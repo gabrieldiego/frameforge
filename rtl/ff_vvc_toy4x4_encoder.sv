@@ -75,7 +75,7 @@ module ff_vvc_toy4x4_encoder (
         end
         if (input_count_q == 8'd0) begin
           sampled_y <= s_axis_data;
-          quant_luma_rem_q <= quant_luma_rem_from_sample(s_axis_data);
+          quant_luma_rem_q <= quant_luma_rem_from_solid_transform(s_axis_data);
         end
         if (input_count_q == 8'd16) begin
           sampled_u <= s_axis_data;
@@ -143,6 +143,32 @@ module ff_vvc_toy4x4_encoder (
   function automatic logic [4:0] quant_luma_rem();
     begin
       quant_luma_rem = quant_luma_rem_q;
+    end
+  endfunction
+
+  function automatic signed [9:0] solid_luma_dc_coeff(input logic [7:0] sample);
+    begin
+      solid_luma_dc_coeff = $signed({ 2'b00, sample }) - 10'sd114;
+    end
+  endfunction
+
+  function automatic logic [4:0] quant_luma_rem_from_solid_transform(input logic [7:0] sample);
+    begin
+      quant_luma_rem_from_solid_transform = quant_luma_rem_from_dc_coeff(solid_luma_dc_coeff(sample));
+    end
+  endfunction
+
+  function automatic logic [4:0] quant_luma_rem_from_dc_coeff(input logic signed [9:0] dc_coeff);
+    logic [7:0] sample;
+    begin
+      if (dc_coeff <= -10'sd114) begin
+        sample = 8'd0;
+      end else if (dc_coeff >= 10'sd141) begin
+        sample = 8'd255;
+      end else begin
+        sample = dc_coeff + 10'sd114;
+      end
+      quant_luma_rem_from_dc_coeff = quant_luma_rem_from_sample(sample);
     end
   endfunction
 

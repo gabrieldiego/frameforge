@@ -267,6 +267,17 @@ pub struct Toy4x4QuantizedColor {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Toy4x4TransformBlock {
+    dc_coeff: i16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Toy4x4QuantizedTransformBlock {
+    reconstructed_dc_coeff: i16,
+    abs_remainder: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToyResidualComponent {
     Luma,
     ChromaCb,
@@ -400,12 +411,14 @@ pub fn sample_toy_4x4_first_yuv420p8(
 }
 
 pub fn quantize_toy_4x4_color(color: Toy4x4SampledColor) -> Toy4x4QuantizedColor {
-    let (y, luma_rem) = nearest_quantized_luma(color.y);
+    let luma_transform = transform_toy_4x4_solid_luma(color.y);
+    let quantized_luma = quantize_toy_4x4_luma_dc(luma_transform);
+    let y = reconstruct_toy_luma_from_dc(quantized_luma.reconstructed_dc_coeff);
     Toy4x4QuantizedColor {
         y,
         u: 0,
         v: 0,
-        luma_rem,
+        luma_rem: quantized_luma.abs_remainder,
         chroma_rem: 6,
     }
 }
@@ -1094,6 +1107,25 @@ fn renorm_bits(mut range: u32) -> u32 {
     bits
 }
 
+fn transform_toy_4x4_solid_luma(sample: u8) -> Toy4x4TransformBlock {
+    Toy4x4TransformBlock {
+        dc_coeff: sample as i16 - TOY_LUMA_DC_BASE,
+    }
+}
+
+fn quantize_toy_4x4_luma_dc(block: Toy4x4TransformBlock) -> Toy4x4QuantizedTransformBlock {
+    let sample = (block.dc_coeff + TOY_LUMA_DC_BASE).clamp(0, u8::MAX as i16) as u8;
+    let (reconstructed_sample, abs_remainder) = nearest_quantized_luma(sample);
+    Toy4x4QuantizedTransformBlock {
+        reconstructed_dc_coeff: reconstructed_sample as i16 - TOY_LUMA_DC_BASE,
+        abs_remainder,
+    }
+}
+
+fn reconstruct_toy_luma_from_dc(dc_coeff: i16) -> u8 {
+    (dc_coeff + TOY_LUMA_DC_BASE).clamp(0, u8::MAX as i16) as u8
+}
+
 fn nearest_quantized_luma(input: u8) -> (u8, u8) {
     let mut best_value = 0;
     let mut best_rem = 16;
@@ -1109,6 +1141,8 @@ fn nearest_quantized_luma(input: u8) -> (u8, u8) {
     }
     (best_value, best_rem)
 }
+
+const TOY_LUMA_DC_BASE: i16 = 114;
 
 fn placeholder_rbsp() -> Vec<u8> {
     // TODO(vvc): Replace this rbsp_trailing_bits-only payload with real VPS,
@@ -1411,6 +1445,52 @@ mod tests {
         assert_eq!(
             toy_4x4_slice_payload(Toy4x4PictureKind::Cra, black),
             hex_bytes("c404788062f5b7ebcb1f80")
+        );
+    }
+
+    #[test]
+    fn toy_solid_luma_transform_generates_dc_only() {
+        assert_eq!(
+            transform_toy_4x4_solid_luma(0),
+            Toy4x4TransformBlock { dc_coeff: -114 }
+        );
+        assert_eq!(
+            transform_toy_4x4_solid_luma(64),
+            Toy4x4TransformBlock { dc_coeff: -50 }
+        );
+        assert_eq!(
+            transform_toy_4x4_solid_luma(114),
+            Toy4x4TransformBlock { dc_coeff: 0 }
+        );
+    }
+
+    #[test]
+    fn toy_luma_dc_quantization_matches_existing_ladder() {
+        let black = quantize_toy_4x4_luma_dc(transform_toy_4x4_solid_luma(0));
+        assert_eq!(
+            black,
+            Toy4x4QuantizedTransformBlock {
+                reconstructed_dc_coeff: -114,
+                abs_remainder: 16
+            }
+        );
+
+        let mid = quantize_toy_4x4_luma_dc(transform_toy_4x4_solid_luma(65));
+        assert_eq!(
+            mid,
+            Toy4x4QuantizedTransformBlock {
+                reconstructed_dc_coeff: -50,
+                abs_remainder: 7
+            }
+        );
+
+        let white = quantize_toy_4x4_luma_dc(transform_toy_4x4_solid_luma(255));
+        assert_eq!(
+            white,
+            Toy4x4QuantizedTransformBlock {
+                reconstructed_dc_coeff: 0,
+                abs_remainder: 0
+            }
         );
     }
 
