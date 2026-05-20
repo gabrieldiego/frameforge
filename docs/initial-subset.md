@@ -51,7 +51,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 
 - Replace placeholder output with clean-room VVC parameter set and slice scaffolding where syntax details are confirmed.
 - Add a true VVC/H.266 bitstream path alongside the experimental `ffbs` path once syntax details are confirmed.
-- Replace the fixed VTM-derived 4x4 validation fixture with generated clean-room SPS/PPS/IDR syntax.
+- Replace the remaining VTM-derived toy payload byte emitters with generated clean-room SPS/PPS/IDR syntax.
 - Add clean-room VPS/SPS/PPS and a first intra picture after the EOS-only NAL writer is stable.
 - Replace placeholder VPS/SPS/PPS and IDR RBSP payloads with real clean-room syntax.
 - Define a narrow internal packet model for coding-tree traversal.

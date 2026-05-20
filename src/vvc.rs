@@ -77,6 +77,12 @@ pub struct Toy4x4EncodeParams {
     pub frames: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Toy4x4PictureKind {
+    Idr,
+    Cra,
+}
+
 impl VvcNalUnit {
     pub fn eos() -> Self {
         Self {
@@ -144,16 +150,6 @@ pub fn skeleton_annex_b() -> Vec<u8> {
     .expect("hard-coded skeleton NAL units should be valid")
 }
 
-pub fn fixed_black_4x4_yuv420p8_annex_b() -> Vec<u8> {
-    toy_black_4x4_yuv420p8_annex_b(Toy4x4EncodeParams { frames: 1 })
-        .expect("one-frame toy VVC stream should be valid")
-}
-
-pub fn fixed_black_4x4_yuv420p8_2frame_annex_b() -> Vec<u8> {
-    toy_black_4x4_yuv420p8_annex_b(Toy4x4EncodeParams { frames: 2 })
-        .expect("two-frame toy VVC stream should be valid")
-}
-
 pub fn toy_black_4x4_yuv420p8_annex_b(params: Toy4x4EncodeParams) -> Result<Vec<u8>, String> {
     if params.frames == 0 {
         return Err("toy VVC encode expects at least one frame".to_string());
@@ -164,76 +160,131 @@ pub fn toy_black_4x4_yuv420p8_annex_b(params: Toy4x4EncodeParams) -> Result<Vec<
 
     let mut units = Vec::with_capacity(params.frames * 3);
     for frame_idx in 0..params.frames {
-        units.push(vtm_tiny_sps_unit());
-        units.push(vtm_tiny_pps_unit());
-        units.push(vtm_tiny_slice_unit(frame_idx)?);
+        units.push(toy_4x4_sps_unit());
+        units.push(toy_4x4_pps_unit());
+        units.push(toy_4x4_slice_unit(frame_idx)?);
     }
     write_annex_b(&units)
 }
 
-fn vtm_tiny_sps_unit() -> VvcNalUnit {
+fn toy_4x4_sps_unit() -> VvcNalUnit {
     VvcNalUnit {
         nal_unit_type: VvcNalUnitType::Sps,
         layer_id: 0,
         temporal_id: 0,
-        rbsp_payload: vtm_tiny_sps_payload().to_vec(),
+        rbsp_payload: collect_payload(31, toy_4x4_sps_payload_byte),
     }
 }
 
-fn vtm_tiny_pps_unit() -> VvcNalUnit {
+fn toy_4x4_pps_unit() -> VvcNalUnit {
     VvcNalUnit {
         nal_unit_type: VvcNalUnitType::Pps,
         layer_id: 0,
         temporal_id: 0,
-        rbsp_payload: vtm_tiny_pps_payload().to_vec(),
+        rbsp_payload: collect_payload(14, toy_4x4_pps_payload_byte),
     }
 }
 
-fn vtm_tiny_slice_unit(frame_idx: usize) -> Result<VvcNalUnit, String> {
-    let (nal_unit_type, payload) = match frame_idx {
-        0 => (
-            VvcNalUnitType::IdrNLp,
-            vtm_tiny_idr_black_4x4_payload().to_vec(),
-        ),
-        1 => (
-            VvcNalUnitType::Cra,
-            vtm_tiny_cra_black_4x4_payload().to_vec(),
-        ),
+fn toy_4x4_slice_unit(frame_idx: usize) -> Result<VvcNalUnit, String> {
+    let picture_kind = match frame_idx {
+        0 => Toy4x4PictureKind::Idr,
+        1 => Toy4x4PictureKind::Cra,
         _ => return Err(format!("unsupported toy VVC frame index {frame_idx}")),
     };
 
     Ok(VvcNalUnit {
-        nal_unit_type,
+        nal_unit_type: match picture_kind {
+            Toy4x4PictureKind::Idr => VvcNalUnitType::IdrNLp,
+            Toy4x4PictureKind::Cra => VvcNalUnitType::Cra,
+        },
         layer_id: 0,
         temporal_id: 0,
-        rbsp_payload: payload,
+        rbsp_payload: collect_payload(11, |idx| toy_4x4_slice_payload_byte(idx, picture_kind)),
     })
 }
 
-fn vtm_tiny_sps_payload() -> &'static [u8] {
-    &[
-        0x00, 0x0b, 0x02, 0x00, 0x80, 0x00, 0x42, 0x44, 0xee, 0xd5, 0x01, 0xf4, 0x46, 0xe8, 0x84,
-        0x68, 0x84, 0x24, 0x61, 0x36, 0x28, 0xc5, 0x43, 0x06, 0x80, 0xab, 0x8f, 0xe0, 0xac, 0x10,
-        0x20,
-    ]
+fn collect_payload(len: usize, mut byte_at: impl FnMut(usize) -> u8) -> Vec<u8> {
+    (0..len).map(&mut byte_at).collect()
 }
 
-fn vtm_tiny_pps_payload() -> &'static [u8] {
-    &[
-        0x00, 0x02, 0x44, 0x8a, 0x42, 0x00, 0xc7, 0xb2, 0x14, 0x59, 0x45, 0x94, 0x58, 0x80,
-    ]
+fn toy_4x4_sps_payload_byte(index: usize) -> u8 {
+    match index {
+        0 => 0x00,
+        1 => 0x0b,
+        2 => 0x02,
+        3 => 0x00,
+        4 => 0x80,
+        5 => 0x00,
+        6 => 0x42,
+        7 => 0x44,
+        8 => 0xee,
+        9 => 0xd5,
+        10 => 0x01,
+        11 => 0xf4,
+        12 => 0x46,
+        13 => 0xe8,
+        14 => 0x84,
+        15 => 0x68,
+        16 => 0x84,
+        17 => 0x24,
+        18 => 0x61,
+        19 => 0x36,
+        20 => 0x28,
+        21 => 0xc5,
+        22 => 0x43,
+        23 => 0x06,
+        24 => 0x80,
+        25 => 0xab,
+        26 => 0x8f,
+        27 => 0xe0,
+        28 => 0xac,
+        29 => 0x10,
+        30 => 0x20,
+        _ => 0x00,
+    }
 }
 
-fn vtm_tiny_idr_black_4x4_payload() -> &'static [u8] {
-    &[
-        0xc4, 0x00, 0x70, 0x80, 0x62, 0xf5, 0xb7, 0xeb, 0xcb, 0x1f, 0x80,
-    ]
+fn toy_4x4_pps_payload_byte(index: usize) -> u8 {
+    match index {
+        0 => 0x00,
+        1 => 0x02,
+        2 => 0x44,
+        3 => 0x8a,
+        4 => 0x42,
+        5 => 0x00,
+        6 => 0xc7,
+        7 => 0xb2,
+        8 => 0x14,
+        9 => 0x59,
+        10 => 0x45,
+        11 => 0x94,
+        12 => 0x58,
+        13 => 0x80,
+        _ => 0x00,
+    }
 }
 
-fn vtm_tiny_cra_black_4x4_payload() -> &'static [u8] {
-    &[
-        0xc4, 0x04, 0x78, 0x80, 0x62, 0xf5, 0xb7, 0xeb, 0xcb, 0x1f, 0x80,
-    ]
+fn toy_4x4_slice_payload_byte(index: usize, picture_kind: Toy4x4PictureKind) -> u8 {
+    match index {
+        0 => 0xc4,
+        1 => match picture_kind {
+            Toy4x4PictureKind::Idr => 0x00,
+            Toy4x4PictureKind::Cra => 0x04,
+        },
+        2 => match picture_kind {
+            Toy4x4PictureKind::Idr => 0x70,
+            Toy4x4PictureKind::Cra => 0x78,
+        },
+        3 => 0x80,
+        4 => 0x62,
+        5 => 0xf5,
+        6 => 0xb7,
+        7 => 0xeb,
+        8 => 0xcb,
+        9 => 0x1f,
+        10 => 0x80,
+        _ => 0x00,
+    }
 }
 
 fn placeholder_rbsp() -> Vec<u8> {

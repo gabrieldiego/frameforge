@@ -153,13 +153,6 @@ cargo run -- vvc-toy-4x4-black-video --frames 2 --output /tmp/frameforge-toy-4x4
 make validate-decode BITSTREAM=/tmp/frameforge-toy-4x4-2f.vvc DECODED=/tmp/frameforge-toy-4x4-2f-dec.yuv
 ```
 
-The older fixture command remains as a compatibility alias:
-
-```sh
-cargo run -- vvc-fixture-4x4-black-video --output /tmp/frameforge-fixture-4x4-2f.vvc
-make validate-decode BITSTREAM=/tmp/frameforge-fixture-4x4-2f.vvc DECODED=/tmp/frameforge-fixture-4x4-2f-dec.yuv
-```
-
 This stream decodes to two 4x4 YUV420p8 frames and is useful for proving that the software and RTL output paths can generate the same short video stream before clean-room VVC picture syntax is complete.
 
 Inspect NAL headers in any Annex-B VVC stream:

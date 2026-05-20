@@ -1,83 +1,39 @@
+import subprocess
+import tempfile
+from pathlib import Path
+
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ReadOnly, RisingEdge
+from cocotb.triggers import ReadOnly, RisingEdge, Timer
 
 
-SPS_PAYLOAD = bytes(
-    [
-        0x00,
-        0x0B,
-        0x02,
-        0x00,
-        0x80,
-        0x00,
-        0x42,
-        0x44,
-        0xEE,
-        0xD5,
-        0x01,
-        0xF4,
-        0x46,
-        0xE8,
-        0x84,
-        0x68,
-        0x84,
-        0x24,
-        0x61,
-        0x36,
-        0x28,
-        0xC5,
-        0x43,
-        0x06,
-        0x80,
-        0xAB,
-        0x8F,
-        0xE0,
-        0xAC,
-        0x10,
-        0x20,
-    ]
-)
-
-PPS_PAYLOAD = bytes(
-    [
-        0x00,
-        0x02,
-        0x44,
-        0x8A,
-        0x42,
-        0x00,
-        0xC7,
-        0xB2,
-        0x14,
-        0x59,
-        0x45,
-        0x94,
-        0x58,
-        0x80,
-    ]
-)
-
-IDR_PAYLOAD = bytes([0xC4, 0x00, 0x70, 0x80, 0x62, 0xF5, 0xB7, 0xEB, 0xCB, 0x1F, 0x80])
-CRA_PAYLOAD = bytes([0xC4, 0x04, 0x78, 0x80, 0x62, 0xF5, 0xB7, 0xEB, 0xCB, 0x1F, 0x80])
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def nal_unit(nal_type, payload):
-    temporal_id_plus1 = 1
-    header = bytes([0x00, (nal_type << 3) | temporal_id_plus1])
-    return b"\x00\x00\x00\x01" + header + payload
-
-
-def expected_stream(frames):
-    out = bytearray()
-    for frame_idx in range(frames):
-        out += nal_unit(15, SPS_PAYLOAD)
-        out += nal_unit(16, PPS_PAYLOAD)
-        out += nal_unit(9 if frame_idx else 8, CRA_PAYLOAD if frame_idx else IDR_PAYLOAD)
-    return bytes(out)
+def software_stream(frames):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output = Path(tmpdir) / "toy.vvc"
+        subprocess.run(
+            [
+                "cargo",
+                "run",
+                "--quiet",
+                "--",
+                "vvc-toy-4x4-black-video",
+                "--frames",
+                str(frames),
+                "--output",
+                str(output),
+            ],
+            cwd=REPO_ROOT,
+            check=True,
+        )
+        return output.read_bytes()
 
 
 async def collect_stream(dut, frames):
+    await Timer(1, unit="ns")
+
     dut.rst_n.value = 0
     dut.start.value = 0
     dut.frame_count.value = frames
@@ -110,7 +66,8 @@ async def collect_stream(dut, frames):
 
 
 @cocotb.test()
-async def vvc_toy4x4_encoder_generates_software_stream(dut):
+async def vvc_toy4x4_encoder_matches_software_stream(dut):
     cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
 
-    assert await collect_stream(dut, frames=2) == expected_stream(frames=2)
+    assert await collect_stream(dut, frames=1) == software_stream(frames=1)
+    assert await collect_stream(dut, frames=2) == software_stream(frames=2)

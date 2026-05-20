@@ -12,10 +12,14 @@ module ff_vvc_toy4x4_encoder (
   output logic [7:0] m_axis_data,
   output logic       m_axis_last
 );
-  localparam int ACCESS_UNIT_LEN  = 74;
   localparam int SPS_PAYLOAD_LEN  = 31;
   localparam int PPS_PAYLOAD_LEN  = 14;
   localparam int SLICE_PAYLOAD_LEN = 11;
+  localparam int NAL_OVERHEAD_LEN = 6;
+  localparam int SPS_NAL_LEN = NAL_OVERHEAD_LEN + SPS_PAYLOAD_LEN;
+  localparam int PPS_NAL_LEN = NAL_OVERHEAD_LEN + PPS_PAYLOAD_LEN;
+  localparam int SLICE_NAL_LEN = NAL_OVERHEAD_LEN + SLICE_PAYLOAD_LEN;
+  localparam int ACCESS_UNIT_LEN = SPS_NAL_LEN + PPS_NAL_LEN + SLICE_NAL_LEN;
 
   logic [7:0] index_q;
   logic [7:0] stream_len_q;
@@ -52,8 +56,8 @@ module ff_vvc_toy4x4_encoder (
 
   function automatic logic [7:0] stream_len(input logic [1:0] frames);
     case (frames)
-      2'd2: stream_len = 8'd148;
-      default: stream_len = 8'd74;
+      2'd2: stream_len = ACCESS_UNIT_LEN * 2;
+      default: stream_len = ACCESS_UNIT_LEN;
     endcase
   endfunction
 
@@ -62,8 +66,8 @@ module ff_vvc_toy4x4_encoder (
     logic [6:0] access_unit_index;
 
     begin
-      second_access_unit = (index >= 8'd74);
-      access_unit_index = second_access_unit ? (index - 8'd74) : index[6:0];
+      second_access_unit = (index >= ACCESS_UNIT_LEN);
+      access_unit_index = second_access_unit ? (index - ACCESS_UNIT_LEN) : index[6:0];
       stream_byte = access_unit_byte(access_unit_index, second_access_unit);
     end
   endfunction
@@ -73,12 +77,12 @@ module ff_vvc_toy4x4_encoder (
     input logic       cra_picture
   );
     begin
-      if (index < 7'd37) begin
+      if (index < SPS_NAL_LEN) begin
         access_unit_byte = nal_byte(2'd0, index, cra_picture);
-      end else if (index < 7'd57) begin
-        access_unit_byte = nal_byte(2'd1, index - 7'd37, cra_picture);
+      end else if (index < SPS_NAL_LEN + PPS_NAL_LEN) begin
+        access_unit_byte = nal_byte(2'd1, index - SPS_NAL_LEN, cra_picture);
       end else begin
-        access_unit_byte = nal_byte(2'd2, index - 7'd57, cra_picture);
+        access_unit_byte = nal_byte(2'd2, index - (SPS_NAL_LEN + PPS_NAL_LEN), cra_picture);
       end
     end
   endfunction
