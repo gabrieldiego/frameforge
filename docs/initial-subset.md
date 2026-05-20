@@ -17,6 +17,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
   - RBSP trailing bits
   - emulation-prevention byte insertion
 - Named VVC syntax writer for `flag`, `u(n)`, `ue(v)`, `se(v)`, observed transition regions, RBSP trailing bits, and field-offset tracing.
+- Internally generated VVC NAL unit headers with named `forbidden_zero_bit`, `nuh_reserved_zero_bit`, `nuh_layer_id`, `nal_unit_type`, and `nuh_temporal_id_plus1` fields.
 - Basic placeholder NAL/Annex-B-style structures with TODOs for exact VVC syntax.
 - `EncoderParams`, `Picture`, reconstruction buffer skeleton, and fixed block traversal.
 - JSONL trace events.

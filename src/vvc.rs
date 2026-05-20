@@ -199,6 +199,15 @@ pub struct VvcNalUnit {
     pub rbsp_payload: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VvcNalHeader {
+    pub forbidden_zero_bit: bool,
+    pub nuh_reserved_zero_bit: bool,
+    pub layer_id: u8,
+    pub nal_unit_type: VvcNalUnitType,
+    pub temporal_id: u8,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VvcNalInfo {
     pub nal_unit_type: u8,
@@ -401,10 +410,25 @@ pub fn nal_unit_header_bytes(unit: &VvcNalUnit) -> Result<[u8; 2], String> {
         return Err("VVC temporal_id must be in the range 0..=6".to_string());
     }
 
-    let word = ((unit.layer_id as u16) << 8)
-        | ((unit.nal_unit_type as u16) << 3)
-        | ((unit.temporal_id as u16) + 1);
-    Ok(word.to_be_bytes())
+    let header = VvcNalHeader {
+        forbidden_zero_bit: false,
+        nuh_reserved_zero_bit: false,
+        layer_id: unit.layer_id,
+        nal_unit_type: unit.nal_unit_type,
+        temporal_id: unit.temporal_id,
+    };
+    let bytes = write_nal_unit_header(header).bytes;
+    Ok([bytes[0], bytes[1]])
+}
+
+pub fn write_nal_unit_header(header: VvcNalHeader) -> VvcSyntaxRbsp {
+    let mut writer = VvcSyntaxWriter::new();
+    writer.write_flag("forbidden_zero_bit", header.forbidden_zero_bit);
+    writer.write_flag("nuh_reserved_zero_bit", header.nuh_reserved_zero_bit);
+    writer.write_u("nuh_layer_id", header.layer_id as u64, 6);
+    writer.write_u("nal_unit_type", header.nal_unit_type as u64, 5);
+    writer.write_u("nuh_temporal_id_plus1", header.temporal_id as u64 + 1, 3);
+    writer.finish()
 }
 
 pub fn parse_annex_b_nal_units(bytes: &[u8]) -> Result<Vec<VvcNalInfo>, String> {
@@ -486,6 +510,54 @@ mod tests {
     fn eos_header_matches_vvc_packing() {
         let unit = VvcNalUnit::eos();
         assert_eq!(nal_unit_header_bytes(&unit).unwrap(), [0x00, 0xa9]);
+    }
+
+    #[test]
+    fn nal_header_writer_records_named_fields() {
+        let rbsp = write_nal_unit_header(VvcNalHeader {
+            forbidden_zero_bit: false,
+            nuh_reserved_zero_bit: false,
+            layer_id: 0,
+            nal_unit_type: VvcNalUnitType::IdrNLp,
+            temporal_id: 0,
+        });
+
+        assert_eq!(rbsp.bytes, vec![0x00, 0x41]);
+        assert_eq!(
+            rbsp.fields,
+            vec![
+                VvcSyntaxField {
+                    name: "forbidden_zero_bit",
+                    code: VvcSyntaxCode::Flag,
+                    bit_offset: 0,
+                    bit_count: 1,
+                },
+                VvcSyntaxField {
+                    name: "nuh_reserved_zero_bit",
+                    code: VvcSyntaxCode::Flag,
+                    bit_offset: 1,
+                    bit_count: 1,
+                },
+                VvcSyntaxField {
+                    name: "nuh_layer_id",
+                    code: VvcSyntaxCode::U,
+                    bit_offset: 2,
+                    bit_count: 6,
+                },
+                VvcSyntaxField {
+                    name: "nal_unit_type",
+                    code: VvcSyntaxCode::U,
+                    bit_offset: 8,
+                    bit_count: 5,
+                },
+                VvcSyntaxField {
+                    name: "nuh_temporal_id_plus1",
+                    code: VvcSyntaxCode::U,
+                    bit_offset: 13,
+                    bit_count: 3,
+                },
+            ]
+        );
     }
 
     #[test]

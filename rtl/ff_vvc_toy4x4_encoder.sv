@@ -108,16 +108,40 @@ module ff_vvc_toy4x4_encoder (
     input logic       byte_index,
     input logic       cra_picture
   );
+    logic [15:0] header;
+
     begin
-      if (!byte_index) begin
-        nal_header_byte = 8'h00;
-      end else begin
-        case (nal_kind)
-          2'd0: nal_header_byte = 8'h79; // SPS, nal_unit_type 15.
-          2'd1: nal_header_byte = 8'h81; // PPS, nal_unit_type 16.
-          default: nal_header_byte = cra_picture ? 8'h49 : 8'h41;
-        endcase
-      end
+      header = nal_header_bits(6'd0, nal_unit_type(nal_kind, cra_picture), 3'd0);
+      nal_header_byte = byte_index ? header[7:0] : header[15:8];
+    end
+  endfunction
+
+  function automatic logic [4:0] nal_unit_type(
+    input logic [1:0] nal_kind,
+    input logic       cra_picture
+  );
+    begin
+      case (nal_kind)
+        2'd0: nal_unit_type = 5'd15; // SPS.
+        2'd1: nal_unit_type = 5'd16; // PPS.
+        default: nal_unit_type = cra_picture ? 5'd9 : 5'd8;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [15:0] nal_header_bits(
+    input logic [5:0] layer_id,
+    input logic [4:0] nal_type,
+    input logic [2:0] temporal_id
+  );
+    begin
+      nal_header_bits = {
+        1'b0,              // forbidden_zero_bit
+        1'b0,              // nuh_reserved_zero_bit
+        layer_id,          // nuh_layer_id
+        nal_type,          // nal_unit_type
+        temporal_id + 3'd1 // nuh_temporal_id_plus1
+      };
     end
   endfunction
 
