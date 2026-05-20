@@ -8,7 +8,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - VVC Annex-B writer capable of emitting an EOS-only stream for NAL header and bytestream testing.
 - VVC skeleton stream containing VPS/SPS/PPS/IDR/EOS/EOB NAL units with placeholder RBSP payloads.
 - VVC Annex-B NAL header listing for comparing FrameForge output against VTM output.
-- Generated 1- or 2-frame 4x4 black YUV420p8 VVC toy stream assembled from SPS, PPS, and slice NAL units with VTM-derived payload bytes.
+- Generated 1- or 2-frame 4x4 black YUV420p8 VVC toy stream assembled from SPS, PPS, and slice NAL units using named observed bit regions.
 - External VTM reference-encode helper that can generate a real 4x4 YUV420 VVC stream for validation.
 - Basic encoder trait boundary for replacing the placeholder path with real codec implementations.
 - Generic bitstream utilities:
@@ -47,7 +47,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 
 - Replace placeholder output with clean-room VVC parameter set and slice scaffolding where syntax details are confirmed.
 - Replace the remaining non-VVC placeholder encode/decode path with the VVC toy encoder as it becomes more capable.
-- Replace the remaining VTM-derived toy payload byte emitters with generated clean-room SPS/PPS/IDR syntax.
+- Replace the observed toy payload bit regions with generated clean-room SPS/PPS/IDR syntax.
 - Add clean-room VPS/SPS/PPS and a first intra picture after the EOS-only NAL writer is stable.
 - Replace placeholder VPS/SPS/PPS and IDR RBSP payloads with real clean-room syntax.
 - Define a narrow internal packet model for coding-tree traversal.

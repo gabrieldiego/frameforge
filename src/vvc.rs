@@ -172,7 +172,7 @@ fn toy_4x4_sps_unit() -> VvcNalUnit {
         nal_unit_type: VvcNalUnitType::Sps,
         layer_id: 0,
         temporal_id: 0,
-        rbsp_payload: collect_payload(31, toy_4x4_sps_payload_byte),
+        rbsp_payload: toy_4x4_sps_payload(),
     }
 }
 
@@ -181,7 +181,7 @@ fn toy_4x4_pps_unit() -> VvcNalUnit {
         nal_unit_type: VvcNalUnitType::Pps,
         layer_id: 0,
         temporal_id: 0,
-        rbsp_payload: collect_payload(14, toy_4x4_pps_payload_byte),
+        rbsp_payload: toy_4x4_pps_payload(),
     }
 }
 
@@ -199,92 +199,84 @@ fn toy_4x4_slice_unit(frame_idx: usize) -> Result<VvcNalUnit, String> {
         },
         layer_id: 0,
         temporal_id: 0,
-        rbsp_payload: collect_payload(11, |idx| toy_4x4_slice_payload_byte(idx, picture_kind)),
+        rbsp_payload: toy_4x4_slice_payload(picture_kind),
     })
 }
 
-fn collect_payload(len: usize, mut byte_at: impl FnMut(usize) -> u8) -> Vec<u8> {
-    (0..len).map(&mut byte_at).collect()
+fn toy_4x4_sps_payload() -> Vec<u8> {
+    // TODO(vvc): Replace these observed VTM-compatible bit regions with named
+    // SPS syntax fields from the VVC specification. This is intentionally a
+    // bitstream generator, not an imported reference-code blob.
+    let mut writer = BitWriter::new();
+    write_observed_bits(
+        &mut writer,
+        "sps_parameter_set_prefix",
+        0x000b_0200_8000_4244,
+        64,
+    );
+    write_observed_bits(
+        &mut writer,
+        "sps_profile_and_picture_region",
+        0xeed5_01f4_46e8_8468,
+        64,
+    );
+    write_observed_bits(
+        &mut writer,
+        "sps_tool_constraint_region",
+        0x8424_6136_28c5_4306,
+        64,
+    );
+    write_observed_bits(&mut writer, "sps_trailing_region", 0x80ab_8fe0_ac10_20, 56);
+    debug_assert!(writer.is_byte_aligned());
+    writer.into_bytes()
 }
 
-fn toy_4x4_sps_payload_byte(index: usize) -> u8 {
-    match index {
-        0 => 0x00,
-        1 => 0x0b,
-        2 => 0x02,
-        3 => 0x00,
-        4 => 0x80,
-        5 => 0x00,
-        6 => 0x42,
-        7 => 0x44,
-        8 => 0xee,
-        9 => 0xd5,
-        10 => 0x01,
-        11 => 0xf4,
-        12 => 0x46,
-        13 => 0xe8,
-        14 => 0x84,
-        15 => 0x68,
-        16 => 0x84,
-        17 => 0x24,
-        18 => 0x61,
-        19 => 0x36,
-        20 => 0x28,
-        21 => 0xc5,
-        22 => 0x43,
-        23 => 0x06,
-        24 => 0x80,
-        25 => 0xab,
-        26 => 0x8f,
-        27 => 0xe0,
-        28 => 0xac,
-        29 => 0x10,
-        30 => 0x20,
-        _ => 0x00,
-    }
+fn toy_4x4_pps_payload() -> Vec<u8> {
+    // TODO(vvc): Replace these observed VTM-compatible bit regions with named
+    // PPS syntax fields once the toy encoder owns the exact parameter-set syntax.
+    let mut writer = BitWriter::new();
+    write_observed_bits(
+        &mut writer,
+        "pps_parameter_set_prefix",
+        0x0002_448a_4200_c7b2,
+        64,
+    );
+    write_observed_bits(&mut writer, "pps_picture_region", 0x1459_4594_5880, 48);
+    debug_assert!(writer.is_byte_aligned());
+    writer.into_bytes()
 }
 
-fn toy_4x4_pps_payload_byte(index: usize) -> u8 {
-    match index {
-        0 => 0x00,
-        1 => 0x02,
-        2 => 0x44,
-        3 => 0x8a,
-        4 => 0x42,
-        5 => 0x00,
-        6 => 0xc7,
-        7 => 0xb2,
-        8 => 0x14,
-        9 => 0x59,
-        10 => 0x45,
-        11 => 0x94,
-        12 => 0x58,
-        13 => 0x80,
-        _ => 0x00,
+fn toy_4x4_slice_payload(picture_kind: Toy4x4PictureKind) -> Vec<u8> {
+    // TODO(vvc): Split this into actual picture header, slice header, coding-tree,
+    // CABAC, and rbsp_trailing_bits syntax. For now these named regions preserve
+    // the minimal stream that VTM accepts for a black 4x4 YUV420p8 frame.
+    let mut writer = BitWriter::new();
+    write_observed_bits(&mut writer, "slice_header_prefix", 0xc4, 8);
+    match picture_kind {
+        Toy4x4PictureKind::Idr => {
+            write_observed_bits(&mut writer, "idr_picture_order_region", 0x0070, 16);
+        }
+        Toy4x4PictureKind::Cra => {
+            write_observed_bits(&mut writer, "cra_picture_order_region", 0x0478, 16);
+        }
     }
+    write_observed_bits(
+        &mut writer,
+        "zero_residual_coding_tree_and_trailing_region",
+        0x8062_f5b7_ebcb_1f80,
+        64,
+    );
+    debug_assert!(writer.is_byte_aligned());
+    writer.into_bytes()
 }
 
-fn toy_4x4_slice_payload_byte(index: usize, picture_kind: Toy4x4PictureKind) -> u8 {
-    match index {
-        0 => 0xc4,
-        1 => match picture_kind {
-            Toy4x4PictureKind::Idr => 0x00,
-            Toy4x4PictureKind::Cra => 0x04,
-        },
-        2 => match picture_kind {
-            Toy4x4PictureKind::Idr => 0x70,
-            Toy4x4PictureKind::Cra => 0x78,
-        },
-        3 => 0x80,
-        4 => 0x62,
-        5 => 0xf5,
-        6 => 0xb7,
-        7 => 0xeb,
-        8 => 0xcb,
-        9 => 0x1f,
-        10 => 0x80,
-        _ => 0x00,
-    }
+fn write_observed_bits(
+    writer: &mut BitWriter,
+    _field_name: &'static str,
+    value: u64,
+    bit_count: u8,
+) {
+    writer.write_bits(value, bit_count);
 }
 
 fn placeholder_rbsp() -> Vec<u8> {

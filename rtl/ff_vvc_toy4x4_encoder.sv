@@ -143,79 +143,83 @@ module ff_vvc_toy4x4_encoder (
   endfunction
 
   function automatic logic [7:0] sps_payload_byte(input logic [6:0] index);
-    case (index)
-      7'd0:  sps_payload_byte = 8'h00;
-      7'd1:  sps_payload_byte = 8'h0b;
-      7'd2:  sps_payload_byte = 8'h02;
-      7'd3:  sps_payload_byte = 8'h00;
-      7'd4:  sps_payload_byte = 8'h80;
-      7'd5:  sps_payload_byte = 8'h00;
-      7'd6:  sps_payload_byte = 8'h42;
-      7'd7:  sps_payload_byte = 8'h44;
-      7'd8:  sps_payload_byte = 8'hee;
-      7'd9:  sps_payload_byte = 8'hd5;
-      7'd10: sps_payload_byte = 8'h01;
-      7'd11: sps_payload_byte = 8'hf4;
-      7'd12: sps_payload_byte = 8'h46;
-      7'd13: sps_payload_byte = 8'he8;
-      7'd14: sps_payload_byte = 8'h84;
-      7'd15: sps_payload_byte = 8'h68;
-      7'd16: sps_payload_byte = 8'h84;
-      7'd17: sps_payload_byte = 8'h24;
-      7'd18: sps_payload_byte = 8'h61;
-      7'd19: sps_payload_byte = 8'h36;
-      7'd20: sps_payload_byte = 8'h28;
-      7'd21: sps_payload_byte = 8'hc5;
-      7'd22: sps_payload_byte = 8'h43;
-      7'd23: sps_payload_byte = 8'h06;
-      7'd24: sps_payload_byte = 8'h80;
-      7'd25: sps_payload_byte = 8'hab;
-      7'd26: sps_payload_byte = 8'h8f;
-      7'd27: sps_payload_byte = 8'he0;
-      7'd28: sps_payload_byte = 8'hac;
-      7'd29: sps_payload_byte = 8'h10;
-      7'd30: sps_payload_byte = 8'h20;
-      default: sps_payload_byte = 8'h00;
-    endcase
+    begin
+      // TODO(vvc): Replace these observed VTM-compatible regions with exact SPS
+      // syntax fields. The byte extraction keeps this as generated logic instead
+      // of a byte lookup table.
+      if (index < 7'd8) begin
+        sps_payload_byte = region64_byte(64'h000b_0200_8000_4244, index);
+      end else if (index < 7'd16) begin
+        sps_payload_byte = region64_byte(64'heed5_01f4_46e8_8468, index - 7'd8);
+      end else if (index < 7'd24) begin
+        sps_payload_byte = region64_byte(64'h8424_6136_28c5_4306, index - 7'd16);
+      end else if (index < 7'd31) begin
+        sps_payload_byte = region56_byte(56'h80ab_8fe0_ac10_20, index - 7'd24);
+      end else begin
+        sps_payload_byte = 8'h00;
+      end
+    end
   endfunction
 
   function automatic logic [7:0] pps_payload_byte(input logic [6:0] index);
-    case (index)
-      7'd0:  pps_payload_byte = 8'h00;
-      7'd1:  pps_payload_byte = 8'h02;
-      7'd2:  pps_payload_byte = 8'h44;
-      7'd3:  pps_payload_byte = 8'h8a;
-      7'd4:  pps_payload_byte = 8'h42;
-      7'd5:  pps_payload_byte = 8'h00;
-      7'd6:  pps_payload_byte = 8'hc7;
-      7'd7:  pps_payload_byte = 8'hb2;
-      7'd8:  pps_payload_byte = 8'h14;
-      7'd9:  pps_payload_byte = 8'h59;
-      7'd10: pps_payload_byte = 8'h45;
-      7'd11: pps_payload_byte = 8'h94;
-      7'd12: pps_payload_byte = 8'h58;
-      7'd13: pps_payload_byte = 8'h80;
-      default: pps_payload_byte = 8'h00;
-    endcase
+    begin
+      // TODO(vvc): Replace these observed VTM-compatible regions with exact PPS
+      // syntax fields once the toy encoder owns the parameter-set syntax.
+      if (index < 7'd8) begin
+        pps_payload_byte = region64_byte(64'h0002_448a_4200_c7b2, index);
+      end else if (index < 7'd14) begin
+        pps_payload_byte = region48_byte(48'h1459_4594_5880, index - 7'd8);
+      end else begin
+        pps_payload_byte = 8'h00;
+      end
+    end
   endfunction
 
   function automatic logic [7:0] slice_payload_byte(
     input logic [6:0] index,
     input logic       cra_picture
   );
-    case (index)
-      7'd0:  slice_payload_byte = 8'hc4;
-      7'd1:  slice_payload_byte = cra_picture ? 8'h04 : 8'h00;
-      7'd2:  slice_payload_byte = cra_picture ? 8'h78 : 8'h70;
-      7'd3:  slice_payload_byte = 8'h80;
-      7'd4:  slice_payload_byte = 8'h62;
-      7'd5:  slice_payload_byte = 8'hf5;
-      7'd6:  slice_payload_byte = 8'hb7;
-      7'd7:  slice_payload_byte = 8'heb;
-      7'd8:  slice_payload_byte = 8'hcb;
-      7'd9:  slice_payload_byte = 8'h1f;
-      7'd10: slice_payload_byte = 8'h80;
-      default: slice_payload_byte = 8'h00;
-    endcase
+    begin
+      // TODO(vvc): Split this into picture header, slice header, coding-tree,
+      // CABAC, and rbsp_trailing_bits generators.
+      if (index == 7'd0) begin
+        slice_payload_byte = 8'hc4;
+      end else if (index == 7'd1) begin
+        slice_payload_byte = cra_picture ? 8'h04 : 8'h00;
+      end else if (index == 7'd2) begin
+        slice_payload_byte = cra_picture ? 8'h78 : 8'h70;
+      end else if (index < 7'd11) begin
+        slice_payload_byte = region64_byte(64'h8062_f5b7_ebcb_1f80, index - 7'd3);
+      end else begin
+        slice_payload_byte = 8'h00;
+      end
+    end
+  endfunction
+
+  function automatic logic [7:0] region64_byte(
+    input logic [63:0] region,
+    input logic [6:0]  index
+  );
+    begin
+      region64_byte = region >> ((3'd7 - index) * 8);
+    end
+  endfunction
+
+  function automatic logic [7:0] region56_byte(
+    input logic [55:0] region,
+    input logic [6:0]  index
+  );
+    begin
+      region56_byte = region >> ((7'd6 - index) * 8);
+    end
+  endfunction
+
+  function automatic logic [7:0] region48_byte(
+    input logic [47:0] region,
+    input logic [6:0]  index
+  );
+    begin
+      region48_byte = region >> ((7'd5 - index) * 8);
+    end
   endfunction
 endmodule
