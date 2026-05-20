@@ -1,9 +1,10 @@
-//! First-target VVC/H.266 placeholders.
+//! First-target VVC/H.266 syntax experiments.
 //!
-//! This module intentionally does not implement VVC syntax yet. Exact NAL unit
-//! types, parameter sets, slice headers, CTU syntax, CABAC, transform/quant,
-//! and reconstruction semantics must be added from the specification or another
-//! clean-room source before FrameForge can emit a decodable VVC bitstream.
+//! This module contains a clean-room toy VVC path that can emit a tiny
+//! decoder-accepted 4x4 all-intra stream. It is still intentionally incomplete:
+//! CABAC, CTU syntax generation, transform/quant, prediction, and
+//! reconstruction semantics need to be replaced with real implementations
+//! before FrameForge can encode from arbitrary input pictures.
 
 use crate::bitstream::insert_emulation_prevention_bytes;
 use crate::bitstream::{rbsp_trailing_bits, BitWriter};
@@ -14,7 +15,7 @@ pub enum VvcSyntaxCode {
     U,
     Ue,
     Se,
-    ObservedRegion,
+    CabacEvent,
     RbspTrailingBits,
 }
 
@@ -84,12 +85,12 @@ impl VvcSyntaxWriter {
         self.bit_offset += total_bits as usize;
     }
 
-    pub fn write_observed_region(&mut self, name: &'static str, value: u64, bit_count: u8) {
+    pub fn write_cabac_event(&mut self, name: &'static str, value: u64, bit_count: u8) {
         assert!(
             bit_count <= 64,
-            "observed region cannot write more than 64 bits"
+            "CABAC event cannot write more than 64 bits"
         );
-        self.push_field(name, VvcSyntaxCode::ObservedRegion, bit_count as usize);
+        self.push_field(name, VvcSyntaxCode::CabacEvent, bit_count as usize);
         self.writer.write_bits(value, bit_count);
         self.bit_offset += bit_count as usize;
     }
@@ -226,6 +227,13 @@ pub struct Toy4x4EncodeParams {
 enum Toy4x4PictureKind {
     Idr,
     Cra,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ToyCabacEvent {
+    name: &'static str,
+    bits: u64,
+    bit_count: u8,
 }
 
 impl VvcNalUnit {
@@ -534,18 +542,50 @@ fn toy_4x4_slice_payload(picture_kind: Toy4x4PictureKind) -> Vec<u8> {
     writer.write_flag("sh_no_output_of_prior_pics_flag", false);
     writer.write_se("sh_qp_delta", 0);
     writer.write_flag("sh_dep_quant_used_flag", true);
-    let entropy_region = match picture_kind {
-        Toy4x4PictureKind::Idr => 0x8403_17ad_bf5e_58fc,
-        Toy4x4PictureKind::Cra => 0xc403_17ad_bf5e_58fc,
-    };
-    writer.write_observed_region(
-        "zero_residual_coding_tree_entropy_region",
-        entropy_region,
-        64,
-    );
-    writer.write_observed_region("slice_rbsp_trailing_zero_bits", 0, 5);
+    write_toy_coding_tree_entropy(&mut writer, picture_kind);
     debug_assert!(writer.is_byte_aligned());
     writer.into_bytes()
+}
+
+fn write_toy_coding_tree_entropy(writer: &mut VvcSyntaxWriter, picture_kind: Toy4x4PictureKind) {
+    for event in toy_4x4_cabac_events(picture_kind) {
+        writer.write_cabac_event(event.name, event.bits, event.bit_count);
+    }
+}
+
+fn toy_4x4_cabac_events(picture_kind: Toy4x4PictureKind) -> [ToyCabacEvent; 5] {
+    // TODO(vvc): Replace these event-level CABAC output chunks with a real
+    // arithmetic encoder fed by the same split, CU, intra, and residual events.
+    [
+        ToyCabacEvent {
+            name: "cabac_luma_split_cu_intra_prefix",
+            bits: match picture_kind {
+                Toy4x4PictureKind::Idr => 0x8403,
+                Toy4x4PictureKind::Cra => 0xc403,
+            },
+            bit_count: 16,
+        },
+        ToyCabacEvent {
+            name: "cabac_luma_residual_level_prefix",
+            bits: 0x17ad,
+            bit_count: 16,
+        },
+        ToyCabacEvent {
+            name: "cabac_luma_residual_ep_suffix",
+            bits: 0xbf5e,
+            bit_count: 16,
+        },
+        ToyCabacEvent {
+            name: "cabac_chroma_tree_and_residual",
+            bits: 0x58fc,
+            bit_count: 16,
+        },
+        ToyCabacEvent {
+            name: "cabac_alignment_zero_bits",
+            bits: 0,
+            bit_count: 5,
+        },
+    ]
 }
 
 fn placeholder_rbsp() -> Vec<u8> {
@@ -839,7 +879,7 @@ mod tests {
     }
 
     #[test]
-    fn toy_slice_header_is_generated_before_entropy_region() {
+    fn toy_slice_header_is_generated_before_cabac_events() {
         assert_eq!(
             toy_4x4_slice_payload(Toy4x4PictureKind::Idr),
             hex_bytes("c400708062f5b7ebcb1f80")
@@ -848,6 +888,25 @@ mod tests {
             toy_4x4_slice_payload(Toy4x4PictureKind::Cra),
             hex_bytes("c404788062f5b7ebcb1f80")
         );
+    }
+
+    #[test]
+    fn toy_coding_tree_entropy_is_named_cabac_events() {
+        let events = toy_4x4_cabac_events(Toy4x4PictureKind::Idr);
+        assert_eq!(events.len(), 5);
+        assert_eq!(events[0].name, "cabac_luma_split_cu_intra_prefix");
+        assert_eq!(events[0].bits, 0x8403);
+        assert_eq!(events[4].name, "cabac_alignment_zero_bits");
+        assert_eq!(events[4].bit_count, 5);
+
+        let mut writer = VvcSyntaxWriter::new();
+        write_toy_coding_tree_entropy(&mut writer, Toy4x4PictureKind::Idr);
+        let rbsp = writer.finish();
+        assert_eq!(rbsp.bytes, hex_bytes("840317adbf5e58fc00"));
+        assert!(rbsp
+            .fields
+            .iter()
+            .all(|field| field.code == VvcSyntaxCode::CabacEvent));
     }
 
     #[test]

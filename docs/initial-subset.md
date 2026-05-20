@@ -16,9 +16,9 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
   - byte alignment
   - RBSP trailing bits
   - emulation-prevention byte insertion
-- Named VVC syntax writer for `flag`, `u(n)`, `ue(v)`, `se(v)`, observed transition regions, RBSP trailing bits, and field-offset tracing.
+- Named VVC syntax writer for `flag`, `u(n)`, `ue(v)`, `se(v)`, toy CABAC event chunks, RBSP trailing bits, and field-offset tracing.
 - Internally generated VVC NAL unit headers with named `forbidden_zero_bit`, `nuh_reserved_zero_bit`, `nuh_layer_id`, `nal_unit_type`, and `nuh_temporal_id_plus1` fields.
-- Internally generated toy SPS, PPS, picture header, and slice header syntax fields. The remaining observed picture payload region is the entropy-coded coding-tree body.
+- Internally generated toy SPS, PPS, picture header, slice header, and named toy CABAC event chunks for the entropy-coded coding-tree body.
 - Basic placeholder NAL/Annex-B-style structures with TODOs for exact VVC syntax.
 - `EncoderParams`, `Picture`, reconstruction buffer skeleton, and fixed block traversal.
 - JSONL trace events.
@@ -50,7 +50,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 
 - Replace placeholder output with clean-room VVC parameter set and slice scaffolding where syntax details are confirmed.
 - Replace the remaining non-VVC placeholder encode/decode path with the VVC toy encoder as it becomes more capable.
-- Replace the remaining observed entropy-coded toy picture payload region with a minimal internally generated coding-tree/CABAC path.
+- Replace toy CABAC event chunks with a minimal arithmetic CABAC writer fed by the same coding-tree events.
 - Add clean-room VPS/SPS/PPS and a first intra picture after the EOS-only NAL writer is stable.
 - Replace placeholder VPS/SPS/PPS and IDR RBSP payloads with real clean-room syntax.
 - Define a narrow internal packet model for coding-tree traversal.

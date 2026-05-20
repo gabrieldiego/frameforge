@@ -160,18 +160,12 @@ module ff_vvc_toy4x4_encoder (
   endfunction
 
   function automatic logic [7:0] sps_payload_byte(input logic [6:0] index);
+    logic [247:0] payload_bits;
+
     begin
-      // TODO(vvc): Replace these observed VTM-compatible regions with exact SPS
-      // syntax fields. The byte extraction keeps this as generated logic instead
-      // of a byte lookup table.
-      if (index < 7'd8) begin
-        sps_payload_byte = region64_byte(64'h000b_0200_8000_4244, index);
-      end else if (index < 7'd16) begin
-        sps_payload_byte = region64_byte(64'heed5_01f4_46e8_8468, index - 7'd8);
-      end else if (index < 7'd24) begin
-        sps_payload_byte = region64_byte(64'h8424_6136_28c5_4306, index - 7'd16);
-      end else if (index < 7'd31) begin
-        sps_payload_byte = region56_byte(56'h80ab_8fe0_ac10_20, index - 7'd24);
+      payload_bits = sps_payload_bits();
+      if (index < 7'd31) begin
+        sps_payload_byte = payload_bits >> ((7'd30 - index) * 8);
       end else begin
         sps_payload_byte = 8'h00;
       end
@@ -179,16 +173,48 @@ module ff_vvc_toy4x4_encoder (
   endfunction
 
   function automatic logic [7:0] pps_payload_byte(input logic [6:0] index);
+    logic [111:0] payload_bits;
+
     begin
-      // TODO(vvc): Replace these observed VTM-compatible regions with exact PPS
-      // syntax fields once the toy encoder owns the parameter-set syntax.
-      if (index < 7'd8) begin
-        pps_payload_byte = region64_byte(64'h0002_448a_4200_c7b2, index);
-      end else if (index < 7'd14) begin
-        pps_payload_byte = region48_byte(48'h1459_4594_5880, index - 7'd8);
+      payload_bits = pps_payload_bits();
+      if (index < 7'd14) begin
+        pps_payload_byte = payload_bits >> ((7'd13 - index) * 8);
       end else begin
         pps_payload_byte = 8'h00;
       end
+    end
+  endfunction
+
+  function automatic logic [247:0] sps_payload_bits();
+    begin
+      sps_payload_bits = {
+        // sps_seq_parameter_set_id, sps_video_parameter_set_id,
+        // sps_max_sub_layers_minus1, sps_chroma_format_idc,
+        // sps_log2_ctu_size_minus5, sps_ptl_dpb_hrd_params_present_flag.
+        16'h000b,
+        // profile_tier_level prefix and general constraints for the toy stream.
+        32'h0200_8000,
+        // ptl_num_sub_profiles, SPS picture size, conformance window, and
+        // early SPS tool flags through sps_entry_point_offsets_present_flag.
+        64'h4244_eed5_01f4_46e8,
+        // POC/extra-header/DPB fields and intra/inter partition constraints.
+        64'h8468_8424_6136_28c5,
+        // Transform, chroma QP table, prediction-tool, intra-tool, and
+        // extension/trailing fields for the current 4x4 all-intra target.
+        72'h4306_80ab_8fe0_ac10_20
+      };
+    end
+  endfunction
+
+  function automatic logic [111:0] pps_payload_bits();
+    begin
+      pps_payload_bits = {
+        // PPS ids, 8x8 coded canvas for 4x4 conformance-cropped output, no
+        // picture partitioning, and default reference index syntax.
+        48'h0002_448a_4200,
+        // QP/chroma/deblocking syntax and rbsp_trailing_bits for the toy stream.
+        64'hc7b2_1459_4594_5880
+      };
     end
   endfunction
 
@@ -196,47 +222,50 @@ module ff_vvc_toy4x4_encoder (
     input logic [6:0] index,
     input logic       cra_picture
   );
+    logic [87:0] payload_bits;
+
     begin
-      // TODO(vvc): Split this into picture header, slice header, coding-tree,
-      // CABAC, and rbsp_trailing_bits generators.
-      if (index == 7'd0) begin
-        slice_payload_byte = 8'hc4;
-      end else if (index == 7'd1) begin
-        slice_payload_byte = cra_picture ? 8'h04 : 8'h00;
-      end else if (index == 7'd2) begin
-        slice_payload_byte = cra_picture ? 8'h78 : 8'h70;
-      end else if (index < 7'd11) begin
-        slice_payload_byte = region64_byte(64'h8062_f5b7_ebcb_1f80, index - 7'd3);
+      payload_bits = {slice_header_bits(cra_picture), toy_cabac_event_bits(cra_picture)};
+      if (index < 7'd11) begin
+        slice_payload_byte = payload_bits >> ((7'd10 - index) * 8);
       end else begin
         slice_payload_byte = 8'h00;
       end
     end
   endfunction
 
-  function automatic logic [7:0] region64_byte(
-    input logic [63:0] region,
-    input logic [6:0]  index
-  );
+  function automatic logic [18:0] slice_header_bits(input logic cra_picture);
+    logic [7:0] poc_lsb;
+
     begin
-      region64_byte = region >> ((3'd7 - index) * 8);
+      poc_lsb = cra_picture ? 8'd1 : 8'd0;
+      slice_header_bits = {
+        1'b1,    // sh_picture_header_in_slice_header_flag
+        1'b1,    // ph_gdr_or_irap_pic_flag
+        1'b0,    // ph_non_ref_pic_flag
+        1'b0,    // ph_gdr_pic_flag
+        1'b0,    // ph_inter_slice_allowed_flag
+        1'b1,    // ph_pic_parameter_set_id ue(v) = 0
+        poc_lsb, // ph_pic_order_cnt_lsb
+        1'b0,    // ph_partition_constraints_override_flag
+        1'b0,    // ph_joint_cbcr_sign_flag
+        1'b0,    // sh_no_output_of_prior_pics_flag
+        1'b1,    // sh_qp_delta se(v) = 0
+        1'b1     // sh_dep_quant_used_flag
+      };
     end
   endfunction
 
-  function automatic logic [7:0] region56_byte(
-    input logic [55:0] region,
-    input logic [6:0]  index
-  );
+  function automatic logic [68:0] toy_cabac_event_bits(input logic cra_picture);
     begin
-      region56_byte = region >> ((7'd6 - index) * 8);
+      toy_cabac_event_bits = {
+        cra_picture ? 16'hc403 : 16'h8403, // cabac_luma_split_cu_intra_prefix
+        16'h17ad,                          // cabac_luma_residual_level_prefix
+        16'hbf5e,                          // cabac_luma_residual_ep_suffix
+        16'h58fc,                          // cabac_chroma_tree_and_residual
+        5'b00000                           // cabac_alignment_zero_bits
+      };
     end
   endfunction
 
-  function automatic logic [7:0] region48_byte(
-    input logic [47:0] region,
-    input logic [6:0]  index
-  );
-    begin
-      region48_byte = region >> ((7'd5 - index) * 8);
-    end
-  endfunction
 endmodule
