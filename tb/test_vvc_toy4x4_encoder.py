@@ -128,6 +128,7 @@ async def collect_stream(dut, frames):
     assert int(dut.sampled_y.value) == data[0]
     assert int(dut.sampled_u.value) == data[16]
     assert int(dut.sampled_v.value) == data[20]
+    assert int(dut.luma_samples_q.value) == int.from_bytes(data[:16], "big")
 
     observed = bytearray()
     if dut.m_axis_valid.value == 1:
@@ -164,13 +165,15 @@ async def drain_sampled_color(dut, frames, y, u, v):
     await RisingEdge(dut.clk)
     dut.start.value = 0
 
-    await feed_input(dut, varied_yuv420p8(y, u, v, frames))
+    data = varied_yuv420p8(y, u, v, frames)
+    await feed_input(dut, data)
     await ReadOnly()
     assert dut.input_error.value == 0
     assert dut.sampled_color_valid.value == 1
     assert int(dut.sampled_y.value) == y
     assert int(dut.sampled_u.value) == u
     assert int(dut.sampled_v.value) == v
+    assert int(dut.luma_samples_q.value) == int.from_bytes(data[:16], "big")
 
 
 @cocotb.test()

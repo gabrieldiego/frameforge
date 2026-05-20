@@ -35,9 +35,18 @@ module ff_vvc_toy4x4_encoder (
   logic [7:0] input_count_q;
   logic [7:0] input_len_q;
   logic       input_active_q;
+  logic [127:0] luma_samples_q;
   logic [4:0] quant_luma_rem_q;
+  logic [4:0] residual_quant_luma_rem;
+  logic [7:0] residual_recon_luma_sample;
 
   assign busy = input_active_q || m_axis_valid || (index_q != 0);
+
+  ff_residual_stub residual_block (
+    .luma_samples(luma_samples_q),
+    .quant_luma_rem(residual_quant_luma_rem),
+    .recon_luma_sample(residual_recon_luma_sample)
+  );
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -52,6 +61,7 @@ module ff_vvc_toy4x4_encoder (
       sampled_y <= '0;
       sampled_u <= '0;
       sampled_v <= '0;
+      luma_samples_q <= '0;
       quant_luma_rem_q <= 5'd16;
       m_axis_valid <= 1'b0;
       m_axis_data  <= '0;
@@ -65,6 +75,7 @@ module ff_vvc_toy4x4_encoder (
         stream_len_q   <= '0;
         input_error    <= 1'b0;
         sampled_color_valid <= 1'b0;
+        luma_samples_q <= '0;
         quant_luma_rem_q <= 5'd16;
         m_axis_valid   <= 1'b0;
         m_axis_last    <= 1'b0;
@@ -75,7 +86,12 @@ module ff_vvc_toy4x4_encoder (
         end
         if (input_count_q == 8'd0) begin
           sampled_y <= s_axis_data;
-          quant_luma_rem_q <= quant_luma_rem_from_solid_transform(s_axis_data);
+        end
+        if (input_count_q < 8'd16) begin
+          luma_samples_q[(15 - input_count_q[3:0]) * 8 +: 8] <= s_axis_data;
+        end
+        if (input_count_q == 8'd16) begin
+          quant_luma_rem_q <= residual_quant_luma_rem;
         end
         if (input_count_q == 8'd16) begin
           sampled_u <= s_axis_data;
@@ -143,60 +159,6 @@ module ff_vvc_toy4x4_encoder (
   function automatic logic [4:0] quant_luma_rem();
     begin
       quant_luma_rem = quant_luma_rem_q;
-    end
-  endfunction
-
-  function automatic signed [9:0] solid_luma_dc_coeff(input logic [7:0] sample);
-    begin
-      solid_luma_dc_coeff = $signed({ 2'b00, sample }) - 10'sd114;
-    end
-  endfunction
-
-  function automatic logic [4:0] quant_luma_rem_from_solid_transform(input logic [7:0] sample);
-    begin
-      quant_luma_rem_from_solid_transform = quant_luma_rem_from_dc_coeff(solid_luma_dc_coeff(sample));
-    end
-  endfunction
-
-  function automatic logic [4:0] quant_luma_rem_from_dc_coeff(input logic signed [9:0] dc_coeff);
-    logic [7:0] sample;
-    begin
-      sample = inverse_solid_luma_dc_coeff(dc_coeff);
-      quant_luma_rem_from_dc_coeff = quant_luma_rem_from_sample(sample);
-    end
-  endfunction
-
-  function automatic logic [7:0] inverse_solid_luma_dc_coeff(input logic signed [9:0] dc_coeff);
-    begin
-      if (dc_coeff <= -10'sd114) begin
-        inverse_solid_luma_dc_coeff = 8'd0;
-      end else if (dc_coeff >= 10'sd141) begin
-        inverse_solid_luma_dc_coeff = 8'd255;
-      end else begin
-        inverse_solid_luma_dc_coeff = dc_coeff + 10'sd114;
-      end
-    end
-  endfunction
-
-  function automatic logic [4:0] quant_luma_rem_from_sample(input logic [7:0] sample);
-    begin
-      if (sample >= 8'd111) quant_luma_rem_from_sample = 5'd0;
-      else if (sample >= 8'd104) quant_luma_rem_from_sample = 5'd1;
-      else if (sample >= 8'd96) quant_luma_rem_from_sample = 5'd2;
-      else if (sample >= 8'd89) quant_luma_rem_from_sample = 5'd3;
-      else if (sample >= 8'd82) quant_luma_rem_from_sample = 5'd4;
-      else if (sample >= 8'd75) quant_luma_rem_from_sample = 5'd5;
-      else if (sample >= 8'd68) quant_luma_rem_from_sample = 5'd6;
-      else if (sample >= 8'd61) quant_luma_rem_from_sample = 5'd7;
-      else if (sample >= 8'd54) quant_luma_rem_from_sample = 5'd8;
-      else if (sample >= 8'd46) quant_luma_rem_from_sample = 5'd9;
-      else if (sample >= 8'd39) quant_luma_rem_from_sample = 5'd10;
-      else if (sample >= 8'd32) quant_luma_rem_from_sample = 5'd11;
-      else if (sample >= 8'd25) quant_luma_rem_from_sample = 5'd12;
-      else if (sample >= 8'd18) quant_luma_rem_from_sample = 5'd13;
-      else if (sample >= 8'd11) quant_luma_rem_from_sample = 5'd14;
-      else if (sample >= 8'd4) quant_luma_rem_from_sample = 5'd15;
-      else quant_luma_rem_from_sample = 5'd16;
     end
   endfunction
 
