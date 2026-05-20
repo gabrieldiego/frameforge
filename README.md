@@ -27,6 +27,18 @@ Current status: skeleton, experimental, not production-ready, and not conforming
 
 ## Build
 
+Prerequisites:
+
+- Rust stable toolchain with `cargo` and `rustfmt`.
+- Python 3 for helper scripts and cocotb tests.
+- Optional RTL verification tools: cocotb and Icarus Verilog. cocotb can be installed from `requirements-dev.txt`.
+
+Check local tool availability:
+
+```sh
+make check-tools
+```
+
 ```sh
 make build
 ```
@@ -63,6 +75,8 @@ cargo run -- \
 
 Supported placeholder input formats are `yuv420p8` and `gray8`.
 
+The output is intentionally marked as placeholder data and is not a valid VVC/H.266 or other codec bitstream.
+
 ## RTL / cocotb
 
 The initial simulator target is Icarus Verilog through cocotb:
@@ -96,3 +110,15 @@ The helper fails gracefully if `FRAMEFORGE_DECODER` is not set or the decoder ca
 - No inter prediction, B-frames, rate control, real RDO, or compression optimization.
 - No screen-content coding tools yet; palette coding, intra block copy, BDPCM, transform skip, and related techniques are planned areas only.
 
+## Contributing
+
+See `CONTRIBUTING.md`. The short version: keep the early project clean, small, explicit about unsupported behavior, and free of imported reference-code implementations.
+
+## License
+
+FrameForge is licensed under either of:
+
+- Apache License, Version 2.0
+- MIT License
+
+at your option.

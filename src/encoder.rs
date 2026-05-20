@@ -2,6 +2,8 @@ use crate::bitstream::{rbsp_trailing_bits, AnnexBWriter, BitWriter, NalUnit, Nal
 use crate::picture::{Picture, PixelFormat, ReconstructionBuffer};
 use crate::trace::TraceEvent;
 
+pub const PLACEHOLDER_MAGIC: &[u8] = b"FRAMEFORGE_PLACEHOLDER_NOT_A_VALID_CODEC_BITSTREAM\n";
+
 #[derive(Debug, Clone)]
 pub struct EncoderParams {
     pub width: usize,
@@ -18,6 +20,14 @@ impl EncoderParams {
             format,
             block_size: 64,
         }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        Picture::validate_shape(self.width, self.height, self.format)?;
+        if self.block_size == 0 {
+            return Err("block size must be non-zero".to_string());
+        }
+        Ok(())
     }
 }
 
@@ -55,6 +65,10 @@ pub struct EncodeResult {
     pub trace_events: Vec<TraceEvent>,
 }
 
+pub trait Encoder {
+    fn encode_picture(&mut self, picture: &Picture) -> Result<EncodeResult, String>;
+}
+
 pub struct PlaceholderEncoder {
     params: EncoderParams,
     recon: ReconstructionBuffer,
@@ -62,11 +76,17 @@ pub struct PlaceholderEncoder {
 
 impl PlaceholderEncoder {
     pub fn new(params: EncoderParams) -> Self {
+        params
+            .validate()
+            .expect("invalid encoder parameters for placeholder encoder");
         let recon = ReconstructionBuffer::new(params.width, params.height, params.format);
         Self { params, recon }
     }
+}
 
+impl Encoder for PlaceholderEncoder {
     pub fn encode_picture(&mut self, picture: &Picture) -> Result<EncodeResult, String> {
+        self.params.validate()?;
         if picture.width != self.params.width
             || picture.height != self.params.height
             || picture.format != self.params.format
@@ -93,7 +113,7 @@ impl PlaceholderEncoder {
         rbsp.write_bool(matches!(self.params.format, PixelFormat::Yuv420p8));
         rbsp_trailing_bits(&mut rbsp);
 
-        let mut payload = b"FRAMEFORGE_PLACEHOLDER_NOT_A_VALID_CODEC_BITSTREAM\n".to_vec();
+        let mut payload = PLACEHOLDER_MAGIC.to_vec();
         payload.extend_from_slice(&rbsp.into_bytes());
         let _ = self.recon.as_slice();
 
@@ -128,5 +148,17 @@ mod tests {
                 h: 1
             })
         );
+    }
+
+    #[test]
+    fn encoder_params_reject_zero_dimensions() {
+        let params = EncoderParams::new(0, 64, PixelFormat::Gray8);
+        assert!(params.validate().is_err());
+    }
+
+    #[test]
+    fn encoder_params_reject_odd_yuv420_dimensions() {
+        let params = EncoderParams::new(63, 64, PixelFormat::Yuv420p8);
+        assert!(params.validate().is_err());
     }
 }

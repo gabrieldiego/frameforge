@@ -49,10 +49,27 @@ impl Picture {
     }
 
     pub fn expected_len(width: usize, height: usize, format: PixelFormat) -> usize {
+        Self::checked_len(width, height, format).expect("picture dimensions overflow usize")
+    }
+
+    pub fn checked_len(width: usize, height: usize, format: PixelFormat) -> Option<usize> {
+        let luma = width.checked_mul(height)?;
         match format {
-            PixelFormat::Yuv420p8 => width * height * 3 / 2,
-            PixelFormat::Gray8 => width * height,
+            PixelFormat::Yuv420p8 => luma.checked_mul(3)?.checked_div(2),
+            PixelFormat::Gray8 => Some(luma),
         }
+    }
+
+    pub fn validate_shape(width: usize, height: usize, format: PixelFormat) -> Result<(), String> {
+        if width == 0 || height == 0 {
+            return Err("picture width and height must be non-zero".to_string());
+        }
+        if matches!(format, PixelFormat::Yuv420p8) && (width % 2 != 0 || height % 2 != 0) {
+            return Err("yuv420p8 requires even width and height".to_string());
+        }
+        Self::checked_len(width, height, format)
+            .ok_or_else(|| "picture dimensions overflow addressable memory".to_string())?;
+        Ok(())
     }
 }
 

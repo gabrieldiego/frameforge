@@ -6,6 +6,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 
 - Rust crate and CLI skeleton.
 - Placeholder encoder output with an explicit not-valid-bitstream marker.
+- Basic encoder trait boundary for replacing the placeholder path with real codec implementations.
 - Generic bitstream utilities:
   - `BitWriter`
   - byte alignment
@@ -17,6 +18,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - Optional external decoder wrapper that does not assume a decoder is installed.
 - SystemVerilog RTL stubs with AXI-stream-style handshakes.
 - cocotb/Icarus verification skeleton.
+- Local contribution and license files for an open-source starting point.
 
 ## First VVC/H.266 Subset Target
 
@@ -55,4 +57,3 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 ## VVC Isolation
 
 VVC-specific code belongs in isolated modules such as `src/vvc.rs` or future `src/codecs/vvc/` modules. Generic infrastructure should use names such as `bitstream`, `encoder`, `picture`, `trace`, `packet`, and `golden` where reasonable. The project should not become permanently shaped around VVC terminology when a generic abstraction is sufficient.
-

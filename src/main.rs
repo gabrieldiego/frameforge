@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use frameforge::trace::TraceSink;
-use frameforge::{EncoderParams, Picture, PixelFormat, PlaceholderEncoder};
+use frameforge::{Encoder, EncoderParams, Picture, PixelFormat, PlaceholderEncoder};
 
 #[derive(Debug)]
 struct Cli {
@@ -32,6 +32,7 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<(), String> {
+    Picture::validate_shape(cli.width, cli.height, cli.format)?;
     let data = fs::read(&cli.input)
         .map_err(|err| format!("failed to read input '{}': {err}", cli.input.display()))?;
     let expected = Picture::expected_len(cli.width, cli.height, cli.format);
@@ -108,11 +109,61 @@ fn next_value(iter: &mut impl Iterator<Item = String>, flag: &str) -> Result<Str
 }
 
 fn parse_usize(value: String, flag: &str) -> Result<usize, String> {
-    value
+    let parsed = value
         .parse::<usize>()
-        .map_err(|_| format!("{flag} expects a positive integer, got '{value}'"))
+        .map_err(|_| format!("{flag} expects a positive integer, got '{value}'"))?;
+    if parsed == 0 {
+        return Err(format!("{flag} expects a positive integer, got 0"));
+    }
+    Ok(parsed)
 }
 
 fn usage() -> &'static str {
     "usage: frameforge --input <path> --width <w> --height <h> --format <format> --output <path> [--trace <path>]"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_cli_accepts_required_args() {
+        let cli = parse_cli(vec![
+            "--input".into(),
+            "in.yuv".into(),
+            "--width".into(),
+            "64".into(),
+            "--height".into(),
+            "32".into(),
+            "--format".into(),
+            "gray8".into(),
+            "--output".into(),
+            "out.ffbs".into(),
+        ])
+        .unwrap();
+
+        assert_eq!(cli.width, 64);
+        assert_eq!(cli.height, 32);
+        assert_eq!(cli.format, PixelFormat::Gray8);
+        assert_eq!(cli.trace, None);
+    }
+
+    #[test]
+    fn parse_cli_rejects_zero_width() {
+        let err = parse_cli(vec![
+            "--input".into(),
+            "in.yuv".into(),
+            "--width".into(),
+            "0".into(),
+            "--height".into(),
+            "32".into(),
+            "--format".into(),
+            "gray8".into(),
+            "--output".into(),
+            "out.ffbs".into(),
+        ])
+        .unwrap_err();
+
+        assert!(err.contains("--width"));
+    }
 }

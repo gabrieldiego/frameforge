@@ -3,6 +3,7 @@
 
 import argparse
 import os
+import shlex
 import subprocess
 import sys
 
@@ -27,7 +28,12 @@ def main() -> int:
         )
         return 2
 
-    cmd = [decoder, args.bitstream]
+    cmd = shlex.split(decoder)
+    if not cmd:
+        print("FRAMEFORGE_DECODER is empty.", file=sys.stderr)
+        return 2
+
+    cmd.append(args.bitstream)
     if args.output:
         cmd.extend(["-o", args.output])
     cmd.extend(extra)
@@ -36,7 +42,7 @@ def main() -> int:
         completed = subprocess.run(cmd, check=False)
     except FileNotFoundError:
         print(
-            f"decoder '{decoder}' was not found. Set FRAMEFORGE_DECODER to an "
+            f"decoder '{cmd[0]}' was not found. Set FRAMEFORGE_DECODER to an "
             "installed decoder executable such as vvdecapp or a VTM decoder.",
             file=sys.stderr,
         )
