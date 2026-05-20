@@ -252,6 +252,31 @@ pub struct Toy4x4SampledColor {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Toy4x4SampledFrame {
+    luma: [u8; 16],
+    u: u8,
+    v: u8,
+}
+
+impl Toy4x4SampledFrame {
+    fn solid(color: Toy4x4SampledColor) -> Self {
+        Self {
+            luma: [color.y; 16],
+            u: color.u,
+            v: color.v,
+        }
+    }
+
+    fn sampled_color(self) -> Toy4x4SampledColor {
+        Toy4x4SampledColor {
+            y: self.luma[0],
+            u: self.u,
+            v: self.v,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Toy4x4PictureKind {
     Idr,
     Cra,
@@ -381,21 +406,31 @@ pub fn skeleton_annex_b() -> Vec<u8> {
 
 pub fn toy_black_4x4_yuv420p8_annex_b(params: Toy4x4EncodeParams) -> Result<Vec<u8>, String> {
     validate_toy_4x4_frame_count(params)?;
-    toy_4x4_yuv420p8_annex_b(params, Toy4x4SampledColor { y: 0, u: 0, v: 0 })
+    toy_4x4_yuv420p8_annex_b(
+        params,
+        Toy4x4SampledFrame::solid(Toy4x4SampledColor { y: 0, u: 0, v: 0 }),
+    )
 }
 
 pub fn toy_4x4_yuv420p8_annex_b_from_input(
     input: &[u8],
     params: Toy4x4EncodeParams,
 ) -> Result<Vec<u8>, String> {
-    let color = sample_toy_4x4_first_yuv420p8(input, params)?;
-    toy_4x4_yuv420p8_annex_b(params, color)
+    let frame = sample_toy_4x4_yuv420p8_frame(input, params)?;
+    toy_4x4_yuv420p8_annex_b(params, frame)
 }
 
 pub fn sample_toy_4x4_first_yuv420p8(
     input: &[u8],
     params: Toy4x4EncodeParams,
 ) -> Result<Toy4x4SampledColor, String> {
+    Ok(sample_toy_4x4_yuv420p8_frame(input, params)?.sampled_color())
+}
+
+fn sample_toy_4x4_yuv420p8_frame(
+    input: &[u8],
+    params: Toy4x4EncodeParams,
+) -> Result<Toy4x4SampledFrame, String> {
     validate_toy_4x4_frame_count(params)?;
     let frame_len = Picture::expected_len(4, 4, PixelFormat::Yuv420p8);
     let expected_len = frame_len * params.frames;
@@ -408,15 +443,22 @@ pub fn sample_toy_4x4_first_yuv420p8(
         ));
     }
 
-    Ok(Toy4x4SampledColor {
-        y: input[0],
+    let mut luma = [0; 16];
+    luma.copy_from_slice(&input[0..16]);
+
+    Ok(Toy4x4SampledFrame {
+        luma,
         u: input[16],
         v: input[20],
     })
 }
 
 pub fn quantize_toy_4x4_color(color: Toy4x4SampledColor) -> Toy4x4QuantizedColor {
-    let luma_transform = transform_toy_4x4_solid_luma(color.y);
+    quantize_toy_4x4_frame(Toy4x4SampledFrame::solid(color))
+}
+
+fn quantize_toy_4x4_frame(frame: Toy4x4SampledFrame) -> Toy4x4QuantizedColor {
+    let luma_transform = transform_toy_4x4_luma(frame.luma);
     let quantized_luma = quantize_toy_4x4_luma_dc(luma_transform);
     let reconstructed_luma = inverse_transform_toy_4x4_luma_dc(quantized_luma);
     Toy4x4QuantizedColor {
@@ -440,13 +482,13 @@ fn validate_toy_4x4_frame_count(params: Toy4x4EncodeParams) -> Result<(), String
 
 fn toy_4x4_yuv420p8_annex_b(
     params: Toy4x4EncodeParams,
-    color: Toy4x4SampledColor,
+    frame: Toy4x4SampledFrame,
 ) -> Result<Vec<u8>, String> {
     let mut units = Vec::with_capacity(params.frames + 3);
     units.push(toy_4x4_sps_unit());
     units.push(toy_4x4_pps_unit());
-    units.push(toy_4x4_color_filler_unit(color));
-    let quantized = quantize_toy_4x4_color(color);
+    units.push(toy_4x4_color_filler_unit(frame.sampled_color()));
+    let quantized = quantize_toy_4x4_frame(frame);
     for frame_idx in 0..params.frames {
         units.push(toy_4x4_slice_unit(frame_idx, quantized)?);
     }
@@ -1112,9 +1154,11 @@ fn renorm_bits(mut range: u32) -> u32 {
     bits
 }
 
-fn transform_toy_4x4_solid_luma(sample: u8) -> Toy4x4TransformBlock {
+fn transform_toy_4x4_luma(samples: [u8; 16]) -> Toy4x4TransformBlock {
+    let sum: u16 = samples.iter().map(|sample| *sample as u16).sum();
+    let dc_sample = ((sum + 8) >> 4) as u8;
     Toy4x4TransformBlock {
-        dc_coeff: sample as i16 - TOY_LUMA_DC_BASE,
+        dc_coeff: dc_sample as i16 - TOY_LUMA_DC_BASE,
     }
 }
 
@@ -1461,22 +1505,32 @@ mod tests {
     #[test]
     fn toy_solid_luma_transform_generates_dc_only() {
         assert_eq!(
-            transform_toy_4x4_solid_luma(0),
+            transform_toy_4x4_luma([0; 16]),
             Toy4x4TransformBlock { dc_coeff: -114 }
         );
         assert_eq!(
-            transform_toy_4x4_solid_luma(64),
+            transform_toy_4x4_luma([64; 16]),
             Toy4x4TransformBlock { dc_coeff: -50 }
         );
         assert_eq!(
-            transform_toy_4x4_solid_luma(114),
+            transform_toy_4x4_luma([114; 16]),
             Toy4x4TransformBlock { dc_coeff: 0 }
         );
     }
 
     #[test]
+    fn toy_luma_transform_dc_uses_all_samples() {
+        let mut samples = [64; 16];
+        samples[3] = 255;
+        assert_eq!(
+            transform_toy_4x4_luma(samples),
+            Toy4x4TransformBlock { dc_coeff: -38 }
+        );
+    }
+
+    #[test]
     fn toy_luma_dc_quantization_matches_existing_ladder() {
-        let black = quantize_toy_4x4_luma_dc(transform_toy_4x4_solid_luma(0));
+        let black = quantize_toy_4x4_luma_dc(transform_toy_4x4_luma([0; 16]));
         assert_eq!(
             black,
             Toy4x4QuantizedTransformBlock {
@@ -1485,7 +1539,7 @@ mod tests {
             }
         );
 
-        let mid = quantize_toy_4x4_luma_dc(transform_toy_4x4_solid_luma(65));
+        let mid = quantize_toy_4x4_luma_dc(transform_toy_4x4_luma([65; 16]));
         assert_eq!(
             mid,
             Toy4x4QuantizedTransformBlock {
@@ -1494,7 +1548,7 @@ mod tests {
             }
         );
 
-        let white = quantize_toy_4x4_luma_dc(transform_toy_4x4_solid_luma(255));
+        let white = quantize_toy_4x4_luma_dc(transform_toy_4x4_luma([255; 16]));
         assert_eq!(
             white,
             Toy4x4QuantizedTransformBlock {
@@ -1525,6 +1579,22 @@ mod tests {
                 u: 0,
                 v: 0,
                 luma_rem: 7,
+                chroma_rem: 6
+            }
+        );
+    }
+
+    #[test]
+    fn toy_frame_quantization_uses_all_luma_samples_for_dc() {
+        let mut luma = [64; 16];
+        luma[3] = 255;
+        assert_eq!(
+            quantize_toy_4x4_frame(Toy4x4SampledFrame { luma, u: 9, v: 7 }),
+            Toy4x4QuantizedColor {
+                y: 78,
+                u: 0,
+                v: 0,
+                luma_rem: 5,
                 chroma_rem: 6
             }
         );

@@ -5,28 +5,39 @@ module ff_residual_stub (
   output logic [4:0]   quant_luma_rem,
   output logic [7:0]   recon_luma_sample
 );
-  logic [7:0] first_luma_sample;
   logic signed [9:0] dc_coeff;
   logic signed [9:0] quantized_dc_coeff;
 
-  assign first_luma_sample = luma_samples[127:120];
-  assign dc_coeff = solid_luma_dc_coeff(luma_samples);
+  assign dc_coeff = forward_luma_dc_coeff(luma_samples);
   assign quant_luma_rem = quant_luma_rem_from_dc_coeff(dc_coeff);
   assign quantized_dc_coeff = reconstructed_dc_coeff_from_rem(quant_luma_rem);
-  assign recon_luma_sample = inverse_solid_luma_dc_coeff(quantized_dc_coeff);
+  assign recon_luma_sample = inverse_luma_dc_coeff(quantized_dc_coeff);
 
-  function automatic signed [9:0] solid_luma_dc_coeff(input logic [127:0] samples);
+  function automatic signed [9:0] forward_luma_dc_coeff(input logic [127:0] samples);
+    logic [12:0] sum;
+    logic [7:0] dc_sample;
     begin
-      // Current toy model is intentionally solid-color only. All samples are
-      // still carried into this block so later transforms can consume them.
-      solid_luma_dc_coeff = $signed({ 2'b00, samples[127:120] }) - 10'sd114;
+      // Current token generation still emits only the DC coefficient, but the
+      // residual block consumes all luma samples so SW and RTL share the same
+      // first transform boundary.
+      sum =
+        {5'd0, samples[127:120]} + {5'd0, samples[119:112]} +
+        {5'd0, samples[111:104]} + {5'd0, samples[103:96]}  +
+        {5'd0, samples[95:88]}   + {5'd0, samples[87:80]}   +
+        {5'd0, samples[79:72]}   + {5'd0, samples[71:64]}   +
+        {5'd0, samples[63:56]}   + {5'd0, samples[55:48]}   +
+        {5'd0, samples[47:40]}   + {5'd0, samples[39:32]}   +
+        {5'd0, samples[31:24]}   + {5'd0, samples[23:16]}   +
+        {5'd0, samples[15:8]}    + {5'd0, samples[7:0]};
+      dc_sample = (sum + 13'd8) >> 4;
+      forward_luma_dc_coeff = $signed({ 2'b00, dc_sample }) - 10'sd114;
     end
   endfunction
 
   function automatic logic [4:0] quant_luma_rem_from_dc_coeff(input logic signed [9:0] coeff);
     logic [7:0] sample;
     begin
-      sample = inverse_solid_luma_dc_coeff(coeff);
+      sample = inverse_luma_dc_coeff(coeff);
       quant_luma_rem_from_dc_coeff = quant_luma_rem_from_sample(sample);
     end
   endfunction
@@ -37,14 +48,14 @@ module ff_residual_stub (
     end
   endfunction
 
-  function automatic logic [7:0] inverse_solid_luma_dc_coeff(input logic signed [9:0] coeff);
+  function automatic logic [7:0] inverse_luma_dc_coeff(input logic signed [9:0] coeff);
     begin
       if (coeff <= -10'sd114) begin
-        inverse_solid_luma_dc_coeff = 8'd0;
+        inverse_luma_dc_coeff = 8'd0;
       end else if (coeff >= 10'sd141) begin
-        inverse_solid_luma_dc_coeff = 8'd255;
+        inverse_luma_dc_coeff = 8'd255;
       end else begin
-        inverse_solid_luma_dc_coeff = coeff + 10'sd114;
+        inverse_luma_dc_coeff = coeff + 10'sd114;
       end
     end
   endfunction

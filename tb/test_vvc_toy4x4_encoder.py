@@ -40,8 +40,8 @@ def quantized_luma(sample):
     )
 
 
-def solid_luma_dc(sample):
-    return sample - 114
+def forward_luma_dc(samples):
+    return ((sum(samples) + 8) >> 4) - 114
 
 
 def quantized_luma_dc(dc_coeff):
@@ -49,14 +49,14 @@ def quantized_luma_dc(dc_coeff):
     return quantized_luma(sample) - 114
 
 
-def inverse_transform_solid_luma_dc(dc_coeff):
+def inverse_transform_luma_dc(dc_coeff):
     return max(0, min(255, dc_coeff + 114))
 
 
 def decoded_reconstruction(frames, data):
     # This is the reconstruction of the emitted VVC bitstream. Chroma remains
     # quantized to zero until the toy residual path supports chroma color.
-    y = inverse_transform_solid_luma_dc(quantized_luma_dc(solid_luma_dc(data[0])))
+    y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(data[:16])))
     frame = bytes([y] * 16 + [0] * 4 + [0] * 4)
     return frame * frames
 
