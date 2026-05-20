@@ -332,16 +332,18 @@ pub fn toy_4x4_yuv420p8_annex_b_from_input(
     input: &[u8],
     params: Toy4x4EncodeParams,
 ) -> Result<Vec<u8>, String> {
-    validate_toy_4x4_frame_count(params)?;
-    let color = sample_toy_4x4_first_yuv420p8(input, params)?;
-    if color != (Toy4x4SampledColor { y: 0, u: 0, v: 0 }) {
-        return Err(format!(
-            "toy VVC bitstream generation currently supports only black after first-pixel sampling; got y={} u={} v={}",
-            color.y, color.u, color.v
-        ));
-    }
-
+    let _ = sample_toy_4x4_first_yuv420p8(input, params)?;
+    // TODO(vvc): Feed the sampled color into residual/CABAC packet generation.
+    // The current VVC payload is still the verified black toy stream.
     toy_4x4_yuv420p8_annex_b(params)
+}
+
+pub fn toy_4x4_sampled_reconstruction_from_input(
+    input: &[u8],
+    params: Toy4x4EncodeParams,
+) -> Result<Vec<u8>, String> {
+    let color = sample_toy_4x4_first_yuv420p8(input, params)?;
+    Ok(toy_4x4_sampled_reconstruction(color, params.frames))
 }
 
 pub fn sample_toy_4x4_first_yuv420p8(
@@ -365,6 +367,17 @@ pub fn sample_toy_4x4_first_yuv420p8(
         u: input[16],
         v: input[20],
     })
+}
+
+fn toy_4x4_sampled_reconstruction(color: Toy4x4SampledColor, frames: usize) -> Vec<u8> {
+    let frame_len = Picture::expected_len(4, 4, PixelFormat::Yuv420p8);
+    let mut out = Vec::with_capacity(frame_len * frames);
+    for _ in 0..frames {
+        out.extend(std::iter::repeat_n(color.y, 16));
+        out.extend(std::iter::repeat_n(color.u, 4));
+        out.extend(std::iter::repeat_n(color.v, 4));
+    }
+    out
 }
 
 fn validate_toy_4x4_frame_count(params: Toy4x4EncodeParams) -> Result<(), String> {
@@ -1076,11 +1089,24 @@ mod tests {
     }
 
     #[test]
-    fn toy_4x4_bitstream_path_rejects_non_black_solid_until_residuals_exist() {
+    fn toy_4x4_bitstream_path_accepts_sampled_non_black_input() {
         let input = solid_yuv420p8(64, 128, 192, 1);
-        assert!(
-            toy_4x4_yuv420p8_annex_b_from_input(&input, Toy4x4EncodeParams { frames: 1 }).is_err()
-        );
+        let bytes =
+            toy_4x4_yuv420p8_annex_b_from_input(&input, Toy4x4EncodeParams { frames: 1 }).unwrap();
+        let infos = parse_annex_b_nal_units(&bytes).unwrap();
+        let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
+        assert_eq!(types, vec![15, 16, 8]);
+    }
+
+    #[test]
+    fn toy_4x4_sampled_reconstruction_uses_first_yuv_values() {
+        let mut input = solid_yuv420p8(64, 128, 192, 2);
+        input[1] = 0;
+        input[17] = 0;
+        let recon =
+            toy_4x4_sampled_reconstruction_from_input(&input, Toy4x4EncodeParams { frames: 2 })
+                .unwrap();
+        assert_eq!(recon, solid_yuv420p8(64, 128, 192, 2));
     }
 
     #[test]

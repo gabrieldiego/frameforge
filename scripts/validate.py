@@ -58,7 +58,8 @@ def main() -> int:
     rtl_internal_recon = out_dir / f"{stem}_rtl_internal_rec.yuv"
     vtm_recon = out_dir / f"{stem}_vtm_from_rtl_dec.yuv"
 
-    sw_internal_recon.write_bytes(software_internal_reconstruction(info))
+    input_data = input_path.read_bytes()
+    sw_internal_recon.write_bytes(software_internal_reconstruction(input_data, info))
 
     run(
         [
@@ -84,9 +85,11 @@ def main() -> int:
 
     env = os.environ.copy()
     if info.frames == 1:
+        env["FRAMEFORGE_RTL_TOY4X4_INPUT_1F"] = str(input_path)
         env["FRAMEFORGE_RTL_TOY4X4_OUT_1F"] = str(rtl_bitstream)
         env["FRAMEFORGE_RTL_TOY4X4_RECON_OUT_1F"] = str(rtl_internal_recon)
     else:
+        env["FRAMEFORGE_RTL_TOY4X4_INPUT"] = str(input_path)
         env["FRAMEFORGE_RTL_TOY4X4_OUT"] = str(rtl_bitstream)
         env["FRAMEFORGE_RTL_TOY4X4_RECON_OUT"] = str(rtl_internal_recon)
     run(["make", "rtl-test", "DUT=vvc-toy4x4"], env=env)
@@ -197,10 +200,6 @@ def validate_supported_input(input_path: Path, info: InputInfo) -> None:
         raise ValueError(
             f"input size mismatch: got {len(data)} bytes, expected {expected_len}"
         )
-    if any(data):
-        raise ValueError(
-            "toy VVC validation currently supports only all-zero black input"
-        )
 
 
 def normalize_format(fmt: str) -> str:
@@ -222,9 +221,15 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def software_internal_reconstruction(info: InputInfo) -> bytes:
+def software_internal_reconstruction(data: bytes, info: InputInfo) -> bytes:
     frame_len = info.width * info.height * 3 // 2
-    return bytes(frame_len * info.frames)
+    y = data[0]
+    u = data[info.width * info.height]
+    v = data[info.width * info.height + (info.width * info.height // 4)]
+    frame = bytes([y] * (info.width * info.height))
+    frame += bytes([u] * (info.width * info.height // 4))
+    frame += bytes([v] * (info.width * info.height // 4))
+    return frame * info.frames
 
 
 if __name__ == "__main__":

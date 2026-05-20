@@ -24,11 +24,24 @@ def varied_yuv420p8(y, u, v, frames):
     return bytes(frame) * frames
 
 
-def software_stream(frames):
+def input_data(frames):
+    specific = os.environ.get(f"FRAMEFORGE_RTL_TOY4X4_INPUT_{frames}F")
+    generic = os.environ.get("FRAMEFORGE_RTL_TOY4X4_INPUT")
+    if path := specific or generic:
+        data = Path(path).read_bytes()
+        return data[: len(solid_yuv420p8(0, 0, 0, frames))]
+    return solid_yuv420p8(0, 0, 0, frames)
+
+
+def sampled_reconstruction(data, frames):
+    return solid_yuv420p8(data[0], data[16], data[20], frames)
+
+
+def software_stream(frames, data):
     with tempfile.TemporaryDirectory() as tmpdir:
         input_yuv = Path(tmpdir) / f"black_4x4_{frames}f_yuv420p8.yuv"
         output = Path(tmpdir) / "toy.vvc"
-        input_yuv.write_bytes(solid_yuv420p8(0, 0, 0, frames))
+        input_yuv.write_bytes(data)
         subprocess.run(
             [
                 "cargo",
@@ -49,10 +62,6 @@ def software_stream(frames):
         return output.read_bytes()
 
 
-def internal_reconstruction(frames):
-    return bytes(4 * 4 * 3 // 2 * frames)
-
-
 async def feed_input(dut, data):
     for index, sample in enumerate(data):
         while dut.s_axis_ready.value != 1:
@@ -68,6 +77,7 @@ async def feed_input(dut, data):
 
 
 async def collect_stream(dut, frames):
+    data = input_data(frames)
     await Timer(1, unit="ns")
 
     dut.rst_n.value = 0
@@ -87,13 +97,13 @@ async def collect_stream(dut, frames):
     await RisingEdge(dut.clk)
     dut.start.value = 0
 
-    await feed_input(dut, solid_yuv420p8(0, 0, 0, frames))
+    await feed_input(dut, data)
     await ReadOnly()
     assert dut.input_error.value == 0
     assert dut.sampled_color_valid.value == 1
-    assert int(dut.sampled_y.value) == 0
-    assert int(dut.sampled_u.value) == 0
-    assert int(dut.sampled_v.value) == 0
+    assert int(dut.sampled_y.value) == data[0]
+    assert int(dut.sampled_u.value) == data[16]
+    assert int(dut.sampled_v.value) == data[20]
 
     observed = bytearray()
     if dut.m_axis_valid.value == 1:
@@ -107,7 +117,7 @@ async def collect_stream(dut, frames):
             if dut.m_axis_last.value == 1:
                 break
 
-    return bytes(observed)
+    return bytes(observed), data
 
 
 async def drain_sampled_color(dut, frames, y, u, v):
@@ -143,8 +153,8 @@ async def drain_sampled_color(dut, frames, y, u, v):
 async def vvc_toy4x4_encoder_matches_software_stream(dut):
     cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
 
-    one_frame = await collect_stream(dut, frames=1)
-    assert one_frame == software_stream(frames=1)
+    one_frame, one_frame_input = await collect_stream(dut, frames=1)
+    assert one_frame == software_stream(frames=1, data=one_frame_input)
     if path := os.environ.get("FRAMEFORGE_RTL_TOY4X4_OUT_1F"):
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -152,10 +162,10 @@ async def vvc_toy4x4_encoder_matches_software_stream(dut):
     if path := os.environ.get("FRAMEFORGE_RTL_TOY4X4_RECON_OUT_1F"):
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_bytes(internal_reconstruction(frames=1))
+        output.write_bytes(sampled_reconstruction(one_frame_input, frames=1))
 
-    two_frames = await collect_stream(dut, frames=2)
-    assert two_frames == software_stream(frames=2)
+    two_frames, two_frame_input = await collect_stream(dut, frames=2)
+    assert two_frames == software_stream(frames=2, data=two_frame_input)
     if path := os.environ.get("FRAMEFORGE_RTL_TOY4X4_OUT"):
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -163,7 +173,7 @@ async def vvc_toy4x4_encoder_matches_software_stream(dut):
     if path := os.environ.get("FRAMEFORGE_RTL_TOY4X4_RECON_OUT"):
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_bytes(internal_reconstruction(frames=2))
+        output.write_bytes(sampled_reconstruction(two_frame_input, frames=2))
 
 
 @cocotb.test()
