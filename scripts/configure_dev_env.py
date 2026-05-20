@@ -7,6 +7,7 @@ import argparse
 import shutil
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,7 @@ class Tool:
     ubuntu: str
     required: bool = True
     version_args: tuple[str, ...] = ("--version",)
+    alternate_paths: tuple[str, ...] = ()
 
 
 TOOLS = (
@@ -75,8 +77,15 @@ TOOLS = (
         name="cocotb",
         command="cocotb-config",
         required_for="Python RTL verification",
-        ubuntu="python3 -m pip install -r requirements-dev.txt",
+        ubuntu=(
+            "sudo apt update && sudo apt install -y python3-venv python3-pip\n"
+            "  python3 -m venv .venv\n"
+            "  . .venv/bin/activate\n"
+            "  python -m pip install -U pip\n"
+            "  python -m pip install -r requirements-dev.txt"
+        ),
         required=False,
+        alternate_paths=(".venv/bin/cocotb-config",),
     ),
 )
 
@@ -96,9 +105,9 @@ def main() -> int:
     print("FrameForge development environment check\n")
 
     for tool in TOOLS:
-        path = shutil.which(tool.command)
+        path = find_tool(tool)
         if path:
-            version = read_version(tool.command, tool.version_args)
+            version = read_version(path, tool.version_args)
             print(f"[ok]      {tool.name}: {path}{version}")
             continue
 
@@ -131,6 +140,18 @@ def read_version(command: str, args: tuple[str, ...]) -> str:
     return f" ({text[0]})" if text else ""
 
 
+def find_tool(tool: Tool) -> str | None:
+    path = shutil.which(tool.command)
+    if path:
+        return path
+
+    for alternate in tool.alternate_paths:
+        candidate = Path(alternate)
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
 def print_install_help(title: str, tools: list[Tool]) -> None:
     if not tools:
         return
@@ -141,7 +162,8 @@ def print_install_help(title: str, tools: list[Tool]) -> None:
         if tool.ubuntu in seen:
             continue
         seen.add(tool.ubuntu)
-        print(f"  {tool.ubuntu}")
+        for line in tool.ubuntu.splitlines():
+            print(f"  {line}")
 
 
 if __name__ == "__main__":

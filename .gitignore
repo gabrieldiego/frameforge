@@ -1,4 +1,5 @@
 /target/
+/.venv/
 /tb/sim_build/
 /tb/results.xml
 /tb/__pycache__/
