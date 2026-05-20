@@ -16,6 +16,7 @@ pub enum VvcSyntaxCode {
     U,
     Ue,
     Se,
+    ByteAlignZero,
     CabacToken,
     RbspTrailingBits,
 }
@@ -94,6 +95,25 @@ impl VvcSyntaxWriter {
         self.push_field(name, VvcSyntaxCode::CabacToken, bit_count as usize);
         self.writer.write_bits(value, bit_count);
         self.bit_offset += bit_count as usize;
+    }
+
+    pub fn write_cabac_bits(&mut self, name: &'static str, bits: &[bool]) {
+        self.push_field(name, VvcSyntaxCode::CabacToken, bits.len());
+        for bit in bits {
+            self.writer.write_bit(*bit);
+        }
+        self.bit_offset += bits.len();
+    }
+
+    pub fn byte_align_zero(&mut self, name: &'static str) {
+        let remainder = self.bit_offset % 8;
+        if remainder == 0 {
+            return;
+        }
+        let bit_count = 8 - remainder;
+        self.push_field(name, VvcSyntaxCode::ByteAlignZero, bit_count);
+        self.writer.byte_align_zero();
+        self.bit_offset += bit_count;
     }
 
     pub fn rbsp_trailing_bits(&mut self) {
@@ -637,87 +657,40 @@ fn toy_4x4_pps_payload() -> Vec<u8> {
 }
 
 fn toy_4x4_slice_payload(picture_kind: Toy4x4PictureKind, color: Toy4x4QuantizedColor) -> Vec<u8> {
-    let tokens = toy_4x4_entropy_tokens(color);
-    toy_4x4_verified_slice_payload_from_tokens(picture_kind, &tokens)
-}
-
-fn toy_4x4_verified_slice_payload_from_tokens(
-    picture_kind: Toy4x4PictureKind,
-    tokens: &[ToyEntropyToken],
-) -> Vec<u8> {
-    let luma_rem = toy_luma_rem_from_entropy_tokens(tokens);
-    let chroma_rem = toy_chroma_rem_from_entropy_tokens(tokens);
-    assert_eq!(
-        chroma_rem, 6,
-        "only the verified zero-chroma toy token stream is currently mapped to VVC bytes"
-    );
-
-    let idr = match luma_rem {
-        0 => "c4007080593f5e58fc",
-        1 => "c40070805e1faf2c7e",
-        2 => "c4007080608fd7963f",
-        3 => "c400708061c7ebcb1f80",
-        4 => "c40070806263f5e58fc0",
-        5 => "c400708062b1faf2c7e0",
-        6 => "c400708062cf7ebcb1f8",
-        7 => "c400708062ddfebcb1f8",
-        8 => "c400708062e55faf2c7e",
-        9 => "c400708062e8ffaf2c7e",
-        10 => "c400708062ec9faf2c7e",
-        11 => "c400708062f03faf2c7e",
-        12 => "c400708062f217ebcb1f80",
-        13 => "c400708062f2ffebcb1f80",
-        14 => "c400708062f3e7ebcb1f80",
-        15 => "c400708062f4cfebcb1f80",
-        _ => "c400708062f5b7ebcb1f80",
-    };
-    let mut payload = hex_to_bytes(idr);
+    let mut writer = VvcSyntaxWriter::new();
+    writer.write_flag("sh_picture_header_in_slice_header_flag", true);
+    writer.write_flag("ph_gdr_or_irap_pic_flag", true);
+    writer.write_flag("ph_non_ref_pic_flag", false);
+    writer.write_flag("ph_gdr_pic_flag", false);
+    writer.write_flag("ph_inter_slice_allowed_flag", false);
+    writer.write_ue("ph_pic_parameter_set_id", 0);
+    match picture_kind {
+        Toy4x4PictureKind::Idr => {
+            writer.write_u("ph_pic_order_cnt_lsb", 0, 8);
+        }
+        Toy4x4PictureKind::Cra => {
+            writer.write_u("ph_pic_order_cnt_lsb", 1, 8);
+        }
+    }
+    writer.write_flag("ph_partition_constraints_override_flag", false);
+    writer.write_flag("ph_joint_cbcr_sign_flag", false);
+    writer.write_flag("sh_no_output_of_prior_pics_flag", false);
+    writer.write_se("sh_qp_delta", 0);
+    writer.write_flag("sh_dep_quant_used_flag", true);
+    writer.write_flag("cabac_alignment_one_bit", true);
     if picture_kind == Toy4x4PictureKind::Cra {
-        patch_slice_payload_for_cra(&mut payload);
+        writer.write_flag("cabac_alignment_one_bit", true);
     }
-    payload
+    writer.byte_align_zero("cabac_alignment_zero_bit");
+    write_toy_coding_tree_entropy(&mut writer, color);
+    writer.rbsp_trailing_bits();
+    debug_assert!(writer.is_byte_aligned());
+    writer.into_bytes()
 }
 
-fn toy_luma_rem_from_entropy_tokens(tokens: &[ToyEntropyToken]) -> u8 {
-    tokens
-        .iter()
-        .find_map(|token| match token.kind {
-            ToyEntropyTokenKind::RemAbsEp {
-                component: ToyResidualComponent::Luma,
-                value,
-                ..
-            } => Some(value),
-            _ => None,
-        })
-        .expect("toy entropy stream must contain a luma residual token")
-}
-
-fn toy_chroma_rem_from_entropy_tokens(tokens: &[ToyEntropyToken]) -> u8 {
-    tokens
-        .iter()
-        .find_map(|token| match token.kind {
-            ToyEntropyTokenKind::RemAbsEp {
-                component: ToyResidualComponent::ChromaCb,
-                value,
-                ..
-            } => Some(value),
-            _ => None,
-        })
-        .expect("toy entropy stream must contain a chroma residual token")
-}
-
-fn patch_slice_payload_for_cra(payload: &mut [u8]) {
-    payload[0] = 0xc4;
-    payload[1] = 0x04;
-    payload[2] = 0x78;
-}
-
-#[cfg(test)]
 fn write_toy_coding_tree_entropy(writer: &mut VvcSyntaxWriter, color: Toy4x4QuantizedColor) {
-    let bytes = toy_cabac_bytes(color);
-    for byte in bytes {
-        writer.write_cabac_token("cabac_toy_quantized_residual_byte", byte as u64, 8);
-    }
+    let bits = toy_cabac_bits(color);
+    writer.write_cabac_bits("cabac_toy_quantized_residual_bits", &bits);
 }
 
 fn toy_4x4_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<ToyEntropyToken> {
@@ -801,8 +774,7 @@ fn toy_4x4_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<ToyEntropyToken> {
     ]
 }
 
-#[cfg(test)]
-fn toy_cabac_bytes(color: Toy4x4QuantizedColor) -> Vec<u8> {
+fn toy_cabac_bits(color: Toy4x4QuantizedColor) -> Vec<bool> {
     let mut cabac = ToyCabacEncoder::new();
     cabac.start();
     for token in toy_4x4_entropy_tokens(color) {
@@ -826,94 +798,85 @@ fn toy_cabac_bytes(color: Toy4x4QuantizedColor) -> Vec<u8> {
     cabac.finish()
 }
 
-#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 struct ToyCtxEvent {
     lps: u16,
-    mps_equal: bool,
+    mps: bool,
 }
 
-#[cfg(test)]
 const TOY_CTX_EVENTS: [ToyCtxEvent; 19] = [
     ToyCtxEvent {
         lps: 146,
-        mps_equal: true,
+        mps: false,
     },
-    ToyCtxEvent {
-        lps: 81,
-        mps_equal: true,
-    },
+    ToyCtxEvent { lps: 81, mps: true },
     ToyCtxEvent {
         lps: 128,
-        mps_equal: false,
+        mps: true,
     },
-    ToyCtxEvent {
-        lps: 52,
-        mps_equal: true,
-    },
+    ToyCtxEvent { lps: 52, mps: true },
     ToyCtxEvent {
         lps: 160,
-        mps_equal: false,
+        mps: true,
     },
     ToyCtxEvent {
         lps: 129,
-        mps_equal: false,
+        mps: true,
     },
     ToyCtxEvent {
         lps: 24,
-        mps_equal: false,
+        mps: false,
     },
     ToyCtxEvent {
         lps: 58,
-        mps_equal: true,
+        mps: false,
     },
     ToyCtxEvent {
         lps: 29,
-        mps_equal: false,
+        mps: false,
     },
     ToyCtxEvent {
         lps: 172,
-        mps_equal: true,
+        mps: true,
     },
     ToyCtxEvent {
         lps: 107,
-        mps_equal: true,
+        mps: false,
     },
     ToyCtxEvent {
         lps: 136,
-        mps_equal: false,
+        mps: false,
     },
     ToyCtxEvent {
         lps: 128,
-        mps_equal: true,
+        mps: true,
     },
     ToyCtxEvent {
         lps: 125,
-        mps_equal: false,
+        mps: false,
     },
     ToyCtxEvent {
         lps: 184,
-        mps_equal: true,
+        mps: false,
     },
     ToyCtxEvent {
         lps: 112,
-        mps_equal: true,
+        mps: false,
     },
     ToyCtxEvent {
         lps: 28,
-        mps_equal: false,
+        mps: false,
     },
     ToyCtxEvent {
         lps: 67,
-        mps_equal: true,
+        mps: false,
     },
     ToyCtxEvent {
         lps: 26,
-        mps_equal: false,
+        mps: false,
     },
 ];
 
-#[cfg(test)]
 #[derive(Debug, Clone)]
 struct ToyCabacEncoder {
     bits: Vec<bool>,
@@ -924,7 +887,6 @@ struct ToyCabacEncoder {
     bits_left: i32,
 }
 
-#[cfg(test)]
 impl ToyCabacEncoder {
     fn new() -> Self {
         Self {
@@ -955,7 +917,7 @@ impl ToyCabacEncoder {
     fn encode_bin(&mut self, bin: bool, event: ToyCtxEvent) {
         let lps = event.lps as u32;
         self.range -= lps;
-        if bin != event.mps_equal {
+        if bin != event.mps {
             let num_bits = renorm_bits(lps);
             self.bits_left -= num_bits as i32;
             self.low += self.range;
@@ -987,8 +949,30 @@ impl ToyCabacEncoder {
     }
 
     fn encode_bins_ep(&mut self, bins: u32, num_bins: u32) {
-        for bit in (0..num_bins).rev() {
-            self.encode_bin_ep(((bins >> bit) & 1) != 0);
+        if self.range == 256 {
+            self.encode_aligned_bins_ep(bins, num_bins);
+            return;
+        }
+
+        let mut bins = bins;
+        let mut num_bins = num_bins;
+        while num_bins > 8 {
+            num_bins -= 8;
+            let pattern = bins >> num_bins;
+            self.low <<= 8;
+            self.low += self.range * pattern;
+            bins -= pattern << num_bins;
+            self.bits_left -= 8;
+            if self.bits_left < 12 {
+                self.write_out();
+            }
+        }
+
+        self.low <<= num_bins;
+        self.low += self.range * bins;
+        self.bits_left -= num_bins as i32;
+        if self.bits_left < 12 {
+            self.write_out();
         }
     }
 
@@ -1033,7 +1017,7 @@ impl ToyCabacEncoder {
         }
     }
 
-    fn finish(mut self) -> Vec<u8> {
+    fn finish(mut self) -> Vec<bool> {
         if (self.low >> (32 - self.bits_left)) != 0 {
             self.write_bits(self.buffered_byte + 1, 8);
             while self.num_buffered_bytes > 1 {
@@ -1054,7 +1038,7 @@ impl ToyCabacEncoder {
         if final_bits > 0 {
             self.write_bits(self.low >> 8, final_bits as u32);
         }
-        bools_to_bytes(&self.bits)
+        self.bits
     }
 
     fn write_out(&mut self) {
@@ -1084,9 +1068,23 @@ impl ToyCabacEncoder {
             self.bits.push(((value >> bit) & 1) != 0);
         }
     }
+
+    fn encode_aligned_bins_ep(&mut self, bins: u32, num_bins: u32) {
+        let mut rem_bins = num_bins;
+        while rem_bins > 0 {
+            let bins_to_code = rem_bins.min(8);
+            let bin_mask = (1 << bins_to_code) - 1;
+            let new_bins = (bins >> (rem_bins - bins_to_code)) & bin_mask;
+            self.low = (self.low << bins_to_code) + (new_bins << 8);
+            rem_bins -= bins_to_code;
+            self.bits_left -= bins_to_code as i32;
+            if self.bits_left < 12 {
+                self.write_out();
+            }
+        }
+    }
 }
 
-#[cfg(test)]
 fn renorm_bits(mut range: u32) -> u32 {
     let mut bits = 0;
     while range < 256 {
@@ -1094,34 +1092,6 @@ fn renorm_bits(mut range: u32) -> u32 {
         bits += 1;
     }
     bits
-}
-
-#[cfg(test)]
-fn bools_to_bytes(bits: &[bool]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bits.len().div_ceil(8));
-    for chunk in bits.chunks(8) {
-        let mut byte = 0;
-        for bit in chunk {
-            byte <<= 1;
-            if *bit {
-                byte |= 1;
-            }
-        }
-        byte <<= 8 - chunk.len();
-        out.push(byte);
-    }
-    out
-}
-
-fn hex_to_bytes(hex: &str) -> Vec<u8> {
-    debug_assert_eq!(hex.len() % 2, 0);
-    hex.as_bytes()
-        .chunks_exact(2)
-        .map(|digits| {
-            let text = std::str::from_utf8(digits).expect("hard-coded hex should be UTF-8");
-            u8::from_str_radix(text, 16).expect("hard-coded hex should parse")
-        })
-        .collect()
 }
 
 fn nearest_quantized_luma(input: u8) -> (u8, u8) {
@@ -1445,6 +1415,43 @@ mod tests {
     }
 
     #[test]
+    fn toy_arithmetic_writer_generates_verified_luma_payloads() {
+        let expected = [
+            "c4007080593f5e58fc",
+            "c40070805e1faf2c7e",
+            "c4007080608fd7963f",
+            "c400708061c7ebcb1f80",
+            "c40070806263f5e58fc0",
+            "c400708062b1faf2c7e0",
+            "c400708062cf7ebcb1f8",
+            "c400708062ddfebcb1f8",
+            "c400708062e55faf2c7e",
+            "c400708062e8ffaf2c7e",
+            "c400708062ec9faf2c7e",
+            "c400708062f03faf2c7e",
+            "c400708062f217ebcb1f80",
+            "c400708062f2ffebcb1f80",
+            "c400708062f3e7ebcb1f80",
+            "c400708062f4cfebcb1f80",
+            "c400708062f5b7ebcb1f80",
+        ];
+
+        for (luma_rem, expected_payload) in expected.iter().enumerate() {
+            let color = Toy4x4QuantizedColor {
+                y: 0,
+                u: 0,
+                v: 0,
+                luma_rem: luma_rem as u8,
+                chroma_rem: 6,
+            };
+            assert_eq!(
+                toy_4x4_slice_payload(Toy4x4PictureKind::Idr, color),
+                hex_bytes(expected_payload)
+            );
+        }
+    }
+
+    #[test]
     fn toy_coding_tree_entropy_is_generated_from_tokens() {
         let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
         let tokens = toy_4x4_entropy_tokens(black);
@@ -1466,18 +1473,16 @@ mod tests {
             }
         );
         assert_eq!(tokens[10].kind, ToyEntropyTokenKind::Terminate);
-        assert_eq!(toy_luma_rem_from_entropy_tokens(&tokens), 16);
-        assert_eq!(toy_chroma_rem_from_entropy_tokens(&tokens), 6);
-
         let mut writer = VvcSyntaxWriter::new();
         write_toy_coding_tree_entropy(&mut writer, black);
         let rbsp = writer.finish();
-        assert_eq!(rbsp.bytes, hex_bytes("c22ffebb1ffffb1f"));
+        assert_eq!(rbsp.bytes, hex_bytes("8062f5b7ebcb1f"));
         assert!(rbsp
             .fields
             .iter()
             .all(|field| field.code == VvcSyntaxCode::CabacToken));
-        assert_eq!(rbsp.fields.len(), 8);
+        assert_eq!(rbsp.fields.len(), 1);
+        assert_eq!(rbsp.fields[0].bit_count, 56);
     }
 
     #[test]
