@@ -16,6 +16,14 @@ def solid_yuv420p8(y, u, v, frames):
     return frame * frames
 
 
+def varied_yuv420p8(y, u, v, frames):
+    frame = bytearray(solid_yuv420p8(y, u, v, 1))
+    frame[3] = (y + 17) & 0xFF
+    frame[17] = (u + 29) & 0xFF
+    frame[21] = (v + 43) & 0xFF
+    return bytes(frame) * frames
+
+
 def software_stream(frames):
     with tempfile.TemporaryDirectory() as tmpdir:
         input_yuv = Path(tmpdir) / f"black_4x4_{frames}f_yuv420p8.yuv"
@@ -82,10 +90,10 @@ async def collect_stream(dut, frames):
     await feed_input(dut, solid_yuv420p8(0, 0, 0, frames))
     await ReadOnly()
     assert dut.input_error.value == 0
-    assert dut.solid_color_valid.value == 1
-    assert int(dut.solid_y.value) == 0
-    assert int(dut.solid_u.value) == 0
-    assert int(dut.solid_v.value) == 0
+    assert dut.sampled_color_valid.value == 1
+    assert int(dut.sampled_y.value) == 0
+    assert int(dut.sampled_u.value) == 0
+    assert int(dut.sampled_v.value) == 0
 
     observed = bytearray()
     if dut.m_axis_valid.value == 1:
@@ -102,7 +110,7 @@ async def collect_stream(dut, frames):
     return bytes(observed)
 
 
-async def drain_solid_color(dut, frames, y, u, v):
+async def drain_sampled_color(dut, frames, y, u, v):
     await Timer(1, unit="ns")
 
     dut.rst_n.value = 0
@@ -122,13 +130,13 @@ async def drain_solid_color(dut, frames, y, u, v):
     await RisingEdge(dut.clk)
     dut.start.value = 0
 
-    await feed_input(dut, solid_yuv420p8(y, u, v, frames))
+    await feed_input(dut, varied_yuv420p8(y, u, v, frames))
     await ReadOnly()
     assert dut.input_error.value == 0
-    assert dut.solid_color_valid.value == 1
-    assert int(dut.solid_y.value) == y
-    assert int(dut.solid_u.value) == u
-    assert int(dut.solid_v.value) == v
+    assert dut.sampled_color_valid.value == 1
+    assert int(dut.sampled_y.value) == y
+    assert int(dut.sampled_u.value) == u
+    assert int(dut.sampled_v.value) == v
 
 
 @cocotb.test()
@@ -159,6 +167,6 @@ async def vvc_toy4x4_encoder_matches_software_stream(dut):
 
 
 @cocotb.test()
-async def vvc_toy4x4_encoder_detects_solid_color_input(dut):
+async def vvc_toy4x4_encoder_samples_first_yuv_values(dut):
     cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
-    await drain_solid_color(dut, frames=2, y=64, u=128, v=192)
+    await drain_sampled_color(dut, frames=2, y=64, u=128, v=192)
