@@ -55,7 +55,10 @@ def main() -> int:
         )
         return 2
 
-    cmd.append(args.bitstream)
+    if is_vtm_decoder(cmd):
+        cmd.extend(["-b", args.bitstream])
+    else:
+        cmd.append(args.bitstream)
     if args.output:
         cmd.extend(["-o", args.output])
     cmd.extend(extra)
@@ -78,6 +81,13 @@ def main() -> int:
             file=sys.stderr,
         )
     return completed.returncode
+
+
+def is_vtm_decoder(cmd: list[str]) -> bool:
+    if not cmd:
+        return False
+    name = Path(cmd[0]).name
+    return name.startswith("DecoderApp") and "-b" not in cmd and "--BitstreamFile" not in cmd
 
 
 if __name__ == "__main__":

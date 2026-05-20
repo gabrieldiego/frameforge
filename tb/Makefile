@@ -16,6 +16,10 @@ ifeq ($(DUT),encoder)
 VERILOG_SOURCES := $(RTL_DIR)/ff_min_encoder_stub.sv
 TOPLEVEL := ff_min_encoder_stub
 COCOTB_TEST_MODULES := test_min_encoder_stub
+else ifeq ($(DUT),ffbs)
+VERILOG_SOURCES := $(RTL_DIR)/ff_ffbs_gray4x4_encoder.sv
+TOPLEVEL := ff_ffbs_gray4x4_encoder
+COCOTB_TEST_MODULES := test_ffbs_gray4x4_encoder
 else
 VERILOG_SOURCES := $(RTL_DIR)/ff_intra_pred_stub.sv
 TOPLEVEL := ff_intra_pred_stub

@@ -156,7 +156,7 @@ def find_decoder(root: Path) -> str | None:
 
 
 def run(cmd: list[str]) -> None:
-    completed = subprocess.run(cmd, check=False)
+    completed = subprocess.run(cmd, check=False, stdout=sys.stderr)
     if completed.returncode != 0:
         raise SystemExit(completed.returncode)
 

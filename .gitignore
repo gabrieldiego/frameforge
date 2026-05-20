@@ -6,6 +6,7 @@
 /scripts/__pycache__/
 /verification/reference/vtm/
 /verification/reference/build/
+/verification/generated/
 *.vcd
 *.fst
 *.ffbs

@@ -10,9 +10,10 @@ Useful variables:
 
 - `FRAMEFORGE_DECODER`: complete decoder command.
 - `FRAMEFORGE_VTM_DECODER`: direct path to a built VTM decoder executable.
+- `FRAMEFORGE_VTM_ENCODER`: direct path to a built VTM encoder executable.
 - `FRAMEFORGE_VTM_ROOT`: existing VTM tree to search for a decoder.
 - `FRAMEFORGE_REF_DIR`: parent directory for downloaded validation tools.
 - `FRAMEFORGE_VTM_REPO`: VTM repository URL.
 - `FRAMEFORGE_VTM_REF`: optional VTM branch or tag.
 - `FRAMEFORGE_VTM_BUILD_DIR`: CMake build directory.
-
+- `FRAMEFORGE_GENERATED_DIR`: local generated input directory for helper scripts.

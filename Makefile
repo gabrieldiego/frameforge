@@ -14,6 +14,8 @@ help:
 	@printf '%s\n' '  make validate-decode BITSTREAM=out.vvc [DECODED=out.yuv]'
 	@printf '%s\n' '  make rtl-test  - run cocotb RTL tests'
 	@printf '%s\n' '  make rtl-test DUT=encoder - run minimum encoder RTL smoke test'
+	@printf '%s\n' '  make rtl-test DUT=ffbs - run RTL/Rust ffbs format smoke test'
+	@printf '%s\n' '  make reference-vvc BITSTREAM=out.vvc - create real VVC using VTM'
 	@printf '%s\n' '  make clean     - remove local build outputs'
 
 check-tools:
@@ -34,6 +36,10 @@ decoder-setup:
 validate-decode:
 	@test -n "$(BITSTREAM)" || { echo 'usage: make validate-decode BITSTREAM=path/to/stream.vvc [DECODED=decoded.yuv]'; exit 2; }
 	python3 scripts/validate_decode.py "$(BITSTREAM)" $(if $(DECODED),--output "$(DECODED)")
+
+reference-vvc:
+	@test -n "$(BITSTREAM)" || { echo 'usage: make reference-vvc BITSTREAM=path/to/out.vvc [RECON=out.yuv]'; exit 2; }
+	python3 scripts/reference_encode_vvc.py --output "$(BITSTREAM)" $(if $(RECON),--recon "$(RECON)")
 
 rtl-test:
 	$(MAKE) -C tb SIM=$(SIM) TOPLEVEL_LANG=$(TOPLEVEL_LANG) DUT=$(DUT)

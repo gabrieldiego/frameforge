@@ -137,12 +137,27 @@ cargo run -- vvc-skeleton --output /tmp/frameforge-skeleton.vvc
 
 This writes VPS, SPS, PPS, IDR_N_LP, EOS, and EOB NAL units with correct Annex-B start codes and VVC NAL unit headers. The RBSP payloads are deliberately placeholder `rbsp_trailing_bits` only, so this is not a decodable VVC picture stream yet.
 
+Generate a real minimal VVC stream with the external VTM reference encoder:
+
+```sh
+make reference-vvc BITSTREAM=/tmp/frameforge-reference-4x4.vvc RECON=/tmp/frameforge-reference-4x4-rec.yuv
+make validate-decode BITSTREAM=/tmp/frameforge-reference-4x4.vvc DECODED=/tmp/frameforge-reference-4x4-dec.yuv
+```
+
+This path uses VTM as an external validation/reference tool and does not mean FrameForge's own Rust encoder emits conforming VVC yet.
+
 ## RTL / cocotb
 
 The initial simulator target is Icarus Verilog through cocotb:
 
 ```sh
 make rtl-test
+```
+
+Run the RTL `ffbs` byte-format check:
+
+```sh
+make rtl-test DUT=ffbs
 ```
 
 The Makefile uses variables so other simulators can be introduced later:
@@ -159,6 +174,7 @@ FrameForge looks for decoder resources in this order:
 
 - `FRAMEFORGE_DECODER`: complete decoder command, optionally with fixed arguments.
 - `FRAMEFORGE_VTM_DECODER`: direct path to a built VTM decoder executable.
+- `FRAMEFORGE_VTM_ENCODER`: direct path to a built VTM encoder executable.
 - `FRAMEFORGE_VTM_ROOT`: path to an existing VTM source/build tree to search.
 - `verification/reference/vtm`: automatically cloned and built when no configured decoder is found.
 
@@ -170,6 +186,7 @@ The automatic VTM setup can be customized:
 - `FRAMEFORGE_VTM_BUILD_DIR`: CMake build directory.
 - `FRAMEFORGE_VTM_BUILD_TYPE`: CMake build type, default `Release`.
 - `FRAMEFORGE_BUILD_JOBS`: optional build parallelism.
+- `FRAMEFORGE_GENERATED_DIR`: local generated input directory for helper scripts.
 
 Prepare a decoder:
 
@@ -185,6 +202,12 @@ or:
 
 ```sh
 make validate-decode BITSTREAM=out.vvc DECODED=decoded.yuv
+```
+
+Reference encode through VTM:
+
+```sh
+make reference-vvc BITSTREAM=out.vvc RECON=rec.yuv
 ```
 
 The helper fails gracefully if `FRAMEFORGE_DECODER` is not set or the decoder cannot be run.
