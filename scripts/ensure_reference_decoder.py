@@ -16,6 +16,10 @@ from pathlib import Path
 DEFAULT_VTM_REPO = "https://vcgit.hhi.fraunhofer.de/jvet/VVCSoftware_VTM.git"
 DEFAULT_REF_DIR = Path("verification/reference")
 DECODER_NAMES = (
+    "DecoderAnalyserAppStatic",
+    "DecoderAnalyserAppStatic.exe",
+    "DecoderAnalyserApp",
+    "DecoderAnalyserApp.exe",
     "DecoderAppStatic",
     "DecoderAppStatic.exe",
     "DecoderApp",
@@ -44,6 +48,8 @@ def main() -> int:
         return 0
 
     root = configured_vtm_root()
+    if root is None and default_vtm_root().exists():
+        root = default_vtm_root()
     decoder = find_decoder(root) if root else None
     if decoder:
         if args.print_command:

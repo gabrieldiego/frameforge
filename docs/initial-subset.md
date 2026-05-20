@@ -8,7 +8,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - VVC Annex-B writer capable of emitting an EOS-only stream for NAL header and bytestream testing.
 - VVC skeleton stream containing VPS/SPS/PPS/IDR/EOS/EOB NAL units with placeholder RBSP payloads.
 - VVC Annex-B NAL header listing for comparing FrameForge output against VTM output.
-- Generated 1- or 2-frame 4x4 black YUV420p8 VVC toy stream assembled from one SPS/PPS sequence header followed by generated picture slice NAL units using named observed bit regions.
+- Generated 1- or 2-frame 4x4 black YUV420p8 VVC toy stream assembled from one internally generated SPS/PPS sequence header followed by generated picture slice NAL units.
 - External VTM reference-encode helper that can generate a real 4x4 YUV420 VVC stream for validation.
 - Basic encoder trait boundary for replacing the placeholder path with real codec implementations.
 - Generic bitstream utilities:
@@ -18,6 +18,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
   - emulation-prevention byte insertion
 - Named VVC syntax writer for `flag`, `u(n)`, `ue(v)`, `se(v)`, observed transition regions, RBSP trailing bits, and field-offset tracing.
 - Internally generated VVC NAL unit headers with named `forbidden_zero_bit`, `nuh_reserved_zero_bit`, `nuh_layer_id`, `nal_unit_type`, and `nuh_temporal_id_plus1` fields.
+- Internally generated toy SPS, PPS, picture header, and slice header syntax fields. The remaining observed picture payload region is the entropy-coded coding-tree body.
 - Basic placeholder NAL/Annex-B-style structures with TODOs for exact VVC syntax.
 - `EncoderParams`, `Picture`, reconstruction buffer skeleton, and fixed block traversal.
 - JSONL trace events.
@@ -49,7 +50,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 
 - Replace placeholder output with clean-room VVC parameter set and slice scaffolding where syntax details are confirmed.
 - Replace the remaining non-VVC placeholder encode/decode path with the VVC toy encoder as it becomes more capable.
-- Replace the observed toy payload bit regions with named clean-room SPS/PPS/IDR syntax fields through `VvcSyntaxWriter`.
+- Replace the remaining observed entropy-coded toy picture payload region with a minimal internally generated coding-tree/CABAC path.
 - Add clean-room VPS/SPS/PPS and a first intra picture after the EOS-only NAL writer is stable.
 - Replace placeholder VPS/SPS/PPS and IDR RBSP payloads with real clean-room syntax.
 - Define a narrow internal packet model for coding-tree traversal.

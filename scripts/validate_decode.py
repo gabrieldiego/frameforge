@@ -57,14 +57,22 @@ def main() -> int:
 
     if is_vtm_decoder(cmd):
         cmd.extend(["-b", args.bitstream])
+        if is_vtm_analyser(cmd) and not any(arg.startswith("--Stats") for arg in cmd):
+            cmd.append("--Stats=0")
     else:
         cmd.append(args.bitstream)
     if args.output:
         cmd.extend(["-o", args.output])
     cmd.extend(extra)
 
+    quiet_success = is_vtm_analyser(cmd)
     try:
-        completed = subprocess.run(cmd, check=False)
+        completed = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=quiet_success,
+            text=quiet_success,
+        )
     except FileNotFoundError:
         print(
             f"decoder '{cmd[0]}' was not found. Set FRAMEFORGE_DECODER to an "
@@ -74,6 +82,11 @@ def main() -> int:
         return 127
 
     if completed.returncode != 0:
+        if quiet_success:
+            if completed.stdout:
+                print(completed.stdout, end="")
+            if completed.stderr:
+                print(completed.stderr, end="", file=sys.stderr)
         print(
             "decoder returned a non-zero status. This is expected for experimental "
             "FrameForge streams that are not yet decodable VVC/H.266 pictures, and "
@@ -87,7 +100,15 @@ def is_vtm_decoder(cmd: list[str]) -> bool:
     if not cmd:
         return False
     name = Path(cmd[0]).name
-    return name.startswith("DecoderApp") and "-b" not in cmd and "--BitstreamFile" not in cmd
+    return (
+        (name.startswith("DecoderApp") or name.startswith("DecoderAnalyserApp"))
+        and "-b" not in cmd
+        and "--BitstreamFile" not in cmd
+    )
+
+
+def is_vtm_analyser(cmd: list[str]) -> bool:
+    return bool(cmd) and Path(cmd[0]).name.startswith("DecoderAnalyserApp")
 
 
 if __name__ == "__main__":

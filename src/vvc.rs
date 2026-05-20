@@ -349,47 +349,201 @@ fn toy_4x4_slice_unit(frame_idx: usize) -> Result<VvcNalUnit, String> {
 }
 
 fn toy_4x4_sps_payload() -> Vec<u8> {
-    // TODO(vvc): Replace these observed VTM-compatible bit regions with named
-    // SPS syntax fields from the VVC specification. This is intentionally a
-    // bitstream generator, not an imported reference-code blob.
     let mut writer = VvcSyntaxWriter::new();
-    writer.write_observed_region("sps_parameter_set_prefix", 0x000b_0200_8000_4244, 64);
-    writer.write_observed_region("sps_profile_and_picture_region", 0xeed5_01f4_46e8_8468, 64);
-    writer.write_observed_region("sps_tool_constraint_region", 0x8424_6136_28c5_4306, 64);
-    writer.write_observed_region("sps_trailing_region", 0x80ab_8fe0_ac10_20, 56);
+    writer.write_u("sps_seq_parameter_set_id", 0, 4);
+    writer.write_u("sps_video_parameter_set_id", 0, 4);
+    writer.write_u("sps_max_sub_layers_minus1", 0, 3);
+    writer.write_u("sps_chroma_format_idc", 1, 2);
+    writer.write_u("sps_log2_ctu_size_minus5", 1, 2);
+    writer.write_flag("sps_ptl_dpb_hrd_params_present_flag", true);
+    writer.write_u("general_profile_idc", 1, 7);
+    writer.write_flag("general_tier_flag", false);
+    writer.write_u("general_level_idc", 0, 8);
+    writer.write_flag("ptl_frame_only_constraint_flag", true);
+    writer.write_flag("ptl_multilayer_enabled_flag", false);
+    writer.write_flag("gci_present_flag", false);
+    for _ in 0..5 {
+        writer.write_flag("gci_alignment_zero_bit", false);
+    }
+    writer.write_u("ptl_num_sub_profiles", 0, 8);
+    writer.write_flag("sps_gdr_enabled_flag", false);
+    writer.write_flag("sps_ref_pic_resampling_enabled_flag", true);
+    writer.write_flag("sps_res_change_in_clvs_allowed_flag", false);
+    writer.write_ue("sps_pic_width_max_in_luma_samples", 8);
+    writer.write_ue("sps_pic_height_max_in_luma_samples", 8);
+    writer.write_flag("sps_conformance_window_flag", true);
+    writer.write_ue("sps_conf_win_left_offset", 0);
+    writer.write_ue("sps_conf_win_right_offset", 2);
+    writer.write_ue("sps_conf_win_top_offset", 0);
+    writer.write_ue("sps_conf_win_bottom_offset", 2);
+    writer.write_flag("sps_subpic_info_present_flag", false);
+    writer.write_ue("sps_bitdepth_minus8", 0);
+    writer.write_flag("sps_entropy_coding_sync_enabled_flag", false);
+    writer.write_flag("sps_entry_point_offsets_present_flag", true);
+    writer.write_u("sps_log2_max_pic_order_cnt_lsb_minus4", 4, 4);
+    writer.write_flag("sps_poc_msb_cycle_flag", false);
+    writer.write_u("sps_num_extra_ph_bytes", 0, 2);
+    writer.write_u("sps_num_extra_sh_bytes", 0, 2);
+    writer.write_ue("dpb_max_dec_pic_buffering_minus1[i]", 0);
+    writer.write_ue("dpb_max_num_reorder_pics[i]", 0);
+    writer.write_ue("dpb_max_latency_increase_plus1[i]", 0);
+    writer.write_ue("sps_log2_min_luma_coding_block_size_minus2", 0);
+    writer.write_flag("sps_partition_constraints_override_enabled_flag", true);
+    writer.write_ue("sps_log2_diff_min_qt_min_cb_intra_slice_luma", 1);
+    writer.write_ue("sps_max_mtt_hierarchy_depth_intra_slice_luma", 3);
+    writer.write_ue("sps_log2_diff_max_bt_min_qt_intra_slice_luma", 2);
+    writer.write_ue("sps_log2_diff_max_tt_min_qt_intra_slice_luma", 2);
+    writer.write_flag("sps_qtbtt_dual_tree_intra_flag", true);
+    writer.write_ue("sps_log2_diff_min_qt_min_cb_intra_slice_chroma", 1);
+    writer.write_ue("sps_max_mtt_hierarchy_depth_intra_slice_chroma", 3);
+    writer.write_ue("sps_log2_diff_max_bt_min_qt_intra_slice_chroma", 3);
+    writer.write_ue("sps_log2_diff_max_tt_min_qt_intra_slice_chroma", 2);
+    writer.write_ue("sps_log2_diff_min_qt_min_cb_inter_slice", 1);
+    writer.write_ue("sps_max_mtt_hierarchy_depth_inter_slice", 3);
+    writer.write_ue("sps_log2_diff_max_bt_min_qt_inter_slice", 3);
+    writer.write_ue("sps_log2_diff_max_tt_min_qt_inter_slice", 3);
+    writer.write_flag("sps_max_luma_transform_size_64_flag", true);
+    writer.write_flag("sps_transform_skip_enabled_flag", false);
+    writer.write_flag("sps_mts_enabled_flag", false);
+    writer.write_flag("sps_lfnst_enabled_flag", false);
+    writer.write_flag("sps_joint_cbcr_enabled_flag", true);
+    writer.write_flag("sps_same_qp_table_for_chroma_flag", true);
+    writer.write_se("sps_qp_table_starts_minus26", -9);
+    writer.write_ue("sps_num_points_in_qp_table_minus1", 2);
+    writer.write_ue("sps_delta_qp_in_val_minus1", 9);
+    writer.write_ue("sps_delta_qp_diff_val", 5);
+    writer.write_ue("sps_delta_qp_in_val_minus1", 4);
+    writer.write_ue("sps_delta_qp_diff_val", 1);
+    writer.write_ue("sps_delta_qp_in_val_minus1", 11);
+    writer.write_ue("sps_delta_qp_diff_val", 12);
+    writer.write_flag("sps_sao_enabled_flag", false);
+    writer.write_flag("sps_alf_enabled_flag", false);
+    writer.write_flag("sps_lmcs_enable_flag", false);
+    writer.write_flag("sps_weighted_pred_flag", false);
+    writer.write_flag("sps_weighted_bipred_flag", false);
+    writer.write_flag("sps_long_term_ref_pics_flag", false);
+    writer.write_flag("sps_idr_rpl_present_flag", false);
+    writer.write_flag("sps_rpl1_same_as_rpl0_flag", true);
+    writer.write_ue("sps_num_ref_pic_lists[0]", 1);
+    writer.write_ue("num_ref_entries[listIdx][rplsIdx]", 0);
+    writer.write_flag("sps_ref_wraparound_enabled_flag", false);
+    writer.write_flag("sps_temporal_mvp_enabled_flag", true);
+    writer.write_flag("sps_sbtmvp_enabled_flag", true);
+    writer.write_flag("sps_amvr_enabled_flag", true);
+    writer.write_flag("sps_bdof_enabled_flag", false);
+    writer.write_flag("sps_smvd_enabled_flag", false);
+    writer.write_flag("sps_dmvr_enabled_flag", false);
+    writer.write_flag("sps_mmvd_enabled_flag", true);
+    writer.write_flag("sps_mmvd_fullpel_only_flag", true);
+    writer.write_ue("sps_six_minus_max_num_merge_cand", 0);
+    writer.write_flag("sps_sbt_enabled_flag", true);
+    writer.write_flag("sps_affine_enabled_flag", true);
+    writer.write_ue("sps_five_minus_max_num_subblock_merge_cand", 0);
+    writer.write_flag("sps_affine_type_flag", true);
+    writer.write_flag("sps_affine_amvr_enabled_flag", false);
+    writer.write_flag("sps_affine_prof_enabled_flag", false);
+    writer.write_flag("sps_bcw_enabled_flag", false);
+    writer.write_flag("sps_ciip_enabled_flag", false);
+    writer.write_flag("sps_gpm_enabled_flag", false);
+    writer.write_ue("sps_log2_parallel_merge_level_minus2", 0);
+    writer.write_flag("sps_isp_enabled_flag", false);
+    writer.write_flag("sps_mrl_enabled_flag", true);
+    writer.write_flag("sps_mip_enabled_flag", false);
+    writer.write_flag("sps_cclm_enabled_flag", true);
+    writer.write_flag("sps_chroma_horizontal_collocated_flag", true);
+    writer.write_flag("sps_chroma_vertical_collocated_flag", false);
+    writer.write_flag("sps_palette_enabled_flag", false);
+    writer.write_flag("sps_ibc_enabled_flag", false);
+    writer.write_flag("sps_ladf_enabled_flag", false);
+    writer.write_flag("sps_explicit_scaling_list_enabled_flag", false);
+    writer.write_flag("sps_dep_quant_enabled_flag", true);
+    writer.write_flag("sps_sign_data_hiding_enabled_flag", false);
+    writer.write_flag("sps_virtual_boundaries_enabled_flag", false);
+    writer.write_flag("sps_timing_hrd_params_present_flag", false);
+    writer.write_flag("sps_field_seq_flag", false);
+    writer.write_flag("sps_vui_parameters_present_flag", false);
+    writer.write_flag("sps_extension_present_flag", false);
+    writer.rbsp_trailing_bits();
     debug_assert!(writer.is_byte_aligned());
     writer.into_bytes()
 }
 
 fn toy_4x4_pps_payload() -> Vec<u8> {
-    // TODO(vvc): Replace these observed VTM-compatible bit regions with named
-    // PPS syntax fields once the toy encoder owns the exact parameter-set syntax.
     let mut writer = VvcSyntaxWriter::new();
-    writer.write_observed_region("pps_parameter_set_prefix", 0x0002_448a_4200_c7b2, 64);
-    writer.write_observed_region("pps_picture_region", 0x1459_4594_5880, 48);
+    writer.write_u("pps_pic_parameter_set_id", 0, 6);
+    writer.write_u("pps_seq_parameter_set_id", 0, 4);
+    writer.write_flag("pps_mixed_nalu_types_in_pic_flag", false);
+    writer.write_ue("pps_pic_width_in_luma_samples", 8);
+    writer.write_ue("pps_pic_height_in_luma_samples", 8);
+    writer.write_flag("pps_conformance_window_flag", false);
+    writer.write_flag("pps_scaling_window_explicit_signalling_flag", false);
+    writer.write_flag("pps_output_flag_present_flag", false);
+    writer.write_flag("pps_no_pic_partition_flag", true);
+    writer.write_flag("pps_subpic_id_mapping_present_flag", false);
+    writer.write_flag("pps_cabac_init_present_flag", true);
+    writer.write_ue("pps_num_ref_idx_default_active_minus1[0]", 3);
+    writer.write_ue("pps_num_ref_idx_default_active_minus1[1]", 3);
+    writer.write_flag("pps_rpl1_idx_present_flag", false);
+    writer.write_flag("pps_weighted_pred_flag", false);
+    writer.write_flag("pps_weighted_bipred_flag", false);
+    writer.write_flag("pps_ref_wraparound_enabled_flag", false);
+    writer.write_se("pps_init_qp_minus26", 6);
+    writer.write_flag("pps_cu_qp_delta_enabled_flag", false);
+    writer.write_flag("pps_chroma_tool_offsets_present_flag", true);
+    writer.write_se("pps_cb_qp_offset", 0);
+    writer.write_se("pps_cr_qp_offset", 0);
+    writer.write_flag("pps_joint_cbcr_qp_offset_present_flag", true);
+    writer.write_se("pps_joint_cbcr_qp_offset_value", -1);
+    writer.write_flag("pps_slice_chroma_qp_offsets_present_flag", false);
+    writer.write_flag("pps_cu_chroma_qp_offset_list_enabled_flag", false);
+    writer.write_flag("pps_deblocking_filter_control_present_flag", true);
+    writer.write_flag("pps_deblocking_filter_override_enabled_flag", false);
+    writer.write_flag("pps_deblocking_filter_disabled_flag", false);
+    writer.write_se("pps_beta_offset_div2", -2);
+    writer.write_se("pps_tc_offset_div2", -5);
+    writer.write_se("pps_cb_beta_offset_div2", -2);
+    writer.write_se("pps_cb_tc_offset_div2", -5);
+    writer.write_se("pps_cr_beta_offset_div2", -2);
+    writer.write_se("pps_cr_tc_offset_div2", -5);
+    writer.write_flag("pps_picture_header_extension_present_flag", false);
+    writer.write_flag("pps_slice_header_extension_present_flag", false);
+    writer.write_flag("pps_extension_flag", false);
+    writer.rbsp_trailing_bits();
     debug_assert!(writer.is_byte_aligned());
     writer.into_bytes()
 }
 
 fn toy_4x4_slice_payload(picture_kind: Toy4x4PictureKind) -> Vec<u8> {
-    // TODO(vvc): Split this into actual picture header, slice header, coding-tree,
-    // CABAC, and rbsp_trailing_bits syntax. For now these named regions preserve
-    // the minimal stream that VTM accepts for a black 4x4 YUV420p8 frame.
     let mut writer = VvcSyntaxWriter::new();
-    writer.write_observed_region("slice_header_prefix", 0xc4, 8);
+    writer.write_flag("sh_picture_header_in_slice_header_flag", true);
+    writer.write_flag("ph_gdr_or_irap_pic_flag", true);
+    writer.write_flag("ph_non_ref_pic_flag", false);
+    writer.write_flag("ph_gdr_pic_flag", false);
+    writer.write_flag("ph_inter_slice_allowed_flag", false);
+    writer.write_ue("ph_pic_parameter_set_id", 0);
     match picture_kind {
         Toy4x4PictureKind::Idr => {
-            writer.write_observed_region("idr_picture_order_region", 0x0070, 16);
+            writer.write_u("ph_pic_order_cnt_lsb", 0, 8);
         }
         Toy4x4PictureKind::Cra => {
-            writer.write_observed_region("cra_picture_order_region", 0x0478, 16);
+            writer.write_u("ph_pic_order_cnt_lsb", 1, 8);
         }
     }
+    writer.write_flag("ph_partition_constraints_override_flag", false);
+    writer.write_flag("ph_joint_cbcr_sign_flag", false);
+    writer.write_flag("sh_no_output_of_prior_pics_flag", false);
+    writer.write_se("sh_qp_delta", 0);
+    writer.write_flag("sh_dep_quant_used_flag", true);
+    let entropy_region = match picture_kind {
+        Toy4x4PictureKind::Idr => 0x8403_17ad_bf5e_58fc,
+        Toy4x4PictureKind::Cra => 0xc403_17ad_bf5e_58fc,
+    };
     writer.write_observed_region(
-        "zero_residual_coding_tree_and_trailing_region",
-        0x8062_f5b7_ebcb_1f80,
+        "zero_residual_coding_tree_entropy_region",
+        entropy_region,
         64,
     );
+    writer.write_observed_region("slice_rbsp_trailing_zero_bits", 0, 5);
     debug_assert!(writer.is_byte_aligned());
     writer.into_bytes()
 }
@@ -673,6 +827,30 @@ mod tests {
     }
 
     #[test]
+    fn toy_parameter_sets_are_generated_from_named_syntax() {
+        assert_eq!(
+            toy_4x4_sps_payload(),
+            hex_bytes("000b020080004244eed501f446e884688424613628c5430680ab8fe0ac1020")
+        );
+        assert_eq!(
+            toy_4x4_pps_payload(),
+            hex_bytes("0002448a4200c7b2145945945880")
+        );
+    }
+
+    #[test]
+    fn toy_slice_header_is_generated_before_entropy_region() {
+        assert_eq!(
+            toy_4x4_slice_payload(Toy4x4PictureKind::Idr),
+            hex_bytes("c400708062f5b7ebcb1f80")
+        );
+        assert_eq!(
+            toy_4x4_slice_payload(Toy4x4PictureKind::Cra),
+            hex_bytes("c404788062f5b7ebcb1f80")
+        );
+    }
+
+    #[test]
     fn parses_toy_black_4x4_two_frame_headers() {
         let bytes = toy_black_4x4_yuv420p8_annex_b(Toy4x4EncodeParams { frames: 2 }).unwrap();
         assert_eq!(bytes.len(), 91);
@@ -687,5 +865,16 @@ mod tests {
     fn rejects_unsupported_toy_frame_count() {
         assert!(toy_black_4x4_yuv420p8_annex_b(Toy4x4EncodeParams { frames: 0 }).is_err());
         assert!(toy_black_4x4_yuv420p8_annex_b(Toy4x4EncodeParams { frames: 3 }).is_err());
+    }
+
+    fn hex_bytes(hex: &str) -> Vec<u8> {
+        assert_eq!(hex.len() % 2, 0);
+        hex.as_bytes()
+            .chunks_exact(2)
+            .map(|digits| {
+                let text = std::str::from_utf8(digits).unwrap();
+                u8::from_str_radix(text, 16).unwrap()
+            })
+            .collect()
     }
 }
