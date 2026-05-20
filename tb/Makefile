@@ -1,21 +1,28 @@
 SIM ?= icarus
 TOPLEVEL_LANG ?= verilog
+ifneq ("$(wildcard ../.venv/bin/cocotb-config)","")
+COCOTB_CONFIG ?= ../.venv/bin/cocotb-config
+PYTHON_BIN ?= ../.venv/bin/python
+export PATH := $(abspath ../.venv/bin):$(PATH)
+else
 COCOTB_CONFIG ?= cocotb-config
+endif
 
 RTL_DIR := ../rtl
 DUT ?= intra
+SIM_BUILD ?= sim_build/$(DUT)
 
 ifeq ($(DUT),encoder)
 VERILOG_SOURCES := $(RTL_DIR)/ff_min_encoder_stub.sv
 TOPLEVEL := ff_min_encoder_stub
-MODULE := test_min_encoder_stub
+COCOTB_TEST_MODULES := test_min_encoder_stub
 else
 VERILOG_SOURCES := $(RTL_DIR)/ff_intra_pred_stub.sv
 TOPLEVEL := ff_intra_pred_stub
-MODULE := test_intra_pred_stub
+COCOTB_TEST_MODULES := test_intra_pred_stub
 endif
 
-EXTRA_ARGS += -g2012
+COMPILE_ARGS += -g2012
 
 COCOTB_MAKEFILES := $(shell $(COCOTB_CONFIG) --makefiles 2>/dev/null)
 

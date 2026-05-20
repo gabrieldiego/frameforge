@@ -86,7 +86,7 @@ impl PlaceholderEncoder {
 }
 
 impl Encoder for PlaceholderEncoder {
-    pub fn encode_picture(&mut self, picture: &Picture) -> Result<EncodeResult, String> {
+    fn encode_picture(&mut self, picture: &Picture) -> Result<EncodeResult, String> {
         self.params.validate()?;
         if picture.width != self.params.width
             || picture.height != self.params.height
@@ -100,7 +100,11 @@ impl Encoder for PlaceholderEncoder {
             "FrameForge placeholder encode; output is not a valid codec bitstream",
         )];
 
-        for block in traverse_blocks(self.params.width, self.params.height, self.params.block_size) {
+        for block in traverse_blocks(
+            self.params.width,
+            self.params.height,
+            self.params.block_size,
+        ) {
             trace_events.push(
                 TraceEvent::new("traverse", "visit coding block")
                     .with_block(block.x, block.y, block.w, block.h),
@@ -172,12 +176,10 @@ mod tests {
 
         let result = encoder.encode_picture(&picture).unwrap();
         assert!(result.bytes.starts_with(&[0, 0, 0, 1]));
-        assert!(
-            result
-                .bytes
-                .windows(PLACEHOLDER_MAGIC.len())
-                .any(|window| window == PLACEHOLDER_MAGIC)
-        );
+        assert!(result
+            .bytes
+            .windows(PLACEHOLDER_MAGIC.len())
+            .any(|window| window == PLACEHOLDER_MAGIC));
         assert!(!result.trace_events.is_empty());
     }
 }

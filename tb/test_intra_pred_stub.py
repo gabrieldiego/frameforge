@@ -11,7 +11,7 @@ async def pass_through_respects_ready_valid(dut):
     models for block-level co-verification.
     """
 
-    cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
+    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
 
     dut.rst_n.value = 0
     dut.s_axis_valid.value = 0

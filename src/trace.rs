@@ -93,7 +93,8 @@ mod tests {
 
     #[test]
     fn trace_event_creates_jsonl_record() {
-        let event = TraceEvent::new("encode", "placeholder \"bitstream\"").with_block(0, 16, 16, 16);
+        let event =
+            TraceEvent::new("encode", "placeholder \"bitstream\"").with_block(0, 16, 16, 16);
         assert_eq!(
             event.to_json_line(),
             "{\"phase\":\"encode\",\"message\":\"placeholder \\\"bitstream\\\"\",\"x\":0,\"y\":16,\"w\":16,\"h\":16}"

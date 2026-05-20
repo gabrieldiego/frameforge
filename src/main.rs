@@ -81,7 +81,9 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
         match arg.as_str() {
             "--input" => input = Some(next_value(&mut iter, "--input")?.into()),
             "--width" => width = Some(parse_usize(next_value(&mut iter, "--width")?, "--width")?),
-            "--height" => height = Some(parse_usize(next_value(&mut iter, "--height")?, "--height")?),
+            "--height" => {
+                height = Some(parse_usize(next_value(&mut iter, "--height")?, "--height")?)
+            }
             "--format" => {
                 let value = next_value(&mut iter, "--format")?;
                 format = Some(value.parse::<PixelFormat>()?);
