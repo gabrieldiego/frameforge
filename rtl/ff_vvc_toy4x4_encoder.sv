@@ -24,11 +24,9 @@ module ff_vvc_toy4x4_encoder (
 );
   localparam int SPS_PAYLOAD_LEN  = 31;
   localparam int PPS_PAYLOAD_LEN  = 14;
-  localparam int SLICE_PAYLOAD_LEN = 11;
   localparam int NAL_OVERHEAD_LEN = 6;
   localparam int SPS_NAL_LEN = NAL_OVERHEAD_LEN + SPS_PAYLOAD_LEN;
   localparam int PPS_NAL_LEN = NAL_OVERHEAD_LEN + PPS_PAYLOAD_LEN;
-  localparam int SLICE_NAL_LEN = NAL_OVERHEAD_LEN + SLICE_PAYLOAD_LEN;
   localparam int PARAMETER_SET_LEN = SPS_NAL_LEN + PPS_NAL_LEN;
   localparam int FRAME_BYTES = 24;
 
@@ -37,6 +35,7 @@ module ff_vvc_toy4x4_encoder (
   logic [7:0] input_count_q;
   logic [7:0] input_len_q;
   logic       input_active_q;
+  logic [4:0] quant_luma_rem_q;
 
   assign busy = input_active_q || m_axis_valid || (index_q != 0);
 
@@ -53,6 +52,7 @@ module ff_vvc_toy4x4_encoder (
       sampled_y <= '0;
       sampled_u <= '0;
       sampled_v <= '0;
+      quant_luma_rem_q <= 5'd16;
       m_axis_valid <= 1'b0;
       m_axis_data  <= '0;
       m_axis_last  <= 1'b0;
@@ -65,6 +65,7 @@ module ff_vvc_toy4x4_encoder (
         stream_len_q   <= '0;
         input_error    <= 1'b0;
         sampled_color_valid <= 1'b0;
+        quant_luma_rem_q <= 5'd16;
         m_axis_valid   <= 1'b0;
         m_axis_last    <= 1'b0;
         index_q        <= '0;
@@ -74,6 +75,7 @@ module ff_vvc_toy4x4_encoder (
         end
         if (input_count_q == 8'd0) begin
           sampled_y <= s_axis_data;
+          quant_luma_rem_q <= quant_luma_rem_from_sample(s_axis_data);
         end
         if (input_count_q == 8'd16) begin
           sampled_u <= s_axis_data;
@@ -117,9 +119,53 @@ module ff_vvc_toy4x4_encoder (
 
   function automatic logic [7:0] stream_len(input logic [1:0] frames);
     case (frames)
-      2'd2: stream_len = PARAMETER_SET_LEN + color_filler_nal_len() + (SLICE_NAL_LEN * 2);
-      default: stream_len = PARAMETER_SET_LEN + color_filler_nal_len() + SLICE_NAL_LEN;
+      2'd2: stream_len = PARAMETER_SET_LEN + color_filler_nal_len() + (slice_nal_len() * 2);
+      default: stream_len = PARAMETER_SET_LEN + color_filler_nal_len() + slice_nal_len();
     endcase
+  endfunction
+
+  function automatic logic [7:0] slice_payload_len();
+    begin
+      case (quant_luma_rem())
+        5'd0, 5'd1, 5'd2: slice_payload_len = 8'd9;
+        5'd3, 5'd4, 5'd5, 5'd6, 5'd7, 5'd8, 5'd9, 5'd10, 5'd11: slice_payload_len = 8'd10;
+        default: slice_payload_len = 8'd11;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [7:0] slice_nal_len();
+    begin
+      slice_nal_len = NAL_OVERHEAD_LEN + slice_payload_len();
+    end
+  endfunction
+
+  function automatic logic [4:0] quant_luma_rem();
+    begin
+      quant_luma_rem = quant_luma_rem_q;
+    end
+  endfunction
+
+  function automatic logic [4:0] quant_luma_rem_from_sample(input logic [7:0] sample);
+    begin
+      if (sample >= 8'd111) quant_luma_rem_from_sample = 5'd0;
+      else if (sample >= 8'd104) quant_luma_rem_from_sample = 5'd1;
+      else if (sample >= 8'd96) quant_luma_rem_from_sample = 5'd2;
+      else if (sample >= 8'd89) quant_luma_rem_from_sample = 5'd3;
+      else if (sample >= 8'd82) quant_luma_rem_from_sample = 5'd4;
+      else if (sample >= 8'd75) quant_luma_rem_from_sample = 5'd5;
+      else if (sample >= 8'd68) quant_luma_rem_from_sample = 5'd6;
+      else if (sample >= 8'd61) quant_luma_rem_from_sample = 5'd7;
+      else if (sample >= 8'd54) quant_luma_rem_from_sample = 5'd8;
+      else if (sample >= 8'd46) quant_luma_rem_from_sample = 5'd9;
+      else if (sample >= 8'd39) quant_luma_rem_from_sample = 5'd10;
+      else if (sample >= 8'd32) quant_luma_rem_from_sample = 5'd11;
+      else if (sample >= 8'd25) quant_luma_rem_from_sample = 5'd12;
+      else if (sample >= 8'd18) quant_luma_rem_from_sample = 5'd13;
+      else if (sample >= 8'd11) quant_luma_rem_from_sample = 5'd14;
+      else if (sample >= 8'd4) quant_luma_rem_from_sample = 5'd15;
+      else quant_luma_rem_from_sample = 5'd16;
+    end
   endfunction
 
   function automatic logic [7:0] color_filler_count();
@@ -154,9 +200,9 @@ module ff_vvc_toy4x4_encoder (
         stream_byte = nal_byte(2'd3, index - PARAMETER_SET_LEN, 1'b0);
       end else begin
         slice_base = PARAMETER_SET_LEN + color_filler_nal_len();
-        second_picture = (index >= slice_base + SLICE_NAL_LEN);
+        second_picture = (index >= slice_base + slice_nal_len());
         slice_index = second_picture
-          ? (index - (slice_base + SLICE_NAL_LEN))
+          ? (index - (slice_base + slice_nal_len()))
           : (index - slice_base);
         stream_byte = nal_byte(2'd2, slice_index, second_picture);
       end
@@ -319,14 +365,51 @@ module ff_vvc_toy4x4_encoder (
     input logic [6:0] index,
     input logic       cra_picture
   );
-    logic [87:0] payload_bits;
+    begin
+      slice_payload_byte = quant_luma_payload_byte(quant_luma_rem(), index, cra_picture);
+    end
+  endfunction
+
+  function automatic logic [7:0] quant_luma_payload_byte(
+    input logic [4:0] rem,
+    input logic [6:0] index,
+    input logic       cra_picture
+  );
+    logic [87:0] payload;
 
     begin
-      payload_bits = {slice_header_bits(cra_picture), toy_cabac_packet_bits(cra_picture)};
-      if (index < 7'd11) begin
-        slice_payload_byte = payload_bits >> ((7'd10 - index) * 8);
+      case (rem)
+        5'd0: payload = { 16'h0000, 72'hc4007080593f5e58fc };
+        5'd1: payload = { 16'h0000, 72'hc40070805e1faf2c7e };
+        5'd2: payload = { 16'h0000, 72'hc4007080608fd7963f };
+        5'd3: payload = { 8'h00, 80'hc400708061c7ebcb1f80 };
+        5'd4: payload = { 8'h00, 80'hc40070806263f5e58fc0 };
+        5'd5: payload = { 8'h00, 80'hc400708062b1faf2c7e0 };
+        5'd6: payload = { 8'h00, 80'hc400708062cf7ebcb1f8 };
+        5'd7: payload = { 8'h00, 80'hc400708062ddfebcb1f8 };
+        5'd8: payload = { 8'h00, 80'hc400708062e55faf2c7e };
+        5'd9: payload = { 8'h00, 80'hc400708062e8ffaf2c7e };
+        5'd10: payload = { 8'h00, 80'hc400708062ec9faf2c7e };
+        5'd11: payload = { 8'h00, 80'hc400708062f03faf2c7e };
+        5'd12: payload = 88'hc400708062f217ebcb1f80;
+        5'd13: payload = 88'hc400708062f2ffebcb1f80;
+        5'd14: payload = 88'hc400708062f3e7ebcb1f80;
+        5'd15: payload = 88'hc400708062f4cfebcb1f80;
+        default: payload = 88'hc400708062f5b7ebcb1f80;
+      endcase
+
+      if (cra_picture && index == 7'd0) begin
+        quant_luma_payload_byte = 8'hc4;
+      end else if (cra_picture && index == 7'd1) begin
+        quant_luma_payload_byte = 8'h04;
+      end else if (cra_picture && index == 7'd2) begin
+        quant_luma_payload_byte = 8'h78;
       end else begin
-        slice_payload_byte = 8'h00;
+        case (slice_payload_len())
+          8'd9: quant_luma_payload_byte = payload >> ((7'd8 - index) * 8);
+          8'd10: quant_luma_payload_byte = payload >> ((7'd9 - index) * 8);
+          default: quant_luma_payload_byte = payload >> ((7'd10 - index) * 8);
+        endcase
       end
     end
   endfunction

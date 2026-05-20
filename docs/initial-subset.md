@@ -8,7 +8,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - VVC Annex-B writer capable of emitting an EOS-only stream for NAL header and bytestream testing.
 - VVC skeleton stream containing VPS/SPS/PPS/IDR/EOS/EOB NAL units with placeholder RBSP payloads.
 - VVC Annex-B NAL header listing for comparing FrameForge output against VTM output.
-- Generated 1- or 2-frame 4x4 YUV420p8 VVC toy stream assembled from one internally generated SPS/PPS sequence header, a color-derived Filler Data NAL unit, and generated picture slice NAL units. The current decoded picture still comes from the verified black residual stream.
+- Generated 1- or 2-frame 4x4 YUV420p8 VVC toy stream assembled from one internally generated SPS/PPS sequence header, a color-derived Filler Data NAL unit, and generated picture slice NAL units. The current decoded picture uses a small quantized luma ladder from toy residual payloads; chroma still quantizes to zero.
 - External VTM reference-encode helper that can generate a real 4x4 YUV420 VVC stream for validation.
 - Basic encoder trait boundary for replacing the placeholder path with real codec implementations.
 - Generic bitstream utilities:
@@ -19,7 +19,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - Named VVC syntax writer for `flag`, `u(n)`, `ue(v)`, `se(v)`, toy CABAC packets, RBSP trailing bits, and field-offset tracing.
 - Internally generated VVC NAL unit headers with named `forbidden_zero_bit`, `nuh_reserved_zero_bit`, `nuh_layer_id`, `nal_unit_type`, and `nuh_temporal_id_plus1` fields.
 - Internally generated toy SPS, PPS, picture header, slice header, and typed toy coding-tree events packetized into the entropy-coded body.
-- Rust and RTL toy encoder input handling for 4x4 YUV420p8 frame sequences, currently sampling the first Y/Cb/Cr values, deriving filler payload length from that color, and ignoring the rest of the samples.
+- Rust and RTL toy encoder input handling for 4x4 YUV420p8 frame sequences, currently sampling the first Y/Cb/Cr values, deriving filler payload length from that color, quantizing luma into the current residual ladder, and ignoring the rest of the samples.
 - Software and RTL internal reconstructions are bitstream reconstructions. They must match external decoder output even when the encoder has sampled an input feature that is not encoded into the bitstream yet.
 - Basic placeholder NAL/Annex-B-style structures with TODOs for exact VVC syntax.
 - `EncoderParams`, `Picture`, reconstruction buffer skeleton, and fixed block traversal.
@@ -29,7 +29,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - SystemVerilog RTL stubs with AXI-stream-style handshakes.
 - Minimum RTL encoder shell that drains an input stream and emits a fixed placeholder output packet.
 - RTL VVC skeleton emitter that matches Rust `vvc-skeleton` byte-for-byte.
-- RTL toy VVC generator that drains a 4x4 YUV420p8 input stream, samples the first color, and emits a sequence header, color-derived filler NAL, per-picture Annex-B start codes, VVC NAL headers, and NAL payload bytes to match the Rust toy stream.
+- RTL toy VVC generator that drains a 4x4 YUV420p8 input stream, samples the first color, and emits a sequence header, color-derived filler NAL, quantized residual payloads, per-picture Annex-B start codes, VVC NAL headers, and NAL payload bytes to match the Rust toy stream.
 - cocotb/Icarus verification skeleton.
 - Local contribution and license files for an open-source starting point.
 
@@ -53,8 +53,8 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - Replace placeholder output with clean-room VVC parameter set and slice scaffolding where syntax details are confirmed.
 - Replace the remaining non-VVC placeholder encode/decode path with the VVC toy encoder as it becomes more capable.
 - Replace toy CABAC packets with a minimal arithmetic CABAC writer fed by the same coding-tree events.
-- Use the sampled first Y/Cb/Cr values to generate residual syntax so non-black streams decode to the encoder's current lossy representative color.
-- Move the sampled-color dependency from ignored filler syntax into decoded picture syntax while keeping software, RTL, and external-decoder reconstructions identical.
+- Expand sampled-color residual syntax beyond the current luma ladder and add independent decoded chroma support.
+- Keep software, RTL, and external-decoder reconstructions identical as more color and residual cases are added.
 - Add clean-room VPS/SPS/PPS and a first intra picture after the EOS-only NAL writer is stable.
 - Replace placeholder VPS/SPS/PPS and IDR RBSP payloads with real clean-room syntax.
 - Define a narrow internal packet model for coding-tree traversal.

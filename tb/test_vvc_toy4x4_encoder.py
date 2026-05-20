@@ -33,10 +33,19 @@ def input_data(frames):
     return solid_yuv420p8(0, 0, 0, frames)
 
 
-def decoded_reconstruction(frames):
-    # This is the reconstruction of the emitted VVC bitstream. It intentionally
-    # stays black until the residual/CABAC packets encode the sampled color.
-    return bytes(4 * 4 * 3 // 2 * frames)
+def quantized_luma(sample):
+    return min(
+        (((16 - rem) * 114 + 8) // 16 for rem in range(17)),
+        key=lambda value: abs(value - sample),
+    )
+
+
+def decoded_reconstruction(frames, data):
+    # This is the reconstruction of the emitted VVC bitstream. Chroma remains
+    # quantized to zero until the toy residual path supports chroma color.
+    y = quantized_luma(data[0])
+    frame = bytes([y] * 16 + [0] * 4 + [0] * 4)
+    return frame * frames
 
 
 def software_stream(frames, data):
@@ -164,10 +173,9 @@ async def vvc_toy4x4_encoder_matches_software_stream(dut):
     if path := os.environ.get("FRAMEFORGE_RTL_TOY4X4_RECON_OUT_1F"):
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_bytes(decoded_reconstruction(frames=1))
+        output.write_bytes(decoded_reconstruction(frames=1, data=one_frame_input))
 
     two_frames, two_frame_input = await collect_stream(dut, frames=2)
-    assert two_frames == software_stream(frames=2, data=two_frame_input)
     if path := os.environ.get("FRAMEFORGE_RTL_TOY4X4_OUT"):
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -175,7 +183,8 @@ async def vvc_toy4x4_encoder_matches_software_stream(dut):
     if path := os.environ.get("FRAMEFORGE_RTL_TOY4X4_RECON_OUT"):
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_bytes(decoded_reconstruction(frames=2))
+        output.write_bytes(decoded_reconstruction(frames=2, data=two_frame_input))
+    assert two_frames == software_stream(frames=2, data=two_frame_input)
 
 
 @cocotb.test()

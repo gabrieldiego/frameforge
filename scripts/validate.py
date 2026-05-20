@@ -58,7 +58,7 @@ def main() -> int:
     rtl_internal_recon = out_dir / f"{stem}_rtl_internal_rec.yuv"
     vtm_recon = out_dir / f"{stem}_vtm_from_rtl_dec.yuv"
 
-    sw_internal_recon.write_bytes(software_internal_reconstruction(info))
+    sw_internal_recon.write_bytes(software_internal_reconstruction(input_path, info))
 
     run(
         [
@@ -220,11 +220,20 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def software_internal_reconstruction(info: InputInfo) -> bytes:
-    frame_len = info.width * info.height * 3 // 2
-    # This is the reconstruction of the current emitted toy VVC bitstream, not
-    # the intended input approximation. Keep this matched to VTM decode output.
-    return bytes(frame_len * info.frames)
+def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes:
+    data = input_path.read_bytes()
+    y = quantized_luma(data[0])
+    # This is the reconstruction of the emitted toy VVC bitstream, not the
+    # original input. Keep this matched to VTM decode output after quantization.
+    frame = bytes([y] * 16 + [0] * 4 + [0] * 4)
+    return frame * info.frames
+
+
+def quantized_luma(sample: int) -> int:
+    return min(
+        (((16 - rem) * 114 + 8) // 16 for rem in range(17)),
+        key=lambda value: abs(value - sample),
+    )
 
 
 if __name__ == "__main__":
