@@ -129,6 +129,14 @@ cargo run -- vvc-eos --output /tmp/frameforge-eos.vvc
 
 This writes only an EOS NAL unit. It is useful for testing VVC NAL header packing and Annex-B output, but it does not contain parameter sets or a picture.
 
+Generate a larger VVC-shaped scaffold stream:
+
+```sh
+cargo run -- vvc-skeleton --output /tmp/frameforge-skeleton.vvc
+```
+
+This writes VPS, SPS, PPS, IDR_N_LP, EOS, and EOB NAL units with correct Annex-B start codes and VVC NAL unit headers. The RBSP payloads are deliberately placeholder `rbsp_trailing_bits` only, so this is not a decodable VVC picture stream yet.
+
 ## RTL / cocotb
 
 The initial simulator target is Icarus Verilog through cocotb:
@@ -145,7 +153,7 @@ make rtl-test SIM=icarus TOPLEVEL_LANG=verilog
 
 ## External Decoder Validation
 
-External decoder validation is planned but not guaranteed yet because FrameForge does not currently emit a decodable VVC/H.266 picture bitstream. The current `ffbs` stream is decoded by FrameForge itself, and `vvc-eos` emits only a VVC EOS NAL unit.
+External decoder validation is planned but not guaranteed yet because FrameForge does not currently emit a decodable VVC/H.266 picture bitstream. The current `ffbs` stream is decoded by FrameForge itself, `vvc-eos` emits only a VVC EOS NAL unit, and `vvc-skeleton` uses placeholder RBSP payloads.
 
 FrameForge looks for decoder resources in this order:
 

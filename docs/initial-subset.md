@@ -8,6 +8,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - Experimental `ffbs` raw `gray8` intra bitstream for minimal software encode/decode round trips.
 - Minimum software encoder path that validates shape and writes raw monochrome samples into an `ffbs` stream.
 - VVC Annex-B writer capable of emitting an EOS-only stream for NAL header and bytestream testing.
+- VVC skeleton stream containing VPS/SPS/PPS/IDR/EOS/EOB NAL units with placeholder RBSP payloads.
 - Basic encoder trait boundary for replacing the placeholder path with real codec implementations.
 - Generic bitstream utilities:
   - `BitWriter`
@@ -45,6 +46,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - Replace placeholder output with clean-room VVC parameter set and slice scaffolding where syntax details are confirmed.
 - Add a true VVC/H.266 bitstream path alongside the experimental `ffbs` path once syntax details are confirmed.
 - Add clean-room VPS/SPS/PPS and a first intra picture after the EOS-only NAL writer is stable.
+- Replace placeholder VPS/SPS/PPS and IDR RBSP payloads with real clean-room syntax.
 - Define a narrow internal packet model for coding-tree traversal.
 - Add a software golden model for one small intra prediction mode.
 - Add block-level RTL/software comparison through cocotb.

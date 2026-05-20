@@ -11,6 +11,7 @@ enum Command {
     Encode(EncodeCli),
     Decode(DecodeCli),
     VvcEos(VvcEosCli),
+    VvcSkeleton(VvcSkeletonCli),
 }
 
 #[derive(Debug)]
@@ -31,6 +32,11 @@ struct DecodeCli {
 
 #[derive(Debug)]
 struct VvcEosCli {
+    output: PathBuf,
+}
+
+#[derive(Debug)]
+struct VvcSkeletonCli {
     output: PathBuf,
 }
 
@@ -55,6 +61,7 @@ fn run(command: Command) -> Result<(), String> {
         Command::Encode(cli) => run_encode(cli),
         Command::Decode(cli) => run_decode(cli),
         Command::VvcEos(cli) => run_vvc_eos(cli),
+        Command::VvcSkeleton(cli) => run_vvc_skeleton(cli),
     }
 }
 
@@ -111,6 +118,13 @@ fn run_vvc_eos(cli: VvcEosCli) -> Result<(), String> {
     Ok(())
 }
 
+fn run_vvc_skeleton(cli: VvcSkeletonCli) -> Result<(), String> {
+    let bytes = frameforge::vvc::skeleton_annex_b();
+    fs::write(&cli.output, bytes)
+        .map_err(|err| format!("failed to write output '{}': {err}", cli.output.display()))?;
+    Ok(())
+}
+
 fn parse_cli(args: Vec<String>) -> Result<Command, String> {
     if args.first().map(String::as_str) == Some("decode") {
         return parse_decode_cli(args.into_iter().skip(1).collect());
@@ -120,6 +134,9 @@ fn parse_cli(args: Vec<String>) -> Result<Command, String> {
     }
     if args.first().map(String::as_str) == Some("vvc-eos") {
         return parse_vvc_eos_cli(args.into_iter().skip(1).collect());
+    }
+    if args.first().map(String::as_str) == Some("vvc-skeleton") {
+        return parse_vvc_skeleton_cli(args.into_iter().skip(1).collect());
     }
     parse_encode_cli(args)
 }
@@ -198,6 +215,23 @@ fn parse_vvc_eos_cli(args: Vec<String>) -> Result<Command, String> {
     }))
 }
 
+fn parse_vvc_skeleton_cli(args: Vec<String>) -> Result<Command, String> {
+    let mut output = None;
+
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--output" => output = Some(next_value(&mut iter, "--output")?.into()),
+            "--help" | "-h" => return Err(String::new()),
+            other => return Err(format!("unknown vvc-skeleton argument '{other}'")),
+        }
+    }
+
+    Ok(Command::VvcSkeleton(VvcSkeletonCli {
+        output: output.ok_or_else(|| "missing --output <path>".to_string())?,
+    }))
+}
+
 fn next_value(iter: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
     iter.next()
         .ok_or_else(|| format!("missing value for {flag}"))
@@ -214,7 +248,7 @@ fn parse_usize(value: String, flag: &str) -> Result<usize, String> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  frameforge encode --input <raw> --width <w> --height <h> --format gray8 --output <ffbs> [--trace <jsonl>]\n  frameforge decode --input <ffbs> --output <raw>\n  frameforge vvc-eos --output <vvc>\n\nThe encode subcommand is optional for compatibility."
+    "usage:\n  frameforge encode --input <raw> --width <w> --height <h> --format gray8 --output <ffbs> [--trace <jsonl>]\n  frameforge decode --input <ffbs> --output <raw>\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-skeleton --output <vvc>\n\nThe encode subcommand is optional for compatibility."
 }
 
 #[cfg(test)]
@@ -292,5 +326,20 @@ mod tests {
             panic!("expected vvc-eos command");
         };
         assert_eq!(cli.output, PathBuf::from("eos.vvc"));
+    }
+
+    #[test]
+    fn parse_cli_accepts_vvc_skeleton_subcommand() {
+        let command = parse_cli(vec![
+            "vvc-skeleton".into(),
+            "--output".into(),
+            "skeleton.vvc".into(),
+        ])
+        .unwrap();
+
+        let Command::VvcSkeleton(cli) = command else {
+            panic!("expected vvc-skeleton command");
+        };
+        assert_eq!(cli.output, PathBuf::from("skeleton.vvc"));
     }
 }

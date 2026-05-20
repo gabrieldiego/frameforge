@@ -6,6 +6,7 @@
 //! clean-room source before FrameForge can emit a decodable VVC bitstream.
 
 use crate::bitstream::insert_emulation_prevention_bytes;
+use crate::bitstream::{rbsp_trailing_bits, BitWriter};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VvcProfileTarget {
@@ -71,6 +72,15 @@ impl VvcNalUnit {
             rbsp_payload: Vec::new(),
         }
     }
+
+    pub fn eob() -> Self {
+        Self {
+            nal_unit_type: VvcNalUnitType::EndOfBitstream,
+            layer_id: 0,
+            temporal_id: 0,
+            rbsp_payload: Vec::new(),
+        }
+    }
 }
 
 pub fn write_annex_b(units: &[VvcNalUnit]) -> Result<Vec<u8>, String> {
@@ -85,6 +95,47 @@ pub fn write_annex_b(units: &[VvcNalUnit]) -> Result<Vec<u8>, String> {
 
 pub fn eos_annex_b() -> Vec<u8> {
     write_annex_b(&[VvcNalUnit::eos()]).expect("hard-coded EOS NAL should be valid")
+}
+
+pub fn skeleton_annex_b() -> Vec<u8> {
+    let placeholder_rbsp = placeholder_rbsp();
+    write_annex_b(&[
+        VvcNalUnit {
+            nal_unit_type: VvcNalUnitType::Vps,
+            layer_id: 0,
+            temporal_id: 0,
+            rbsp_payload: placeholder_rbsp.clone(),
+        },
+        VvcNalUnit {
+            nal_unit_type: VvcNalUnitType::Sps,
+            layer_id: 0,
+            temporal_id: 0,
+            rbsp_payload: placeholder_rbsp.clone(),
+        },
+        VvcNalUnit {
+            nal_unit_type: VvcNalUnitType::Pps,
+            layer_id: 0,
+            temporal_id: 0,
+            rbsp_payload: placeholder_rbsp.clone(),
+        },
+        VvcNalUnit {
+            nal_unit_type: VvcNalUnitType::IdrNLp,
+            layer_id: 0,
+            temporal_id: 0,
+            rbsp_payload: placeholder_rbsp,
+        },
+        VvcNalUnit::eos(),
+        VvcNalUnit::eob(),
+    ])
+    .expect("hard-coded skeleton NAL units should be valid")
+}
+
+fn placeholder_rbsp() -> Vec<u8> {
+    // TODO(vvc): Replace this rbsp_trailing_bits-only payload with real VPS,
+    // SPS, PPS, and slice RBSP syntax from a clean-room implementation.
+    let mut writer = BitWriter::new();
+    rbsp_trailing_bits(&mut writer);
+    writer.into_bytes()
 }
 
 pub fn nal_unit_header_bytes(unit: &VvcNalUnit) -> Result<[u8; 2], String> {
@@ -114,6 +165,20 @@ mod tests {
     #[test]
     fn eos_annex_b_contains_start_code_and_header() {
         assert_eq!(eos_annex_b(), vec![0x00, 0x00, 0x00, 0x01, 0x00, 0xa9]);
+    }
+
+    #[test]
+    fn skeleton_annex_b_contains_parameter_sets_idr_and_end_markers() {
+        let bytes = skeleton_annex_b();
+        let expected = vec![
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x71, 0x80, // VPS
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x79, 0x80, // SPS
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x81, 0x80, // PPS
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x41, 0x80, // IDR_N_LP
+            0x00, 0x00, 0x00, 0x01, 0x00, 0xa9, // EOS
+            0x00, 0x00, 0x00, 0x01, 0x00, 0xb1, // EOB
+        ];
+        assert_eq!(bytes, expected);
     }
 
     #[test]
