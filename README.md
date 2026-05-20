@@ -115,7 +115,7 @@ cargo run -- vvc-toy-4x4-black-video --frames 1 --output /tmp/frameforge-toy-4x4
 make validate-decode BITSTREAM=/tmp/frameforge-toy-4x4-1f.vvc DECODED=/tmp/frameforge-toy-4x4-1f-dec.yuv
 ```
 
-This writes a generated Annex-B VVC stream for one black 4x4 YUV420p8 IDR picture. FrameForge emits the sequence header, picture header, slice header, and toy CABAC event chunks internally.
+This writes a generated Annex-B VVC stream for one black 4x4 YUV420p8 IDR picture. FrameForge emits the sequence header, picture header, slice header, and toy coding-tree event packets internally.
 
 Generate the toy 2-frame 4x4 black VVC validation stream:
 

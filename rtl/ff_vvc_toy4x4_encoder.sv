@@ -225,7 +225,7 @@ module ff_vvc_toy4x4_encoder (
     logic [87:0] payload_bits;
 
     begin
-      payload_bits = {slice_header_bits(cra_picture), toy_cabac_event_bits(cra_picture)};
+      payload_bits = {slice_header_bits(cra_picture), toy_cabac_packet_bits(cra_picture)};
       if (index < 7'd11) begin
         slice_payload_byte = payload_bits >> ((7'd10 - index) * 8);
       end else begin
@@ -256,15 +256,66 @@ module ff_vvc_toy4x4_encoder (
     end
   endfunction
 
-  function automatic logic [68:0] toy_cabac_event_bits(input logic cra_picture);
+  function automatic logic [68:0] toy_cabac_packet_bits(input logic cra_picture);
     begin
-      toy_cabac_event_bits = {
-        cra_picture ? 16'hc403 : 16'h8403, // cabac_luma_split_cu_intra_prefix
-        16'h17ad,                          // cabac_luma_residual_level_prefix
-        16'hbf5e,                          // cabac_luma_residual_ep_suffix
-        16'h58fc,                          // cabac_chroma_tree_and_residual
-        5'b00000                           // cabac_alignment_zero_bits
+      toy_cabac_packet_bits = {
+        toy_luma_split_cu_prefix(cra_picture),
+        toy_luma_intra_prediction_bits(),
+        toy_luma_transform_unit_prefix(),
+        toy_luma_residual_prefix(),
+        toy_luma_residual_suffix_ep(),
+        toy_chroma_tree_prefix(),
+        toy_chroma_residual_prefix(),
+        toy_cabac_alignment_bits()
       };
+    end
+  endfunction
+
+  function automatic logic [3:0] toy_luma_split_cu_prefix(input logic cra_picture);
+    begin
+      toy_luma_split_cu_prefix = cra_picture ? 4'b1100 : 4'b1000;
+    end
+  endfunction
+
+  function automatic logic [3:0] toy_luma_intra_prediction_bits();
+    begin
+      toy_luma_intra_prediction_bits = 4'b0100;
+    end
+  endfunction
+
+  function automatic logic [7:0] toy_luma_transform_unit_prefix();
+    begin
+      toy_luma_transform_unit_prefix = 8'h03;
+    end
+  endfunction
+
+  function automatic logic [15:0] toy_luma_residual_prefix();
+    begin
+      toy_luma_residual_prefix = 16'h17ad;
+    end
+  endfunction
+
+  function automatic logic [15:0] toy_luma_residual_suffix_ep();
+    begin
+      toy_luma_residual_suffix_ep = 16'hbf5e;
+    end
+  endfunction
+
+  function automatic logic [7:0] toy_chroma_tree_prefix();
+    begin
+      toy_chroma_tree_prefix = 8'h58;
+    end
+  endfunction
+
+  function automatic logic [7:0] toy_chroma_residual_prefix();
+    begin
+      toy_chroma_residual_prefix = 8'hfc;
+    end
+  endfunction
+
+  function automatic logic [4:0] toy_cabac_alignment_bits();
+    begin
+      toy_cabac_alignment_bits = 5'b00000;
     end
   endfunction
 

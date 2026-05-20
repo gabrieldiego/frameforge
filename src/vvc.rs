@@ -15,7 +15,7 @@ pub enum VvcSyntaxCode {
     U,
     Ue,
     Se,
-    CabacEvent,
+    CabacPacket,
     RbspTrailingBits,
 }
 
@@ -85,12 +85,12 @@ impl VvcSyntaxWriter {
         self.bit_offset += total_bits as usize;
     }
 
-    pub fn write_cabac_event(&mut self, name: &'static str, value: u64, bit_count: u8) {
+    pub fn write_cabac_packet(&mut self, name: &'static str, value: u64, bit_count: u8) {
         assert!(
             bit_count <= 64,
-            "CABAC event cannot write more than 64 bits"
+            "CABAC packet cannot write more than 64 bits"
         );
-        self.push_field(name, VvcSyntaxCode::CabacEvent, bit_count as usize);
+        self.push_field(name, VvcSyntaxCode::CabacPacket, bit_count as usize);
         self.writer.write_bits(value, bit_count);
         self.bit_offset += bit_count as usize;
     }
@@ -230,10 +230,22 @@ enum Toy4x4PictureKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ToyCabacEvent {
+struct ToyCabacPacket {
     name: &'static str,
     bits: u64,
     bit_count: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToyCodingTreeEvent {
+    LumaSplitAndCuPrefix { irap_prefix: u8 },
+    LumaIntraPrediction,
+    LumaTransformUnitPrefix,
+    LumaResidualPrefix,
+    LumaResidualSuffixEp,
+    ChromaTreePrefix,
+    ChromaResidualPrefix,
+    CabacAlignment,
 }
 
 impl VvcNalUnit {
@@ -548,44 +560,76 @@ fn toy_4x4_slice_payload(picture_kind: Toy4x4PictureKind) -> Vec<u8> {
 }
 
 fn write_toy_coding_tree_entropy(writer: &mut VvcSyntaxWriter, picture_kind: Toy4x4PictureKind) {
-    for event in toy_4x4_cabac_events(picture_kind) {
-        writer.write_cabac_event(event.name, event.bits, event.bit_count);
+    for event in toy_4x4_coding_tree_events(picture_kind) {
+        let packet = toy_cabac_packet(event);
+        writer.write_cabac_packet(packet.name, packet.bits, packet.bit_count);
     }
 }
 
-fn toy_4x4_cabac_events(picture_kind: Toy4x4PictureKind) -> [ToyCabacEvent; 5] {
-    // TODO(vvc): Replace these event-level CABAC output chunks with a real
-    // arithmetic encoder fed by the same split, CU, intra, and residual events.
+fn toy_4x4_coding_tree_events(picture_kind: Toy4x4PictureKind) -> [ToyCodingTreeEvent; 8] {
+    let irap_prefix = match picture_kind {
+        Toy4x4PictureKind::Idr => 0b1000,
+        Toy4x4PictureKind::Cra => 0b1100,
+    };
+
     [
-        ToyCabacEvent {
-            name: "cabac_luma_split_cu_intra_prefix",
-            bits: match picture_kind {
-                Toy4x4PictureKind::Idr => 0x8403,
-                Toy4x4PictureKind::Cra => 0xc403,
-            },
-            bit_count: 16,
+        ToyCodingTreeEvent::LumaSplitAndCuPrefix { irap_prefix },
+        ToyCodingTreeEvent::LumaIntraPrediction,
+        ToyCodingTreeEvent::LumaTransformUnitPrefix,
+        ToyCodingTreeEvent::LumaResidualPrefix,
+        ToyCodingTreeEvent::LumaResidualSuffixEp,
+        ToyCodingTreeEvent::ChromaTreePrefix,
+        ToyCodingTreeEvent::ChromaResidualPrefix,
+        ToyCodingTreeEvent::CabacAlignment,
+    ]
+}
+
+fn toy_cabac_packet(event: ToyCodingTreeEvent) -> ToyCabacPacket {
+    // TODO(vvc): Replace this packetizer with a real CABAC arithmetic engine.
+    // The event sequence is the software/RTL boundary; these packet values keep
+    // the current clean-room toy stream VTM-decodable while we grow the model.
+    match event {
+        ToyCodingTreeEvent::LumaSplitAndCuPrefix { irap_prefix } => ToyCabacPacket {
+            name: "cabac_luma_split_cu_prefix",
+            bits: irap_prefix as u64,
+            bit_count: 4,
         },
-        ToyCabacEvent {
-            name: "cabac_luma_residual_level_prefix",
+        ToyCodingTreeEvent::LumaIntraPrediction => ToyCabacPacket {
+            name: "cabac_luma_intra_prediction",
+            bits: 0b0100,
+            bit_count: 4,
+        },
+        ToyCodingTreeEvent::LumaTransformUnitPrefix => ToyCabacPacket {
+            name: "cabac_luma_transform_unit_prefix",
+            bits: 0x03,
+            bit_count: 8,
+        },
+        ToyCodingTreeEvent::LumaResidualPrefix => ToyCabacPacket {
+            name: "cabac_luma_residual_prefix",
             bits: 0x17ad,
             bit_count: 16,
         },
-        ToyCabacEvent {
-            name: "cabac_luma_residual_ep_suffix",
+        ToyCodingTreeEvent::LumaResidualSuffixEp => ToyCabacPacket {
+            name: "cabac_luma_residual_suffix_ep",
             bits: 0xbf5e,
             bit_count: 16,
         },
-        ToyCabacEvent {
-            name: "cabac_chroma_tree_and_residual",
-            bits: 0x58fc,
-            bit_count: 16,
+        ToyCodingTreeEvent::ChromaTreePrefix => ToyCabacPacket {
+            name: "cabac_chroma_tree_prefix",
+            bits: 0x58,
+            bit_count: 8,
         },
-        ToyCabacEvent {
+        ToyCodingTreeEvent::ChromaResidualPrefix => ToyCabacPacket {
+            name: "cabac_chroma_residual_prefix",
+            bits: 0xfc,
+            bit_count: 8,
+        },
+        ToyCodingTreeEvent::CabacAlignment => ToyCabacPacket {
             name: "cabac_alignment_zero_bits",
             bits: 0,
             bit_count: 5,
         },
-    ]
+    }
 }
 
 fn placeholder_rbsp() -> Vec<u8> {
@@ -879,7 +923,7 @@ mod tests {
     }
 
     #[test]
-    fn toy_slice_header_is_generated_before_cabac_events() {
+    fn toy_slice_header_is_generated_before_cabac_packets() {
         assert_eq!(
             toy_4x4_slice_payload(Toy4x4PictureKind::Idr),
             hex_bytes("c400708062f5b7ebcb1f80")
@@ -891,13 +935,23 @@ mod tests {
     }
 
     #[test]
-    fn toy_coding_tree_entropy_is_named_cabac_events() {
-        let events = toy_4x4_cabac_events(Toy4x4PictureKind::Idr);
-        assert_eq!(events.len(), 5);
-        assert_eq!(events[0].name, "cabac_luma_split_cu_intra_prefix");
-        assert_eq!(events[0].bits, 0x8403);
-        assert_eq!(events[4].name, "cabac_alignment_zero_bits");
-        assert_eq!(events[4].bit_count, 5);
+    fn toy_coding_tree_entropy_is_packetized_from_events() {
+        let events = toy_4x4_coding_tree_events(Toy4x4PictureKind::Idr);
+        assert_eq!(events.len(), 8);
+        assert_eq!(
+            events[0],
+            ToyCodingTreeEvent::LumaSplitAndCuPrefix {
+                irap_prefix: 0b1000
+            }
+        );
+
+        let packets: Vec<ToyCabacPacket> =
+            events.iter().copied().map(toy_cabac_packet).collect();
+        assert_eq!(packets[0].name, "cabac_luma_split_cu_prefix");
+        assert_eq!(packets[0].bits, 0b1000);
+        assert_eq!(packets[0].bit_count, 4);
+        assert_eq!(packets[7].name, "cabac_alignment_zero_bits");
+        assert_eq!(packets[7].bit_count, 5);
 
         let mut writer = VvcSyntaxWriter::new();
         write_toy_coding_tree_entropy(&mut writer, Toy4x4PictureKind::Idr);
@@ -906,7 +960,8 @@ mod tests {
         assert!(rbsp
             .fields
             .iter()
-            .all(|field| field.code == VvcSyntaxCode::CabacEvent));
+            .all(|field| field.code == VvcSyntaxCode::CabacPacket));
+        assert_eq!(rbsp.fields.len(), 8);
     }
 
     #[test]
