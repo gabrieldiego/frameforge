@@ -20,6 +20,10 @@ else ifeq ($(DUT),ffbs)
 VERILOG_SOURCES := $(RTL_DIR)/ff_ffbs_gray4x4_encoder.sv
 TOPLEVEL := ff_ffbs_gray4x4_encoder
 COCOTB_TEST_MODULES := test_ffbs_gray4x4_encoder
+else ifeq ($(DUT),vvc-skeleton)
+VERILOG_SOURCES := $(RTL_DIR)/ff_vvc_skeleton_encoder.sv
+TOPLEVEL := ff_vvc_skeleton_encoder
+COCOTB_TEST_MODULES := test_vvc_skeleton_encoder
 else
 VERILOG_SOURCES := $(RTL_DIR)/ff_intra_pred_stub.sv
 TOPLEVEL := ff_intra_pred_stub

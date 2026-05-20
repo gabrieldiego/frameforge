@@ -63,6 +63,15 @@ pub struct VvcNalUnit {
     pub rbsp_payload: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VvcNalInfo {
+    pub nal_unit_type: u8,
+    pub layer_id: u8,
+    pub temporal_id: u8,
+    pub payload_len: usize,
+    pub offset: usize,
+}
+
 impl VvcNalUnit {
     pub fn eos() -> Self {
         Self {
@@ -152,6 +161,77 @@ pub fn nal_unit_header_bytes(unit: &VvcNalUnit) -> Result<[u8; 2], String> {
     Ok(word.to_be_bytes())
 }
 
+pub fn parse_annex_b_nal_units(bytes: &[u8]) -> Result<Vec<VvcNalInfo>, String> {
+    let ranges = annex_b_ranges(bytes);
+    let mut infos = Vec::with_capacity(ranges.len());
+
+    for (start, end) in ranges {
+        if end - start < 2 {
+            return Err(format!(
+                "NAL unit at offset {start} is too short for a VVC header"
+            ));
+        }
+        let h0 = bytes[start];
+        let h1 = bytes[start + 1];
+        let forbidden_zero_bit = h0 >> 7;
+        let nuh_reserved_zero_bit = (h0 >> 6) & 0x01;
+        if forbidden_zero_bit != 0 || nuh_reserved_zero_bit != 0 {
+            return Err(format!(
+                "invalid VVC NAL header reserved bits at offset {start}"
+            ));
+        }
+        let layer_id = h0 & 0x3f;
+        if layer_id > 55 {
+            return Err(format!(
+                "VVC layer id {layer_id} out of range at offset {start}"
+            ));
+        }
+        let nal_unit_type = h1 >> 3;
+        let temporal_id_plus1 = h1 & 0x07;
+        if temporal_id_plus1 == 0 {
+            return Err(format!("VVC temporal_id_plus1 is zero at offset {start}"));
+        }
+        infos.push(VvcNalInfo {
+            nal_unit_type,
+            layer_id,
+            temporal_id: temporal_id_plus1 - 1,
+            payload_len: end - start - 2,
+            offset: start,
+        });
+    }
+
+    Ok(infos)
+}
+
+fn annex_b_ranges(bytes: &[u8]) -> Vec<(usize, usize)> {
+    let mut starts = Vec::new();
+    let mut i = 0;
+    while i + 3 <= bytes.len() {
+        if i + 4 <= bytes.len() && bytes[i..i + 4] == [0, 0, 0, 1] {
+            starts.push((i, 4));
+            i += 4;
+        } else if bytes[i..i + 3] == [0, 0, 1] {
+            starts.push((i, 3));
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+
+    starts
+        .iter()
+        .enumerate()
+        .map(|(idx, (prefix_pos, prefix_len))| {
+            let payload_start = prefix_pos + prefix_len;
+            let payload_end = starts
+                .get(idx + 1)
+                .map(|(next_prefix_pos, _)| *next_prefix_pos)
+                .unwrap_or(bytes.len());
+            (payload_start, payload_end)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +266,14 @@ mod tests {
         let mut unit = VvcNalUnit::eos();
         unit.layer_id = 56;
         assert!(nal_unit_header_bytes(&unit).is_err());
+    }
+
+    #[test]
+    fn parses_skeleton_annex_b_headers() {
+        let infos = parse_annex_b_nal_units(&skeleton_annex_b()).unwrap();
+        let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
+        assert_eq!(types, vec![14, 15, 16, 8, 21, 22]);
+        assert_eq!(infos[0].payload_len, 1);
+        assert_eq!(infos[4].payload_len, 0);
     }
 }

@@ -137,6 +137,13 @@ cargo run -- vvc-skeleton --output /tmp/frameforge-skeleton.vvc
 
 This writes VPS, SPS, PPS, IDR_N_LP, EOS, and EOB NAL units with correct Annex-B start codes and VVC NAL unit headers. The RBSP payloads are deliberately placeholder `rbsp_trailing_bits` only, so this is not a decodable VVC picture stream yet.
 
+Inspect NAL headers in any Annex-B VVC stream:
+
+```sh
+cargo run -- vvc-list --input /tmp/frameforge-skeleton.vvc
+cargo run -- vvc-list --input /tmp/frameforge-reference-4x4.vvc
+```
+
 Generate a real minimal VVC stream with the external VTM reference encoder:
 
 ```sh
@@ -158,6 +165,12 @@ Run the RTL `ffbs` byte-format check:
 
 ```sh
 make rtl-test DUT=ffbs
+```
+
+Run the RTL VVC skeleton byte-format check:
+
+```sh
+make rtl-test DUT=vvc-skeleton
 ```
 
 The Makefile uses variables so other simulators can be introduced later:

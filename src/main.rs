@@ -12,6 +12,7 @@ enum Command {
     Decode(DecodeCli),
     VvcEos(VvcEosCli),
     VvcSkeleton(VvcSkeletonCli),
+    VvcList(VvcListCli),
 }
 
 #[derive(Debug)]
@@ -40,6 +41,11 @@ struct VvcSkeletonCli {
     output: PathBuf,
 }
 
+#[derive(Debug)]
+struct VvcListCli {
+    input: PathBuf,
+}
+
 fn main() {
     match parse_cli(env::args().skip(1).collect()) {
         Ok(cli) => {
@@ -62,6 +68,7 @@ fn run(command: Command) -> Result<(), String> {
         Command::Decode(cli) => run_decode(cli),
         Command::VvcEos(cli) => run_vvc_eos(cli),
         Command::VvcSkeleton(cli) => run_vvc_skeleton(cli),
+        Command::VvcList(cli) => run_vvc_list(cli),
     }
 }
 
@@ -125,6 +132,18 @@ fn run_vvc_skeleton(cli: VvcSkeletonCli) -> Result<(), String> {
     Ok(())
 }
 
+fn run_vvc_list(cli: VvcListCli) -> Result<(), String> {
+    let bytes = fs::read(&cli.input)
+        .map_err(|err| format!("failed to read bitstream '{}': {err}", cli.input.display()))?;
+    for info in frameforge::vvc::parse_annex_b_nal_units(&bytes)? {
+        println!(
+            "offset={} nal_unit_type={} layer_id={} temporal_id={} payload_len={}",
+            info.offset, info.nal_unit_type, info.layer_id, info.temporal_id, info.payload_len
+        );
+    }
+    Ok(())
+}
+
 fn parse_cli(args: Vec<String>) -> Result<Command, String> {
     if args.first().map(String::as_str) == Some("decode") {
         return parse_decode_cli(args.into_iter().skip(1).collect());
@@ -137,6 +156,9 @@ fn parse_cli(args: Vec<String>) -> Result<Command, String> {
     }
     if args.first().map(String::as_str) == Some("vvc-skeleton") {
         return parse_vvc_skeleton_cli(args.into_iter().skip(1).collect());
+    }
+    if args.first().map(String::as_str) == Some("vvc-list") {
+        return parse_vvc_list_cli(args.into_iter().skip(1).collect());
     }
     parse_encode_cli(args)
 }
@@ -232,6 +254,23 @@ fn parse_vvc_skeleton_cli(args: Vec<String>) -> Result<Command, String> {
     }))
 }
 
+fn parse_vvc_list_cli(args: Vec<String>) -> Result<Command, String> {
+    let mut input = None;
+
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--input" => input = Some(next_value(&mut iter, "--input")?.into()),
+            "--help" | "-h" => return Err(String::new()),
+            other => return Err(format!("unknown vvc-list argument '{other}'")),
+        }
+    }
+
+    Ok(Command::VvcList(VvcListCli {
+        input: input.ok_or_else(|| "missing --input <path>".to_string())?,
+    }))
+}
+
 fn next_value(iter: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
     iter.next()
         .ok_or_else(|| format!("missing value for {flag}"))
@@ -248,7 +287,7 @@ fn parse_usize(value: String, flag: &str) -> Result<usize, String> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  frameforge encode --input <raw> --width <w> --height <h> --format gray8 --output <ffbs> [--trace <jsonl>]\n  frameforge decode --input <ffbs> --output <raw>\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-skeleton --output <vvc>\n\nThe encode subcommand is optional for compatibility."
+    "usage:\n  frameforge encode --input <raw> --width <w> --height <h> --format gray8 --output <ffbs> [--trace <jsonl>]\n  frameforge decode --input <ffbs> --output <raw>\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-skeleton --output <vvc>\n  frameforge vvc-list --input <vvc>\n\nThe encode subcommand is optional for compatibility."
 }
 
 #[cfg(test)]
@@ -341,5 +380,20 @@ mod tests {
             panic!("expected vvc-skeleton command");
         };
         assert_eq!(cli.output, PathBuf::from("skeleton.vvc"));
+    }
+
+    #[test]
+    fn parse_cli_accepts_vvc_list_subcommand() {
+        let command = parse_cli(vec![
+            "vvc-list".into(),
+            "--input".into(),
+            "reference.vvc".into(),
+        ])
+        .unwrap();
+
+        let Command::VvcList(cli) = command else {
+            panic!("expected vvc-list command");
+        };
+        assert_eq!(cli.input, PathBuf::from("reference.vvc"));
     }
 }

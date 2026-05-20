@@ -15,6 +15,7 @@ help:
 	@printf '%s\n' '  make rtl-test  - run cocotb RTL tests'
 	@printf '%s\n' '  make rtl-test DUT=encoder - run minimum encoder RTL smoke test'
 	@printf '%s\n' '  make rtl-test DUT=ffbs - run RTL/Rust ffbs format smoke test'
+	@printf '%s\n' '  make rtl-test DUT=vvc-skeleton - run RTL/Rust VVC skeleton smoke test'
 	@printf '%s\n' '  make reference-vvc BITSTREAM=out.vvc - create real VVC using VTM'
 	@printf '%s\n' '  make clean     - remove local build outputs'
 
