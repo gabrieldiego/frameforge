@@ -9,6 +9,142 @@ use crate::bitstream::insert_emulation_prevention_bytes;
 use crate::bitstream::{rbsp_trailing_bits, BitWriter};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VvcSyntaxCode {
+    Flag,
+    U,
+    Ue,
+    Se,
+    ObservedRegion,
+    RbspTrailingBits,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VvcSyntaxField {
+    pub name: &'static str,
+    pub code: VvcSyntaxCode,
+    pub bit_offset: usize,
+    pub bit_count: usize,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct VvcSyntaxWriter {
+    writer: BitWriter,
+    fields: Vec<VvcSyntaxField>,
+    bit_offset: usize,
+}
+
+impl VvcSyntaxWriter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn write_flag(&mut self, name: &'static str, value: bool) {
+        self.push_field(name, VvcSyntaxCode::Flag, 1);
+        self.writer.write_bool(value);
+        self.bit_offset += 1;
+    }
+
+    pub fn write_u(&mut self, name: &'static str, value: u64, bit_count: u8) {
+        assert!(bit_count <= 64, "u(n) cannot write more than 64 bits");
+        if bit_count < 64 {
+            assert!(
+                value < (1u64 << bit_count),
+                "value does not fit in u({bit_count})"
+            );
+        }
+        self.push_field(name, VvcSyntaxCode::U, bit_count as usize);
+        self.writer.write_bits(value, bit_count);
+        self.bit_offset += bit_count as usize;
+    }
+
+    pub fn write_ue(&mut self, name: &'static str, value: u32) {
+        let code_num = value as u64 + 1;
+        self.write_exp_golomb_code(name, VvcSyntaxCode::Ue, code_num);
+    }
+
+    pub fn write_se(&mut self, name: &'static str, value: i32) {
+        let code_num = if value > 0 {
+            (value as u64) * 2
+        } else {
+            (value.unsigned_abs() as u64 * 2) + 1
+        };
+        self.write_exp_golomb_code(name, VvcSyntaxCode::Se, code_num);
+    }
+
+    fn write_exp_golomb_code(&mut self, name: &'static str, code: VvcSyntaxCode, code_num: u64) {
+        debug_assert!(code_num > 0);
+        let bit_count = 64 - code_num.leading_zeros() as u8;
+        let leading_zero_bits = bit_count - 1;
+        let total_bits = (leading_zero_bits * 2) + 1;
+        self.push_field(name, code, total_bits as usize);
+        for _ in 0..leading_zero_bits {
+            self.writer.write_bit(false);
+        }
+        self.writer.write_bits(code_num, bit_count);
+        self.bit_offset += total_bits as usize;
+    }
+
+    pub fn write_observed_region(&mut self, name: &'static str, value: u64, bit_count: u8) {
+        assert!(
+            bit_count <= 64,
+            "observed region cannot write more than 64 bits"
+        );
+        self.push_field(name, VvcSyntaxCode::ObservedRegion, bit_count as usize);
+        self.writer.write_bits(value, bit_count);
+        self.bit_offset += bit_count as usize;
+    }
+
+    pub fn rbsp_trailing_bits(&mut self) {
+        let bit_count = if self.writer.is_byte_aligned() {
+            8
+        } else {
+            8 - (self.bit_offset % 8)
+        };
+        self.push_field(
+            "rbsp_trailing_bits",
+            VvcSyntaxCode::RbspTrailingBits,
+            bit_count,
+        );
+        rbsp_trailing_bits(&mut self.writer);
+        self.bit_offset += bit_count;
+    }
+
+    pub fn is_byte_aligned(&self) -> bool {
+        self.writer.is_byte_aligned()
+    }
+
+    pub fn fields(&self) -> &[VvcSyntaxField] {
+        &self.fields
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.writer.into_bytes()
+    }
+
+    pub fn finish(self) -> VvcSyntaxRbsp {
+        VvcSyntaxRbsp {
+            bytes: self.writer.into_bytes(),
+            fields: self.fields,
+        }
+    }
+
+    fn push_field(&mut self, name: &'static str, code: VvcSyntaxCode, bit_count: usize) {
+        self.fields.push(VvcSyntaxField {
+            name,
+            code,
+            bit_offset: self.bit_offset,
+            bit_count,
+        });
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VvcSyntaxRbsp {
+    pub bytes: Vec<u8>,
+    pub fields: Vec<VvcSyntaxField>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VvcProfileTarget {
     MinimalToyAllIntra,
 }
@@ -207,26 +343,11 @@ fn toy_4x4_sps_payload() -> Vec<u8> {
     // TODO(vvc): Replace these observed VTM-compatible bit regions with named
     // SPS syntax fields from the VVC specification. This is intentionally a
     // bitstream generator, not an imported reference-code blob.
-    let mut writer = BitWriter::new();
-    write_observed_bits(
-        &mut writer,
-        "sps_parameter_set_prefix",
-        0x000b_0200_8000_4244,
-        64,
-    );
-    write_observed_bits(
-        &mut writer,
-        "sps_profile_and_picture_region",
-        0xeed5_01f4_46e8_8468,
-        64,
-    );
-    write_observed_bits(
-        &mut writer,
-        "sps_tool_constraint_region",
-        0x8424_6136_28c5_4306,
-        64,
-    );
-    write_observed_bits(&mut writer, "sps_trailing_region", 0x80ab_8fe0_ac10_20, 56);
+    let mut writer = VvcSyntaxWriter::new();
+    writer.write_observed_region("sps_parameter_set_prefix", 0x000b_0200_8000_4244, 64);
+    writer.write_observed_region("sps_profile_and_picture_region", 0xeed5_01f4_46e8_8468, 64);
+    writer.write_observed_region("sps_tool_constraint_region", 0x8424_6136_28c5_4306, 64);
+    writer.write_observed_region("sps_trailing_region", 0x80ab_8fe0_ac10_20, 56);
     debug_assert!(writer.is_byte_aligned());
     writer.into_bytes()
 }
@@ -234,14 +355,9 @@ fn toy_4x4_sps_payload() -> Vec<u8> {
 fn toy_4x4_pps_payload() -> Vec<u8> {
     // TODO(vvc): Replace these observed VTM-compatible bit regions with named
     // PPS syntax fields once the toy encoder owns the exact parameter-set syntax.
-    let mut writer = BitWriter::new();
-    write_observed_bits(
-        &mut writer,
-        "pps_parameter_set_prefix",
-        0x0002_448a_4200_c7b2,
-        64,
-    );
-    write_observed_bits(&mut writer, "pps_picture_region", 0x1459_4594_5880, 48);
+    let mut writer = VvcSyntaxWriter::new();
+    writer.write_observed_region("pps_parameter_set_prefix", 0x0002_448a_4200_c7b2, 64);
+    writer.write_observed_region("pps_picture_region", 0x1459_4594_5880, 48);
     debug_assert!(writer.is_byte_aligned());
     writer.into_bytes()
 }
@@ -250,18 +366,17 @@ fn toy_4x4_slice_payload(picture_kind: Toy4x4PictureKind) -> Vec<u8> {
     // TODO(vvc): Split this into actual picture header, slice header, coding-tree,
     // CABAC, and rbsp_trailing_bits syntax. For now these named regions preserve
     // the minimal stream that VTM accepts for a black 4x4 YUV420p8 frame.
-    let mut writer = BitWriter::new();
-    write_observed_bits(&mut writer, "slice_header_prefix", 0xc4, 8);
+    let mut writer = VvcSyntaxWriter::new();
+    writer.write_observed_region("slice_header_prefix", 0xc4, 8);
     match picture_kind {
         Toy4x4PictureKind::Idr => {
-            write_observed_bits(&mut writer, "idr_picture_order_region", 0x0070, 16);
+            writer.write_observed_region("idr_picture_order_region", 0x0070, 16);
         }
         Toy4x4PictureKind::Cra => {
-            write_observed_bits(&mut writer, "cra_picture_order_region", 0x0478, 16);
+            writer.write_observed_region("cra_picture_order_region", 0x0478, 16);
         }
     }
-    write_observed_bits(
-        &mut writer,
+    writer.write_observed_region(
         "zero_residual_coding_tree_and_trailing_region",
         0x8062_f5b7_ebcb_1f80,
         64,
@@ -270,20 +385,11 @@ fn toy_4x4_slice_payload(picture_kind: Toy4x4PictureKind) -> Vec<u8> {
     writer.into_bytes()
 }
 
-fn write_observed_bits(
-    writer: &mut BitWriter,
-    _field_name: &'static str,
-    value: u64,
-    bit_count: u8,
-) {
-    writer.write_bits(value, bit_count);
-}
-
 fn placeholder_rbsp() -> Vec<u8> {
     // TODO(vvc): Replace this rbsp_trailing_bits-only payload with real VPS,
     // SPS, PPS, and slice RBSP syntax from a clean-room implementation.
-    let mut writer = BitWriter::new();
-    rbsp_trailing_bits(&mut writer);
+    let mut writer = VvcSyntaxWriter::new();
+    writer.rbsp_trailing_bits();
     writer.into_bytes()
 }
 
@@ -415,6 +521,71 @@ mod tests {
         assert_eq!(types, vec![14, 15, 16, 8, 21, 22]);
         assert_eq!(infos[0].payload_len, 1);
         assert_eq!(infos[4].payload_len, 0);
+    }
+
+    #[test]
+    fn syntax_writer_records_named_fixed_width_fields() {
+        let mut writer = VvcSyntaxWriter::new();
+        writer.write_flag("ph_gdr_or_irap_pic_flag", true);
+        writer.write_u("sps_seq_parameter_set_id", 3, 4);
+        writer.rbsp_trailing_bits();
+        let rbsp = writer.finish();
+
+        assert_eq!(rbsp.bytes, vec![0b1001_1100]);
+        assert_eq!(
+            rbsp.fields,
+            vec![
+                VvcSyntaxField {
+                    name: "ph_gdr_or_irap_pic_flag",
+                    code: VvcSyntaxCode::Flag,
+                    bit_offset: 0,
+                    bit_count: 1,
+                },
+                VvcSyntaxField {
+                    name: "sps_seq_parameter_set_id",
+                    code: VvcSyntaxCode::U,
+                    bit_offset: 1,
+                    bit_count: 4,
+                },
+                VvcSyntaxField {
+                    name: "rbsp_trailing_bits",
+                    code: VvcSyntaxCode::RbspTrailingBits,
+                    bit_offset: 5,
+                    bit_count: 3,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn syntax_writer_encodes_unsigned_exp_golomb() {
+        let mut writer = VvcSyntaxWriter::new();
+        writer.write_ue("sps_log2_ctu_size_minus5", 0);
+        writer.write_ue("pps_num_subpics_minus1", 5);
+        writer.rbsp_trailing_bits();
+        let rbsp = writer.finish();
+
+        assert_eq!(rbsp.bytes, vec![0b1001_1010]);
+        assert_eq!(rbsp.fields[0].bit_count, 1);
+        assert_eq!(rbsp.fields[1].bit_offset, 1);
+        assert_eq!(rbsp.fields[1].bit_count, 5);
+        assert_eq!(rbsp.fields[2].bit_offset, 6);
+    }
+
+    #[test]
+    fn syntax_writer_encodes_signed_exp_golomb() {
+        let mut writer = VvcSyntaxWriter::new();
+        writer.write_se("slice_qp_delta", 0);
+        writer.write_se("delta_luma_weight_l0", 1);
+        writer.write_se("delta_chroma_offset_l0", -1);
+        writer.rbsp_trailing_bits();
+        let rbsp = writer.finish();
+
+        assert_eq!(rbsp.bytes, vec![0b1010_0111]);
+        assert_eq!(rbsp.fields[0].code, VvcSyntaxCode::Se);
+        assert_eq!(rbsp.fields[0].bit_count, 1);
+        assert_eq!(rbsp.fields[1].bit_count, 3);
+        assert_eq!(rbsp.fields[2].bit_count, 3);
     }
 
     #[test]

@@ -16,6 +16,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
   - byte alignment
   - RBSP trailing bits
   - emulation-prevention byte insertion
+- Named VVC syntax writer for `flag`, `u(n)`, `ue(v)`, `se(v)`, observed transition regions, RBSP trailing bits, and field-offset tracing.
 - Basic placeholder NAL/Annex-B-style structures with TODOs for exact VVC syntax.
 - `EncoderParams`, `Picture`, reconstruction buffer skeleton, and fixed block traversal.
 - JSONL trace events.
@@ -47,7 +48,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 
 - Replace placeholder output with clean-room VVC parameter set and slice scaffolding where syntax details are confirmed.
 - Replace the remaining non-VVC placeholder encode/decode path with the VVC toy encoder as it becomes more capable.
-- Replace the observed toy payload bit regions with generated clean-room SPS/PPS/IDR syntax.
+- Replace the observed toy payload bit regions with named clean-room SPS/PPS/IDR syntax fields through `VvcSyntaxWriter`.
 - Add clean-room VPS/SPS/PPS and a first intra picture after the EOS-only NAL writer is stable.
 - Replace placeholder VPS/SPS/PPS and IDR RBSP payloads with real clean-room syntax.
 - Define a narrow internal packet model for coding-tree traversal.
