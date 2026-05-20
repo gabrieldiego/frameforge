@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate FrameForge software/RTL streams and VTM reconstructions."""
+"""Validate FrameForge software/RTL streams and reconstructions."""
 
 from __future__ import annotations
 
@@ -54,8 +54,11 @@ def main() -> int:
     stem = f"{input_path.stem}_{info.width}x{info.height}_{info.frames}f_{info.fmt}"
     sw_bitstream = out_dir / f"{stem}_software.vvc"
     rtl_bitstream = out_dir / f"{stem}_rtl.vvc"
-    sw_recon = out_dir / f"{stem}_software_dec.yuv"
-    rtl_recon = out_dir / f"{stem}_rtl_dec.yuv"
+    sw_internal_recon = out_dir / f"{stem}_software_internal_rec.yuv"
+    rtl_internal_recon = out_dir / f"{stem}_rtl_internal_rec.yuv"
+    vtm_recon = out_dir / f"{stem}_vtm_from_rtl_dec.yuv"
+
+    sw_internal_recon.write_bytes(software_internal_reconstruction(info))
 
     run(
         [
@@ -74,26 +77,19 @@ def main() -> int:
     env = os.environ.copy()
     if info.frames == 1:
         env["FRAMEFORGE_RTL_TOY4X4_OUT_1F"] = str(rtl_bitstream)
+        env["FRAMEFORGE_RTL_TOY4X4_RECON_OUT_1F"] = str(rtl_internal_recon)
     else:
         env["FRAMEFORGE_RTL_TOY4X4_OUT"] = str(rtl_bitstream)
+        env["FRAMEFORGE_RTL_TOY4X4_RECON_OUT"] = str(rtl_internal_recon)
     run(["make", "rtl-test", "DUT=vvc-toy4x4"], env=env)
 
     run(
         [
             sys.executable,
             "scripts/validate_decode.py",
-            str(sw_bitstream),
-            "--output",
-            str(sw_recon),
-        ]
-    )
-    run(
-        [
-            sys.executable,
-            "scripts/validate_decode.py",
             str(rtl_bitstream),
             "--output",
-            str(rtl_recon),
+            str(vtm_recon),
         ]
     )
 
@@ -101,9 +97,9 @@ def main() -> int:
         "input_yuv": sha256(input_path),
         "software_bitstream": sha256(sw_bitstream),
         "rtl_bitstream": sha256(rtl_bitstream),
-        "vtm_recon_from_software": sha256(sw_recon),
-        "vtm_recon_from_rtl": sha256(rtl_recon),
-        "vtm_expected_recon": expected_recon_sha256(info),
+        "software_internal_recon": sha256(sw_internal_recon),
+        "rtl_internal_recon": sha256(rtl_internal_recon),
+        "vtm_recon_from_rtl_bitstream": sha256(vtm_recon),
     }
 
     print("FrameForge validation checksums")
@@ -118,19 +114,19 @@ def main() -> int:
         print("FAIL: software and RTL bitstreams differ", file=sys.stderr)
         return 1
     if not (
-        digests["vtm_recon_from_software"]
-        == digests["vtm_recon_from_rtl"]
-        == digests["vtm_expected_recon"]
+        digests["software_internal_recon"]
+        == digests["rtl_internal_recon"]
+        == digests["vtm_recon_from_rtl_bitstream"]
     ):
         print(
-            "FAIL: software VTM reconstruction, RTL VTM reconstruction, "
-            "and expected reconstruction differ",
+            "FAIL: software internal reconstruction, RTL internal "
+            "reconstruction, and VTM reconstruction differ",
             file=sys.stderr,
         )
         return 1
 
     print("OK: software and RTL bitstreams match")
-    print("OK: VTM reconstructions match the expected reconstruction")
+    print("OK: software, RTL, and VTM reconstructions match")
     return 0
 
 
@@ -218,9 +214,9 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def expected_recon_sha256(info: InputInfo) -> str:
+def software_internal_reconstruction(info: InputInfo) -> bytes:
     frame_len = info.width * info.height * 3 // 2
-    return hashlib.sha256(bytes(frame_len * info.frames)).hexdigest()
+    return bytes(frame_len * info.frames)
 
 
 if __name__ == "__main__":

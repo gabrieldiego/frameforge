@@ -137,7 +137,7 @@ dd if=/dev/zero of=/tmp/frameforge/black_4x4_2f_yuv420p8.yuv bs=48 count=1
 make validate INPUT=/tmp/frameforge/black_4x4_2f_yuv420p8.yuv
 ```
 
-The validation command infers resolution, frame count, and format from names such as `black_4x4_2f_yuv420p8.yuv`. You can override them with `WIDTH=4 HEIGHT=4 FRAMES=2 FORMAT=yuv420p8`. It generates software and RTL bitstreams, decodes both with VTM, and checks that the bitstreams match and the VTM reconstructions match the expected reconstruction.
+The validation command infers resolution, frame count, and format from names such as `black_4x4_2f_yuv420p8.yuv`. You can override them with `WIDTH=4 HEIGHT=4 FRAMES=2 FORMAT=yuv420p8`. It generates software and RTL bitstreams, checks that those bitstreams match, taps the software and RTL internal reconstructions, decodes the RTL bitstream with VTM, and checks that the three reconstruction checksums match.
 
 Inspect NAL headers in any Annex-B VVC stream:
 

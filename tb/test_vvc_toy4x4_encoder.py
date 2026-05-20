@@ -32,6 +32,10 @@ def software_stream(frames):
         return output.read_bytes()
 
 
+def internal_reconstruction(frames):
+    return bytes(4 * 4 * 3 // 2 * frames)
+
+
 async def collect_stream(dut, frames):
     await Timer(1, unit="ns")
 
@@ -76,6 +80,10 @@ async def vvc_toy4x4_encoder_matches_software_stream(dut):
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(one_frame)
+    if path := os.environ.get("FRAMEFORGE_RTL_TOY4X4_RECON_OUT_1F"):
+        output = Path(path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(internal_reconstruction(frames=1))
 
     two_frames = await collect_stream(dut, frames=2)
     assert two_frames == software_stream(frames=2)
@@ -83,3 +91,7 @@ async def vvc_toy4x4_encoder_matches_software_stream(dut):
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(two_frames)
+    if path := os.environ.get("FRAMEFORGE_RTL_TOY4X4_RECON_OUT"):
+        output = Path(path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(internal_reconstruction(frames=2))
