@@ -4,7 +4,7 @@ from cocotb.triggers import ReadOnly, RisingEdge
 
 
 @cocotb.test()
-async def encoder_stub_ignores_input_and_emits_placeholder(dut):
+async def encoder_stub_ignores_input_and_emits_marker(dut):
     """Smoke test for the minimum RTL encoder shell."""
 
     cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
@@ -34,4 +34,4 @@ async def encoder_stub_ignores_input_and_emits_placeholder(dut):
             assert dut.m_axis_last.value == 1
             return
 
-    assert False, "encoder stub did not emit placeholder packet"
+    assert False, "encoder stub did not emit marker word"

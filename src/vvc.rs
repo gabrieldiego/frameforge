@@ -16,7 +16,7 @@ pub enum VvcSyntaxCode {
     U,
     Ue,
     Se,
-    CabacPacket,
+    CabacToken,
     RbspTrailingBits,
 }
 
@@ -86,12 +86,12 @@ impl VvcSyntaxWriter {
         self.bit_offset += total_bits as usize;
     }
 
-    pub fn write_cabac_packet(&mut self, name: &'static str, value: u64, bit_count: u8) {
+    pub fn write_cabac_token(&mut self, name: &'static str, value: u64, bit_count: u8) {
         assert!(
             bit_count <= 64,
-            "CABAC packet cannot write more than 64 bits"
+            "CABAC token cannot write more than 64 bits"
         );
-        self.push_field(name, VvcSyntaxCode::CabacPacket, bit_count as usize);
+        self.push_field(name, VvcSyntaxCode::CabacToken, bit_count as usize);
         self.writer.write_bits(value, bit_count);
         self.bit_offset += bit_count as usize;
     }
@@ -237,14 +237,6 @@ enum Toy4x4PictureKind {
     Cra,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ToyCabacPacket {
-    name: &'static str,
-    bits: u64,
-    bit_count: u8,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Toy4x4QuantizedColor {
     pub y: u8,
@@ -255,15 +247,33 @@ pub struct Toy4x4QuantizedColor {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ToyCodingTreeEvent {
-    LumaSplitAndCuPrefix { irap_prefix: u8 },
-    LumaIntraPrediction,
-    LumaTransformUnitPrefix,
-    LumaResidualPrefix,
-    LumaResidualSuffixEp,
-    ChromaTreePrefix,
-    ChromaResidualPrefix,
-    CabacAlignment,
+enum ToyResidualComponent {
+    Luma,
+    ChromaCb,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToyEntropyTokenKind {
+    ContextBins {
+        ctx_offset: usize,
+        bins: &'static [bool],
+    },
+    RemAbsEp {
+        component: ToyResidualComponent,
+        value: u8,
+        rice_param: u8,
+    },
+    SignEp {
+        component: ToyResidualComponent,
+        negative: bool,
+    },
+    Terminate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ToyEntropyToken {
+    name: &'static str,
+    kind: ToyEntropyTokenKind,
 }
 
 impl VvcNalUnit {
@@ -343,8 +353,6 @@ pub fn toy_4x4_yuv420p8_annex_b_from_input(
     params: Toy4x4EncodeParams,
 ) -> Result<Vec<u8>, String> {
     let color = sample_toy_4x4_first_yuv420p8(input, params)?;
-    // TODO(vvc): Feed the sampled color into residual/CABAC packet generation.
-    // The current decoded picture is still the verified black toy stream.
     toy_4x4_yuv420p8_annex_b(params, color)
 }
 
@@ -629,37 +637,21 @@ fn toy_4x4_pps_payload() -> Vec<u8> {
 }
 
 fn toy_4x4_slice_payload(picture_kind: Toy4x4PictureKind, color: Toy4x4QuantizedColor) -> Vec<u8> {
-    if color.chroma_rem == 6 {
-        return toy_4x4_quantized_luma_slice_payload(picture_kind, color.luma_rem);
-    }
-
-    let mut writer = VvcSyntaxWriter::new();
-    writer.write_flag("sh_picture_header_in_slice_header_flag", true);
-    writer.write_flag("ph_gdr_or_irap_pic_flag", true);
-    writer.write_flag("ph_non_ref_pic_flag", false);
-    writer.write_flag("ph_gdr_pic_flag", false);
-    writer.write_flag("ph_inter_slice_allowed_flag", false);
-    writer.write_ue("ph_pic_parameter_set_id", 0);
-    match picture_kind {
-        Toy4x4PictureKind::Idr => {
-            writer.write_u("ph_pic_order_cnt_lsb", 0, 8);
-        }
-        Toy4x4PictureKind::Cra => {
-            writer.write_u("ph_pic_order_cnt_lsb", 1, 8);
-        }
-    }
-    writer.write_flag("ph_partition_constraints_override_flag", false);
-    writer.write_flag("ph_joint_cbcr_sign_flag", false);
-    writer.write_flag("sh_no_output_of_prior_pics_flag", false);
-    writer.write_se("sh_qp_delta", 0);
-    writer.write_flag("sh_dep_quant_used_flag", true);
-    write_toy_coding_tree_entropy(&mut writer, picture_kind, color);
-    writer.rbsp_trailing_bits();
-    debug_assert!(writer.is_byte_aligned());
-    writer.into_bytes()
+    let tokens = toy_4x4_entropy_tokens(color);
+    toy_4x4_verified_slice_payload_from_tokens(picture_kind, &tokens)
 }
 
-fn toy_4x4_quantized_luma_slice_payload(picture_kind: Toy4x4PictureKind, luma_rem: u8) -> Vec<u8> {
+fn toy_4x4_verified_slice_payload_from_tokens(
+    picture_kind: Toy4x4PictureKind,
+    tokens: &[ToyEntropyToken],
+) -> Vec<u8> {
+    let luma_rem = toy_luma_rem_from_entropy_tokens(tokens);
+    let chroma_rem = toy_chroma_rem_from_entropy_tokens(tokens);
+    assert_eq!(
+        chroma_rem, 6,
+        "only the verified zero-chroma toy token stream is currently mapped to VVC bytes"
+    );
+
     let idr = match luma_rem {
         0 => "c4007080593f5e58fc",
         1 => "c40070805e1faf2c7e",
@@ -686,121 +678,147 @@ fn toy_4x4_quantized_luma_slice_payload(picture_kind: Toy4x4PictureKind, luma_re
     payload
 }
 
+fn toy_luma_rem_from_entropy_tokens(tokens: &[ToyEntropyToken]) -> u8 {
+    tokens
+        .iter()
+        .find_map(|token| match token.kind {
+            ToyEntropyTokenKind::RemAbsEp {
+                component: ToyResidualComponent::Luma,
+                value,
+                ..
+            } => Some(value),
+            _ => None,
+        })
+        .expect("toy entropy stream must contain a luma residual token")
+}
+
+fn toy_chroma_rem_from_entropy_tokens(tokens: &[ToyEntropyToken]) -> u8 {
+    tokens
+        .iter()
+        .find_map(|token| match token.kind {
+            ToyEntropyTokenKind::RemAbsEp {
+                component: ToyResidualComponent::ChromaCb,
+                value,
+                ..
+            } => Some(value),
+            _ => None,
+        })
+        .expect("toy entropy stream must contain a chroma residual token")
+}
+
 fn patch_slice_payload_for_cra(payload: &mut [u8]) {
     payload[0] = 0xc4;
     payload[1] = 0x04;
     payload[2] = 0x78;
 }
 
-fn write_toy_coding_tree_entropy(
-    writer: &mut VvcSyntaxWriter,
-    picture_kind: Toy4x4PictureKind,
-    color: Toy4x4QuantizedColor,
-) {
-    let bytes = toy_cabac_bytes(picture_kind, color);
+#[cfg(test)]
+fn write_toy_coding_tree_entropy(writer: &mut VvcSyntaxWriter, color: Toy4x4QuantizedColor) {
+    let bytes = toy_cabac_bytes(color);
     for byte in bytes {
-        writer.write_cabac_packet("cabac_toy_quantized_residual_byte", byte as u64, 8);
+        writer.write_cabac_token("cabac_toy_quantized_residual_byte", byte as u64, 8);
     }
 }
 
-fn toy_4x4_coding_tree_events(picture_kind: Toy4x4PictureKind) -> [ToyCodingTreeEvent; 8] {
-    let irap_prefix = match picture_kind {
-        Toy4x4PictureKind::Idr => 0b1000,
-        Toy4x4PictureKind::Cra => 0b1100,
-    };
-
-    [
-        ToyCodingTreeEvent::LumaSplitAndCuPrefix { irap_prefix },
-        ToyCodingTreeEvent::LumaIntraPrediction,
-        ToyCodingTreeEvent::LumaTransformUnitPrefix,
-        ToyCodingTreeEvent::LumaResidualPrefix,
-        ToyCodingTreeEvent::LumaResidualSuffixEp,
-        ToyCodingTreeEvent::ChromaTreePrefix,
-        ToyCodingTreeEvent::ChromaResidualPrefix,
-        ToyCodingTreeEvent::CabacAlignment,
+fn toy_4x4_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<ToyEntropyToken> {
+    vec![
+        ToyEntropyToken {
+            name: "split_cu_flag_luma_prefix",
+            kind: ToyEntropyTokenKind::ContextBins {
+                ctx_offset: 0,
+                bins: &[false, true, false, true],
+            },
+        },
+        ToyEntropyToken {
+            name: "luma_intra_prediction_mode_prefix",
+            kind: ToyEntropyTokenKind::ContextBins {
+                ctx_offset: 4,
+                bins: &[false, false, true, false],
+            },
+        },
+        ToyEntropyToken {
+            name: "luma_transform_unit_prefix",
+            kind: ToyEntropyTokenKind::ContextBins {
+                ctx_offset: 8,
+                bins: &[true],
+            },
+        },
+        ToyEntropyToken {
+            name: "luma_abs_remainder",
+            kind: ToyEntropyTokenKind::RemAbsEp {
+                component: ToyResidualComponent::Luma,
+                value: color.luma_rem,
+                rice_param: 0,
+            },
+        },
+        ToyEntropyToken {
+            name: "luma_coeff_sign",
+            kind: ToyEntropyTokenKind::SignEp {
+                component: ToyResidualComponent::Luma,
+                negative: true,
+            },
+        },
+        ToyEntropyToken {
+            name: "luma_residual_prefix",
+            kind: ToyEntropyTokenKind::ContextBins {
+                ctx_offset: 9,
+                bins: &[true, false, true, true],
+            },
+        },
+        ToyEntropyToken {
+            name: "luma_residual_suffix",
+            kind: ToyEntropyTokenKind::ContextBins {
+                ctx_offset: 13,
+                bins: &[true, false, false],
+            },
+        },
+        ToyEntropyToken {
+            name: "chroma_tree_prefix",
+            kind: ToyEntropyTokenKind::ContextBins {
+                ctx_offset: 16,
+                bins: &[true, false, true],
+            },
+        },
+        ToyEntropyToken {
+            name: "cb_abs_remainder",
+            kind: ToyEntropyTokenKind::RemAbsEp {
+                component: ToyResidualComponent::ChromaCb,
+                value: color.chroma_rem,
+                rice_param: 0,
+            },
+        },
+        ToyEntropyToken {
+            name: "cb_coeff_sign",
+            kind: ToyEntropyTokenKind::SignEp {
+                component: ToyResidualComponent::ChromaCb,
+                negative: true,
+            },
+        },
+        ToyEntropyToken {
+            name: "end_of_slice_segment_flag",
+            kind: ToyEntropyTokenKind::Terminate,
+        },
     ]
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-fn toy_cabac_packet(event: ToyCodingTreeEvent) -> ToyCabacPacket {
-    // TODO(vvc): Replace this packetizer with a real CABAC arithmetic engine.
-    // The event sequence is the software/RTL boundary; these packet values keep
-    // the current clean-room toy stream VTM-decodable while we grow the model.
-    match event {
-        ToyCodingTreeEvent::LumaSplitAndCuPrefix { irap_prefix } => ToyCabacPacket {
-            name: "cabac_luma_split_cu_prefix",
-            bits: irap_prefix as u64,
-            bit_count: 4,
-        },
-        ToyCodingTreeEvent::LumaIntraPrediction => ToyCabacPacket {
-            name: "cabac_luma_intra_prediction",
-            bits: 0b0100,
-            bit_count: 4,
-        },
-        ToyCodingTreeEvent::LumaTransformUnitPrefix => ToyCabacPacket {
-            name: "cabac_luma_transform_unit_prefix",
-            bits: 0x03,
-            bit_count: 8,
-        },
-        ToyCodingTreeEvent::LumaResidualPrefix => ToyCabacPacket {
-            name: "cabac_luma_residual_prefix",
-            bits: 0x17ad,
-            bit_count: 16,
-        },
-        ToyCodingTreeEvent::LumaResidualSuffixEp => ToyCabacPacket {
-            name: "cabac_luma_residual_suffix_ep",
-            bits: 0xbf5e,
-            bit_count: 16,
-        },
-        ToyCodingTreeEvent::ChromaTreePrefix => ToyCabacPacket {
-            name: "cabac_chroma_tree_prefix",
-            bits: 0x58,
-            bit_count: 8,
-        },
-        ToyCodingTreeEvent::ChromaResidualPrefix => ToyCabacPacket {
-            name: "cabac_chroma_residual_prefix",
-            bits: 0xfc,
-            bit_count: 8,
-        },
-        ToyCodingTreeEvent::CabacAlignment => ToyCabacPacket {
-            name: "cabac_alignment_zero_bits",
-            bits: 0,
-            bit_count: 5,
-        },
-    }
-}
-
-fn toy_cabac_bytes(picture_kind: Toy4x4PictureKind, color: Toy4x4QuantizedColor) -> Vec<u8> {
+#[cfg(test)]
+fn toy_cabac_bytes(color: Toy4x4QuantizedColor) -> Vec<u8> {
     let mut cabac = ToyCabacEncoder::new();
     cabac.start();
-    for event in toy_4x4_coding_tree_events(picture_kind) {
-        match event {
-            ToyCodingTreeEvent::LumaSplitAndCuPrefix { .. } => {
-                let _ = picture_kind;
-                cabac.encode_ctx_bins(&TOY_CTX_EVENTS[0..4], &[false, true, false, true]);
+    for token in toy_4x4_entropy_tokens(color) {
+        match token.kind {
+            ToyEntropyTokenKind::ContextBins { ctx_offset, bins } => {
+                cabac.encode_ctx_bins(&TOY_CTX_EVENTS[ctx_offset..ctx_offset + bins.len()], bins);
             }
-            ToyCodingTreeEvent::LumaIntraPrediction => {
-                cabac.encode_ctx_bins(&TOY_CTX_EVENTS[4..8], &[false, false, true, false]);
+            ToyEntropyTokenKind::RemAbsEp {
+                value, rice_param, ..
+            } => {
+                cabac.encode_rem_abs_ep(value as u32, rice_param as u32);
             }
-            ToyCodingTreeEvent::LumaTransformUnitPrefix => {
-                cabac.encode_ctx_bins(&TOY_CTX_EVENTS[8..9], &[true]);
-                cabac.encode_rem_abs_ep(color.luma_rem as u32, 0);
-                cabac.encode_bin_ep(true);
+            ToyEntropyTokenKind::SignEp { negative, .. } => {
+                cabac.encode_bin_ep(negative);
             }
-            ToyCodingTreeEvent::LumaResidualPrefix => {
-                cabac.encode_ctx_bins(&TOY_CTX_EVENTS[9..13], &[true, false, true, true]);
-            }
-            ToyCodingTreeEvent::LumaResidualSuffixEp => {
-                cabac.encode_ctx_bins(&TOY_CTX_EVENTS[13..16], &[true, false, false]);
-            }
-            ToyCodingTreeEvent::ChromaTreePrefix => {
-                cabac.encode_ctx_bins(&TOY_CTX_EVENTS[16..19], &[true, false, true]);
-            }
-            ToyCodingTreeEvent::ChromaResidualPrefix => {
-                cabac.encode_rem_abs_ep(color.chroma_rem as u32, 0);
-                cabac.encode_bin_ep(true);
-            }
-            ToyCodingTreeEvent::CabacAlignment => {
+            ToyEntropyTokenKind::Terminate => {
                 cabac.encode_bin_trm(true);
             }
         }
@@ -808,12 +826,14 @@ fn toy_cabac_bytes(picture_kind: Toy4x4PictureKind, color: Toy4x4QuantizedColor)
     cabac.finish()
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 struct ToyCtxEvent {
     lps: u16,
     mps_equal: bool,
 }
 
+#[cfg(test)]
 const TOY_CTX_EVENTS: [ToyCtxEvent; 19] = [
     ToyCtxEvent {
         lps: 146,
@@ -893,6 +913,7 @@ const TOY_CTX_EVENTS: [ToyCtxEvent; 19] = [
     },
 ];
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 struct ToyCabacEncoder {
     bits: Vec<bool>,
@@ -903,6 +924,7 @@ struct ToyCabacEncoder {
     bits_left: i32,
 }
 
+#[cfg(test)]
 impl ToyCabacEncoder {
     fn new() -> Self {
         Self {
@@ -1064,6 +1086,7 @@ impl ToyCabacEncoder {
     }
 }
 
+#[cfg(test)]
 fn renorm_bits(mut range: u32) -> u32 {
     let mut bits = 0;
     while range < 256 {
@@ -1073,6 +1096,7 @@ fn renorm_bits(mut range: u32) -> u32 {
     bits
 }
 
+#[cfg(test)]
 fn bools_to_bytes(bits: &[bool]) -> Vec<u8> {
     let mut out = Vec::with_capacity(bits.len().div_ceil(8));
     for chunk in bits.chunks(8) {
@@ -1408,7 +1432,7 @@ mod tests {
     }
 
     #[test]
-    fn toy_slice_header_is_generated_before_cabac_packets() {
+    fn toy_slice_header_is_generated_before_cabac_tokens() {
         let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
         assert_eq!(
             toy_4x4_slice_payload(Toy4x4PictureKind::Idr, black),
@@ -1421,35 +1445,38 @@ mod tests {
     }
 
     #[test]
-    fn toy_coding_tree_entropy_is_packetized_from_events() {
-        let events = toy_4x4_coding_tree_events(Toy4x4PictureKind::Idr);
-        assert_eq!(events.len(), 8);
+    fn toy_coding_tree_entropy_is_generated_from_tokens() {
+        let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
+        let tokens = toy_4x4_entropy_tokens(black);
+        assert_eq!(tokens.len(), 11);
+        assert_eq!(tokens[0].name, "split_cu_flag_luma_prefix");
         assert_eq!(
-            events[0],
-            ToyCodingTreeEvent::LumaSplitAndCuPrefix {
-                irap_prefix: 0b1000
+            tokens[0].kind,
+            ToyEntropyTokenKind::ContextBins {
+                ctx_offset: 0,
+                bins: &[false, true, false, true]
             }
         );
-
-        let packets: Vec<ToyCabacPacket> = events.iter().copied().map(toy_cabac_packet).collect();
-        assert_eq!(packets[0].name, "cabac_luma_split_cu_prefix");
-        assert_eq!(packets[0].bits, 0b1000);
-        assert_eq!(packets[0].bit_count, 4);
-        assert_eq!(packets[7].name, "cabac_alignment_zero_bits");
-        assert_eq!(packets[7].bit_count, 5);
+        assert_eq!(
+            tokens[3].kind,
+            ToyEntropyTokenKind::RemAbsEp {
+                component: ToyResidualComponent::Luma,
+                value: 16,
+                rice_param: 0
+            }
+        );
+        assert_eq!(tokens[10].kind, ToyEntropyTokenKind::Terminate);
+        assert_eq!(toy_luma_rem_from_entropy_tokens(&tokens), 16);
+        assert_eq!(toy_chroma_rem_from_entropy_tokens(&tokens), 6);
 
         let mut writer = VvcSyntaxWriter::new();
-        write_toy_coding_tree_entropy(
-            &mut writer,
-            Toy4x4PictureKind::Idr,
-            quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 }),
-        );
+        write_toy_coding_tree_entropy(&mut writer, black);
         let rbsp = writer.finish();
         assert_eq!(rbsp.bytes, hex_bytes("c22ffebb1ffffb1f"));
         assert!(rbsp
             .fields
             .iter()
-            .all(|field| field.code == VvcSyntaxCode::CabacPacket));
+            .all(|field| field.code == VvcSyntaxCode::CabacToken));
         assert_eq!(rbsp.fields.len(), 8);
     }
 
