@@ -116,7 +116,7 @@ cargo run -- vvc-toy-4x4-black-video --input /tmp/frameforge-toy-4x4-1f.yuv --fr
 make validate-decode BITSTREAM=/tmp/frameforge-toy-4x4-1f.vvc DECODED=/tmp/frameforge-toy-4x4-1f-dec.yuv
 ```
 
-This reads a 4x4 YUV420p8 input, currently accepts only all-zero black samples, and writes a generated Annex-B VVC stream for one IDR picture. FrameForge emits the sequence header, picture header, slice header, and toy coding-tree event packets internally.
+This reads a 4x4 YUV420p8 input, detects solid Y/Cb/Cr samples, and writes a generated Annex-B VVC stream for one IDR picture when the detected color is currently supported by the toy residual path. FrameForge emits the sequence header, picture header, slice header, and toy coding-tree event packets internally.
 
 Generate the toy 2-frame 4x4 black VVC validation stream:
 

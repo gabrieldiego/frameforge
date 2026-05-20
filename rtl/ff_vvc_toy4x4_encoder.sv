@@ -12,6 +12,10 @@ module ff_vvc_toy4x4_encoder (
   input  logic [7:0] s_axis_data,
   input  logic       s_axis_last,
   output logic       input_error,
+  output logic       solid_color_valid,
+  output logic [7:0] solid_y,
+  output logic [7:0] solid_u,
+  output logic [7:0] solid_v,
 
   output logic       m_axis_valid,
   input  logic       m_axis_ready,
@@ -33,6 +37,9 @@ module ff_vvc_toy4x4_encoder (
   logic [7:0] input_count_q;
   logic [7:0] input_len_q;
   logic       input_active_q;
+  logic       solid_y_seen_q;
+  logic       solid_u_seen_q;
+  logic       solid_v_seen_q;
 
   assign busy = input_active_q || m_axis_valid || (index_q != 0);
 
@@ -45,6 +52,13 @@ module ff_vvc_toy4x4_encoder (
       input_active_q <= 1'b0;
       s_axis_ready <= 1'b0;
       input_error  <= 1'b0;
+      solid_color_valid <= 1'b0;
+      solid_y <= '0;
+      solid_u <= '0;
+      solid_v <= '0;
+      solid_y_seen_q <= 1'b0;
+      solid_u_seen_q <= 1'b0;
+      solid_v_seen_q <= 1'b0;
       m_axis_valid <= 1'b0;
       m_axis_data  <= '0;
       m_axis_last  <= 1'b0;
@@ -56,20 +70,47 @@ module ff_vvc_toy4x4_encoder (
         input_len_q    <= input_len(frame_count);
         stream_len_q   <= stream_len(frame_count);
         input_error    <= 1'b0;
+        solid_color_valid <= 1'b0;
+        solid_y_seen_q <= 1'b0;
+        solid_u_seen_q <= 1'b0;
+        solid_v_seen_q <= 1'b0;
         m_axis_valid   <= 1'b0;
         m_axis_last    <= 1'b0;
         index_q        <= '0;
       end else if (input_active_q && s_axis_valid && s_axis_ready) begin
-        if (s_axis_data != 8'h00) begin
+        if (!solid_sample_matches(input_count_q, s_axis_data)) begin
           input_error <= 1'b1;
         end
         if (s_axis_last != (input_count_q == input_len_q - 1'b1)) begin
           input_error <= 1'b1;
         end
+        case (sample_plane(input_count_q))
+          2'd0: begin
+            if (!solid_y_seen_q) begin
+              solid_y <= s_axis_data;
+              solid_y_seen_q <= 1'b1;
+            end
+          end
+          2'd1: begin
+            if (!solid_u_seen_q) begin
+              solid_u <= s_axis_data;
+              solid_u_seen_q <= 1'b1;
+            end
+          end
+          default: begin
+            if (!solid_v_seen_q) begin
+              solid_v <= s_axis_data;
+              solid_v_seen_q <= 1'b1;
+            end
+          end
+        endcase
 
         if (input_count_q == input_len_q - 1'b1) begin
           input_active_q <= 1'b0;
           s_axis_ready   <= 1'b0;
+          solid_color_valid <= !input_error
+            && solid_sample_matches(input_count_q, s_axis_data)
+            && s_axis_last;
           m_axis_valid   <= 1'b1;
           m_axis_data    <= stream_byte(8'd0);
           m_axis_last    <= 1'b0;
@@ -90,6 +131,40 @@ module ff_vvc_toy4x4_encoder (
       end
     end
   end
+
+  function automatic logic [4:0] frame_byte_index(input logic [7:0] index);
+    begin
+      frame_byte_index = index % FRAME_BYTES;
+    end
+  endfunction
+
+  function automatic logic [1:0] sample_plane(input logic [7:0] index);
+    logic [4:0] byte_in_frame;
+
+    begin
+      byte_in_frame = frame_byte_index(index);
+      if (byte_in_frame < 5'd16) begin
+        sample_plane = 2'd0;
+      end else if (byte_in_frame < 5'd20) begin
+        sample_plane = 2'd1;
+      end else begin
+        sample_plane = 2'd2;
+      end
+    end
+  endfunction
+
+  function automatic logic solid_sample_matches(
+    input logic [7:0] index,
+    input logic [7:0] sample
+  );
+    begin
+      case (sample_plane(index))
+        2'd0: solid_sample_matches = !solid_y_seen_q || (sample == solid_y);
+        2'd1: solid_sample_matches = !solid_u_seen_q || (sample == solid_u);
+        default: solid_sample_matches = !solid_v_seen_q || (sample == solid_v);
+      endcase
+    end
+  endfunction
 
   function automatic logic [7:0] input_len(input logic [1:0] frames);
     case (frames)

@@ -11,11 +11,16 @@ from cocotb.triggers import ReadOnly, RisingEdge, Timer
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def solid_yuv420p8(y, u, v, frames):
+    frame = bytes([y] * 16 + [u] * 4 + [v] * 4)
+    return frame * frames
+
+
 def software_stream(frames):
     with tempfile.TemporaryDirectory() as tmpdir:
         input_yuv = Path(tmpdir) / f"black_4x4_{frames}f_yuv420p8.yuv"
         output = Path(tmpdir) / "toy.vvc"
-        input_yuv.write_bytes(internal_reconstruction(frames))
+        input_yuv.write_bytes(solid_yuv420p8(0, 0, 0, frames))
         subprocess.run(
             [
                 "cargo",
@@ -40,16 +45,13 @@ def internal_reconstruction(frames):
     return bytes(4 * 4 * 3 // 2 * frames)
 
 
-async def feed_black_input(dut, frames):
-    frame_bytes = len(internal_reconstruction(1))
-    input_len = frame_bytes * frames
-
-    for index in range(input_len):
+async def feed_input(dut, data):
+    for index, sample in enumerate(data):
         while dut.s_axis_ready.value != 1:
             await RisingEdge(dut.clk)
         dut.s_axis_valid.value = 1
-        dut.s_axis_data.value = 0
-        dut.s_axis_last.value = index == input_len - 1
+        dut.s_axis_data.value = sample
+        dut.s_axis_last.value = index == len(data) - 1
         await RisingEdge(dut.clk)
 
     dut.s_axis_valid.value = 0
@@ -77,9 +79,13 @@ async def collect_stream(dut, frames):
     await RisingEdge(dut.clk)
     dut.start.value = 0
 
-    await feed_black_input(dut, frames)
+    await feed_input(dut, solid_yuv420p8(0, 0, 0, frames))
     await ReadOnly()
     assert dut.input_error.value == 0
+    assert dut.solid_color_valid.value == 1
+    assert int(dut.solid_y.value) == 0
+    assert int(dut.solid_u.value) == 0
+    assert int(dut.solid_v.value) == 0
 
     observed = bytearray()
     if dut.m_axis_valid.value == 1:
@@ -94,6 +100,35 @@ async def collect_stream(dut, frames):
                 break
 
     return bytes(observed)
+
+
+async def drain_solid_color(dut, frames, y, u, v):
+    await Timer(1, unit="ns")
+
+    dut.rst_n.value = 0
+    dut.start.value = 0
+    dut.frame_count.value = frames
+    dut.s_axis_valid.value = 0
+    dut.s_axis_data.value = 0
+    dut.s_axis_last.value = 0
+    dut.m_axis_ready.value = 1
+
+    for _ in range(2):
+        await RisingEdge(dut.clk)
+    dut.rst_n.value = 1
+    await RisingEdge(dut.clk)
+
+    dut.start.value = 1
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
+
+    await feed_input(dut, solid_yuv420p8(y, u, v, frames))
+    await ReadOnly()
+    assert dut.input_error.value == 0
+    assert dut.solid_color_valid.value == 1
+    assert int(dut.solid_y.value) == y
+    assert int(dut.solid_u.value) == u
+    assert int(dut.solid_v.value) == v
 
 
 @cocotb.test()
@@ -121,3 +156,9 @@ async def vvc_toy4x4_encoder_matches_software_stream(dut):
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(internal_reconstruction(frames=2))
+
+
+@cocotb.test()
+async def vvc_toy4x4_encoder_detects_solid_color_input(dut):
+    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
+    await drain_solid_color(dut, frames=2, y=64, u=128, v=192)

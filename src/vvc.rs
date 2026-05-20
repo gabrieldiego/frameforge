@@ -225,6 +225,13 @@ pub struct Toy4x4EncodeParams {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Toy4x4SolidColor {
+    pub y: u8,
+    pub u: u8,
+    pub v: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Toy4x4PictureKind {
     Idr,
     Cra,
@@ -326,7 +333,24 @@ pub fn toy_4x4_yuv420p8_annex_b_from_input(
     params: Toy4x4EncodeParams,
 ) -> Result<Vec<u8>, String> {
     validate_toy_4x4_frame_count(params)?;
-    let expected_len = Picture::expected_len(4, 4, PixelFormat::Yuv420p8) * params.frames;
+    let solid = detect_toy_4x4_solid_yuv420p8(input, params)?;
+    if solid != (Toy4x4SolidColor { y: 0, u: 0, v: 0 }) {
+        return Err(format!(
+            "toy VVC bitstream generation currently supports only black after solid-color detection; got y={} u={} v={}",
+            solid.y, solid.u, solid.v
+        ));
+    }
+
+    toy_4x4_yuv420p8_annex_b(params)
+}
+
+pub fn detect_toy_4x4_solid_yuv420p8(
+    input: &[u8],
+    params: Toy4x4EncodeParams,
+) -> Result<Toy4x4SolidColor, String> {
+    validate_toy_4x4_frame_count(params)?;
+    let frame_len = Picture::expected_len(4, 4, PixelFormat::Yuv420p8);
+    let expected_len = frame_len * params.frames;
     if input.len() != expected_len {
         return Err(format!(
             "toy VVC input size mismatch: got {} bytes, expected {} for 4x4 yuv420p8 with {} frame(s)",
@@ -335,13 +359,46 @@ pub fn toy_4x4_yuv420p8_annex_b_from_input(
             params.frames
         ));
     }
-    if input.iter().any(|sample| *sample != 0) {
-        return Err(
-            "toy VVC pixel-driven path currently supports only all-zero black input".to_string(),
-        );
+
+    let first = solid_color_for_frame(&input[..frame_len])?;
+    for frame_idx in 1..params.frames {
+        let start = frame_idx * frame_len;
+        let color = solid_color_for_frame(&input[start..start + frame_len])?;
+        if color != first {
+            return Err(format!(
+                "toy VVC solid-color path requires every frame to use the same solid color; frame 0 is y={} u={} v={}, frame {} is y={} u={} v={}",
+                first.y,
+                first.u,
+                first.v,
+                frame_idx,
+                color.y,
+                color.u,
+                color.v
+            ));
+        }
     }
 
-    toy_4x4_yuv420p8_annex_b(params)
+    Ok(first)
+}
+
+fn solid_color_for_frame(frame: &[u8]) -> Result<Toy4x4SolidColor, String> {
+    debug_assert_eq!(
+        frame.len(),
+        Picture::expected_len(4, 4, PixelFormat::Yuv420p8)
+    );
+    let y = frame[0];
+    let u = frame[16];
+    let v = frame[20];
+    if frame[..16].iter().any(|sample| *sample != y) {
+        return Err("toy VVC input is not solid: luma samples differ".to_string());
+    }
+    if frame[16..20].iter().any(|sample| *sample != u) {
+        return Err("toy VVC input is not solid: Cb samples differ".to_string());
+    }
+    if frame[20..24].iter().any(|sample| *sample != v) {
+        return Err("toy VVC input is not solid: Cr samples differ".to_string());
+    }
+    Ok(Toy4x4SolidColor { y, u, v })
 }
 
 fn validate_toy_4x4_frame_count(params: Toy4x4EncodeParams) -> Result<(), String> {
@@ -977,8 +1034,7 @@ mod tests {
             }
         );
 
-        let packets: Vec<ToyCabacPacket> =
-            events.iter().copied().map(toy_cabac_packet).collect();
+        let packets: Vec<ToyCabacPacket> = events.iter().copied().map(toy_cabac_packet).collect();
         assert_eq!(packets[0].name, "cabac_luma_split_cu_prefix");
         assert_eq!(packets[0].bits, 0b1000);
         assert_eq!(packets[0].bit_count, 4);
@@ -1011,19 +1067,38 @@ mod tests {
     fn toy_4x4_input_path_accepts_black_yuv420p8_frames() {
         let input = vec![0; Picture::expected_len(4, 4, PixelFormat::Yuv420p8) * 2];
         let from_input =
-            toy_4x4_yuv420p8_annex_b_from_input(&input, Toy4x4EncodeParams { frames: 2 })
-                .unwrap();
+            toy_4x4_yuv420p8_annex_b_from_input(&input, Toy4x4EncodeParams { frames: 2 }).unwrap();
         let generated = toy_black_4x4_yuv420p8_annex_b(Toy4x4EncodeParams { frames: 2 }).unwrap();
         assert_eq!(from_input, generated);
     }
 
     #[test]
-    fn toy_4x4_input_path_rejects_non_black_samples() {
-        let mut input = vec![0; Picture::expected_len(4, 4, PixelFormat::Yuv420p8)];
-        input[0] = 1;
+    fn toy_4x4_input_path_detects_solid_color() {
+        let input = solid_yuv420p8(64, 128, 192, 2);
+        let color =
+            detect_toy_4x4_solid_yuv420p8(&input, Toy4x4EncodeParams { frames: 2 }).unwrap();
+        assert_eq!(
+            color,
+            Toy4x4SolidColor {
+                y: 64,
+                u: 128,
+                v: 192,
+            }
+        );
+    }
+
+    #[test]
+    fn toy_4x4_input_path_rejects_non_solid_samples() {
+        let mut input = solid_yuv420p8(64, 128, 192, 1);
+        input[3] = 65;
+        assert!(detect_toy_4x4_solid_yuv420p8(&input, Toy4x4EncodeParams { frames: 1 }).is_err());
+    }
+
+    #[test]
+    fn toy_4x4_bitstream_path_rejects_non_black_solid_until_residuals_exist() {
+        let input = solid_yuv420p8(64, 128, 192, 1);
         assert!(
-            toy_4x4_yuv420p8_annex_b_from_input(&input, Toy4x4EncodeParams { frames: 1 })
-                .is_err()
+            toy_4x4_yuv420p8_annex_b_from_input(&input, Toy4x4EncodeParams { frames: 1 }).is_err()
         );
     }
 
@@ -1042,5 +1117,16 @@ mod tests {
                 u8::from_str_radix(text, 16).unwrap()
             })
             .collect()
+    }
+
+    fn solid_yuv420p8(y: u8, u: u8, v: u8, frames: usize) -> Vec<u8> {
+        let mut out =
+            Vec::with_capacity(Picture::expected_len(4, 4, PixelFormat::Yuv420p8) * frames);
+        for _ in 0..frames {
+            out.extend(std::iter::repeat_n(y, 16));
+            out.extend(std::iter::repeat_n(u, 4));
+            out.extend(std::iter::repeat_n(v, 4));
+        }
+        out
     }
 }

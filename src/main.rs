@@ -479,10 +479,7 @@ mod tests {
         let Command::VvcToy4x4Video(cli) = command else {
             panic!("expected vvc-toy-4x4-black-video command");
         };
-        assert_eq!(
-            cli.input,
-            Some(PathBuf::from("black_4x4_2f_yuv420p8.yuv"))
-        );
+        assert_eq!(cli.input, Some(PathBuf::from("black_4x4_2f_yuv420p8.yuv")));
         assert_eq!(cli.output, PathBuf::from("toy.vvc"));
         assert_eq!(cli.frames, 2);
         assert_eq!(cli.width, 4);
