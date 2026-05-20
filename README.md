@@ -4,7 +4,7 @@ FrameForge is an open-source lab for video compression, bitstream generation, RT
 
 FrameForge is starting with a minimal VVC/H.266 encoder foundation, but the project is not limited to VVC, H.266, screen-content coding, FPGA work, or encoding only. The long-term goal is a practical research workspace for codec block experiments, software golden models, bitstream generation, RTL acceleration, FPGA-oriented blocks, encoder and decoder research, and hardware/software co-verification.
 
-Current status: skeleton, experimental, not production-ready, and not conforming. The encoder currently writes a placeholder file with an explicit `FRAMEFORGE_PLACEHOLDER_NOT_A_VALID_CODEC_BITSTREAM` marker. It is infrastructure for future work, not a decodable VVC bitstream.
+Current status: skeleton, experimental, not production-ready, and not conforming. The software path can now write and read a tiny FrameForge experimental `ffbs` raw `gray8` intra bitstream. This is useful for end-to-end infrastructure, but it is not a VVC/H.266 bitstream.
 
 ## Near-Term Direction
 
@@ -94,17 +94,32 @@ cargo test
 
 ```sh
 cargo run -- \
-  --input input.yuv \
+  --input input.y \
   --width 64 \
   --height 64 \
-  --format yuv420p8 \
+  --format gray8 \
   --output out.ffbs \
   --trace trace.jsonl
 ```
 
 Supported placeholder input formats are `yuv420p8` and `gray8`.
 
-The output is intentionally marked as placeholder data and is not a valid VVC/H.266 or other codec bitstream.
+The current minimal encoder supports the experimental `ffbs` raw `gray8` path. `yuv420p8` is accepted by the CLI/parser as a planned input format but is not encodable by the current minimal `ffbs` encoder.
+
+Decode an `ffbs` stream back to raw gray samples:
+
+```sh
+cargo run -- decode --input out.ffbs --output decoded.y
+```
+
+Minimal 4x4 round trip:
+
+```sh
+printf '\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017\020' > /tmp/frameforge-4x4.y
+cargo run -- encode --input /tmp/frameforge-4x4.y --width 4 --height 4 --format gray8 --output /tmp/frameforge-4x4.ffbs --trace /tmp/frameforge-4x4.jsonl
+cargo run -- decode --input /tmp/frameforge-4x4.ffbs --output /tmp/frameforge-4x4.decoded.y
+cmp /tmp/frameforge-4x4.y /tmp/frameforge-4x4.decoded.y
+```
 
 ## RTL / cocotb
 
@@ -122,7 +137,7 @@ make rtl-test SIM=icarus TOPLEVEL_LANG=verilog
 
 ## External Decoder Validation
 
-External decoder validation is planned but not guaranteed yet because FrameForge does not currently emit a valid codec bitstream.
+External decoder validation is planned but not guaranteed yet because FrameForge does not currently emit a valid VVC/H.266 bitstream. The current `ffbs` stream is decoded by FrameForge itself.
 
 FrameForge looks for decoder resources in this order:
 

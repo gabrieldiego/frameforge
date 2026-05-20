@@ -5,8 +5,8 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 ## Implemented Now
 
 - Rust crate and CLI skeleton.
-- Placeholder encoder output with an explicit not-valid-bitstream marker.
-- Minimum software encoder path that currently ignores sample content after validating shape and emits a structured placeholder packet.
+- Experimental `ffbs` raw `gray8` intra bitstream for minimal software encode/decode round trips.
+- Minimum software encoder path that validates shape and writes raw monochrome samples into an `ffbs` stream.
 - Basic encoder trait boundary for replacing the placeholder path with real codec implementations.
 - Generic bitstream utilities:
   - `BitWriter`
@@ -16,6 +16,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - Basic placeholder NAL/Annex-B-style structures with TODOs for exact VVC syntax.
 - `EncoderParams`, `Picture`, reconstruction buffer skeleton, and fixed block traversal.
 - JSONL trace events.
+- CLI decode path for `ffbs` streams.
 - Optional external decoder wrapper that does not assume a decoder is installed.
 - Reference-decoder setup helper that uses local decoder settings first and can clone/build VTM under `verification/reference`.
 - SystemVerilog RTL stubs with AXI-stream-style handshakes.
@@ -41,6 +42,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 ## Planned Next
 
 - Replace placeholder output with clean-room VVC parameter set and slice scaffolding where syntax details are confirmed.
+- Add a true VVC/H.266 bitstream path alongside the experimental `ffbs` path once syntax details are confirmed.
 - Define a narrow internal packet model for coding-tree traversal.
 - Add a software golden model for one small intra prediction mode.
 - Add block-level RTL/software comparison through cocotb.

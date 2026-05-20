@@ -2,17 +2,30 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
+use frameforge::ffbs;
 use frameforge::trace::TraceSink;
-use frameforge::{Encoder, EncoderParams, Picture, PixelFormat, PlaceholderEncoder};
+use frameforge::{Encoder, EncoderParams, MinimalEncoder, Picture, PixelFormat};
 
 #[derive(Debug)]
-struct Cli {
+enum Command {
+    Encode(EncodeCli),
+    Decode(DecodeCli),
+}
+
+#[derive(Debug)]
+struct EncodeCli {
     input: PathBuf,
     width: usize,
     height: usize,
     format: PixelFormat,
     output: PathBuf,
     trace: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+struct DecodeCli {
+    input: PathBuf,
+    output: PathBuf,
 }
 
 fn main() {
@@ -31,7 +44,14 @@ fn main() {
     }
 }
 
-fn run(cli: Cli) -> Result<(), String> {
+fn run(command: Command) -> Result<(), String> {
+    match command {
+        Command::Encode(cli) => run_encode(cli),
+        Command::Decode(cli) => run_decode(cli),
+    }
+}
+
+fn run_encode(cli: EncodeCli) -> Result<(), String> {
     Picture::validate_shape(cli.width, cli.height, cli.format)?;
     let data = fs::read(&cli.input)
         .map_err(|err| format!("failed to read input '{}': {err}", cli.input.display()))?;
@@ -50,7 +70,7 @@ fn run(cli: Cli) -> Result<(), String> {
 
     let picture = Picture::new(cli.width, cli.height, cli.format, data);
     let params = EncoderParams::new(cli.width, cli.height, cli.format);
-    let mut encoder = PlaceholderEncoder::new(params);
+    let mut encoder = MinimalEncoder::new(params);
     let result = encoder.encode_picture(&picture)?;
 
     fs::write(&cli.output, &result.bytes)
@@ -68,7 +88,26 @@ fn run(cli: Cli) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
+fn run_decode(cli: DecodeCli) -> Result<(), String> {
+    let data = fs::read(&cli.input)
+        .map_err(|err| format!("failed to read bitstream '{}': {err}", cli.input.display()))?;
+    let decoded = ffbs::decode(&data)?;
+    fs::write(&cli.output, &decoded.samples)
+        .map_err(|err| format!("failed to write output '{}': {err}", cli.output.display()))?;
+    Ok(())
+}
+
+fn parse_cli(args: Vec<String>) -> Result<Command, String> {
+    if args.first().map(String::as_str) == Some("decode") {
+        return parse_decode_cli(args.into_iter().skip(1).collect());
+    }
+    if args.first().map(String::as_str) == Some("encode") {
+        return parse_encode_cli(args.into_iter().skip(1).collect());
+    }
+    parse_encode_cli(args)
+}
+
+fn parse_encode_cli(args: Vec<String>) -> Result<Command, String> {
     let mut input = None;
     let mut width = None;
     let mut height = None;
@@ -95,14 +134,34 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
         }
     }
 
-    Ok(Cli {
+    Ok(Command::Encode(EncodeCli {
         input: input.ok_or_else(|| "missing --input <path>".to_string())?,
         width: width.ok_or_else(|| "missing --width <w>".to_string())?,
         height: height.ok_or_else(|| "missing --height <h>".to_string())?,
         format: format.ok_or_else(|| "missing --format <format>".to_string())?,
         output: output.ok_or_else(|| "missing --output <path>".to_string())?,
         trace,
-    })
+    }))
+}
+
+fn parse_decode_cli(args: Vec<String>) -> Result<Command, String> {
+    let mut input = None;
+    let mut output = None;
+
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--input" => input = Some(next_value(&mut iter, "--input")?.into()),
+            "--output" => output = Some(next_value(&mut iter, "--output")?.into()),
+            "--help" | "-h" => return Err(String::new()),
+            other => return Err(format!("unknown decode argument '{other}'")),
+        }
+    }
+
+    Ok(Command::Decode(DecodeCli {
+        input: input.ok_or_else(|| "missing --input <path>".to_string())?,
+        output: output.ok_or_else(|| "missing --output <path>".to_string())?,
+    }))
 }
 
 fn next_value(iter: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
@@ -121,7 +180,7 @@ fn parse_usize(value: String, flag: &str) -> Result<usize, String> {
 }
 
 fn usage() -> &'static str {
-    "usage: frameforge --input <path> --width <w> --height <h> --format <format> --output <path> [--trace <path>]"
+    "usage:\n  frameforge encode --input <raw> --width <w> --height <h> --format gray8 --output <ffbs> [--trace <jsonl>]\n  frameforge decode --input <ffbs> --output <raw>\n\nThe encode subcommand is optional for compatibility."
 }
 
 #[cfg(test)]
@@ -130,7 +189,7 @@ mod tests {
 
     #[test]
     fn parse_cli_accepts_required_args() {
-        let cli = parse_cli(vec![
+        let command = parse_cli(vec![
             "--input".into(),
             "in.yuv".into(),
             "--width".into(),
@@ -144,6 +203,9 @@ mod tests {
         ])
         .unwrap();
 
+        let Command::Encode(cli) = command else {
+            panic!("expected encode command");
+        };
         assert_eq!(cli.width, 64);
         assert_eq!(cli.height, 32);
         assert_eq!(cli.format, PixelFormat::Gray8);
@@ -167,5 +229,23 @@ mod tests {
         .unwrap_err();
 
         assert!(err.contains("--width"));
+    }
+
+    #[test]
+    fn parse_cli_accepts_decode_subcommand() {
+        let command = parse_cli(vec![
+            "decode".into(),
+            "--input".into(),
+            "in.ffbs".into(),
+            "--output".into(),
+            "out.y".into(),
+        ])
+        .unwrap();
+
+        let Command::Decode(cli) = command else {
+            panic!("expected decode command");
+        };
+        assert_eq!(cli.input, PathBuf::from("in.ffbs"));
+        assert_eq!(cli.output, PathBuf::from("out.y"));
     }
 }

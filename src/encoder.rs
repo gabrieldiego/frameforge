@@ -1,9 +1,6 @@
-use crate::bitstream::{rbsp_trailing_bits, AnnexBWriter, BitWriter, NalUnit, NalUnitKind};
+use crate::ffbs;
 use crate::picture::{Picture, PixelFormat, ReconstructionBuffer};
 use crate::trace::TraceEvent;
-
-pub const PLACEHOLDER_MAGIC: &[u8] = b"FRAMEFORGE_PLACEHOLDER_NOT_A_VALID_CODEC_BITSTREAM\n";
-pub const PLACEHOLDER_VERSION: u8 = 1;
 
 #[derive(Debug, Clone)]
 pub struct EncoderParams {
@@ -70,22 +67,22 @@ pub trait Encoder {
     fn encode_picture(&mut self, picture: &Picture) -> Result<EncodeResult, String>;
 }
 
-pub struct PlaceholderEncoder {
+pub struct MinimalEncoder {
     params: EncoderParams,
     recon: ReconstructionBuffer,
 }
 
-impl PlaceholderEncoder {
+impl MinimalEncoder {
     pub fn new(params: EncoderParams) -> Self {
         params
             .validate()
-            .expect("invalid encoder parameters for placeholder encoder");
+            .expect("invalid encoder parameters for minimal encoder");
         let recon = ReconstructionBuffer::new(params.width, params.height, params.format);
         Self { params, recon }
     }
 }
 
-impl Encoder for PlaceholderEncoder {
+impl Encoder for MinimalEncoder {
     fn encode_picture(&mut self, picture: &Picture) -> Result<EncodeResult, String> {
         self.params.validate()?;
         if picture.width != self.params.width
@@ -97,7 +94,7 @@ impl Encoder for PlaceholderEncoder {
 
         let mut trace_events = vec![TraceEvent::new(
             "encode",
-            "FrameForge placeholder encode; output is not a valid codec bitstream",
+            "FrameForge experimental ffbs raw-gray8 intra encode",
         )];
 
         for block in traverse_blocks(
@@ -111,31 +108,17 @@ impl Encoder for PlaceholderEncoder {
             );
         }
 
-        let mut rbsp = BitWriter::new();
-        rbsp.write_bits(0x4652_4647, 32);
-        rbsp.write_bits(PLACEHOLDER_VERSION as u64, 8);
-        rbsp.write_bits(self.params.width as u64, 16);
-        rbsp.write_bits(self.params.height as u64, 16);
-        rbsp.write_bool(matches!(self.params.format, PixelFormat::Yuv420p8));
-        rbsp_trailing_bits(&mut rbsp);
-
-        let mut payload = PLACEHOLDER_MAGIC.to_vec();
-        payload.extend_from_slice(&rbsp.into_bytes());
+        let bytes = ffbs::encode_raw_gray8(picture)?;
         let _ = self.recon.as_slice();
 
-        let mut writer = AnnexBWriter::new();
-        writer.push(NalUnit {
-            kind: NalUnitKind::FrameForgePlaceholder,
-            temporal_id: 0,
-            payload,
-        });
-
         Ok(EncodeResult {
-            bytes: writer.into_bytes(),
+            bytes,
             trace_events,
         })
     }
 }
+
+pub type PlaceholderEncoder = MinimalEncoder;
 
 #[cfg(test)]
 mod tests {
@@ -169,17 +152,15 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_encoder_emits_marked_output() {
+    fn minimal_encoder_emits_decodable_ffbs() {
         let params = EncoderParams::new(4, 4, PixelFormat::Gray8);
-        let picture = Picture::new(4, 4, PixelFormat::Gray8, vec![0; 16]);
-        let mut encoder = PlaceholderEncoder::new(params);
+        let samples: Vec<u8> = (0..16).collect();
+        let picture = Picture::new(4, 4, PixelFormat::Gray8, samples.clone());
+        let mut encoder = MinimalEncoder::new(params);
 
         let result = encoder.encode_picture(&picture).unwrap();
-        assert!(result.bytes.starts_with(&[0, 0, 0, 1]));
-        assert!(result
-            .bytes
-            .windows(PLACEHOLDER_MAGIC.len())
-            .any(|window| window == PLACEHOLDER_MAGIC));
+        let decoded = ffbs::decode(&result.bytes).unwrap();
+        assert_eq!(decoded.samples, samples);
         assert!(!result.trace_events.is_empty());
     }
 }
