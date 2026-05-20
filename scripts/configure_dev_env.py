@@ -80,9 +80,19 @@ TOOLS = (
         required_for="Python RTL verification",
         ubuntu=(
             "# cocotb currently does not support Python 3.14; use Python 3.13 or 3.12\n"
+            "  # If python3.13 is available from apt:\n"
             "  sudo apt update && sudo apt install -y python3.13 python3.13-venv python3-pip\n"
             "  rm -rf .venv\n"
             "  python3.13 -m venv .venv\n"
+            "  . .venv/bin/activate\n"
+            "  python -m pip install -U pip\n"
+            "  python -m pip install -r requirements-dev.txt\n"
+            "\n"
+            "  # If apt does not provide python3.13, use uv to install a managed Python:\n"
+            "  curl -LsSf https://astral.sh/uv/install.sh | sh\n"
+            "  ~/.local/bin/uv python install 3.13\n"
+            "  rm -rf .venv\n"
+            "  ~/.local/bin/uv venv --python 3.13 .venv\n"
             "  . .venv/bin/activate\n"
             "  python -m pip install -U pip\n"
             "  python -m pip install -r requirements-dev.txt"
@@ -122,6 +132,7 @@ def main() -> int:
     print_install_help("Required tools", missing_required)
     print_install_help("Optional tools", missing_optional)
     print_cocotb_python_note(missing_optional)
+    print_venv_python_note()
 
     if missing_required or (args.strict and missing_optional):
         return 1
@@ -181,9 +192,29 @@ def print_cocotb_python_note(missing_optional: list[Tool]) -> None:
         "\nNote: this system's default python3 is "
         f"{sys.version_info.major}.{sys.version_info.minor}. "
         "cocotb currently rejects Python 3.14, so create .venv with "
-        "python3.13 or python3.12 instead of python3. If .venv already exists "
-        "from Python 3.14, remove and recreate it."
+        "python3.13 or python3.12 instead of python3. If apt does not provide "
+        "python3.13, use the uv commands above."
     )
+
+
+def print_venv_python_note() -> None:
+    python = Path(".venv/bin/python")
+    if not python.exists():
+        return
+
+    completed = subprocess.run(
+        [str(python), "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    version = completed.stdout.strip()
+    if version and version >= "3.14":
+        print(
+            "\nExisting .venv uses Python "
+            f"{version}, which is too new for cocotb. Run `rm -rf .venv` "
+            "and recreate it with Python 3.13 or 3.12."
+        )
 
 
 if __name__ == "__main__":
