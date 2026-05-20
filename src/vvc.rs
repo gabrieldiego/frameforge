@@ -278,6 +278,11 @@ struct Toy4x4QuantizedTransformBlock {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Toy4x4ReconstructedLumaBlock {
+    samples: [u8; 16],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToyResidualComponent {
     Luma,
     ChromaCb,
@@ -413,9 +418,9 @@ pub fn sample_toy_4x4_first_yuv420p8(
 pub fn quantize_toy_4x4_color(color: Toy4x4SampledColor) -> Toy4x4QuantizedColor {
     let luma_transform = transform_toy_4x4_solid_luma(color.y);
     let quantized_luma = quantize_toy_4x4_luma_dc(luma_transform);
-    let y = reconstruct_toy_luma_from_dc(quantized_luma.reconstructed_dc_coeff);
+    let reconstructed_luma = inverse_transform_toy_4x4_luma_dc(quantized_luma);
     Toy4x4QuantizedColor {
-        y,
+        y: reconstructed_luma.samples[0],
         u: 0,
         v: 0,
         luma_rem: quantized_luma.abs_remainder,
@@ -1122,8 +1127,13 @@ fn quantize_toy_4x4_luma_dc(block: Toy4x4TransformBlock) -> Toy4x4QuantizedTrans
     }
 }
 
-fn reconstruct_toy_luma_from_dc(dc_coeff: i16) -> u8 {
-    (dc_coeff + TOY_LUMA_DC_BASE).clamp(0, u8::MAX as i16) as u8
+fn inverse_transform_toy_4x4_luma_dc(
+    block: Toy4x4QuantizedTransformBlock,
+) -> Toy4x4ReconstructedLumaBlock {
+    let sample = (block.reconstructed_dc_coeff + TOY_LUMA_DC_BASE).clamp(0, u8::MAX as i16) as u8;
+    Toy4x4ReconstructedLumaBlock {
+        samples: [sample; 16],
+    }
 }
 
 fn nearest_quantized_luma(input: u8) -> (u8, u8) {
@@ -1490,6 +1500,32 @@ mod tests {
             Toy4x4QuantizedTransformBlock {
                 reconstructed_dc_coeff: 0,
                 abs_remainder: 0
+            }
+        );
+    }
+
+    #[test]
+    fn toy_inverse_transform_reconstructs_solid_luma_block() {
+        let quantized = Toy4x4QuantizedTransformBlock {
+            reconstructed_dc_coeff: -50,
+            abs_remainder: 7,
+        };
+        assert_eq!(
+            inverse_transform_toy_4x4_luma_dc(quantized),
+            Toy4x4ReconstructedLumaBlock { samples: [64; 16] }
+        );
+    }
+
+    #[test]
+    fn toy_color_quantization_uses_inverse_transform_reconstruction() {
+        assert_eq!(
+            quantize_toy_4x4_color(Toy4x4SampledColor { y: 65, u: 9, v: 7 }),
+            Toy4x4QuantizedColor {
+                y: 64,
+                u: 0,
+                v: 0,
+                luma_rem: 7,
+                chroma_rem: 6
             }
         );
     }

@@ -161,14 +161,20 @@ module ff_vvc_toy4x4_encoder (
   function automatic logic [4:0] quant_luma_rem_from_dc_coeff(input logic signed [9:0] dc_coeff);
     logic [7:0] sample;
     begin
-      if (dc_coeff <= -10'sd114) begin
-        sample = 8'd0;
-      end else if (dc_coeff >= 10'sd141) begin
-        sample = 8'd255;
-      end else begin
-        sample = dc_coeff + 10'sd114;
-      end
+      sample = inverse_solid_luma_dc_coeff(dc_coeff);
       quant_luma_rem_from_dc_coeff = quant_luma_rem_from_sample(sample);
+    end
+  endfunction
+
+  function automatic logic [7:0] inverse_solid_luma_dc_coeff(input logic signed [9:0] dc_coeff);
+    begin
+      if (dc_coeff <= -10'sd114) begin
+        inverse_solid_luma_dc_coeff = 8'd0;
+      end else if (dc_coeff >= 10'sd141) begin
+        inverse_solid_luma_dc_coeff = 8'd255;
+      end else begin
+        inverse_solid_luma_dc_coeff = dc_coeff + 10'sd114;
+      end
     end
   endfunction
 

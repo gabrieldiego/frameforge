@@ -222,11 +222,24 @@ def sha256(path: Path) -> str:
 
 def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes:
     data = input_path.read_bytes()
-    y = quantized_luma(data[0])
+    y = inverse_transform_solid_luma_dc(quantized_luma_dc(solid_luma_dc(data[0])))
     # This is the reconstruction of the emitted toy VVC bitstream, not the
     # original input. Keep this matched to VTM decode output after quantization.
     frame = bytes([y] * 16 + [0] * 4 + [0] * 4)
     return frame * info.frames
+
+
+def solid_luma_dc(sample: int) -> int:
+    return sample - 114
+
+
+def quantized_luma_dc(dc_coeff: int) -> int:
+    sample = max(0, min(255, dc_coeff + 114))
+    return quantized_luma(sample) - 114
+
+
+def inverse_transform_solid_luma_dc(dc_coeff: int) -> int:
+    return max(0, min(255, dc_coeff + 114))
 
 
 def quantized_luma(sample: int) -> int:
