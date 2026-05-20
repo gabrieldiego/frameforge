@@ -17,11 +17,7 @@ help:
 	@printf '%s\n' '  make clean     - remove local build outputs'
 
 check-tools:
-	@command -v cargo >/dev/null 2>&1 || { echo 'missing cargo: install a Rust toolchain from https://rustup.rs/'; exit 1; }
-	@command -v python3 >/dev/null 2>&1 || { echo 'missing python3: required for helper scripts and cocotb tests'; exit 1; }
-	@command -v cmake >/dev/null 2>&1 || echo 'warning: missing cmake; make decoder-setup cannot build VTM until CMake is installed'
-	@command -v cocotb-config >/dev/null 2>&1 || echo 'warning: missing cocotb-config; make rtl-test will not run until cocotb is installed'
-	@command -v iverilog >/dev/null 2>&1 || echo 'warning: missing iverilog; make rtl-test with SIM=icarus will not run until Icarus Verilog is installed'
+	python3 scripts/configure_dev_env.py
 
 build:
 	cargo build

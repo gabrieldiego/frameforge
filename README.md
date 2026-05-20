@@ -39,6 +39,12 @@ Check local tool availability:
 make check-tools
 ```
 
+For Ubuntu install suggestions without running Make:
+
+```sh
+python3 scripts/configure_dev_env.py
+```
+
 ```sh
 make build
 ```
