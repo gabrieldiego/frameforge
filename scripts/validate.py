@@ -101,8 +101,9 @@ def main() -> int:
         "input_yuv": sha256(input_path),
         "software_bitstream": sha256(sw_bitstream),
         "rtl_bitstream": sha256(rtl_bitstream),
-        "software_recon": sha256(sw_recon),
-        "rtl_recon": sha256(rtl_recon),
+        "vtm_recon_from_software": sha256(sw_recon),
+        "vtm_recon_from_rtl": sha256(rtl_recon),
+        "vtm_expected_recon": expected_recon_sha256(info),
     }
 
     print("FrameForge validation checksums")
@@ -118,8 +119,9 @@ def main() -> int:
         return 1
     if not (
         digests["input_yuv"]
-        == digests["software_recon"]
-        == digests["rtl_recon"]
+        == digests["vtm_recon_from_software"]
+        == digests["vtm_recon_from_rtl"]
+        == digests["vtm_expected_recon"]
     ):
         print(
             "FAIL: input YUV, software VTM reconstruction, and RTL VTM "
@@ -215,6 +217,11 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def expected_recon_sha256(info: InputInfo) -> str:
+    frame_len = info.width * info.height * 3 // 2
+    return hashlib.sha256(bytes(frame_len * info.frames)).hexdigest()
 
 
 if __name__ == "__main__":
