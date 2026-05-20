@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -78,8 +79,10 @@ TOOLS = (
         command="cocotb-config",
         required_for="Python RTL verification",
         ubuntu=(
-            "sudo apt update && sudo apt install -y python3-venv python3-pip\n"
-            "  python3 -m venv .venv\n"
+            "# cocotb currently does not support Python 3.14; use Python 3.13 or 3.12\n"
+            "  sudo apt update && sudo apt install -y python3.13 python3.13-venv python3-pip\n"
+            "  rm -rf .venv\n"
+            "  python3.13 -m venv .venv\n"
             "  . .venv/bin/activate\n"
             "  python -m pip install -U pip\n"
             "  python -m pip install -r requirements-dev.txt"
@@ -118,6 +121,7 @@ def main() -> int:
 
     print_install_help("Required tools", missing_required)
     print_install_help("Optional tools", missing_optional)
+    print_cocotb_python_note(missing_optional)
 
     if missing_required or (args.strict and missing_optional):
         return 1
@@ -164,6 +168,22 @@ def print_install_help(title: str, tools: list[Tool]) -> None:
         seen.add(tool.ubuntu)
         for line in tool.ubuntu.splitlines():
             print(f"  {line}")
+
+
+def print_cocotb_python_note(missing_optional: list[Tool]) -> None:
+    if not any(tool.command == "cocotb-config" for tool in missing_optional):
+        return
+
+    if sys.version_info < (3, 14):
+        return
+
+    print(
+        "\nNote: this system's default python3 is "
+        f"{sys.version_info.major}.{sys.version_info.minor}. "
+        "cocotb currently rejects Python 3.14, so create .venv with "
+        "python3.13 or python3.12 instead of python3. If .venv already exists "
+        "from Python 3.14, remove and recreate it."
+    )
 
 
 if __name__ == "__main__":

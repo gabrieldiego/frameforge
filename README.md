@@ -45,11 +45,12 @@ For Ubuntu install suggestions without running Make:
 python3 scripts/configure_dev_env.py
 ```
 
-On Ubuntu, install Python packages such as cocotb in a virtual environment:
+On Ubuntu, install Python packages such as cocotb in a virtual environment. cocotb currently rejects Python 3.14, so use Python 3.13 or 3.12 for this venv:
 
 ```sh
-sudo apt update && sudo apt install -y python3-venv python3-pip
-python3 -m venv .venv
+sudo apt update && sudo apt install -y python3.13 python3.13-venv python3-pip
+rm -rf .venv
+python3.13 -m venv .venv
 . .venv/bin/activate
 python -m pip install -U pip
 python -m pip install -r requirements-dev.txt
