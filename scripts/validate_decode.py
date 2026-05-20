@@ -72,8 +72,9 @@ def main() -> int:
 
     if completed.returncode != 0:
         print(
-            "decoder returned a non-zero status. This is expected for the current "
-            "FrameForge placeholder output and does not imply conformance.",
+            "decoder returned a non-zero status. This is expected for experimental "
+            "FrameForge streams that are not yet decodable VVC/H.266 pictures, and "
+            "does not imply conformance.",
             file=sys.stderr,
         )
     return completed.returncode

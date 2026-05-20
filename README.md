@@ -121,6 +121,14 @@ cargo run -- decode --input /tmp/frameforge-4x4.ffbs --output /tmp/frameforge-4x
 cmp /tmp/frameforge-4x4.y /tmp/frameforge-4x4.decoded.y
 ```
 
+Generate the current smallest VVC-shaped Annex-B stream:
+
+```sh
+cargo run -- vvc-eos --output /tmp/frameforge-eos.vvc
+```
+
+This writes only an EOS NAL unit. It is useful for testing VVC NAL header packing and Annex-B output, but it does not contain parameter sets or a picture.
+
 ## RTL / cocotb
 
 The initial simulator target is Icarus Verilog through cocotb:
@@ -137,7 +145,7 @@ make rtl-test SIM=icarus TOPLEVEL_LANG=verilog
 
 ## External Decoder Validation
 
-External decoder validation is planned but not guaranteed yet because FrameForge does not currently emit a valid VVC/H.266 bitstream. The current `ffbs` stream is decoded by FrameForge itself.
+External decoder validation is planned but not guaranteed yet because FrameForge does not currently emit a decodable VVC/H.266 picture bitstream. The current `ffbs` stream is decoded by FrameForge itself, and `vvc-eos` emits only a VVC EOS NAL unit.
 
 FrameForge looks for decoder resources in this order:
 

@@ -10,6 +10,7 @@ use frameforge::{Encoder, EncoderParams, MinimalEncoder, Picture, PixelFormat};
 enum Command {
     Encode(EncodeCli),
     Decode(DecodeCli),
+    VvcEos(VvcEosCli),
 }
 
 #[derive(Debug)]
@@ -25,6 +26,11 @@ struct EncodeCli {
 #[derive(Debug)]
 struct DecodeCli {
     input: PathBuf,
+    output: PathBuf,
+}
+
+#[derive(Debug)]
+struct VvcEosCli {
     output: PathBuf,
 }
 
@@ -48,6 +54,7 @@ fn run(command: Command) -> Result<(), String> {
     match command {
         Command::Encode(cli) => run_encode(cli),
         Command::Decode(cli) => run_decode(cli),
+        Command::VvcEos(cli) => run_vvc_eos(cli),
     }
 }
 
@@ -97,12 +104,22 @@ fn run_decode(cli: DecodeCli) -> Result<(), String> {
     Ok(())
 }
 
+fn run_vvc_eos(cli: VvcEosCli) -> Result<(), String> {
+    let bytes = frameforge::vvc::eos_annex_b();
+    fs::write(&cli.output, bytes)
+        .map_err(|err| format!("failed to write output '{}': {err}", cli.output.display()))?;
+    Ok(())
+}
+
 fn parse_cli(args: Vec<String>) -> Result<Command, String> {
     if args.first().map(String::as_str) == Some("decode") {
         return parse_decode_cli(args.into_iter().skip(1).collect());
     }
     if args.first().map(String::as_str) == Some("encode") {
         return parse_encode_cli(args.into_iter().skip(1).collect());
+    }
+    if args.first().map(String::as_str) == Some("vvc-eos") {
+        return parse_vvc_eos_cli(args.into_iter().skip(1).collect());
     }
     parse_encode_cli(args)
 }
@@ -164,6 +181,23 @@ fn parse_decode_cli(args: Vec<String>) -> Result<Command, String> {
     }))
 }
 
+fn parse_vvc_eos_cli(args: Vec<String>) -> Result<Command, String> {
+    let mut output = None;
+
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--output" => output = Some(next_value(&mut iter, "--output")?.into()),
+            "--help" | "-h" => return Err(String::new()),
+            other => return Err(format!("unknown vvc-eos argument '{other}'")),
+        }
+    }
+
+    Ok(Command::VvcEos(VvcEosCli {
+        output: output.ok_or_else(|| "missing --output <path>".to_string())?,
+    }))
+}
+
 fn next_value(iter: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
     iter.next()
         .ok_or_else(|| format!("missing value for {flag}"))
@@ -180,7 +214,7 @@ fn parse_usize(value: String, flag: &str) -> Result<usize, String> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  frameforge encode --input <raw> --width <w> --height <h> --format gray8 --output <ffbs> [--trace <jsonl>]\n  frameforge decode --input <ffbs> --output <raw>\n\nThe encode subcommand is optional for compatibility."
+    "usage:\n  frameforge encode --input <raw> --width <w> --height <h> --format gray8 --output <ffbs> [--trace <jsonl>]\n  frameforge decode --input <ffbs> --output <raw>\n  frameforge vvc-eos --output <vvc>\n\nThe encode subcommand is optional for compatibility."
 }
 
 #[cfg(test)]
@@ -247,5 +281,16 @@ mod tests {
         };
         assert_eq!(cli.input, PathBuf::from("in.ffbs"));
         assert_eq!(cli.output, PathBuf::from("out.y"));
+    }
+
+    #[test]
+    fn parse_cli_accepts_vvc_eos_subcommand() {
+        let command =
+            parse_cli(vec!["vvc-eos".into(), "--output".into(), "eos.vvc".into()]).unwrap();
+
+        let Command::VvcEos(cli) = command else {
+            panic!("expected vvc-eos command");
+        };
+        assert_eq!(cli.output, PathBuf::from("eos.vvc"));
     }
 }
