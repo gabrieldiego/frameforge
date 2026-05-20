@@ -16,8 +16,7 @@ help:
 	@printf '%s\n' '  make rtl-test DUT=encoder - run minimum encoder RTL smoke test'
 	@printf '%s\n' '  make rtl-test DUT=ffbs - run RTL/Rust ffbs format smoke test'
 	@printf '%s\n' '  make rtl-test DUT=vvc-skeleton - run RTL/Rust VVC skeleton smoke test'
-	@printf '%s\n' '  make rtl-test DUT=vvc-fixture4x4 - run RTL fixed VVC fixture smoke test'
-	@printf '%s\n' '  make rtl-test DUT=vvc-fixture4x4-2frame - run RTL fixed 2-frame VVC fixture smoke test'
+	@printf '%s\n' '  make rtl-test DUT=vvc-toy4x4 - run generated RTL/software VVC toy stream test'
 	@printf '%s\n' '  make reference-vvc BITSTREAM=out.vvc - create real VVC using VTM'
 	@printf '%s\n' '  make clean     - remove local build outputs'
 
