@@ -6,6 +6,32 @@ import os
 import shlex
 import subprocess
 import sys
+from pathlib import Path
+
+
+def find_decoder_command() -> list[str] | None:
+    decoder = os.environ.get("FRAMEFORGE_DECODER")
+    if decoder:
+        return shlex.split(decoder)
+
+    decoder = os.environ.get("FRAMEFORGE_VTM_DECODER")
+    if decoder:
+        return [decoder]
+
+    helper = Path(__file__).with_name("ensure_reference_decoder.py")
+    completed = subprocess.run(
+        [sys.executable, str(helper), "--print-command"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        if completed.stderr:
+            print(completed.stderr, end="", file=sys.stderr)
+        return None
+
+    command = completed.stdout.strip()
+    return shlex.split(command) if command else None
 
 
 def main() -> int:
@@ -19,18 +45,14 @@ def main() -> int:
     parser.add_argument("-o", "--output", help="optional decoded output path")
     args, extra = parser.parse_known_args()
 
-    decoder = os.environ.get("FRAMEFORGE_DECODER")
-    if not decoder:
+    cmd = find_decoder_command()
+    if not cmd:
         print(
-            "FRAMEFORGE_DECODER is not set. External decoder validation is planned "
-            "but not required for the current placeholder bitstream.",
+            "No external decoder is configured or available. Set FRAMEFORGE_DECODER, "
+            "FRAMEFORGE_VTM_DECODER, or FRAMEFORGE_VTM_ROOT, or allow the reference "
+            "decoder helper to clone/build VTM under verification/reference.",
             file=sys.stderr,
         )
-        return 2
-
-    cmd = shlex.split(decoder)
-    if not cmd:
-        print("FRAMEFORGE_DECODER is empty.", file=sys.stderr)
         return 2
 
     cmd.append(args.bitstream)

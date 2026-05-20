@@ -95,8 +95,36 @@ make rtl-test SIM=icarus TOPLEVEL_LANG=verilog
 
 External decoder validation is planned but not guaranteed yet because FrameForge does not currently emit a valid codec bitstream.
 
+FrameForge looks for decoder resources in this order:
+
+- `FRAMEFORGE_DECODER`: complete decoder command, optionally with fixed arguments.
+- `FRAMEFORGE_VTM_DECODER`: direct path to a built VTM decoder executable.
+- `FRAMEFORGE_VTM_ROOT`: path to an existing VTM source/build tree to search.
+- `verification/reference/vtm`: automatically cloned and built when no configured decoder is found.
+
+The automatic VTM setup can be customized:
+
+- `FRAMEFORGE_REF_DIR`: parent directory for downloaded validation tools.
+- `FRAMEFORGE_VTM_REPO`: VTM git repository URL.
+- `FRAMEFORGE_VTM_REF`: optional VTM branch or tag.
+- `FRAMEFORGE_VTM_BUILD_DIR`: CMake build directory.
+- `FRAMEFORGE_VTM_BUILD_TYPE`: CMake build type, default `Release`.
+- `FRAMEFORGE_BUILD_JOBS`: optional build parallelism.
+
+Prepare a decoder:
+
+```sh
+make decoder-setup
+```
+
 ```sh
 FRAMEFORGE_DECODER=/path/to/decoder scripts/validate_decode.py out.vvc --output decoded.yuv
+```
+
+or:
+
+```sh
+make validate-decode BITSTREAM=out.vvc DECODED=decoded.yuv
 ```
 
 The helper fails gracefully if `FRAMEFORGE_DECODER` is not set or the decoder cannot be run.

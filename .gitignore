@@ -3,6 +3,8 @@
 /tb/results.xml
 /tb/__pycache__/
 /scripts/__pycache__/
+/verification/reference/vtm/
+/verification/reference/build/
 *.vcd
 *.fst
 *.ffbs

@@ -3,6 +3,7 @@ use crate::picture::{Picture, PixelFormat, ReconstructionBuffer};
 use crate::trace::TraceEvent;
 
 pub const PLACEHOLDER_MAGIC: &[u8] = b"FRAMEFORGE_PLACEHOLDER_NOT_A_VALID_CODEC_BITSTREAM\n";
+pub const PLACEHOLDER_VERSION: u8 = 1;
 
 #[derive(Debug, Clone)]
 pub struct EncoderParams {
@@ -108,6 +109,7 @@ impl Encoder for PlaceholderEncoder {
 
         let mut rbsp = BitWriter::new();
         rbsp.write_bits(0x4652_4647, 32);
+        rbsp.write_bits(PLACEHOLDER_VERSION as u64, 8);
         rbsp.write_bits(self.params.width as u64, 16);
         rbsp.write_bits(self.params.height as u64, 16);
         rbsp.write_bool(matches!(self.params.format, PixelFormat::Yuv420p8));
@@ -160,5 +162,22 @@ mod tests {
     fn encoder_params_reject_odd_yuv420_dimensions() {
         let params = EncoderParams::new(63, 64, PixelFormat::Yuv420p8);
         assert!(params.validate().is_err());
+    }
+
+    #[test]
+    fn placeholder_encoder_emits_marked_output() {
+        let params = EncoderParams::new(4, 4, PixelFormat::Gray8);
+        let picture = Picture::new(4, 4, PixelFormat::Gray8, vec![0; 16]);
+        let mut encoder = PlaceholderEncoder::new(params);
+
+        let result = encoder.encode_picture(&picture).unwrap();
+        assert!(result.bytes.starts_with(&[0, 0, 0, 1]));
+        assert!(
+            result
+                .bytes
+                .windows(PLACEHOLDER_MAGIC.len())
+                .any(|window| window == PLACEHOLDER_MAGIC)
+        );
+        assert!(!result.trace_events.is_empty());
     }
 }
