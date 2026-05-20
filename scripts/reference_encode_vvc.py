@@ -21,10 +21,14 @@ def main() -> int:
     parser.add_argument("--recon", help="optional reconstructed YUV output path")
     parser.add_argument("--width", type=int, default=4)
     parser.add_argument("--height", type=int, default=4)
+    parser.add_argument("--frames", type=int, default=1)
     args = parser.parse_args()
 
     if args.width <= 0 or args.height <= 0 or args.width % 2 or args.height % 2:
         print("reference VVC encode currently expects positive even dimensions", file=sys.stderr)
+        return 2
+    if args.frames <= 0:
+        print("reference VVC encode expects at least one frame", file=sys.stderr)
         return 2
 
     try:
@@ -33,7 +37,11 @@ def main() -> int:
         print(err, file=sys.stderr)
         return 2
 
-    input_path = Path(args.input) if args.input else default_black_yuv420(args.width, args.height)
+    input_path = (
+        Path(args.input)
+        if args.input
+        else default_black_yuv420(args.width, args.height, args.frames)
+    )
     output_path = Path(args.output)
     recon_path = Path(args.recon) if args.recon else output_path.with_suffix(".rec.yuv")
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -54,7 +62,7 @@ def main() -> int:
         "-hgt",
         str(args.height),
         "-f",
-        "1",
+        str(args.frames),
         "-fr",
         "1",
         "--InputChromaFormat=420",
@@ -125,12 +133,12 @@ def vtm_root() -> Path:
     return Path(os.environ.get("FRAMEFORGE_REF_DIR", DEFAULT_REF_DIR)) / "vtm"
 
 
-def default_black_yuv420(width: int, height: int) -> Path:
+def default_black_yuv420(width: int, height: int, frames: int) -> Path:
     out_dir = Path(os.environ.get("FRAMEFORGE_GENERATED_DIR", DEFAULT_GENERATED_DIR))
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"black_{width}x{height}_yuv420p8.yuv"
+    path = out_dir / f"black_{width}x{height}_{frames}f_yuv420p8.yuv"
     frame_len = width * height * 3 // 2
-    path.write_bytes(bytes(frame_len))
+    path.write_bytes(bytes(frame_len * frames))
     return path
 
 

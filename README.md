@@ -146,6 +146,15 @@ make validate-decode BITSTREAM=/tmp/frameforge-fixture-4x4.vvc DECODED=/tmp/fram
 
 This writes a fixed Annex-B VVC stream for one black 4x4 YUV420p8 IDR picture. It is a decoder-validation fixture derived from the external VTM reference path, not FrameForge's clean-room VVC encoder implementation.
 
+Generate the fixed 2-frame 4x4 black VVC validation fixture:
+
+```sh
+cargo run -- vvc-fixture-4x4-black-video --output /tmp/frameforge-fixture-4x4-2f.vvc
+make validate-decode BITSTREAM=/tmp/frameforge-fixture-4x4-2f.vvc DECODED=/tmp/frameforge-fixture-4x4-2f-dec.yuv
+```
+
+This stream decodes to two 4x4 YUV420p8 frames and is useful for proving that the software and RTL output paths can represent a short video stream before clean-room VVC picture syntax is implemented.
+
 Inspect NAL headers in any Annex-B VVC stream:
 
 ```sh
@@ -186,6 +195,12 @@ Run the RTL fixed VVC fixture byte-format check:
 
 ```sh
 make rtl-test DUT=vvc-fixture4x4
+```
+
+Run the RTL fixed 2-frame VVC fixture byte-format check:
+
+```sh
+make rtl-test DUT=vvc-fixture4x4-2frame
 ```
 
 The Makefile uses variables so other simulators can be introduced later:
@@ -236,6 +251,7 @@ Reference encode through VTM:
 
 ```sh
 make reference-vvc BITSTREAM=out.vvc RECON=rec.yuv
+make reference-vvc BITSTREAM=out-2f.vvc RECON=rec-2f.yuv FRAMES=2
 ```
 
 The helper fails gracefully if `FRAMEFORGE_DECODER` is not set or the decoder cannot be run.

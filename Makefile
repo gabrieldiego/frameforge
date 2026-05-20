@@ -17,6 +17,7 @@ help:
 	@printf '%s\n' '  make rtl-test DUT=ffbs - run RTL/Rust ffbs format smoke test'
 	@printf '%s\n' '  make rtl-test DUT=vvc-skeleton - run RTL/Rust VVC skeleton smoke test'
 	@printf '%s\n' '  make rtl-test DUT=vvc-fixture4x4 - run RTL fixed VVC fixture smoke test'
+	@printf '%s\n' '  make rtl-test DUT=vvc-fixture4x4-2frame - run RTL fixed 2-frame VVC fixture smoke test'
 	@printf '%s\n' '  make reference-vvc BITSTREAM=out.vvc - create real VVC using VTM'
 	@printf '%s\n' '  make clean     - remove local build outputs'
 
@@ -40,8 +41,8 @@ validate-decode:
 	python3 scripts/validate_decode.py "$(BITSTREAM)" $(if $(DECODED),--output "$(DECODED)")
 
 reference-vvc:
-	@test -n "$(BITSTREAM)" || { echo 'usage: make reference-vvc BITSTREAM=path/to/out.vvc [RECON=out.yuv]'; exit 2; }
-	python3 scripts/reference_encode_vvc.py --output "$(BITSTREAM)" $(if $(RECON),--recon "$(RECON)")
+	@test -n "$(BITSTREAM)" || { echo 'usage: make reference-vvc BITSTREAM=path/to/out.vvc [RECON=out.yuv] [FRAMES=1]'; exit 2; }
+	python3 scripts/reference_encode_vvc.py --output "$(BITSTREAM)" --frames "$(or $(FRAMES),1)" $(if $(RECON),--recon "$(RECON)")
 
 rtl-test:
 	$(MAKE) -C tb SIM=$(SIM) TOPLEVEL_LANG=$(TOPLEVEL_LANG) DUT=$(DUT)
