@@ -111,16 +111,18 @@ This writes VPS, SPS, PPS, IDR_N_LP, EOS, and EOB NAL units with correct Annex-B
 Generate the toy 1-frame 4x4 black VVC validation stream:
 
 ```sh
-cargo run -- vvc-toy-4x4-black-video --frames 1 --output /tmp/frameforge-toy-4x4-1f.vvc
+dd if=/dev/zero of=/tmp/frameforge-toy-4x4-1f.yuv bs=24 count=1
+cargo run -- vvc-toy-4x4-black-video --input /tmp/frameforge-toy-4x4-1f.yuv --frames 1 --output /tmp/frameforge-toy-4x4-1f.vvc
 make validate-decode BITSTREAM=/tmp/frameforge-toy-4x4-1f.vvc DECODED=/tmp/frameforge-toy-4x4-1f-dec.yuv
 ```
 
-This writes a generated Annex-B VVC stream for one black 4x4 YUV420p8 IDR picture. FrameForge emits the sequence header, picture header, slice header, and toy coding-tree event packets internally.
+This reads a 4x4 YUV420p8 input, currently accepts only all-zero black samples, and writes a generated Annex-B VVC stream for one IDR picture. FrameForge emits the sequence header, picture header, slice header, and toy coding-tree event packets internally.
 
 Generate the toy 2-frame 4x4 black VVC validation stream:
 
 ```sh
-cargo run -- vvc-toy-4x4-black-video --frames 2 --output /tmp/frameforge-toy-4x4-2f.vvc
+dd if=/dev/zero of=/tmp/frameforge-toy-4x4-2f.yuv bs=48 count=1
+cargo run -- vvc-toy-4x4-black-video --input /tmp/frameforge-toy-4x4-2f.yuv --frames 2 --output /tmp/frameforge-toy-4x4-2f.vvc
 make validate-decode BITSTREAM=/tmp/frameforge-toy-4x4-2f.vvc DECODED=/tmp/frameforge-toy-4x4-2f-dec.yuv
 ```
 

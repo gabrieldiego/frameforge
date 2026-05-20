@@ -8,6 +8,7 @@
 
 use crate::bitstream::insert_emulation_prevention_bytes;
 use crate::bitstream::{rbsp_trailing_bits, BitWriter};
+use crate::picture::{Picture, PixelFormat};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VvcSyntaxCode {
@@ -316,13 +317,44 @@ pub fn skeleton_annex_b() -> Vec<u8> {
 }
 
 pub fn toy_black_4x4_yuv420p8_annex_b(params: Toy4x4EncodeParams) -> Result<Vec<u8>, String> {
+    validate_toy_4x4_frame_count(params)?;
+    toy_4x4_yuv420p8_annex_b(params)
+}
+
+pub fn toy_4x4_yuv420p8_annex_b_from_input(
+    input: &[u8],
+    params: Toy4x4EncodeParams,
+) -> Result<Vec<u8>, String> {
+    validate_toy_4x4_frame_count(params)?;
+    let expected_len = Picture::expected_len(4, 4, PixelFormat::Yuv420p8) * params.frames;
+    if input.len() != expected_len {
+        return Err(format!(
+            "toy VVC input size mismatch: got {} bytes, expected {} for 4x4 yuv420p8 with {} frame(s)",
+            input.len(),
+            expected_len,
+            params.frames
+        ));
+    }
+    if input.iter().any(|sample| *sample != 0) {
+        return Err(
+            "toy VVC pixel-driven path currently supports only all-zero black input".to_string(),
+        );
+    }
+
+    toy_4x4_yuv420p8_annex_b(params)
+}
+
+fn validate_toy_4x4_frame_count(params: Toy4x4EncodeParams) -> Result<(), String> {
     if params.frames == 0 {
         return Err("toy VVC encode expects at least one frame".to_string());
     }
     if params.frames > 2 {
         return Err("toy VVC encode currently supports at most two frames".to_string());
     }
+    Ok(())
+}
 
+fn toy_4x4_yuv420p8_annex_b(params: Toy4x4EncodeParams) -> Result<Vec<u8>, String> {
     let mut units = Vec::with_capacity(params.frames + 2);
     units.push(toy_4x4_sps_unit());
     units.push(toy_4x4_pps_unit());
@@ -973,6 +1005,26 @@ mod tests {
         assert_eq!(types, vec![15, 16, 8, 9]);
         assert_eq!(infos[3].offset, 78);
         assert_eq!(infos[3].payload_len, 11);
+    }
+
+    #[test]
+    fn toy_4x4_input_path_accepts_black_yuv420p8_frames() {
+        let input = vec![0; Picture::expected_len(4, 4, PixelFormat::Yuv420p8) * 2];
+        let from_input =
+            toy_4x4_yuv420p8_annex_b_from_input(&input, Toy4x4EncodeParams { frames: 2 })
+                .unwrap();
+        let generated = toy_black_4x4_yuv420p8_annex_b(Toy4x4EncodeParams { frames: 2 }).unwrap();
+        assert_eq!(from_input, generated);
+    }
+
+    #[test]
+    fn toy_4x4_input_path_rejects_non_black_samples() {
+        let mut input = vec![0; Picture::expected_len(4, 4, PixelFormat::Yuv420p8)];
+        input[0] = 1;
+        assert!(
+            toy_4x4_yuv420p8_annex_b_from_input(&input, Toy4x4EncodeParams { frames: 1 })
+                .is_err()
+        );
     }
 
     #[test]

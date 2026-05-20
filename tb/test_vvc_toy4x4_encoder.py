@@ -13,7 +13,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def software_stream(frames):
     with tempfile.TemporaryDirectory() as tmpdir:
+        input_yuv = Path(tmpdir) / f"black_4x4_{frames}f_yuv420p8.yuv"
         output = Path(tmpdir) / "toy.vvc"
+        input_yuv.write_bytes(internal_reconstruction(frames))
         subprocess.run(
             [
                 "cargo",
@@ -21,6 +23,8 @@ def software_stream(frames):
                 "--quiet",
                 "--",
                 "vvc-toy-4x4-black-video",
+                "--input",
+                str(input_yuv),
                 "--frames",
                 str(frames),
                 "--output",
