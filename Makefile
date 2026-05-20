@@ -1,4 +1,4 @@
-.PHONY: help check-tools build test fmt decoder-setup validate-decode validate-toy4x4 rtl-test clean
+.PHONY: help check-tools build test fmt decoder-setup validate validate-decode rtl-test clean
 
 SIM ?= icarus
 TOPLEVEL_LANG ?= verilog
@@ -11,11 +11,10 @@ help:
 	@printf '%s\n' '  make test      - run Rust tests'
 	@printf '%s\n' '  make fmt       - format Rust code'
 	@printf '%s\n' '  make decoder-setup - find or build external VTM decoder'
+	@printf '%s\n' '  make validate INPUT=in.yuv [WIDTH=4 HEIGHT=4 FRAMES=1 FORMAT=yuv420p8]'
 	@printf '%s\n' '  make validate-decode BITSTREAM=out.vvc [DECODED=out.yuv]'
-	@printf '%s\n' '  make validate-toy4x4 [FRAMES=1] - compare software/RTL/VTM checksums'
 	@printf '%s\n' '  make rtl-test  - run cocotb RTL tests'
 	@printf '%s\n' '  make rtl-test DUT=encoder - run minimum encoder RTL smoke test'
-	@printf '%s\n' '  make rtl-test DUT=ffbs - run RTL/Rust ffbs format smoke test'
 	@printf '%s\n' '  make rtl-test DUT=vvc-skeleton - run RTL/Rust VVC skeleton smoke test'
 	@printf '%s\n' '  make rtl-test DUT=vvc-toy4x4 - run generated RTL/software VVC toy stream test'
 	@printf '%s\n' '  make reference-vvc BITSTREAM=out.vvc - create real VVC using VTM'
@@ -36,12 +35,13 @@ fmt:
 decoder-setup:
 	python3 scripts/ensure_reference_decoder.py
 
+validate:
+	@test -n "$(INPUT)" || { echo 'usage: make validate INPUT=path/to/input_4x4_1f_yuv420p8.yuv [WIDTH=4 HEIGHT=4 FRAMES=1 FORMAT=yuv420p8]'; exit 2; }
+	python3 scripts/validate.py "$(INPUT)" $(if $(WIDTH),--width "$(WIDTH)") $(if $(HEIGHT),--height "$(HEIGHT)") $(if $(FRAMES),--frames "$(FRAMES)") $(if $(FORMAT),--format "$(FORMAT)")
+
 validate-decode:
 	@test -n "$(BITSTREAM)" || { echo 'usage: make validate-decode BITSTREAM=path/to/stream.vvc [DECODED=decoded.yuv]'; exit 2; }
 	python3 scripts/validate_decode.py "$(BITSTREAM)" $(if $(DECODED),--output "$(DECODED)")
-
-validate-toy4x4:
-	python3 scripts/validate_toy4x4.py --frames "$(or $(FRAMES),1)"
 
 reference-vvc:
 	@test -n "$(BITSTREAM)" || { echo 'usage: make reference-vvc BITSTREAM=path/to/out.vvc [RECON=out.yuv] [FRAMES=1]'; exit 2; }

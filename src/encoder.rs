@@ -150,17 +150,4 @@ mod tests {
         let params = EncoderParams::new(63, 64, PixelFormat::Yuv420p8);
         assert!(params.validate().is_err());
     }
-
-    #[test]
-    fn minimal_encoder_emits_decodable_ffbs() {
-        let params = EncoderParams::new(4, 4, PixelFormat::Gray8);
-        let samples: Vec<u8> = (0..16).collect();
-        let picture = Picture::new(4, 4, PixelFormat::Gray8, samples.clone());
-        let mut encoder = MinimalEncoder::new(params);
-
-        let result = encoder.encode_picture(&picture).unwrap();
-        let decoded = ffbs::decode(&result.bytes).unwrap();
-        assert_eq!(decoded.samples, samples);
-        assert!(!result.trace_events.is_empty());
-    }
 }

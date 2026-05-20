@@ -5,8 +5,6 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 ## Implemented Now
 
 - Rust crate and CLI skeleton.
-- Experimental `ffbs` raw `gray8` intra bitstream for minimal software encode/decode round trips.
-- Minimum software encoder path that validates shape and writes raw monochrome samples into an `ffbs` stream.
 - VVC Annex-B writer capable of emitting an EOS-only stream for NAL header and bytestream testing.
 - VVC skeleton stream containing VPS/SPS/PPS/IDR/EOS/EOB NAL units with placeholder RBSP payloads.
 - VVC Annex-B NAL header listing for comparing FrameForge output against VTM output.
@@ -21,12 +19,10 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - Basic placeholder NAL/Annex-B-style structures with TODOs for exact VVC syntax.
 - `EncoderParams`, `Picture`, reconstruction buffer skeleton, and fixed block traversal.
 - JSONL trace events.
-- CLI decode path for `ffbs` streams.
 - Optional external decoder wrapper that does not assume a decoder is installed.
 - Reference-decoder setup helper that uses local decoder settings first and can clone/build VTM under `verification/reference`.
 - SystemVerilog RTL stubs with AXI-stream-style handshakes.
 - Minimum RTL encoder shell that drains an input stream and emits a fixed placeholder output packet.
-- RTL `ffbs` 4x4 gray encoder that emits the same byte format as the Rust `ffbs` path.
 - RTL VVC skeleton emitter that matches Rust `vvc-skeleton` byte-for-byte.
 - RTL toy VVC generator that emits Annex-B start codes, VVC NAL headers, and NAL payload bytes to match the Rust toy stream.
 - cocotb/Icarus verification skeleton.
@@ -50,7 +46,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 ## Planned Next
 
 - Replace placeholder output with clean-room VVC parameter set and slice scaffolding where syntax details are confirmed.
-- Add a true VVC/H.266 bitstream path alongside the experimental `ffbs` path once syntax details are confirmed.
+- Replace the remaining non-VVC placeholder encode/decode path with the VVC toy encoder as it becomes more capable.
 - Replace the remaining VTM-derived toy payload byte emitters with generated clean-room SPS/PPS/IDR syntax.
 - Add clean-room VPS/SPS/PPS and a first intra picture after the EOS-only NAL writer is stable.
 - Replace placeholder VPS/SPS/PPS and IDR RBSP payloads with real clean-room syntax.

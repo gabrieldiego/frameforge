@@ -114,28 +114,3 @@ pub fn decode(bytes: &[u8]) -> Result<DecodedFfbs, String> {
         samples: bytes[HEADER_LEN..].to_vec(),
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn raw_gray8_round_trip_4x4() {
-        let samples: Vec<u8> = (0..16).collect();
-        let picture = Picture::new(4, 4, PixelFormat::Gray8, samples.clone());
-
-        let bytes = encode_raw_gray8(&picture).unwrap();
-        assert_eq!(&bytes[0..4], FFBS_MAGIC);
-
-        let decoded = decode(&bytes).unwrap();
-        assert_eq!(decoded.header.width, 4);
-        assert_eq!(decoded.header.height, 4);
-        assert_eq!(decoded.header.format, PixelFormat::Gray8);
-        assert_eq!(decoded.samples, samples);
-    }
-
-    #[test]
-    fn rejects_non_ffbs_magic() {
-        assert!(decode(b"not a frameforge bitstream").is_err());
-    }
-}

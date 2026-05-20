@@ -4,7 +4,7 @@ FrameForge is an open-source lab for video compression, bitstream generation, RT
 
 FrameForge is starting with a minimal VVC/H.266 encoder foundation, but the project is not limited to VVC, H.266, screen-content coding, FPGA work, or encoding only. The long-term goal is a practical research workspace for codec block experiments, software golden models, bitstream generation, RTL acceleration, FPGA-oriented blocks, encoder and decoder research, and hardware/software co-verification.
 
-Current status: skeleton, experimental, not production-ready, and not conforming. The software path can now write and read a tiny FrameForge experimental `ffbs` raw `gray8` intra bitstream. This is useful for end-to-end infrastructure, but it is not a VVC/H.266 bitstream.
+Current status: skeleton, experimental, not production-ready, and not conforming. The current VVC toy path can generate a tiny black 4x4 YUV420p8 stream for software/RTL/VTM validation, but it is not a complete VVC/H.266 encoder.
 
 ## Near-Term Direction
 
@@ -92,35 +92,6 @@ cargo test
 
 ## CLI
 
-```sh
-cargo run -- \
-  --input input.y \
-  --width 64 \
-  --height 64 \
-  --format gray8 \
-  --output out.ffbs \
-  --trace trace.jsonl
-```
-
-Supported placeholder input formats are `yuv420p8` and `gray8`.
-
-The current minimal encoder supports the experimental `ffbs` raw `gray8` path. `yuv420p8` is accepted by the CLI/parser as a planned input format but is not encodable by the current minimal `ffbs` encoder.
-
-Decode an `ffbs` stream back to raw gray samples:
-
-```sh
-cargo run -- decode --input out.ffbs --output decoded.y
-```
-
-Minimal 4x4 round trip:
-
-```sh
-printf '\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017\020' > /tmp/frameforge-4x4.y
-cargo run -- encode --input /tmp/frameforge-4x4.y --width 4 --height 4 --format gray8 --output /tmp/frameforge-4x4.ffbs --trace /tmp/frameforge-4x4.jsonl
-cargo run -- decode --input /tmp/frameforge-4x4.ffbs --output /tmp/frameforge-4x4.decoded.y
-cmp /tmp/frameforge-4x4.y /tmp/frameforge-4x4.decoded.y
-```
-
 Generate the current smallest VVC-shaped Annex-B stream:
 
 ```sh
@@ -158,11 +129,15 @@ This stream decodes to two 4x4 YUV420p8 frames and is useful for proving that th
 Validate the software stream, RTL stream, and VTM reconstructions with SHA-256 checksums:
 
 ```sh
-make validate-toy4x4 FRAMES=1
-make validate-toy4x4 FRAMES=2
+mkdir -p /tmp/frameforge
+dd if=/dev/zero of=/tmp/frameforge/black_4x4_1f_yuv420p8.yuv bs=24 count=1
+make validate INPUT=/tmp/frameforge/black_4x4_1f_yuv420p8.yuv
+
+dd if=/dev/zero of=/tmp/frameforge/black_4x4_2f_yuv420p8.yuv bs=48 count=1
+make validate INPUT=/tmp/frameforge/black_4x4_2f_yuv420p8.yuv
 ```
 
-This command generates software and RTL bitstreams, decodes both with VTM, and checks that the bitstreams match and the decoded reconstructions match the expected black YUV420p8 frames.
+The validation command infers resolution, frame count, and format from names such as `black_4x4_2f_yuv420p8.yuv`. You can override them with `WIDTH=4 HEIGHT=4 FRAMES=2 FORMAT=yuv420p8`. It generates software and RTL bitstreams, decodes both with VTM, and checks that the bitstreams match and the decoded reconstructions match the input YUV.
 
 Inspect NAL headers in any Annex-B VVC stream:
 
@@ -188,12 +163,6 @@ The initial simulator target is Icarus Verilog through cocotb:
 make rtl-test
 ```
 
-Run the RTL `ffbs` byte-format check:
-
-```sh
-make rtl-test DUT=ffbs
-```
-
 Run the RTL VVC skeleton byte-format check:
 
 ```sh
@@ -214,7 +183,7 @@ make rtl-test SIM=icarus TOPLEVEL_LANG=verilog
 
 ## External Decoder Validation
 
-External decoder validation is partially wired. The current `ffbs` stream is decoded by FrameForge itself, `vvc-eos` emits only a VVC EOS NAL unit, and `vvc-skeleton` uses placeholder RBSP payloads. The `vvc-toy-4x4-black-video` command assembles a tiny VTM-accepted stream from generated NAL units and VTM-derived payload bytes; it is an incremental validation path, not a complete clean-room VVC encoder yet.
+External decoder validation is partially wired. The `vvc-eos` command emits only a VVC EOS NAL unit, and `vvc-skeleton` uses placeholder RBSP payloads. The `vvc-toy-4x4-black-video` command assembles a tiny VTM-accepted stream from generated NAL units and VTM-derived payload bytes; it is an incremental validation path, not a complete clean-room VVC encoder yet.
 
 FrameForge looks for decoder resources in this order:
 
