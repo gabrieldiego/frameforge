@@ -1,0 +1,8 @@
+/target/
+/tb/sim_build/
+/tb/results.xml
+/tb/__pycache__/
+*.vcd
+*.fst
+*.ffbs
+*.jsonl

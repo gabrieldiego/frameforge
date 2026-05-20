@@ -1,0 +1,14 @@
+[package]
+name = "frameforge"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Experimental video compression and hardware-acceleration lab."
+
+[lib]
+name = "frameforge"
+path = "src/lib.rs"
+
+[[bin]]
+name = "frameforge"
+path = "src/main.rs"
