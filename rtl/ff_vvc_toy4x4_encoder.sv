@@ -7,6 +7,12 @@ module ff_vvc_toy4x4_encoder (
   input  logic [1:0] frame_count,
   output logic       busy,
 
+  input  logic       s_axis_valid,
+  output logic       s_axis_ready,
+  input  logic [7:0] s_axis_data,
+  input  logic       s_axis_last,
+  output logic       input_error,
+
   output logic       m_axis_valid,
   input  logic       m_axis_ready,
   output logic [7:0] m_axis_data,
@@ -20,26 +26,57 @@ module ff_vvc_toy4x4_encoder (
   localparam int PPS_NAL_LEN = NAL_OVERHEAD_LEN + PPS_PAYLOAD_LEN;
   localparam int SLICE_NAL_LEN = NAL_OVERHEAD_LEN + SLICE_PAYLOAD_LEN;
   localparam int PARAMETER_SET_LEN = SPS_NAL_LEN + PPS_NAL_LEN;
+  localparam int FRAME_BYTES = 24;
 
   logic [7:0] index_q;
   logic [7:0] stream_len_q;
+  logic [7:0] input_count_q;
+  logic [7:0] input_len_q;
+  logic       input_active_q;
 
-  assign busy = m_axis_valid || (index_q != 0);
+  assign busy = input_active_q || m_axis_valid || (index_q != 0);
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       index_q      <= '0;
       stream_len_q <= '0;
+      input_count_q <= '0;
+      input_len_q   <= '0;
+      input_active_q <= 1'b0;
+      s_axis_ready <= 1'b0;
+      input_error  <= 1'b0;
       m_axis_valid <= 1'b0;
       m_axis_data  <= '0;
       m_axis_last  <= 1'b0;
     end else begin
       if (start && !busy) begin
-        m_axis_valid <= 1'b1;
-        m_axis_data  <= stream_byte(8'd0);
-        m_axis_last  <= 1'b0;
-        index_q      <= 8'd1;
-        stream_len_q <= stream_len(frame_count);
+        input_active_q <= 1'b1;
+        s_axis_ready   <= 1'b1;
+        input_count_q  <= '0;
+        input_len_q    <= input_len(frame_count);
+        stream_len_q   <= stream_len(frame_count);
+        input_error    <= 1'b0;
+        m_axis_valid   <= 1'b0;
+        m_axis_last    <= 1'b0;
+        index_q        <= '0;
+      end else if (input_active_q && s_axis_valid && s_axis_ready) begin
+        if (s_axis_data != 8'h00) begin
+          input_error <= 1'b1;
+        end
+        if (s_axis_last != (input_count_q == input_len_q - 1'b1)) begin
+          input_error <= 1'b1;
+        end
+
+        if (input_count_q == input_len_q - 1'b1) begin
+          input_active_q <= 1'b0;
+          s_axis_ready   <= 1'b0;
+          m_axis_valid   <= 1'b1;
+          m_axis_data    <= stream_byte(8'd0);
+          m_axis_last    <= 1'b0;
+          index_q        <= 8'd1;
+        end else begin
+          input_count_q <= input_count_q + 1'b1;
+        end
       end else if (m_axis_valid && m_axis_ready) begin
         if (index_q == stream_len_q) begin
           m_axis_valid <= 1'b0;
@@ -53,6 +90,13 @@ module ff_vvc_toy4x4_encoder (
       end
     end
   end
+
+  function automatic logic [7:0] input_len(input logic [1:0] frames);
+    case (frames)
+      2'd2: input_len = FRAME_BYTES * 2;
+      default: input_len = FRAME_BYTES;
+    endcase
+  endfunction
 
   function automatic logic [7:0] stream_len(input logic [1:0] frames);
     case (frames)

@@ -40,12 +40,32 @@ def internal_reconstruction(frames):
     return bytes(4 * 4 * 3 // 2 * frames)
 
 
+async def feed_black_input(dut, frames):
+    frame_bytes = len(internal_reconstruction(1))
+    input_len = frame_bytes * frames
+
+    for index in range(input_len):
+        while dut.s_axis_ready.value != 1:
+            await RisingEdge(dut.clk)
+        dut.s_axis_valid.value = 1
+        dut.s_axis_data.value = 0
+        dut.s_axis_last.value = index == input_len - 1
+        await RisingEdge(dut.clk)
+
+    dut.s_axis_valid.value = 0
+    dut.s_axis_data.value = 0
+    dut.s_axis_last.value = 0
+
+
 async def collect_stream(dut, frames):
     await Timer(1, unit="ns")
 
     dut.rst_n.value = 0
     dut.start.value = 0
     dut.frame_count.value = frames
+    dut.s_axis_valid.value = 0
+    dut.s_axis_data.value = 0
+    dut.s_axis_last.value = 0
     dut.m_axis_ready.value = 1
 
     for _ in range(2):
@@ -55,7 +75,11 @@ async def collect_stream(dut, frames):
 
     dut.start.value = 1
     await RisingEdge(dut.clk)
+    dut.start.value = 0
+
+    await feed_black_input(dut, frames)
     await ReadOnly()
+    assert dut.input_error.value == 0
 
     observed = bytearray()
     if dut.m_axis_valid.value == 1:
@@ -63,8 +87,6 @@ async def collect_stream(dut, frames):
 
     for cycle in range(240):
         await RisingEdge(dut.clk)
-        if cycle == 0:
-            dut.start.value = 0
         await ReadOnly()
         if dut.m_axis_valid.value == 1:
             observed.append(int(dut.m_axis_data.value))

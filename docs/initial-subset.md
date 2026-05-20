@@ -28,7 +28,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - SystemVerilog RTL stubs with AXI-stream-style handshakes.
 - Minimum RTL encoder shell that drains an input stream and emits a fixed placeholder output packet.
 - RTL VVC skeleton emitter that matches Rust `vvc-skeleton` byte-for-byte.
-- RTL toy VVC generator that emits a sequence header plus per-picture Annex-B start codes, VVC NAL headers, and NAL payload bytes to match the Rust toy stream.
+- RTL toy VVC generator that drains a 4x4 YUV420p8 input stream, checks that the current supported samples are all-zero, and emits a sequence header plus per-picture Annex-B start codes, VVC NAL headers, and NAL payload bytes to match the Rust toy stream.
 - cocotb/Icarus verification skeleton.
 - Local contribution and license files for an open-source starting point.
 
