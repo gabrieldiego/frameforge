@@ -10,6 +10,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - VVC Annex-B writer capable of emitting an EOS-only stream for NAL header and bytestream testing.
 - VVC skeleton stream containing VPS/SPS/PPS/IDR/EOS/EOB NAL units with placeholder RBSP payloads.
 - VVC Annex-B NAL header listing for comparing FrameForge output against VTM output.
+- Fixed 4x4 black YUV420p8 VVC validation fixture that VTM can decode; this is not a clean-room encoder implementation.
 - External VTM reference-encode helper that can generate a real 4x4 YUV420 VVC stream for validation.
 - Basic encoder trait boundary for replacing the placeholder path with real codec implementations.
 - Generic bitstream utilities:
@@ -27,6 +28,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - Minimum RTL encoder shell that drains an input stream and emits a fixed placeholder output packet.
 - RTL `ffbs` 4x4 gray encoder that emits the same byte format as the Rust `ffbs` path.
 - RTL VVC skeleton emitter that matches Rust `vvc-skeleton` byte-for-byte.
+- RTL fixed VVC fixture emitter that matches the Rust fixed fixture byte-for-byte.
 - cocotb/Icarus verification skeleton.
 - Local contribution and license files for an open-source starting point.
 
@@ -49,6 +51,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 
 - Replace placeholder output with clean-room VVC parameter set and slice scaffolding where syntax details are confirmed.
 - Add a true VVC/H.266 bitstream path alongside the experimental `ffbs` path once syntax details are confirmed.
+- Replace the fixed VTM-derived 4x4 validation fixture with generated clean-room SPS/PPS/IDR syntax.
 - Add clean-room VPS/SPS/PPS and a first intra picture after the EOS-only NAL writer is stable.
 - Replace placeholder VPS/SPS/PPS and IDR RBSP payloads with real clean-room syntax.
 - Define a narrow internal packet model for coding-tree traversal.

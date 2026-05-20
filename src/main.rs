@@ -12,6 +12,7 @@ enum Command {
     Decode(DecodeCli),
     VvcEos(VvcEosCli),
     VvcSkeleton(VvcSkeletonCli),
+    VvcFixture4x4(VvcFixture4x4Cli),
     VvcList(VvcListCli),
 }
 
@@ -42,6 +43,11 @@ struct VvcSkeletonCli {
 }
 
 #[derive(Debug)]
+struct VvcFixture4x4Cli {
+    output: PathBuf,
+}
+
+#[derive(Debug)]
 struct VvcListCli {
     input: PathBuf,
 }
@@ -68,6 +74,7 @@ fn run(command: Command) -> Result<(), String> {
         Command::Decode(cli) => run_decode(cli),
         Command::VvcEos(cli) => run_vvc_eos(cli),
         Command::VvcSkeleton(cli) => run_vvc_skeleton(cli),
+        Command::VvcFixture4x4(cli) => run_vvc_fixture_4x4(cli),
         Command::VvcList(cli) => run_vvc_list(cli),
     }
 }
@@ -132,6 +139,13 @@ fn run_vvc_skeleton(cli: VvcSkeletonCli) -> Result<(), String> {
     Ok(())
 }
 
+fn run_vvc_fixture_4x4(cli: VvcFixture4x4Cli) -> Result<(), String> {
+    let bytes = frameforge::vvc::fixed_black_4x4_yuv420p8_annex_b();
+    fs::write(&cli.output, bytes)
+        .map_err(|err| format!("failed to write output '{}': {err}", cli.output.display()))?;
+    Ok(())
+}
+
 fn run_vvc_list(cli: VvcListCli) -> Result<(), String> {
     let bytes = fs::read(&cli.input)
         .map_err(|err| format!("failed to read bitstream '{}': {err}", cli.input.display()))?;
@@ -156,6 +170,9 @@ fn parse_cli(args: Vec<String>) -> Result<Command, String> {
     }
     if args.first().map(String::as_str) == Some("vvc-skeleton") {
         return parse_vvc_skeleton_cli(args.into_iter().skip(1).collect());
+    }
+    if args.first().map(String::as_str) == Some("vvc-fixture-4x4-black") {
+        return parse_vvc_fixture_4x4_cli(args.into_iter().skip(1).collect());
     }
     if args.first().map(String::as_str) == Some("vvc-list") {
         return parse_vvc_list_cli(args.into_iter().skip(1).collect());
@@ -254,6 +271,23 @@ fn parse_vvc_skeleton_cli(args: Vec<String>) -> Result<Command, String> {
     }))
 }
 
+fn parse_vvc_fixture_4x4_cli(args: Vec<String>) -> Result<Command, String> {
+    let mut output = None;
+
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--output" => output = Some(next_value(&mut iter, "--output")?.into()),
+            "--help" | "-h" => return Err(String::new()),
+            other => return Err(format!("unknown vvc-fixture-4x4-black argument '{other}'")),
+        }
+    }
+
+    Ok(Command::VvcFixture4x4(VvcFixture4x4Cli {
+        output: output.ok_or_else(|| "missing --output <path>".to_string())?,
+    }))
+}
+
 fn parse_vvc_list_cli(args: Vec<String>) -> Result<Command, String> {
     let mut input = None;
 
@@ -287,7 +321,7 @@ fn parse_usize(value: String, flag: &str) -> Result<usize, String> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  frameforge encode --input <raw> --width <w> --height <h> --format gray8 --output <ffbs> [--trace <jsonl>]\n  frameforge decode --input <ffbs> --output <raw>\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-skeleton --output <vvc>\n  frameforge vvc-list --input <vvc>\n\nThe encode subcommand is optional for compatibility."
+    "usage:\n  frameforge encode --input <raw> --width <w> --height <h> --format gray8 --output <ffbs> [--trace <jsonl>]\n  frameforge decode --input <ffbs> --output <raw>\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-skeleton --output <vvc>\n  frameforge vvc-fixture-4x4-black --output <vvc>\n  frameforge vvc-list --input <vvc>\n\nThe encode subcommand is optional for compatibility."
 }
 
 #[cfg(test)]
@@ -380,6 +414,21 @@ mod tests {
             panic!("expected vvc-skeleton command");
         };
         assert_eq!(cli.output, PathBuf::from("skeleton.vvc"));
+    }
+
+    #[test]
+    fn parse_cli_accepts_vvc_fixture_4x4_subcommand() {
+        let command = parse_cli(vec![
+            "vvc-fixture-4x4-black".into(),
+            "--output".into(),
+            "fixture.vvc".into(),
+        ])
+        .unwrap();
+
+        let Command::VvcFixture4x4(cli) = command else {
+            panic!("expected vvc-fixture-4x4-black command");
+        };
+        assert_eq!(cli.output, PathBuf::from("fixture.vvc"));
     }
 
     #[test]

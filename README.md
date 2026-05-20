@@ -137,6 +137,15 @@ cargo run -- vvc-skeleton --output /tmp/frameforge-skeleton.vvc
 
 This writes VPS, SPS, PPS, IDR_N_LP, EOS, and EOB NAL units with correct Annex-B start codes and VVC NAL unit headers. The RBSP payloads are deliberately placeholder `rbsp_trailing_bits` only, so this is not a decodable VVC picture stream yet.
 
+Generate the fixed 4x4 black VVC validation fixture:
+
+```sh
+cargo run -- vvc-fixture-4x4-black --output /tmp/frameforge-fixture-4x4.vvc
+make validate-decode BITSTREAM=/tmp/frameforge-fixture-4x4.vvc DECODED=/tmp/frameforge-fixture-4x4-dec.yuv
+```
+
+This writes a fixed Annex-B VVC stream for one black 4x4 YUV420p8 IDR picture. It is a decoder-validation fixture derived from the external VTM reference path, not FrameForge's clean-room VVC encoder implementation.
+
 Inspect NAL headers in any Annex-B VVC stream:
 
 ```sh
@@ -173,6 +182,12 @@ Run the RTL VVC skeleton byte-format check:
 make rtl-test DUT=vvc-skeleton
 ```
 
+Run the RTL fixed VVC fixture byte-format check:
+
+```sh
+make rtl-test DUT=vvc-fixture4x4
+```
+
 The Makefile uses variables so other simulators can be introduced later:
 
 ```sh
@@ -181,7 +196,7 @@ make rtl-test SIM=icarus TOPLEVEL_LANG=verilog
 
 ## External Decoder Validation
 
-External decoder validation is planned but not guaranteed yet because FrameForge does not currently emit a decodable VVC/H.266 picture bitstream. The current `ffbs` stream is decoded by FrameForge itself, `vvc-eos` emits only a VVC EOS NAL unit, and `vvc-skeleton` uses placeholder RBSP payloads.
+External decoder validation is partially wired. The current `ffbs` stream is decoded by FrameForge itself, `vvc-eos` emits only a VVC EOS NAL unit, and `vvc-skeleton` uses placeholder RBSP payloads. The `vvc-fixture-4x4-black` command emits a fixed VTM-derived validation fixture that VTM can decode, but this is not yet a real FrameForge VVC encoder path.
 
 FrameForge looks for decoder resources in this order:
 

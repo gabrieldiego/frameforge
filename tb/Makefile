@@ -24,6 +24,10 @@ else ifeq ($(DUT),vvc-skeleton)
 VERILOG_SOURCES := $(RTL_DIR)/ff_vvc_skeleton_encoder.sv
 TOPLEVEL := ff_vvc_skeleton_encoder
 COCOTB_TEST_MODULES := test_vvc_skeleton_encoder
+else ifeq ($(DUT),vvc-fixture4x4)
+VERILOG_SOURCES := $(RTL_DIR)/ff_vvc_fixture4x4_encoder.sv
+TOPLEVEL := ff_vvc_fixture4x4_encoder
+COCOTB_TEST_MODULES := test_vvc_fixture4x4_encoder
 else
 VERILOG_SOURCES := $(RTL_DIR)/ff_intra_pred_stub.sv
 TOPLEVEL := ff_intra_pred_stub
