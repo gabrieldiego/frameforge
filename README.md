@@ -115,7 +115,7 @@ cargo run -- vvc-toy-4x4-black-video --frames 1 --output /tmp/frameforge-toy-4x4
 make validate-decode BITSTREAM=/tmp/frameforge-toy-4x4-1f.vvc DECODED=/tmp/frameforge-toy-4x4-1f-dec.yuv
 ```
 
-This writes a generated Annex-B VVC stream for one black 4x4 YUV420p8 IDR picture. The payload bytes are still VTM-derived, but the stream is assembled through FrameForge's NAL writer.
+This writes a generated Annex-B VVC stream for one black 4x4 YUV420p8 IDR picture. FrameForge emits the sequence header and picture NAL internally from named bit regions, but those regions are still observed from a VTM-compatible stream.
 
 Generate the toy 2-frame 4x4 black VVC validation stream:
 
@@ -124,7 +124,7 @@ cargo run -- vvc-toy-4x4-black-video --frames 2 --output /tmp/frameforge-toy-4x4
 make validate-decode BITSTREAM=/tmp/frameforge-toy-4x4-2f.vvc DECODED=/tmp/frameforge-toy-4x4-2f-dec.yuv
 ```
 
-This stream decodes to two 4x4 YUV420p8 frames and is useful for proving that the software and RTL output paths can generate the same short video stream before clean-room VVC picture syntax is complete.
+This stream emits one SPS/PPS sequence header followed by two picture slices. It decodes to two 4x4 YUV420p8 frames and is useful for proving that the software and RTL output paths can generate the same short video stream before clean-room VVC picture syntax is complete.
 
 Validate the software stream, RTL stream, and VTM reconstructions with SHA-256 checksums:
 
@@ -183,7 +183,7 @@ make rtl-test SIM=icarus TOPLEVEL_LANG=verilog
 
 ## External Decoder Validation
 
-External decoder validation is partially wired. The `vvc-eos` command emits only a VVC EOS NAL unit, and `vvc-skeleton` uses placeholder RBSP payloads. The `vvc-toy-4x4-black-video` command assembles a tiny VTM-accepted stream from generated NAL units and VTM-derived payload bytes; it is an incremental validation path, not a complete clean-room VVC encoder yet.
+External decoder validation is partially wired. The `vvc-eos` command emits only a VVC EOS NAL unit, and `vvc-skeleton` uses placeholder RBSP payloads. The `vvc-toy-4x4-black-video` command assembles a tiny VTM-accepted stream from internally scheduled sequence and picture NALs, with remaining observed bit regions called out in code; it is an incremental validation path, not a complete clean-room VVC encoder yet.
 
 FrameForge looks for decoder resources in this order:
 

@@ -8,7 +8,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - VVC Annex-B writer capable of emitting an EOS-only stream for NAL header and bytestream testing.
 - VVC skeleton stream containing VPS/SPS/PPS/IDR/EOS/EOB NAL units with placeholder RBSP payloads.
 - VVC Annex-B NAL header listing for comparing FrameForge output against VTM output.
-- Generated 1- or 2-frame 4x4 black YUV420p8 VVC toy stream assembled from SPS, PPS, and slice NAL units using named observed bit regions.
+- Generated 1- or 2-frame 4x4 black YUV420p8 VVC toy stream assembled from one SPS/PPS sequence header followed by generated picture slice NAL units using named observed bit regions.
 - External VTM reference-encode helper that can generate a real 4x4 YUV420 VVC stream for validation.
 - Basic encoder trait boundary for replacing the placeholder path with real codec implementations.
 - Generic bitstream utilities:
@@ -24,7 +24,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - SystemVerilog RTL stubs with AXI-stream-style handshakes.
 - Minimum RTL encoder shell that drains an input stream and emits a fixed placeholder output packet.
 - RTL VVC skeleton emitter that matches Rust `vvc-skeleton` byte-for-byte.
-- RTL toy VVC generator that emits Annex-B start codes, VVC NAL headers, and NAL payload bytes to match the Rust toy stream.
+- RTL toy VVC generator that emits a sequence header plus per-picture Annex-B start codes, VVC NAL headers, and NAL payload bytes to match the Rust toy stream.
 - cocotb/Icarus verification skeleton.
 - Local contribution and license files for an open-source starting point.
 

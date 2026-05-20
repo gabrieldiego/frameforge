@@ -19,7 +19,7 @@ module ff_vvc_toy4x4_encoder (
   localparam int SPS_NAL_LEN = NAL_OVERHEAD_LEN + SPS_PAYLOAD_LEN;
   localparam int PPS_NAL_LEN = NAL_OVERHEAD_LEN + PPS_PAYLOAD_LEN;
   localparam int SLICE_NAL_LEN = NAL_OVERHEAD_LEN + SLICE_PAYLOAD_LEN;
-  localparam int ACCESS_UNIT_LEN = SPS_NAL_LEN + PPS_NAL_LEN + SLICE_NAL_LEN;
+  localparam int PARAMETER_SET_LEN = SPS_NAL_LEN + PPS_NAL_LEN;
 
   logic [7:0] index_q;
   logic [7:0] stream_len_q;
@@ -56,33 +56,26 @@ module ff_vvc_toy4x4_encoder (
 
   function automatic logic [7:0] stream_len(input logic [1:0] frames);
     case (frames)
-      2'd2: stream_len = ACCESS_UNIT_LEN * 2;
-      default: stream_len = ACCESS_UNIT_LEN;
+      2'd2: stream_len = PARAMETER_SET_LEN + (SLICE_NAL_LEN * 2);
+      default: stream_len = PARAMETER_SET_LEN + SLICE_NAL_LEN;
     endcase
   endfunction
 
   function automatic logic [7:0] stream_byte(input logic [7:0] index);
-    logic second_access_unit;
-    logic [6:0] access_unit_index;
+    logic second_picture;
+    logic [6:0] slice_index;
 
-    begin
-      second_access_unit = (index >= ACCESS_UNIT_LEN);
-      access_unit_index = second_access_unit ? (index - ACCESS_UNIT_LEN) : index[6:0];
-      stream_byte = access_unit_byte(access_unit_index, second_access_unit);
-    end
-  endfunction
-
-  function automatic logic [7:0] access_unit_byte(
-    input logic [6:0] index,
-    input logic       cra_picture
-  );
     begin
       if (index < SPS_NAL_LEN) begin
-        access_unit_byte = nal_byte(2'd0, index, cra_picture);
-      end else if (index < SPS_NAL_LEN + PPS_NAL_LEN) begin
-        access_unit_byte = nal_byte(2'd1, index - SPS_NAL_LEN, cra_picture);
+        stream_byte = nal_byte(2'd0, index[6:0], 1'b0);
+      end else if (index < PARAMETER_SET_LEN) begin
+        stream_byte = nal_byte(2'd1, index - SPS_NAL_LEN, 1'b0);
       end else begin
-        access_unit_byte = nal_byte(2'd2, index - (SPS_NAL_LEN + PPS_NAL_LEN), cra_picture);
+        second_picture = (index >= PARAMETER_SET_LEN + SLICE_NAL_LEN);
+        slice_index = second_picture
+          ? (index - (PARAMETER_SET_LEN + SLICE_NAL_LEN))
+          : (index - PARAMETER_SET_LEN);
+        stream_byte = nal_byte(2'd2, slice_index, second_picture);
       end
     end
   endfunction

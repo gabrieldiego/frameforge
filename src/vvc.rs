@@ -158,10 +158,10 @@ pub fn toy_black_4x4_yuv420p8_annex_b(params: Toy4x4EncodeParams) -> Result<Vec<
         return Err("toy VVC encode currently supports at most two frames".to_string());
     }
 
-    let mut units = Vec::with_capacity(params.frames * 3);
+    let mut units = Vec::with_capacity(params.frames + 2);
+    units.push(toy_4x4_sps_unit());
+    units.push(toy_4x4_pps_unit());
     for frame_idx in 0..params.frames {
-        units.push(toy_4x4_sps_unit());
-        units.push(toy_4x4_pps_unit());
         units.push(toy_4x4_slice_unit(frame_idx)?);
     }
     write_annex_b(&units)
@@ -432,12 +432,12 @@ mod tests {
     #[test]
     fn parses_toy_black_4x4_two_frame_headers() {
         let bytes = toy_black_4x4_yuv420p8_annex_b(Toy4x4EncodeParams { frames: 2 }).unwrap();
-        assert_eq!(bytes.len(), 148);
+        assert_eq!(bytes.len(), 91);
         let infos = parse_annex_b_nal_units(&bytes).unwrap();
         let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
-        assert_eq!(types, vec![15, 16, 8, 15, 16, 9]);
+        assert_eq!(types, vec![15, 16, 8, 9]);
         assert_eq!(infos[3].offset, 78);
-        assert_eq!(infos[5].payload_len, 11);
+        assert_eq!(infos[3].payload_len, 11);
     }
 
     #[test]
