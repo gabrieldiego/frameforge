@@ -1,6 +1,6 @@
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge
+from cocotb.triggers import ReadOnly, RisingEdge
 
 
 @cocotb.test()
@@ -28,11 +28,8 @@ async def pass_through_respects_ready_valid(dut):
     dut.s_axis_data.value = 0x1234
     dut.s_axis_last.value = 1
     await RisingEdge(dut.clk)
-
-    dut.s_axis_valid.value = 0
-    await RisingEdge(dut.clk)
+    await ReadOnly()
 
     assert dut.m_axis_valid.value == 1
     assert dut.m_axis_data.value == 0x1234
     assert dut.m_axis_last.value == 1
-
