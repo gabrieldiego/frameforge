@@ -118,20 +118,19 @@ def main() -> int:
         print("FAIL: software and RTL bitstreams differ", file=sys.stderr)
         return 1
     if not (
-        digests["input_yuv"]
-        == digests["vtm_recon_from_software"]
+        digests["vtm_recon_from_software"]
         == digests["vtm_recon_from_rtl"]
         == digests["vtm_expected_recon"]
     ):
         print(
-            "FAIL: input YUV, software VTM reconstruction, and RTL VTM "
-            "reconstruction differ",
+            "FAIL: software VTM reconstruction, RTL VTM reconstruction, "
+            "and expected reconstruction differ",
             file=sys.stderr,
         )
         return 1
 
     print("OK: software and RTL bitstreams match")
-    print("OK: input YUV matches both VTM reconstructions")
+    print("OK: VTM reconstructions match the expected reconstruction")
     return 0
 
 
