@@ -65,9 +65,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ~/.local/bin/uv python install 3.13
 rm -rf .venv
 ~/.local/bin/uv venv --python 3.13 .venv
-. .venv/bin/activate
-python -m pip install -U pip
-python -m pip install -r requirements-dev.txt
+~/.local/bin/uv pip install --python .venv/bin/python -r requirements-dev.txt
 ```
 
 ```sh

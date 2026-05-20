@@ -93,9 +93,7 @@ TOOLS = (
             "  ~/.local/bin/uv python install 3.13\n"
             "  rm -rf .venv\n"
             "  ~/.local/bin/uv venv --python 3.13 .venv\n"
-            "  . .venv/bin/activate\n"
-            "  python -m pip install -U pip\n"
-            "  python -m pip install -r requirements-dev.txt"
+            "  ~/.local/bin/uv pip install --python .venv/bin/python -r requirements-dev.txt"
         ),
         required=False,
         alternate_paths=(".venv/bin/cocotb-config",),
