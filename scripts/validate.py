@@ -66,7 +66,7 @@ def main() -> int:
             "run",
             "--quiet",
             "--",
-            "vvc-toy-4x4-black-video",
+            "vvc-toy-4x4-video",
             "--input",
             str(input_path),
             "--frames",

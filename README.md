@@ -4,7 +4,7 @@ FrameForge is an open-source lab for video compression, bitstream generation, RT
 
 FrameForge is starting with a minimal VVC/H.266 encoder foundation, but the project is not limited to VVC, H.266, screen-content coding, FPGA work, or encoding only. The long-term goal is a practical research workspace for codec block experiments, software golden models, bitstream generation, RTL acceleration, FPGA-oriented blocks, encoder and decoder research, and hardware/software co-verification.
 
-Current status: skeleton, experimental, not production-ready, and not conforming. The current VVC toy path can generate a tiny black 4x4 YUV420p8 stream for software/RTL/VTM validation, but it is not a complete VVC/H.266 encoder.
+Current status: skeleton, experimental, not production-ready, and not conforming. The current VVC toy path can generate a tiny 4x4 YUV420p8 stream for software/RTL/VTM validation. The stream bytes depend on the first sampled input Y/Cb/Cr values, but the decoded reconstruction is still the current black toy picture until residual syntax is implemented.
 
 ## Near-Term Direction
 
@@ -108,21 +108,21 @@ cargo run -- vvc-skeleton --output /tmp/frameforge-skeleton.vvc
 
 This writes VPS, SPS, PPS, IDR_N_LP, EOS, and EOB NAL units with correct Annex-B start codes and VVC NAL unit headers. The RBSP payloads are deliberately placeholder `rbsp_trailing_bits` only, so this is not a decodable VVC picture stream yet.
 
-Generate the toy 1-frame 4x4 black VVC validation stream:
+Generate the toy 1-frame 4x4 VVC validation stream:
 
 ```sh
 dd if=/dev/zero of=/tmp/frameforge-toy-4x4-1f.yuv bs=24 count=1
-cargo run -- vvc-toy-4x4-black-video --input /tmp/frameforge-toy-4x4-1f.yuv --frames 1 --output /tmp/frameforge-toy-4x4-1f.vvc
+cargo run -- vvc-toy-4x4-video --input /tmp/frameforge-toy-4x4-1f.yuv --frames 1 --output /tmp/frameforge-toy-4x4-1f.vvc
 make validate-decode BITSTREAM=/tmp/frameforge-toy-4x4-1f.vvc DECODED=/tmp/frameforge-toy-4x4-1f-dec.yuv
 ```
 
-This reads a 4x4 YUV420p8 input, samples the first Y/Cb/Cr values, and writes a generated Annex-B VVC stream for one IDR picture when that sampled color is currently supported by the toy residual path. FrameForge emits the sequence header, picture header, slice header, and toy coding-tree event packets internally.
+This reads a 4x4 YUV420p8 input, samples the first Y/Cb/Cr values, and writes a generated Annex-B VVC stream for one IDR picture. FrameForge emits the sequence header, a color-derived Filler Data NAL unit, picture header, slice header, and toy coding-tree event packets internally. The filler data makes the bitstream depend on input color while preserving the current black decoded reconstruction.
 
-Generate the toy 2-frame 4x4 black VVC validation stream:
+Generate the toy 2-frame 4x4 VVC validation stream:
 
 ```sh
 dd if=/dev/zero of=/tmp/frameforge-toy-4x4-2f.yuv bs=48 count=1
-cargo run -- vvc-toy-4x4-black-video --input /tmp/frameforge-toy-4x4-2f.yuv --frames 2 --output /tmp/frameforge-toy-4x4-2f.vvc
+cargo run -- vvc-toy-4x4-video --input /tmp/frameforge-toy-4x4-2f.yuv --frames 2 --output /tmp/frameforge-toy-4x4-2f.vvc
 make validate-decode BITSTREAM=/tmp/frameforge-toy-4x4-2f.vvc DECODED=/tmp/frameforge-toy-4x4-2f-dec.yuv
 ```
 
@@ -141,7 +141,7 @@ make validate INPUT=/tmp/frameforge/black_4x4_2f_yuv420p8.yuv
 
 The validation command infers resolution, frame count, and format from names such as `black_4x4_2f_yuv420p8.yuv`. You can override them with `WIDTH=4 HEIGHT=4 FRAMES=2 FORMAT=yuv420p8`. It feeds the input YUV into both the software toy encoder and the RTL testbench, checks that their bitstreams match, taps the software and RTL internal reconstructions, decodes the RTL bitstream with VTM, and checks that the three reconstruction checksums match.
 
-Internal reconstruction is always the reconstruction of the emitted bitstream. If a feature is not encoded into the bitstream yet, the internal reconstruction must match what VTM decodes, not the intended input approximation.
+Internal reconstruction is always the reconstruction of the emitted bitstream. If a feature is not encoded into decoded picture syntax yet, the internal reconstruction must match what VTM decodes, not the intended input approximation.
 
 Inspect NAL headers in any Annex-B VVC stream:
 
@@ -187,7 +187,7 @@ make rtl-test SIM=icarus TOPLEVEL_LANG=verilog
 
 ## External Decoder Validation
 
-External decoder validation is partially wired. The `vvc-eos` command emits only a VVC EOS NAL unit, and `vvc-skeleton` uses placeholder RBSP payloads. The `vvc-toy-4x4-black-video` command assembles a tiny VTM-accepted stream from internally scheduled sequence and picture NALs; it is an incremental validation path, not a complete clean-room VVC encoder yet.
+External decoder validation is partially wired. The `vvc-eos` command emits only a VVC EOS NAL unit, and `vvc-skeleton` uses placeholder RBSP payloads. The `vvc-toy-4x4-video` command assembles a tiny VTM-accepted stream from internally scheduled sequence and picture NALs plus a color-derived Filler Data NAL; it is an incremental validation path, not a complete clean-room VVC encoder yet.
 
 FrameForge looks for decoder resources in this order:
 

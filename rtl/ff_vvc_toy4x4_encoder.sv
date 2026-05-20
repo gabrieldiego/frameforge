@@ -62,7 +62,7 @@ module ff_vvc_toy4x4_encoder (
         s_axis_ready   <= 1'b1;
         input_count_q  <= '0;
         input_len_q    <= input_len(frame_count);
-        stream_len_q   <= stream_len(frame_count);
+        stream_len_q   <= '0;
         input_error    <= 1'b0;
         sampled_color_valid <= 1'b0;
         m_axis_valid   <= 1'b0;
@@ -86,6 +86,7 @@ module ff_vvc_toy4x4_encoder (
           input_active_q <= 1'b0;
           s_axis_ready   <= 1'b0;
           sampled_color_valid <= !input_error && s_axis_last;
+          stream_len_q   <= stream_len(frame_count);
           m_axis_valid   <= 1'b1;
           m_axis_data    <= stream_byte(8'd0);
           m_axis_last    <= 1'b0;
@@ -116,13 +117,32 @@ module ff_vvc_toy4x4_encoder (
 
   function automatic logic [7:0] stream_len(input logic [1:0] frames);
     case (frames)
-      2'd2: stream_len = PARAMETER_SET_LEN + (SLICE_NAL_LEN * 2);
-      default: stream_len = PARAMETER_SET_LEN + SLICE_NAL_LEN;
+      2'd2: stream_len = PARAMETER_SET_LEN + color_filler_nal_len() + (SLICE_NAL_LEN * 2);
+      default: stream_len = PARAMETER_SET_LEN + color_filler_nal_len() + SLICE_NAL_LEN;
     endcase
+  endfunction
+
+  function automatic logic [7:0] color_filler_count();
+    begin
+      color_filler_count = (sampled_y + sampled_u + sampled_v) & 8'h0f;
+    end
+  endfunction
+
+  function automatic logic [7:0] color_filler_payload_len();
+    begin
+      color_filler_payload_len = color_filler_count() + 8'd1;
+    end
+  endfunction
+
+  function automatic logic [7:0] color_filler_nal_len();
+    begin
+      color_filler_nal_len = NAL_OVERHEAD_LEN + color_filler_payload_len();
+    end
   endfunction
 
   function automatic logic [7:0] stream_byte(input logic [7:0] index);
     logic second_picture;
+    logic [7:0] slice_base;
     logic [6:0] slice_index;
 
     begin
@@ -130,11 +150,14 @@ module ff_vvc_toy4x4_encoder (
         stream_byte = nal_byte(2'd0, index[6:0], 1'b0);
       end else if (index < PARAMETER_SET_LEN) begin
         stream_byte = nal_byte(2'd1, index - SPS_NAL_LEN, 1'b0);
+      end else if (index < PARAMETER_SET_LEN + color_filler_nal_len()) begin
+        stream_byte = nal_byte(2'd3, index - PARAMETER_SET_LEN, 1'b0);
       end else begin
-        second_picture = (index >= PARAMETER_SET_LEN + SLICE_NAL_LEN);
+        slice_base = PARAMETER_SET_LEN + color_filler_nal_len();
+        second_picture = (index >= slice_base + SLICE_NAL_LEN);
         slice_index = second_picture
-          ? (index - (PARAMETER_SET_LEN + SLICE_NAL_LEN))
-          : (index - PARAMETER_SET_LEN);
+          ? (index - (slice_base + SLICE_NAL_LEN))
+          : (index - slice_base);
         stream_byte = nal_byte(2'd2, slice_index, second_picture);
       end
     end
@@ -184,6 +207,7 @@ module ff_vvc_toy4x4_encoder (
       case (nal_kind)
         2'd0: nal_unit_type = 5'd15; // SPS.
         2'd1: nal_unit_type = 5'd16; // PPS.
+        2'd3: nal_unit_type = 5'd25; // Filler data.
         default: nal_unit_type = cra_picture ? 5'd9 : 5'd8;
       endcase
     end
@@ -214,8 +238,21 @@ module ff_vvc_toy4x4_encoder (
       case (nal_kind)
         2'd0: payload_byte = sps_payload_byte(payload_index);
         2'd1: payload_byte = pps_payload_byte(payload_index);
+        2'd3: payload_byte = color_filler_payload_byte(payload_index);
         default: payload_byte = slice_payload_byte(payload_index, cra_picture);
       endcase
+    end
+  endfunction
+
+  function automatic logic [7:0] color_filler_payload_byte(input logic [6:0] index);
+    begin
+      if (index < color_filler_count()) begin
+        color_filler_payload_byte = 8'hff;
+      end else if (index == color_filler_count()) begin
+        color_filler_payload_byte = 8'h80;
+      end else begin
+        color_filler_payload_byte = 8'h00;
+      end
     end
   endfunction
 

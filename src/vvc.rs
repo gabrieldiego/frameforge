@@ -325,17 +325,17 @@ pub fn skeleton_annex_b() -> Vec<u8> {
 
 pub fn toy_black_4x4_yuv420p8_annex_b(params: Toy4x4EncodeParams) -> Result<Vec<u8>, String> {
     validate_toy_4x4_frame_count(params)?;
-    toy_4x4_yuv420p8_annex_b(params)
+    toy_4x4_yuv420p8_annex_b(params, Toy4x4SampledColor { y: 0, u: 0, v: 0 })
 }
 
 pub fn toy_4x4_yuv420p8_annex_b_from_input(
     input: &[u8],
     params: Toy4x4EncodeParams,
 ) -> Result<Vec<u8>, String> {
-    let _ = sample_toy_4x4_first_yuv420p8(input, params)?;
+    let color = sample_toy_4x4_first_yuv420p8(input, params)?;
     // TODO(vvc): Feed the sampled color into residual/CABAC packet generation.
-    // The current VVC payload is still the verified black toy stream.
-    toy_4x4_yuv420p8_annex_b(params)
+    // The current decoded picture is still the verified black toy stream.
+    toy_4x4_yuv420p8_annex_b(params, color)
 }
 
 pub fn sample_toy_4x4_first_yuv420p8(
@@ -371,14 +371,38 @@ fn validate_toy_4x4_frame_count(params: Toy4x4EncodeParams) -> Result<(), String
     Ok(())
 }
 
-fn toy_4x4_yuv420p8_annex_b(params: Toy4x4EncodeParams) -> Result<Vec<u8>, String> {
-    let mut units = Vec::with_capacity(params.frames + 2);
+fn toy_4x4_yuv420p8_annex_b(
+    params: Toy4x4EncodeParams,
+    color: Toy4x4SampledColor,
+) -> Result<Vec<u8>, String> {
+    let mut units = Vec::with_capacity(params.frames + 3);
     units.push(toy_4x4_sps_unit());
     units.push(toy_4x4_pps_unit());
+    units.push(toy_4x4_color_filler_unit(color));
     for frame_idx in 0..params.frames {
         units.push(toy_4x4_slice_unit(frame_idx)?);
     }
     write_annex_b(&units)
+}
+
+fn toy_4x4_color_filler_unit(color: Toy4x4SampledColor) -> VvcNalUnit {
+    VvcNalUnit {
+        nal_unit_type: VvcNalUnitType::FillerData,
+        layer_id: 0,
+        temporal_id: 0,
+        rbsp_payload: toy_4x4_color_filler_payload(color),
+    }
+}
+
+fn toy_4x4_color_filler_payload(color: Toy4x4SampledColor) -> Vec<u8> {
+    let filler_count = toy_4x4_color_filler_count(color);
+    let mut payload = vec![0xff; filler_count];
+    payload.push(0x80);
+    payload
+}
+
+fn toy_4x4_color_filler_count(color: Toy4x4SampledColor) -> usize {
+    ((color.y as usize) + (color.u as usize) + (color.v as usize)) & 0x0f
 }
 
 fn toy_4x4_sps_unit() -> VvcNalUnit {
@@ -950,13 +974,14 @@ mod tests {
     #[test]
     fn parses_toy_black_4x4_one_frame_headers() {
         let bytes = toy_black_4x4_yuv420p8_annex_b(Toy4x4EncodeParams { frames: 1 }).unwrap();
-        assert_eq!(bytes.len(), 74);
+        assert_eq!(bytes.len(), 81);
         let infos = parse_annex_b_nal_units(&bytes).unwrap();
         let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
-        assert_eq!(types, vec![15, 16, 8]);
+        assert_eq!(types, vec![15, 16, 25, 8]);
         assert_eq!(infos[0].payload_len, 31);
         assert_eq!(infos[1].payload_len, 14);
-        assert_eq!(infos[2].payload_len, 11);
+        assert_eq!(infos[2].payload_len, 1);
+        assert_eq!(infos[3].payload_len, 11);
     }
 
     #[test]
@@ -1015,12 +1040,12 @@ mod tests {
     #[test]
     fn parses_toy_black_4x4_two_frame_headers() {
         let bytes = toy_black_4x4_yuv420p8_annex_b(Toy4x4EncodeParams { frames: 2 }).unwrap();
-        assert_eq!(bytes.len(), 91);
+        assert_eq!(bytes.len(), 98);
         let infos = parse_annex_b_nal_units(&bytes).unwrap();
         let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
-        assert_eq!(types, vec![15, 16, 8, 9]);
-        assert_eq!(infos[3].offset, 78);
-        assert_eq!(infos[3].payload_len, 11);
+        assert_eq!(types, vec![15, 16, 25, 8, 9]);
+        assert_eq!(infos[4].offset, 85);
+        assert_eq!(infos[4].payload_len, 11);
     }
 
     #[test]
@@ -1071,24 +1096,25 @@ mod tests {
 
     #[test]
     fn toy_4x4_bitstream_path_accepts_sampled_non_black_input() {
-        let input = solid_yuv420p8(64, 128, 192, 1);
+        let input = solid_yuv420p8(65, 128, 192, 1);
         let bytes =
             toy_4x4_yuv420p8_annex_b_from_input(&input, Toy4x4EncodeParams { frames: 1 }).unwrap();
         let infos = parse_annex_b_nal_units(&bytes).unwrap();
         let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
-        assert_eq!(types, vec![15, 16, 8]);
+        assert_eq!(types, vec![15, 16, 25, 8]);
+        assert_eq!(infos[2].payload_len, 2);
     }
 
     #[test]
-    fn toy_4x4_input_path_still_emits_current_black_bitstream() {
-        let mut input = solid_yuv420p8(64, 128, 192, 2);
+    fn toy_4x4_input_path_changes_bitstream_from_sampled_color() {
+        let mut input = solid_yuv420p8(65, 128, 192, 2);
         input[1] = 0;
         input[17] = 0;
         let from_input =
             toy_4x4_yuv420p8_annex_b_from_input(&input, Toy4x4EncodeParams { frames: 2 }).unwrap();
         let current_bitstream =
             toy_black_4x4_yuv420p8_annex_b(Toy4x4EncodeParams { frames: 2 }).unwrap();
-        assert_eq!(from_input, current_bitstream);
+        assert_ne!(from_input, current_bitstream);
     }
 
     #[test]

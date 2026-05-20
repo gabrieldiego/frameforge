@@ -41,7 +41,7 @@ def decoded_reconstruction(frames):
 
 def software_stream(frames, data):
     with tempfile.TemporaryDirectory() as tmpdir:
-        input_yuv = Path(tmpdir) / f"black_4x4_{frames}f_yuv420p8.yuv"
+        input_yuv = Path(tmpdir) / f"input_4x4_{frames}f_yuv420p8.yuv"
         output = Path(tmpdir) / "toy.vvc"
         input_yuv.write_bytes(data)
         subprocess.run(
@@ -50,7 +50,7 @@ def software_stream(frames, data):
                 "run",
                 "--quiet",
                 "--",
-                "vvc-toy-4x4-black-video",
+                "vvc-toy-4x4-video",
                 "--input",
                 str(input_yuv),
                 "--frames",

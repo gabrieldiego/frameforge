@@ -44,7 +44,7 @@ struct VvcSkeletonCli {
 
 #[derive(Debug)]
 struct VvcToy4x4VideoCli {
-    input: Option<PathBuf>,
+    input: PathBuf,
     output: PathBuf,
     frames: usize,
     width: usize,
@@ -153,13 +153,9 @@ fn run_vvc_toy_4x4_video(cli: VvcToy4x4VideoCli) -> Result<(), String> {
     }
 
     let params = frameforge::vvc::Toy4x4EncodeParams { frames: cli.frames };
-    let bytes = if let Some(input) = cli.input {
-        let data = fs::read(&input)
-            .map_err(|err| format!("failed to read input '{}': {err}", input.display()))?;
-        frameforge::vvc::toy_4x4_yuv420p8_annex_b_from_input(&data, params)?
-    } else {
-        frameforge::vvc::toy_black_4x4_yuv420p8_annex_b(params)?
-    };
+    let data = fs::read(&cli.input)
+        .map_err(|err| format!("failed to read input '{}': {err}", cli.input.display()))?;
+    let bytes = frameforge::vvc::toy_4x4_yuv420p8_annex_b_from_input(&data, params)?;
     fs::write(&cli.output, bytes)
         .map_err(|err| format!("failed to write output '{}': {err}", cli.output.display()))?;
     Ok(())
@@ -190,7 +186,7 @@ fn parse_cli(args: Vec<String>) -> Result<Command, String> {
     if args.first().map(String::as_str) == Some("vvc-skeleton") {
         return parse_vvc_skeleton_cli(args.into_iter().skip(1).collect());
     }
-    if args.first().map(String::as_str) == Some("vvc-toy-4x4-black-video") {
+    if args.first().map(String::as_str) == Some("vvc-toy-4x4-video") {
         return parse_vvc_toy_4x4_video_cli(args.into_iter().skip(1).collect());
     }
     if args.first().map(String::as_str) == Some("vvc-list") {
@@ -311,16 +307,12 @@ fn parse_vvc_toy_4x4_video_cli(args: Vec<String>) -> Result<Command, String> {
                 format = value.parse::<PixelFormat>()?;
             }
             "--help" | "-h" => return Err(String::new()),
-            other => {
-                return Err(format!(
-                    "unknown vvc-toy-4x4-black-video argument '{other}'"
-                ))
-            }
+            other => return Err(format!("unknown vvc-toy-4x4-video argument '{other}'")),
         }
     }
 
     Ok(Command::VvcToy4x4Video(VvcToy4x4VideoCli {
-        input,
+        input: input.ok_or_else(|| "missing --input <path>".to_string())?,
         output: output.ok_or_else(|| "missing --output <path>".to_string())?,
         frames,
         width,
@@ -362,7 +354,7 @@ fn parse_usize(value: String, flag: &str) -> Result<usize, String> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  frameforge encode --input <raw> --width <w> --height <h> --format gray8 --output <ffbs> [--trace <jsonl>]\n  frameforge decode --input <ffbs> --output <raw>\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-skeleton --output <vvc>\n  frameforge vvc-toy-4x4-black-video --input <yuv> --output <vvc> [--frames 1|2] [--width 4 --height 4 --format yuv420p8]\n  frameforge vvc-list --input <vvc>\n\nThe encode subcommand is optional for compatibility."
+    "usage:\n  frameforge encode --input <raw> --width <w> --height <h> --format gray8 --output <ffbs> [--trace <jsonl>]\n  frameforge decode --input <ffbs> --output <raw>\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-skeleton --output <vvc>\n  frameforge vvc-toy-4x4-video --input <yuv> --output <vvc> [--frames 1|2] [--width 4 --height 4 --format yuv420p8]\n  frameforge vvc-list --input <vvc>\n\nThe encode subcommand is optional for compatibility."
 }
 
 #[cfg(test)]
@@ -460,9 +452,9 @@ mod tests {
     #[test]
     fn parse_cli_accepts_vvc_toy_4x4_video_subcommand() {
         let command = parse_cli(vec![
-            "vvc-toy-4x4-black-video".into(),
+            "vvc-toy-4x4-video".into(),
             "--input".into(),
-            "black_4x4_2f_yuv420p8.yuv".into(),
+            "input_4x4_2f_yuv420p8.yuv".into(),
             "--output".into(),
             "toy.vvc".into(),
             "--frames".into(),
@@ -477,9 +469,9 @@ mod tests {
         .unwrap();
 
         let Command::VvcToy4x4Video(cli) = command else {
-            panic!("expected vvc-toy-4x4-black-video command");
+            panic!("expected vvc-toy-4x4-video command");
         };
-        assert_eq!(cli.input, Some(PathBuf::from("black_4x4_2f_yuv420p8.yuv")));
+        assert_eq!(cli.input, PathBuf::from("input_4x4_2f_yuv420p8.yuv"));
         assert_eq!(cli.output, PathBuf::from("toy.vvc"));
         assert_eq!(cli.frames, 2);
         assert_eq!(cli.width, 4);
