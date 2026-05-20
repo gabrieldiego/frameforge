@@ -1,4 +1,4 @@
-.PHONY: help check-tools build test fmt decoder-setup validate-decode rtl-test clean
+.PHONY: help check-tools build test fmt decoder-setup validate-decode validate-toy4x4 rtl-test clean
 
 SIM ?= icarus
 TOPLEVEL_LANG ?= verilog
@@ -12,6 +12,7 @@ help:
 	@printf '%s\n' '  make fmt       - format Rust code'
 	@printf '%s\n' '  make decoder-setup - find or build external VTM decoder'
 	@printf '%s\n' '  make validate-decode BITSTREAM=out.vvc [DECODED=out.yuv]'
+	@printf '%s\n' '  make validate-toy4x4 [FRAMES=1] - compare software/RTL/VTM checksums'
 	@printf '%s\n' '  make rtl-test  - run cocotb RTL tests'
 	@printf '%s\n' '  make rtl-test DUT=encoder - run minimum encoder RTL smoke test'
 	@printf '%s\n' '  make rtl-test DUT=ffbs - run RTL/Rust ffbs format smoke test'
@@ -38,6 +39,9 @@ decoder-setup:
 validate-decode:
 	@test -n "$(BITSTREAM)" || { echo 'usage: make validate-decode BITSTREAM=path/to/stream.vvc [DECODED=decoded.yuv]'; exit 2; }
 	python3 scripts/validate_decode.py "$(BITSTREAM)" $(if $(DECODED),--output "$(DECODED)")
+
+validate-toy4x4:
+	python3 scripts/validate_toy4x4.py --frames "$(or $(FRAMES),1)"
 
 reference-vvc:
 	@test -n "$(BITSTREAM)" || { echo 'usage: make reference-vvc BITSTREAM=path/to/out.vvc [RECON=out.yuv] [FRAMES=1]'; exit 2; }

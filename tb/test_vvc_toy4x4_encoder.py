@@ -1,5 +1,6 @@
 import subprocess
 import tempfile
+import os
 from pathlib import Path
 
 import cocotb
@@ -69,5 +70,16 @@ async def collect_stream(dut, frames):
 async def vvc_toy4x4_encoder_matches_software_stream(dut):
     cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
 
-    assert await collect_stream(dut, frames=1) == software_stream(frames=1)
-    assert await collect_stream(dut, frames=2) == software_stream(frames=2)
+    one_frame = await collect_stream(dut, frames=1)
+    assert one_frame == software_stream(frames=1)
+    if path := os.environ.get("FRAMEFORGE_RTL_TOY4X4_OUT_1F"):
+        output = Path(path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(one_frame)
+
+    two_frames = await collect_stream(dut, frames=2)
+    assert two_frames == software_stream(frames=2)
+    if path := os.environ.get("FRAMEFORGE_RTL_TOY4X4_OUT"):
+        output = Path(path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(two_frames)

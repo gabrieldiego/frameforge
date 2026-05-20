@@ -155,6 +155,15 @@ make validate-decode BITSTREAM=/tmp/frameforge-toy-4x4-2f.vvc DECODED=/tmp/frame
 
 This stream decodes to two 4x4 YUV420p8 frames and is useful for proving that the software and RTL output paths can generate the same short video stream before clean-room VVC picture syntax is complete.
 
+Validate the software stream, RTL stream, and VTM reconstructions with SHA-256 checksums:
+
+```sh
+make validate-toy4x4 FRAMES=1
+make validate-toy4x4 FRAMES=2
+```
+
+This command generates software and RTL bitstreams, decodes both with VTM, and checks that the bitstreams match and the decoded reconstructions match the expected black YUV420p8 frames.
+
 Inspect NAL headers in any Annex-B VVC stream:
 
 ```sh
