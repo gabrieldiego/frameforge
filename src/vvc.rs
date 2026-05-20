@@ -338,14 +338,6 @@ pub fn toy_4x4_yuv420p8_annex_b_from_input(
     toy_4x4_yuv420p8_annex_b(params)
 }
 
-pub fn toy_4x4_sampled_reconstruction_from_input(
-    input: &[u8],
-    params: Toy4x4EncodeParams,
-) -> Result<Vec<u8>, String> {
-    let color = sample_toy_4x4_first_yuv420p8(input, params)?;
-    Ok(toy_4x4_sampled_reconstruction(color, params.frames))
-}
-
 pub fn sample_toy_4x4_first_yuv420p8(
     input: &[u8],
     params: Toy4x4EncodeParams,
@@ -367,17 +359,6 @@ pub fn sample_toy_4x4_first_yuv420p8(
         u: input[16],
         v: input[20],
     })
-}
-
-fn toy_4x4_sampled_reconstruction(color: Toy4x4SampledColor, frames: usize) -> Vec<u8> {
-    let frame_len = Picture::expected_len(4, 4, PixelFormat::Yuv420p8);
-    let mut out = Vec::with_capacity(frame_len * frames);
-    for _ in 0..frames {
-        out.extend(std::iter::repeat_n(color.y, 16));
-        out.extend(std::iter::repeat_n(color.u, 4));
-        out.extend(std::iter::repeat_n(color.v, 4));
-    }
-    out
 }
 
 fn validate_toy_4x4_frame_count(params: Toy4x4EncodeParams) -> Result<(), String> {
@@ -1099,14 +1080,15 @@ mod tests {
     }
 
     #[test]
-    fn toy_4x4_sampled_reconstruction_uses_first_yuv_values() {
+    fn toy_4x4_input_path_still_emits_current_black_bitstream() {
         let mut input = solid_yuv420p8(64, 128, 192, 2);
         input[1] = 0;
         input[17] = 0;
-        let recon =
-            toy_4x4_sampled_reconstruction_from_input(&input, Toy4x4EncodeParams { frames: 2 })
-                .unwrap();
-        assert_eq!(recon, solid_yuv420p8(64, 128, 192, 2));
+        let from_input =
+            toy_4x4_yuv420p8_annex_b_from_input(&input, Toy4x4EncodeParams { frames: 2 }).unwrap();
+        let current_bitstream =
+            toy_black_4x4_yuv420p8_annex_b(Toy4x4EncodeParams { frames: 2 }).unwrap();
+        assert_eq!(from_input, current_bitstream);
     }
 
     #[test]

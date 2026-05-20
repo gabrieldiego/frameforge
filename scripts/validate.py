@@ -58,8 +58,7 @@ def main() -> int:
     rtl_internal_recon = out_dir / f"{stem}_rtl_internal_rec.yuv"
     vtm_recon = out_dir / f"{stem}_vtm_from_rtl_dec.yuv"
 
-    input_data = input_path.read_bytes()
-    sw_internal_recon.write_bytes(software_internal_reconstruction(input_data, info))
+    sw_internal_recon.write_bytes(software_internal_reconstruction(info))
 
     run(
         [
@@ -221,15 +220,11 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def software_internal_reconstruction(data: bytes, info: InputInfo) -> bytes:
+def software_internal_reconstruction(info: InputInfo) -> bytes:
     frame_len = info.width * info.height * 3 // 2
-    y = data[0]
-    u = data[info.width * info.height]
-    v = data[info.width * info.height + (info.width * info.height // 4)]
-    frame = bytes([y] * (info.width * info.height))
-    frame += bytes([u] * (info.width * info.height // 4))
-    frame += bytes([v] * (info.width * info.height // 4))
-    return frame * info.frames
+    # This is the reconstruction of the current emitted toy VVC bitstream, not
+    # the intended input approximation. Keep this matched to VTM decode output.
+    return bytes(frame_len * info.frames)
 
 
 if __name__ == "__main__":

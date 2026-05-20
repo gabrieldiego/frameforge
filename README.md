@@ -141,6 +141,8 @@ make validate INPUT=/tmp/frameforge/black_4x4_2f_yuv420p8.yuv
 
 The validation command infers resolution, frame count, and format from names such as `black_4x4_2f_yuv420p8.yuv`. You can override them with `WIDTH=4 HEIGHT=4 FRAMES=2 FORMAT=yuv420p8`. It feeds the input YUV into both the software toy encoder and the RTL testbench, checks that their bitstreams match, taps the software and RTL internal reconstructions, decodes the RTL bitstream with VTM, and checks that the three reconstruction checksums match.
 
+Internal reconstruction is always the reconstruction of the emitted bitstream. If a feature is not encoded into the bitstream yet, the internal reconstruction must match what VTM decodes, not the intended input approximation.
+
 Inspect NAL headers in any Annex-B VVC stream:
 
 ```sh
