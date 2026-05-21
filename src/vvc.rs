@@ -471,6 +471,20 @@ struct ToyEntropySchedule {
     tokens: Vec<ToyEntropyToken>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToyCodingTreeStep {
+    LumaTransformUnit {
+        width: usize,
+        height: usize,
+    },
+    ChromaTransformUnit {
+        x: usize,
+        y: usize,
+        cb_coded: bool,
+        cr_coded: bool,
+    },
+}
+
 impl VvcNalUnit {
     pub fn eos() -> Self {
         Self {
@@ -1049,6 +1063,7 @@ fn toy_entropy_schedule(
     geometry: ToyVideoGeometry,
     color: Toy4x4QuantizedColor,
 ) -> ToyEntropySchedule {
+    let _syntax_plan = toy_coding_tree_plan(geometry);
     let kind = if toy_entropy_tokens_mapped_to_vtm_geometry(geometry) {
         ToyEntropyScheduleKind::VtmMapped8x8
     } else {
@@ -1059,6 +1074,30 @@ fn toy_entropy_schedule(
         kind,
         tokens: toy_8x8_mapped_entropy_tokens(color),
     }
+}
+
+fn toy_coding_tree_plan(geometry: ToyVideoGeometry) -> Vec<ToyCodingTreeStep> {
+    let mut steps = Vec::new();
+    steps.push(ToyCodingTreeStep::LumaTransformUnit {
+        width: geometry.coded_width(),
+        height: geometry.coded_height(),
+    });
+
+    let chroma_width = geometry.coded_width() / 2;
+    let chroma_height = geometry.coded_height() / 2;
+    for y in (0..chroma_height).step_by(4) {
+        for x in (0..chroma_width).step_by(4) {
+            let first = x == 0 && y == 0;
+            steps.push(ToyCodingTreeStep::ChromaTransformUnit {
+                x,
+                y,
+                cb_coded: first && geometry.coded_width() <= 8,
+                cr_coded: first,
+            });
+        }
+    }
+
+    steps
 }
 
 fn toy_8x8_mapped_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<ToyEntropyToken> {
@@ -2205,6 +2244,66 @@ mod tests {
         );
         assert_eq!(capacity.kind, ToyEntropyScheduleKind::CapacityPlaceholder);
         assert_eq!(capacity.tokens, mapped.tokens);
+    }
+
+    #[test]
+    fn toy_coding_tree_plan_scales_chroma_blocks_with_geometry() {
+        let mapped_8x8 = toy_coding_tree_plan(ToyVideoGeometry {
+            width: 8,
+            height: 8,
+        });
+        assert_eq!(
+            mapped_8x8,
+            vec![
+                ToyCodingTreeStep::LumaTransformUnit {
+                    width: 8,
+                    height: 8
+                },
+                ToyCodingTreeStep::ChromaTransformUnit {
+                    x: 0,
+                    y: 0,
+                    cb_coded: true,
+                    cr_coded: true
+                }
+            ]
+        );
+
+        let capacity_16x16 = toy_coding_tree_plan(ToyVideoGeometry {
+            width: 16,
+            height: 16,
+        });
+        assert_eq!(capacity_16x16.len(), 5);
+        assert_eq!(
+            capacity_16x16[0],
+            ToyCodingTreeStep::LumaTransformUnit {
+                width: 16,
+                height: 16
+            }
+        );
+        assert_eq!(
+            capacity_16x16[1],
+            ToyCodingTreeStep::ChromaTransformUnit {
+                x: 0,
+                y: 0,
+                cb_coded: false,
+                cr_coded: true
+            }
+        );
+        assert_eq!(
+            capacity_16x16[4],
+            ToyCodingTreeStep::ChromaTransformUnit {
+                x: 4,
+                y: 4,
+                cb_coded: false,
+                cr_coded: false
+            }
+        );
+
+        let capacity_64x64 = toy_coding_tree_plan(ToyVideoGeometry {
+            width: 64,
+            height: 64,
+        });
+        assert_eq!(capacity_64x64.len(), 65);
     }
 
     #[test]
