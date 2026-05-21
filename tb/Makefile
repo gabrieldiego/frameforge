@@ -10,7 +10,9 @@ endif
 
 RTL_DIR := ../rtl
 DUT ?= intra
-SIM_BUILD ?= sim_build/$(DUT)
+RTL_SAMPLE_BITS ?= 8
+SIM_BUILD ?= sim_build/$(DUT)-$(RTL_SAMPLE_BITS)b
+export RTL_SAMPLE_BITS
 
 ifeq ($(DUT),encoder)
 VERILOG_SOURCES := $(RTL_DIR)/ff_min_encoder_stub.sv
@@ -31,6 +33,11 @@ COCOTB_TEST_MODULES := test_intra_pred_stub
 endif
 
 COMPILE_ARGS += -g2012
+ifeq ($(DUT),vvc-toy4x4)
+ifeq ($(SIM),icarus)
+COMPILE_ARGS += -P$(TOPLEVEL).SAMPLE_BITS=$(RTL_SAMPLE_BITS)
+endif
+endif
 
 COCOTB_MAKEFILES := $(shell $(COCOTB_CONFIG) --makefiles 2>/dev/null)
 

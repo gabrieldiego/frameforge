@@ -1,6 +1,8 @@
 `timescale 1ns/1ps
 
-module ff_vvc_toy4x4_encoder (
+module ff_vvc_toy4x4_encoder #(
+  parameter int SAMPLE_BITS = 8
+) (
   input  logic       clk,
   input  logic       rst_n,
   input  logic       start,
@@ -9,13 +11,13 @@ module ff_vvc_toy4x4_encoder (
 
   input  logic       s_axis_valid,
   output logic       s_axis_ready,
-  input  logic [7:0] s_axis_data,
+  input  logic [SAMPLE_BITS - 1:0] s_axis_data,
   input  logic       s_axis_last,
   output logic       input_error,
   output logic       sampled_color_valid,
-  output logic [7:0] sampled_y,
-  output logic [7:0] sampled_u,
-  output logic [7:0] sampled_v,
+  output logic [SAMPLE_BITS - 1:0] sampled_y,
+  output logic [SAMPLE_BITS - 1:0] sampled_u,
+  output logic [SAMPLE_BITS - 1:0] sampled_v,
 
   output logic       m_axis_valid,
   input  logic       m_axis_ready,
@@ -37,7 +39,7 @@ module ff_vvc_toy4x4_encoder (
   logic [7:0] input_count_q;
   logic [7:0] input_len_q;
   logic       input_active_q;
-  logic [127:0] luma_samples_q;
+  logic [(SAMPLE_BITS * 16) - 1:0] luma_samples_q;
   logic [4:0] quant_luma_rem_q;
   logic [4:0] quant_chroma_rem_q;
   logic [119:0] quant_luma_ac_tokens_q;
@@ -47,7 +49,9 @@ module ff_vvc_toy4x4_encoder (
 
   assign busy = input_active_q || m_axis_valid || (index_q != 0);
 
-  ff_residual_stub residual_block (
+  ff_residual_stub #(
+    .SAMPLE_BITS(SAMPLE_BITS)
+  ) residual_block (
     .luma_samples(luma_samples_q),
     .quant_luma_rem(residual_quant_luma_rem),
     .quant_luma_ac_tokens(residual_quant_luma_ac_tokens),
@@ -98,7 +102,7 @@ module ff_vvc_toy4x4_encoder (
           sampled_y <= s_axis_data;
         end
         if (input_count_q < 8'd16) begin
-          luma_samples_q[(15 - input_count_q[3:0]) * 8 +: 8] <= s_axis_data;
+          luma_samples_q[(15 - input_count_q[3:0]) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
         end
         if (input_count_q == 8'd16) begin
           quant_luma_rem_q <= residual_quant_luma_rem;
@@ -184,17 +188,27 @@ module ff_vvc_toy4x4_encoder (
   endfunction
 
   function automatic logic [4:0] quant_chroma_rem_from_samples(
-    input logic [7:0] u,
-    input logic [7:0] v
+    input logic [SAMPLE_BITS - 1:0] u,
+    input logic [SAMPLE_BITS - 1:0] v
   );
     begin
-      quant_chroma_rem_from_samples = (u == 8'd0 && v == 8'd0) ? 5'd6 : 5'd0;
+      quant_chroma_rem_from_samples = (sample_to_8bit(u) == 8'd0 && sample_to_8bit(v) == 8'd0) ? 5'd6 : 5'd0;
+    end
+  endfunction
+
+  function automatic logic [7:0] sample_to_8bit(input logic [SAMPLE_BITS - 1:0] sample);
+    begin
+      if (SAMPLE_BITS <= 8) begin
+        sample_to_8bit = sample[7:0];
+      end else begin
+        sample_to_8bit = sample >> (SAMPLE_BITS - 8);
+      end
     end
   endfunction
 
   function automatic logic [7:0] color_filler_count();
     begin
-      color_filler_count = (sampled_y + sampled_u + sampled_v) & 8'h0f;
+      color_filler_count = (sample_to_8bit(sampled_y) + sample_to_8bit(sampled_u) + sample_to_8bit(sampled_v)) & 8'h0f;
     end
   endfunction
 

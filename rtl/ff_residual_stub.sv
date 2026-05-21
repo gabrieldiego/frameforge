@@ -1,7 +1,9 @@
 `timescale 1ns/1ps
 
-module ff_residual_stub (
-  input  logic [127:0] luma_samples,
+module ff_residual_stub #(
+  parameter int SAMPLE_BITS = 8
+) (
+  input  logic [(SAMPLE_BITS * 16) - 1:0] luma_samples,
   output logic [4:0]   quant_luma_rem,
   output logic [119:0] quant_luma_ac_tokens,
   output logic [7:0]   recon_luma_sample
@@ -17,27 +19,29 @@ module ff_residual_stub (
   assign quantized_dc_coeff = reconstructed_dc_coeff_from_rem(quant_luma_rem);
   assign recon_luma_sample = inverse_luma_dc_coeff(quantized_dc_coeff);
 
-  function automatic logic [7:0] forward_luma_dc_sample(input logic [127:0] samples);
+  function automatic logic [7:0] forward_luma_dc_sample(
+    input logic [(SAMPLE_BITS * 16) - 1:0] samples
+  );
     logic [12:0] sum;
     begin
       // Current token generation still emits only the DC coefficient, but the
       // residual block consumes all luma samples so SW and RTL share the same
       // first transform boundary.
       sum =
-        {5'd0, samples[127:120]} + {5'd0, samples[119:112]} +
-        {5'd0, samples[111:104]} + {5'd0, samples[103:96]}  +
-        {5'd0, samples[95:88]}   + {5'd0, samples[87:80]}   +
-        {5'd0, samples[79:72]}   + {5'd0, samples[71:64]}   +
-        {5'd0, samples[63:56]}   + {5'd0, samples[55:48]}   +
-        {5'd0, samples[47:40]}   + {5'd0, samples[39:32]}   +
-        {5'd0, samples[31:24]}   + {5'd0, samples[23:16]}   +
-        {5'd0, samples[15:8]}    + {5'd0, samples[7:0]};
+        {5'd0, sample_at(samples, 4'd0)}  + {5'd0, sample_at(samples, 4'd1)}  +
+        {5'd0, sample_at(samples, 4'd2)}  + {5'd0, sample_at(samples, 4'd3)}  +
+        {5'd0, sample_at(samples, 4'd4)}  + {5'd0, sample_at(samples, 4'd5)}  +
+        {5'd0, sample_at(samples, 4'd6)}  + {5'd0, sample_at(samples, 4'd7)}  +
+        {5'd0, sample_at(samples, 4'd8)}  + {5'd0, sample_at(samples, 4'd9)}  +
+        {5'd0, sample_at(samples, 4'd10)} + {5'd0, sample_at(samples, 4'd11)} +
+        {5'd0, sample_at(samples, 4'd12)} + {5'd0, sample_at(samples, 4'd13)} +
+        {5'd0, sample_at(samples, 4'd14)} + {5'd0, sample_at(samples, 4'd15)};
       forward_luma_dc_sample = (sum + 13'd8) >> 4;
     end
   endfunction
 
   function automatic logic [119:0] quant_ac_tokens(
-    input logic [127:0] samples,
+    input logic [(SAMPLE_BITS * 16) - 1:0] samples,
     input logic [7:0]   dc
   );
     logic [119:0] tokens;
@@ -51,9 +55,18 @@ module ff_residual_stub (
     end
   endfunction
 
-  function automatic logic [7:0] sample_at(input logic [127:0] samples, input logic [3:0] index);
+  function automatic logic [7:0] sample_at(
+    input logic [(SAMPLE_BITS * 16) - 1:0] samples,
+    input logic [3:0] index
+  );
+    logic [SAMPLE_BITS - 1:0] raw;
     begin
-      sample_at = samples[(15 - index) * 8 +: 8];
+      raw = samples[(15 - index) * SAMPLE_BITS +: SAMPLE_BITS];
+      if (SAMPLE_BITS <= 8) begin
+        sample_at = raw[7:0];
+      end else begin
+        sample_at = raw >> (SAMPLE_BITS - 8);
+      end
     end
   endfunction
 

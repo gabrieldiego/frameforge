@@ -4,7 +4,44 @@ use std::str::FromStr;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PixelFormat {
     Yuv420p8,
+    Yuv420p10,
+    Yuv420p12,
+    Yuv420p16,
     Gray8,
+    Gray10,
+    Gray12,
+    Gray16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SampleBitDepth {
+    Eight,
+    Ten,
+    Twelve,
+    Sixteen,
+}
+
+impl SampleBitDepth {
+    pub fn bits(self) -> u8 {
+        match self {
+            Self::Eight => 8,
+            Self::Ten => 10,
+            Self::Twelve => 12,
+            Self::Sixteen => 16,
+        }
+    }
+
+    pub fn bytes_per_sample(self) -> usize {
+        if self.bits() <= 8 {
+            1
+        } else {
+            2
+        }
+    }
+
+    pub fn max_sample(self) -> u16 {
+        (1u32.checked_shl(self.bits() as u32).unwrap() - 1) as u16
+    }
 }
 
 impl FromStr for PixelFormat {
@@ -13,9 +50,15 @@ impl FromStr for PixelFormat {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "yuv420p8" | "i420" => Ok(Self::Yuv420p8),
+            "yuv420p10" | "yuv420p10le" | "i010" => Ok(Self::Yuv420p10),
+            "yuv420p12" | "yuv420p12le" | "i012" => Ok(Self::Yuv420p12),
+            "yuv420p16" | "yuv420p16le" | "i016" => Ok(Self::Yuv420p16),
             "gray8" | "y8" => Ok(Self::Gray8),
+            "gray10" | "gray10le" | "y10" | "y10le" => Ok(Self::Gray10),
+            "gray12" | "gray12le" | "y12" | "y12le" => Ok(Self::Gray12),
+            "gray16" | "gray16le" | "y16" | "y16le" => Ok(Self::Gray16),
             other => Err(format!(
-                "unsupported format '{other}'; supported formats: yuv420p8, gray8"
+                "unsupported format '{other}'; supported formats: yuv420p8/10/12/16le, gray8/10/12/16le"
             )),
         }
     }
@@ -25,8 +68,36 @@ impl fmt::Display for PixelFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Yuv420p8 => f.write_str("yuv420p8"),
+            Self::Yuv420p10 => f.write_str("yuv420p10le"),
+            Self::Yuv420p12 => f.write_str("yuv420p12le"),
+            Self::Yuv420p16 => f.write_str("yuv420p16le"),
             Self::Gray8 => f.write_str("gray8"),
+            Self::Gray10 => f.write_str("gray10le"),
+            Self::Gray12 => f.write_str("gray12le"),
+            Self::Gray16 => f.write_str("gray16le"),
         }
+    }
+}
+
+impl PixelFormat {
+    pub fn bit_depth(self) -> SampleBitDepth {
+        match self {
+            Self::Yuv420p8 | Self::Gray8 => SampleBitDepth::Eight,
+            Self::Yuv420p10 | Self::Gray10 => SampleBitDepth::Ten,
+            Self::Yuv420p12 | Self::Gray12 => SampleBitDepth::Twelve,
+            Self::Yuv420p16 | Self::Gray16 => SampleBitDepth::Sixteen,
+        }
+    }
+
+    pub fn bytes_per_sample(self) -> usize {
+        self.bit_depth().bytes_per_sample()
+    }
+
+    pub fn is_yuv420(self) -> bool {
+        matches!(
+            self,
+            Self::Yuv420p8 | Self::Yuv420p10 | Self::Yuv420p12 | Self::Yuv420p16
+        )
     }
 }
 
@@ -54,9 +125,19 @@ impl Picture {
 
     pub fn checked_len(width: usize, height: usize, format: PixelFormat) -> Option<usize> {
         let luma = width.checked_mul(height)?;
+        let bytes_per_sample = format.bytes_per_sample();
         match format {
-            PixelFormat::Yuv420p8 => luma.checked_mul(3)?.checked_div(2),
-            PixelFormat::Gray8 => Some(luma),
+            PixelFormat::Yuv420p8
+            | PixelFormat::Yuv420p10
+            | PixelFormat::Yuv420p12
+            | PixelFormat::Yuv420p16 => luma
+                .checked_mul(3)?
+                .checked_div(2)?
+                .checked_mul(bytes_per_sample),
+            PixelFormat::Gray8
+            | PixelFormat::Gray10
+            | PixelFormat::Gray12
+            | PixelFormat::Gray16 => luma.checked_mul(bytes_per_sample),
         }
     }
 
@@ -64,8 +145,8 @@ impl Picture {
         if width == 0 || height == 0 {
             return Err("picture width and height must be non-zero".to_string());
         }
-        if matches!(format, PixelFormat::Yuv420p8) && (width % 2 != 0 || height % 2 != 0) {
-            return Err("yuv420p8 requires even width and height".to_string());
+        if format.is_yuv420() && (width % 2 != 0 || height % 2 != 0) {
+            return Err("yuv420p formats require even width and height".to_string());
         }
         Self::checked_len(width, height, format)
             .ok_or_else(|| "picture dimensions overflow addressable memory".to_string())?;
@@ -93,5 +174,43 @@ impl ReconstructionBuffer {
 
     pub fn as_slice(&self) -> &[u8] {
         &self.samples
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_planar_yuv420_bit_depth_formats() {
+        assert_eq!("yuv420p8".parse::<PixelFormat>(), Ok(PixelFormat::Yuv420p8));
+        assert_eq!(
+            "yuv420p10le".parse::<PixelFormat>(),
+            Ok(PixelFormat::Yuv420p10)
+        );
+        assert_eq!(
+            "yuv420p12".parse::<PixelFormat>(),
+            Ok(PixelFormat::Yuv420p12)
+        );
+        assert_eq!("i016".parse::<PixelFormat>(), Ok(PixelFormat::Yuv420p16));
+    }
+
+    #[test]
+    fn computes_high_bit_depth_frame_lengths() {
+        assert_eq!(Picture::expected_len(4, 4, PixelFormat::Yuv420p8), 24);
+        assert_eq!(Picture::expected_len(4, 4, PixelFormat::Yuv420p10), 48);
+        assert_eq!(Picture::expected_len(4, 4, PixelFormat::Yuv420p12), 48);
+        assert_eq!(Picture::expected_len(4, 4, PixelFormat::Yuv420p16), 48);
+        assert_eq!(Picture::expected_len(4, 4, PixelFormat::Gray16), 32);
+    }
+
+    #[test]
+    fn exposes_format_bit_depth_properties() {
+        assert_eq!(PixelFormat::Yuv420p8.bit_depth().bits(), 8);
+        assert_eq!(PixelFormat::Yuv420p10.bit_depth().bits(), 10);
+        assert_eq!(PixelFormat::Yuv420p12.bit_depth().max_sample(), 4095);
+        assert_eq!(PixelFormat::Yuv420p16.bytes_per_sample(), 2);
+        assert!(PixelFormat::Yuv420p16.is_yuv420());
+        assert!(!PixelFormat::Gray16.is_yuv420());
     }
 }

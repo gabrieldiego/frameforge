@@ -145,9 +145,9 @@ fn run_vvc_skeleton(cli: VvcSkeletonCli) -> Result<(), String> {
 }
 
 fn run_vvc_toy_4x4_video(cli: VvcToy4x4VideoCli) -> Result<(), String> {
-    if cli.width != 4 || cli.height != 4 || cli.format != PixelFormat::Yuv420p8 {
+    if cli.width != 4 || cli.height != 4 || !cli.format.is_yuv420() {
         return Err(format!(
-            "toy VVC encoder currently supports only 4x4 yuv420p8 input; got {}x{} {}",
+            "toy VVC encoder currently supports only 4x4 yuv420p input; got {}x{} {}",
             cli.width, cli.height, cli.format
         ));
     }
@@ -155,7 +155,7 @@ fn run_vvc_toy_4x4_video(cli: VvcToy4x4VideoCli) -> Result<(), String> {
     let params = frameforge::vvc::Toy4x4EncodeParams { frames: cli.frames };
     let data = fs::read(&cli.input)
         .map_err(|err| format!("failed to read input '{}': {err}", cli.input.display()))?;
-    let bytes = frameforge::vvc::toy_4x4_yuv420p8_annex_b_from_input(&data, params)?;
+    let bytes = frameforge::vvc::toy_4x4_yuv420p_annex_b_from_input(&data, params, cli.format)?;
     fs::write(&cli.output, bytes)
         .map_err(|err| format!("failed to write output '{}': {err}", cli.output.display()))?;
     Ok(())
@@ -354,7 +354,7 @@ fn parse_usize(value: String, flag: &str) -> Result<usize, String> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  frameforge encode --input <raw> --width <w> --height <h> --format gray8 --output <ffbs> [--trace <jsonl>]\n  frameforge decode --input <ffbs> --output <raw>\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-skeleton --output <vvc>\n  frameforge vvc-toy-4x4-video --input <yuv> --output <vvc> [--frames 1|2] [--width 4 --height 4 --format yuv420p8]\n  frameforge vvc-list --input <vvc>\n\nThe encode subcommand is optional for compatibility."
+    "usage:\n  frameforge encode --input <raw> --width <w> --height <h> --format gray8 --output <ffbs> [--trace <jsonl>]\n  frameforge decode --input <ffbs> --output <raw>\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-skeleton --output <vvc>\n  frameforge vvc-toy-4x4-video --input <yuv> --output <vvc> [--frames 1|2] [--width 4 --height 4 --format yuv420p8|yuv420p10le|yuv420p12le|yuv420p16le]\n  frameforge vvc-list --input <vvc>\n\nThe encode subcommand is optional for compatibility."
 }
 
 #[cfg(test)]

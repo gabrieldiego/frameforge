@@ -6,4 +6,4 @@ pub mod trace;
 pub mod vvc;
 
 pub use encoder::{Encoder, EncoderParams, MinimalEncoder, PlaceholderEncoder};
-pub use picture::{Picture, PixelFormat};
+pub use picture::{Picture, PixelFormat, SampleBitDepth};

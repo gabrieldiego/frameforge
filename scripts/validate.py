@@ -16,6 +16,19 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_DIR = Path("verification/generated/checksums")
 SUPPORTED_FORMAT = "yuv420p8"
+SUPPORTED_FORMATS = {
+    "i420": "yuv420p8",
+    "yuv420p8": "yuv420p8",
+    "yuv420p10": "yuv420p10le",
+    "yuv420p10le": "yuv420p10le",
+    "i010": "yuv420p10le",
+    "yuv420p12": "yuv420p12le",
+    "yuv420p12le": "yuv420p12le",
+    "i012": "yuv420p12le",
+    "yuv420p16": "yuv420p16le",
+    "yuv420p16le": "yuv420p16le",
+    "i016": "yuv420p16le",
+}
 
 
 @dataclass(frozen=True)
@@ -57,6 +70,7 @@ def main() -> int:
     sw_internal_recon = out_dir / f"{stem}_software_internal_rec.yuv"
     rtl_internal_recon = out_dir / f"{stem}_rtl_internal_rec.yuv"
     vtm_recon = out_dir / f"{stem}_vtm_from_rtl_dec.yuv"
+    rtl_input_path = normalized_rtl_input(input_path, info, out_dir, stem)
 
     sw_internal_recon.write_bytes(software_internal_reconstruction(input_path, info))
 
@@ -84,11 +98,11 @@ def main() -> int:
 
     env = os.environ.copy()
     if info.frames == 1:
-        env["FRAMEFORGE_RTL_TOY4X4_INPUT_1F"] = str(input_path)
+        env["FRAMEFORGE_RTL_TOY4X4_INPUT_1F"] = str(rtl_input_path)
         env["FRAMEFORGE_RTL_TOY4X4_OUT_1F"] = str(rtl_bitstream)
         env["FRAMEFORGE_RTL_TOY4X4_RECON_OUT_1F"] = str(rtl_internal_recon)
     else:
-        env["FRAMEFORGE_RTL_TOY4X4_INPUT"] = str(input_path)
+        env["FRAMEFORGE_RTL_TOY4X4_INPUT"] = str(rtl_input_path)
         env["FRAMEFORGE_RTL_TOY4X4_OUT"] = str(rtl_bitstream)
         env["FRAMEFORGE_RTL_TOY4X4_RECON_OUT"] = str(rtl_internal_recon)
     run(["make", "rtl-test", "DUT=vvc-toy4x4"], env=env)
@@ -173,7 +187,7 @@ def infer_from_filename(name: str) -> InputInfo:
     pattern = re.compile(
         r"(?P<width>\d+)x(?P<height>\d+)"
         r"(?:[_-](?P<frames>\d+)f)?"
-        r"(?:[_-](?P<fmt>yuv420p8|i420))?",
+        r"(?:[_-](?P<fmt>yuv420p8|i420|yuv420p10le?|i010|yuv420p12le?|i012|yuv420p16le?|i016))?",
         re.IGNORECASE,
     )
     match = pattern.search(name)
@@ -189,14 +203,17 @@ def infer_from_filename(name: str) -> InputInfo:
 
 
 def validate_supported_input(input_path: Path, info: InputInfo) -> None:
-    if normalize_format(info.fmt) != SUPPORTED_FORMAT:
-        raise ValueError(f"unsupported format {info.fmt}; only {SUPPORTED_FORMAT} is supported")
+    if normalize_format(info.fmt) not in SUPPORTED_FORMATS.values():
+        raise ValueError(
+            f"unsupported format {info.fmt}; supported toy formats are "
+            "yuv420p8, yuv420p10le, yuv420p12le, and yuv420p16le"
+        )
     if info.width != 4 or info.height != 4:
         raise ValueError("toy VVC validation currently supports only 4x4 input")
     if info.frames not in (1, 2):
         raise ValueError("toy VVC validation currently supports only 1 or 2 frames")
 
-    expected_len = info.width * info.height * 3 // 2 * info.frames
+    expected_len = frame_len(info) * info.frames
     data = input_path.read_bytes()
     if len(data) != expected_len:
         raise ValueError(
@@ -206,9 +223,7 @@ def validate_supported_input(input_path: Path, info: InputInfo) -> None:
 
 def normalize_format(fmt: str) -> str:
     value = fmt.lower()
-    if value == "i420":
-        return SUPPORTED_FORMAT
-    return value
+    return SUPPORTED_FORMATS.get(value, value)
 
 
 def run(cmd: list[str], env: dict[str, str] | None = None) -> None:
@@ -224,9 +239,9 @@ def sha256(path: Path) -> str:
 
 
 def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes:
-    data = input_path.read_bytes()
-    y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(data[:16])))
-    chroma = reconstructed_chroma(data[16], data[20])
+    frame = normalized_first_frame(input_path, info)
+    y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(frame[:16])))
+    chroma = reconstructed_chroma(frame[16], frame[20])
     # This is the reconstruction of the emitted toy VVC bitstream, not the
     # original input. Keep this matched to VTM decode output after quantization.
     frame = bytes([y] * 16 + [chroma] * 4 + [chroma] * 4)
@@ -251,9 +266,8 @@ def reconstructed_chroma(u: int, v: int) -> int:
 
 
 def input_has_nonzero_chroma(input_path: Path, info: InputInfo) -> bool:
-    frame_len = info.width * info.height * 3 // 2
+    first_frame = normalized_first_frame(input_path, info)
     luma_len = info.width * info.height
-    first_frame = input_path.read_bytes()[:frame_len]
     return any(sample != 0 for sample in first_frame[luma_len:])
 
 
@@ -264,6 +278,62 @@ def validate_decoded_non_monochrome(path: Path, info: InputInfo) -> None:
     first_frame_chroma = data[luma_len : luma_len + (chroma_len * 2)]
     if not any(sample != 0 for sample in first_frame_chroma):
         raise SystemExit("FAIL: VTM reconstruction has no decoder-visible chroma")
+
+
+def normalized_rtl_input(input_path: Path, info: InputInfo, out_dir: Path, stem: str) -> Path:
+    if normalize_format(info.fmt) == SUPPORTED_FORMAT:
+        return input_path
+
+    out = out_dir / f"{stem}_rtl_input_yuv420p8.yuv"
+    out.write_bytes(normalized_input(input_path, info))
+    return out
+
+
+def normalized_input(input_path: Path, info: InputInfo) -> bytes:
+    data = input_path.read_bytes()
+    src_frame_len = frame_len(info)
+    out = bytearray()
+    for frame_idx in range(info.frames):
+        frame = data[frame_idx * src_frame_len : (frame_idx + 1) * src_frame_len]
+        out.extend(normalize_frame_bytes(frame, info))
+    return bytes(out)
+
+
+def normalized_first_frame(input_path: Path, info: InputInfo) -> bytes:
+    return normalize_frame_bytes(input_path.read_bytes()[: frame_len(info)], info)
+
+
+def normalize_frame_bytes(frame: bytes, info: InputInfo) -> bytes:
+    bit_depth = format_bit_depth(info.fmt)
+    if bit_depth == 8:
+        return frame
+
+    out = bytearray()
+    for offset in range(0, len(frame), 2):
+        sample = int.from_bytes(frame[offset : offset + 2], "little")
+        out.append(sample >> (bit_depth - 8))
+    return bytes(out)
+
+
+def frame_len(info: InputInfo) -> int:
+    return info.width * info.height * 3 // 2 * bytes_per_sample(info.fmt)
+
+
+def bytes_per_sample(fmt: str) -> int:
+    return 1 if format_bit_depth(fmt) == 8 else 2
+
+
+def format_bit_depth(fmt: str) -> int:
+    normalized = normalize_format(fmt)
+    if normalized == "yuv420p8":
+        return 8
+    if normalized == "yuv420p10le":
+        return 10
+    if normalized == "yuv420p12le":
+        return 12
+    if normalized == "yuv420p16le":
+        return 16
+    raise ValueError(f"unsupported format {fmt}")
 
 
 def quantized_luma(sample: int) -> int:

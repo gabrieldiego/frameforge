@@ -33,6 +33,25 @@ def input_data(frames):
     return solid_yuv420p8(0, 0, 0, frames)
 
 
+def rtl_sample_bits():
+    return int(os.environ.get("RTL_SAMPLE_BITS", "8"))
+
+
+def rtl_input_samples(data):
+    bits = rtl_sample_bits()
+    if bits <= 8:
+        return list(data)
+    return [sample << (bits - 8) for sample in data]
+
+
+def packed_rtl_luma_value(data):
+    bits = rtl_sample_bits()
+    value = 0
+    for sample in rtl_input_samples(data[:16]):
+        value = (value << bits) | sample
+    return value
+
+
 def quantized_luma(sample):
     return min(
         (((16 - rem) * 114 + 8) // 16 for rem in range(17)),
@@ -102,12 +121,13 @@ def software_stream(frames, data):
 
 
 async def feed_input(dut, data):
-    for index, sample in enumerate(data):
+    samples = rtl_input_samples(data)
+    for index, sample in enumerate(samples):
         while dut.s_axis_ready.value != 1:
             await RisingEdge(dut.clk)
         dut.s_axis_valid.value = 1
         dut.s_axis_data.value = sample
-        dut.s_axis_last.value = index == len(data) - 1
+        dut.s_axis_last.value = index == len(samples) - 1
         await RisingEdge(dut.clk)
 
     dut.s_axis_valid.value = 0
@@ -140,10 +160,11 @@ async def collect_stream(dut, frames):
     await ReadOnly()
     assert dut.input_error.value == 0
     assert dut.sampled_color_valid.value == 1
-    assert int(dut.sampled_y.value) == data[0]
-    assert int(dut.sampled_u.value) == data[16]
-    assert int(dut.sampled_v.value) == data[20]
-    assert int(dut.luma_samples_q.value) == int.from_bytes(data[:16], "big")
+    samples = rtl_input_samples(data)
+    assert int(dut.sampled_y.value) == samples[0]
+    assert int(dut.sampled_u.value) == samples[16]
+    assert int(dut.sampled_v.value) == samples[20]
+    assert int(dut.luma_samples_q.value) == packed_rtl_luma_value(data)
     assert int(dut.quant_luma_ac_tokens_q.value) == int.from_bytes(
         quant_ac_tokens(data[:16]), "big"
     )
@@ -188,10 +209,11 @@ async def drain_sampled_color(dut, frames, y, u, v):
     await ReadOnly()
     assert dut.input_error.value == 0
     assert dut.sampled_color_valid.value == 1
-    assert int(dut.sampled_y.value) == y
-    assert int(dut.sampled_u.value) == u
-    assert int(dut.sampled_v.value) == v
-    assert int(dut.luma_samples_q.value) == int.from_bytes(data[:16], "big")
+    samples = rtl_input_samples(data)
+    assert int(dut.sampled_y.value) == samples[0]
+    assert int(dut.sampled_u.value) == samples[16]
+    assert int(dut.sampled_v.value) == samples[20]
+    assert int(dut.luma_samples_q.value) == packed_rtl_luma_value(data)
     assert int(dut.quant_luma_ac_tokens_q.value) == int.from_bytes(
         quant_ac_tokens(data[:16]), "big"
     )

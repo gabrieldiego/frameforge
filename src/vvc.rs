@@ -421,7 +421,15 @@ pub fn toy_4x4_yuv420p8_annex_b_from_input(
     input: &[u8],
     params: Toy4x4EncodeParams,
 ) -> Result<Vec<u8>, String> {
-    let frame = sample_toy_4x4_yuv420p8_frame(input, params)?;
+    toy_4x4_yuv420p_annex_b_from_input(input, params, PixelFormat::Yuv420p8)
+}
+
+pub fn toy_4x4_yuv420p_annex_b_from_input(
+    input: &[u8],
+    params: Toy4x4EncodeParams,
+    format: PixelFormat,
+) -> Result<Vec<u8>, String> {
+    let frame = sample_toy_4x4_yuv420p_frame(input, params, format)?;
     toy_4x4_yuv420p8_annex_b(params, frame)
 }
 
@@ -429,19 +437,25 @@ pub fn sample_toy_4x4_first_yuv420p8(
     input: &[u8],
     params: Toy4x4EncodeParams,
 ) -> Result<Toy4x4SampledColor, String> {
-    Ok(sample_toy_4x4_yuv420p8_frame(input, params)?.sampled_color())
+    Ok(sample_toy_4x4_yuv420p_frame(input, params, PixelFormat::Yuv420p8)?.sampled_color())
 }
 
-fn sample_toy_4x4_yuv420p8_frame(
+fn sample_toy_4x4_yuv420p_frame(
     input: &[u8],
     params: Toy4x4EncodeParams,
+    format: PixelFormat,
 ) -> Result<Toy4x4SampledFrame, String> {
     validate_toy_4x4_frame_count(params)?;
-    let frame_len = Picture::expected_len(4, 4, PixelFormat::Yuv420p8);
+    if !format.is_yuv420() {
+        return Err(format!(
+            "toy VVC input expects yuv420p format; got {format}"
+        ));
+    }
+    let frame_len = Picture::expected_len(4, 4, format);
     let expected_len = frame_len * params.frames;
     if input.len() != expected_len {
         return Err(format!(
-            "toy VVC input size mismatch: got {} bytes, expected {} for 4x4 yuv420p8 with {} frame(s)",
+            "toy VVC input size mismatch: got {} bytes, expected {} for 4x4 {format} with {} frame(s)",
             input.len(),
             expected_len,
             params.frames
@@ -449,13 +463,29 @@ fn sample_toy_4x4_yuv420p8_frame(
     }
 
     let mut luma = [0; 16];
-    luma.copy_from_slice(&input[0..16]);
+    let bytes_per_sample = format.bytes_per_sample();
+    for (idx, sample) in luma.iter_mut().enumerate() {
+        *sample = read_toy_sample_as_8bit(input, idx * bytes_per_sample, format);
+    }
+
+    let u_offset = 16 * bytes_per_sample;
+    let v_offset = u_offset + (4 * bytes_per_sample);
 
     Ok(Toy4x4SampledFrame {
         luma,
-        u: input[16],
-        v: input[20],
+        u: read_toy_sample_as_8bit(input, u_offset, format),
+        v: read_toy_sample_as_8bit(input, v_offset, format),
     })
+}
+
+fn read_toy_sample_as_8bit(input: &[u8], byte_offset: usize, format: PixelFormat) -> u8 {
+    let bit_depth = format.bit_depth().bits();
+    if bit_depth <= 8 {
+        return input[byte_offset];
+    }
+
+    let value = u16::from_le_bytes([input[byte_offset], input[byte_offset + 1]]);
+    (value >> (bit_depth - 8)) as u8
 }
 
 pub fn quantize_toy_4x4_color(color: Toy4x4SampledColor) -> Toy4x4QuantizedColor {
@@ -1863,6 +1893,31 @@ mod tests {
     }
 
     #[test]
+    fn toy_4x4_input_path_accepts_wider_yuv420p_formats() {
+        let expected = toy_4x4_yuv420p8_annex_b_from_input(
+            &solid_yuv420p8(65, 128, 192, 1),
+            Toy4x4EncodeParams { frames: 1 },
+        )
+        .unwrap();
+        for (format, bit_depth) in [
+            (PixelFormat::Yuv420p10, 10),
+            (PixelFormat::Yuv420p12, 12),
+            (PixelFormat::Yuv420p16, 16),
+        ] {
+            let input = solid_yuv420p_high(65, 128, 192, bit_depth, 1);
+            assert_eq!(
+                toy_4x4_yuv420p_annex_b_from_input(
+                    &input,
+                    Toy4x4EncodeParams { frames: 1 },
+                    format
+                )
+                .unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn toy_4x4_input_path_changes_bitstream_from_sampled_color() {
         let mut input = solid_yuv420p8(65, 128, 192, 2);
         input[1] = 0;
@@ -1898,6 +1953,17 @@ mod tests {
             out.extend(std::iter::repeat_n(y, 16));
             out.extend(std::iter::repeat_n(u, 4));
             out.extend(std::iter::repeat_n(v, 4));
+        }
+        out
+    }
+
+    fn solid_yuv420p_high(y: u8, u: u8, v: u8, bit_depth: u8, frames: usize) -> Vec<u8> {
+        let mut out = Vec::new();
+        for _ in 0..frames {
+            for sample in [y; 16].into_iter().chain([u; 4]).chain([v; 4]) {
+                let value = (sample as u16) << (bit_depth - 8);
+                out.extend(value.to_le_bytes());
+            }
         }
         out
     }

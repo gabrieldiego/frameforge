@@ -4,7 +4,7 @@ FrameForge is an open-source lab for video compression, bitstream generation, RT
 
 FrameForge is starting with a minimal VVC/H.266 encoder foundation, but the project is not limited to VVC, H.266, screen-content coding, FPGA work, or encoding only. The long-term goal is a practical research workspace for codec block experiments, software golden models, bitstream generation, RTL acceleration, FPGA-oriented blocks, encoder and decoder research, and hardware/software co-verification.
 
-Current status: skeleton, experimental, not production-ready, and not conforming. The current VVC toy path can generate a tiny 4x4 YUV420p8 stream for software/RTL/VTM validation. The stream bytes depend on the first sampled input Y/Cb/Cr values, and luma is quantized onto the small decoded ladder currently supported by the toy residual syntax. Chroma is still quantized to zero.
+Current status: skeleton, experimental, not production-ready, and not conforming. The current VVC toy path can generate a tiny 4x4 YUV420 stream for software/RTL/VTM validation from 8-, 10-, 12-, or 16-bit little-endian planar input. The stream bytes depend on the sampled input Y/Cb/Cr values after normalization into the current 8-bit toy syntax. Luma and chroma are quantized onto the small decoded values currently supported by the toy residual syntax.
 
 ## Near-Term Direction
 
@@ -116,7 +116,7 @@ cargo run -- vvc-toy-4x4-video --input /tmp/frameforge-toy-4x4-1f.yuv --frames 1
 make validate-decode BITSTREAM=/tmp/frameforge-toy-4x4-1f.vvc DECODED=/tmp/frameforge-toy-4x4-1f-dec.yuv
 ```
 
-This reads a 4x4 YUV420p8 input, samples the first Y/Cb/Cr values, and writes a generated Annex-B VVC stream for one IDR picture. FrameForge emits the sequence header, a color-derived Filler Data NAL unit, picture header, slice header, and toy residual packets internally. The decoded luma is the nearest value on the current toy quantization ladder; decoded chroma remains zero.
+This reads a 4x4 YUV420p8 input, samples the first Y/Cb/Cr values, and writes a generated Annex-B VVC stream for one IDR picture. FrameForge emits the sequence header, a color-derived Filler Data NAL unit, picture header, slice header, and toy residual packets internally. The decoded luma is the nearest value on the current toy quantization ladder; decoded chroma is currently quantized to the narrow set encoded by the toy syntax.
 
 Generate the toy 2-frame 4x4 VVC validation stream:
 
@@ -139,7 +139,7 @@ dd if=/dev/zero of=/tmp/frameforge/black_4x4_2f_yuv420p8.yuv bs=48 count=1
 make validate INPUT=/tmp/frameforge/black_4x4_2f_yuv420p8.yuv
 ```
 
-The validation command infers resolution, frame count, and format from names such as `black_4x4_2f_yuv420p8.yuv`. You can override them with `WIDTH=4 HEIGHT=4 FRAMES=2 FORMAT=yuv420p8`. It feeds the input YUV into both the software toy encoder and the RTL testbench, checks that their bitstreams match, taps the software and RTL internal reconstructions, decodes the RTL bitstream with VTM, and checks that the three reconstruction checksums match.
+The validation command infers resolution, frame count, and format from names such as `black_4x4_2f_yuv420p8.yuv` or `color_4x4_1f_yuv420p10le.yuv`. You can override them with `WIDTH=4 HEIGHT=4 FRAMES=2 FORMAT=yuv420p8`. Supported toy input formats are `yuv420p8`, `yuv420p10le`, `yuv420p12le`, and `yuv420p16le`, with `i420`, `i010`, `i012`, and `i016` aliases. The high-bit-depth paths normalize samples into the current 8-bit toy syntax before encoding. Validation feeds the input YUV into both the software toy encoder and the RTL testbench, checks that their bitstreams match, taps the software and RTL internal reconstructions, decodes the RTL bitstream with VTM, and checks that the three reconstruction checksums match.
 
 Internal reconstruction is always the reconstruction of the emitted bitstream. If a feature is not encoded into decoded picture syntax yet, the internal reconstruction must match what VTM decodes, not the intended input approximation.
 
@@ -177,6 +177,14 @@ Run the RTL generated VVC toy stream check:
 
 ```sh
 make rtl-test DUT=vvc-toy4x4
+```
+
+Run the same RTL toy encoder with wider input sample buses:
+
+```sh
+make rtl-test DUT=vvc-toy4x4 RTL_SAMPLE_BITS=10
+make rtl-test DUT=vvc-toy4x4 RTL_SAMPLE_BITS=12
+make rtl-test DUT=vvc-toy4x4 RTL_SAMPLE_BITS=16
 ```
 
 The Makefile uses variables so other simulators can be introduced later:
