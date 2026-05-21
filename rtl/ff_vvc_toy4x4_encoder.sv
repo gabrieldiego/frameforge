@@ -32,16 +32,19 @@ module ff_vvc_toy4x4_encoder #(
   localparam int SPS_PAYLOAD_LEN  = 31;
   localparam int PPS_PAYLOAD_LEN  = 14;
   localparam int COEFF_SIDEBAND_PAYLOAD_LEN = 23;
+  localparam int PALETTE_SIDEBAND_PAYLOAD_LEN = 17;
   localparam int NAL_OVERHEAD_LEN = 6;
   localparam int SPS_NAL_LEN = NAL_OVERHEAD_LEN + SPS_PAYLOAD_LEN;
   localparam int PPS_NAL_LEN = NAL_OVERHEAD_LEN + PPS_PAYLOAD_LEN;
   localparam int COEFF_SIDEBAND_NAL_LEN = NAL_OVERHEAD_LEN + COEFF_SIDEBAND_PAYLOAD_LEN;
+  localparam int PALETTE_SIDEBAND_NAL_LEN = NAL_OVERHEAD_LEN + PALETTE_SIDEBAND_PAYLOAD_LEN;
   localparam int PARAMETER_SET_LEN = SPS_NAL_LEN + PPS_NAL_LEN;
   localparam int LUMA_SAMPLES = 16;
   localparam int CHROMA_PLANE_SAMPLES = (CHROMA_FORMAT_IDC == 3) ? 16 :
                                        ((CHROMA_FORMAT_IDC == 2) ? 8 : 4);
   localparam int FRAME_SAMPLES = LUMA_SAMPLES + (CHROMA_PLANE_SAMPLES * 2);
   localparam int V_SAMPLE_INDEX = LUMA_SAMPLES + CHROMA_PLANE_SAMPLES;
+  localparam bit PALETTE_MODE = (CHROMA_FORMAT_IDC == 3);
 
   logic [7:0] index_q;
   logic [7:0] stream_len_q;
@@ -160,8 +163,8 @@ module ff_vvc_toy4x4_encoder #(
 
   function automatic logic [7:0] stream_len(input logic [1:0] frames);
     case (frames)
-      2'd2: stream_len = PARAMETER_SET_LEN + color_filler_nal_len() + COEFF_SIDEBAND_NAL_LEN + (slice_nal_len() * 2);
-      default: stream_len = PARAMETER_SET_LEN + color_filler_nal_len() + COEFF_SIDEBAND_NAL_LEN + slice_nal_len();
+      2'd2: stream_len = PARAMETER_SET_LEN + color_filler_nal_len() + palette_sideband_nal_len() + COEFF_SIDEBAND_NAL_LEN + (slice_nal_len() * 2);
+      default: stream_len = PARAMETER_SET_LEN + color_filler_nal_len() + palette_sideband_nal_len() + COEFF_SIDEBAND_NAL_LEN + slice_nal_len();
     endcase
   endfunction
 
@@ -233,9 +236,16 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
+  function automatic logic [7:0] palette_sideband_nal_len();
+    begin
+      palette_sideband_nal_len = PALETTE_MODE ? PALETTE_SIDEBAND_NAL_LEN : 8'd0;
+    end
+  endfunction
+
   function automatic logic [7:0] stream_byte(input logic [7:0] index);
     logic second_picture;
     logic [7:0] slice_base;
+    logic [7:0] palette_base;
     logic [7:0] coeff_base;
     logic [6:0] slice_index;
 
@@ -246,11 +256,14 @@ module ff_vvc_toy4x4_encoder #(
         stream_byte = nal_byte(3'd1, index - SPS_NAL_LEN, 1'b0);
       end else if (index < PARAMETER_SET_LEN + color_filler_nal_len()) begin
         stream_byte = nal_byte(3'd3, index - PARAMETER_SET_LEN, 1'b0);
-      end else if (index < PARAMETER_SET_LEN + color_filler_nal_len() + COEFF_SIDEBAND_NAL_LEN) begin
-        coeff_base = PARAMETER_SET_LEN + color_filler_nal_len();
+      end else if (index < PARAMETER_SET_LEN + color_filler_nal_len() + palette_sideband_nal_len()) begin
+        palette_base = PARAMETER_SET_LEN + color_filler_nal_len();
+        stream_byte = nal_byte(3'd5, index - palette_base, 1'b0);
+      end else if (index < PARAMETER_SET_LEN + color_filler_nal_len() + palette_sideband_nal_len() + COEFF_SIDEBAND_NAL_LEN) begin
+        coeff_base = PARAMETER_SET_LEN + color_filler_nal_len() + palette_sideband_nal_len();
         stream_byte = nal_byte(3'd4, index - coeff_base, 1'b0);
       end else begin
-        slice_base = PARAMETER_SET_LEN + color_filler_nal_len() + COEFF_SIDEBAND_NAL_LEN;
+        slice_base = PARAMETER_SET_LEN + color_filler_nal_len() + palette_sideband_nal_len() + COEFF_SIDEBAND_NAL_LEN;
         second_picture = (index >= slice_base + slice_nal_len());
         slice_index = second_picture
           ? (index - (slice_base + slice_nal_len()))
@@ -306,6 +319,7 @@ module ff_vvc_toy4x4_encoder #(
         3'd1: nal_unit_type = 5'd16; // PPS.
         3'd3: nal_unit_type = 5'd25; // Filler data.
         3'd4: nal_unit_type = 5'd30; // Reserved FrameForge coefficient sideband.
+        3'd5: nal_unit_type = 5'd30; // Reserved FrameForge palette sideband.
         default: nal_unit_type = cra_picture ? 5'd9 : 5'd8;
       endcase
     end
@@ -338,7 +352,30 @@ module ff_vvc_toy4x4_encoder #(
         3'd1: payload_byte = pps_payload_byte(payload_index);
         3'd3: payload_byte = color_filler_payload_byte(payload_index);
         3'd4: payload_byte = coeff_sideband_payload_byte(payload_index);
+        3'd5: payload_byte = palette_sideband_payload_byte(payload_index);
         default: payload_byte = slice_payload_byte(payload_index, cra_picture);
+      endcase
+    end
+  endfunction
+
+  function automatic logic [7:0] palette_sideband_payload_byte(input logic [6:0] index);
+    begin
+      case (index)
+        7'd0: palette_sideband_payload_byte = 8'h46; // F
+        7'd1: palette_sideband_payload_byte = 8'h46; // F
+        7'd2: palette_sideband_payload_byte = 8'h50; // P
+        7'd3: palette_sideband_payload_byte = 8'h4c; // L
+        7'd4: palette_sideband_payload_byte = 8'h81; // sideband version 1
+        7'd5: palette_sideband_payload_byte = 8'h01; // one palette entry
+        7'd6: palette_sideband_payload_byte = 8'h59; // Y
+        7'd7: palette_sideband_payload_byte = sample_to_8bit(sampled_y);
+        7'd8: palette_sideband_payload_byte = 8'h55; // U
+        7'd9: palette_sideband_payload_byte = sample_to_8bit(sampled_u);
+        7'd10: palette_sideband_payload_byte = 8'h56; // V
+        7'd11: palette_sideband_payload_byte = sample_to_8bit(sampled_v);
+        7'd12, 7'd13, 7'd14, 7'd15: palette_sideband_payload_byte = 8'h40;
+        7'd16: palette_sideband_payload_byte = 8'h80;
+        default: palette_sideband_payload_byte = 8'h00;
       endcase
     end
   endfunction

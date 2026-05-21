@@ -119,6 +119,7 @@ def main() -> int:
     )
 
     env = os.environ.copy()
+    env["RTL_CHROMA_FORMAT_IDC"] = str(rtl_chroma_format_idc(info))
     if info.frames == 1:
         env["FRAMEFORGE_RTL_TOY4X4_INPUT_1F"] = str(rtl_input_path)
         env["FRAMEFORGE_RTL_TOY4X4_OUT_1F"] = str(rtl_bitstream)
@@ -308,12 +309,23 @@ def validate_decoded_non_monochrome(path: Path, info: InputInfo) -> None:
 
 
 def normalized_rtl_input(input_path: Path, info: InputInfo, out_dir: Path, stem: str) -> Path:
-    if normalize_format(info.fmt) == RTL_SUPPORTED_FORMAT:
+    if format_bit_depth(info.fmt) == 8:
         return input_path
 
-    out = out_dir / f"{stem}_rtl_input_yuv420p8.yuv"
-    out.write_bytes(normalized_input_to_yuv420p8(input_path, info))
+    out = out_dir / f"{stem}_rtl_input_yuv{format_chroma_sampling(info.fmt)}p8.yuv"
+    out.write_bytes(normalized_input_to_yuv8(input_path, info))
     return out
+
+
+def normalized_input_to_yuv8(input_path: Path, info: InputInfo) -> bytes:
+    data = input_path.read_bytes()
+    src_frame_len = frame_len(info)
+    out = bytearray()
+    total_samples = info.width * info.height + (chroma_plane_samples(info) * 2)
+    for frame_idx in range(info.frames):
+        frame = data[frame_idx * src_frame_len : (frame_idx + 1) * src_frame_len]
+        out.extend(read_normalized_sample(frame, sample_idx, info) for sample_idx in range(total_samples))
+    return bytes(out)
 
 
 def normalized_input_to_yuv420p8(input_path: Path, info: InputInfo) -> bytes:
@@ -401,6 +413,17 @@ def format_chroma_sampling(fmt: str) -> str:
     if normalized.startswith("yuv444p"):
         return "444"
     raise ValueError(f"unsupported format {fmt}")
+
+
+def rtl_chroma_format_idc(info: InputInfo) -> int:
+    sampling = format_chroma_sampling(info.fmt)
+    if sampling == "420":
+        return 1
+    if sampling == "422":
+        return 2
+    if sampling == "444":
+        return 3
+    raise ValueError(f"unsupported chroma sampling for {info.fmt}")
 
 
 def quantized_luma(sample: int) -> int:

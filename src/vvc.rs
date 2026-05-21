@@ -313,6 +313,12 @@ struct Toy4x4ReconstructedLumaBlock {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Toy4x4PaletteBlock {
+    entry: Toy4x4SampledColor,
+    indices: [u8; 16],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToyResidualComponent {
     Luma,
     ChromaCb,
@@ -437,8 +443,17 @@ pub fn toy_4x4_yuv_annex_b_from_input(
     params: Toy4x4EncodeParams,
     format: PixelFormat,
 ) -> Result<Vec<u8>, String> {
+    if format.chroma_sampling() == Some(crate::ChromaSampling::Cs444) {
+        let palette = sample_toy_4x4_yuv444_palette(input, params, format)?;
+        return toy_4x4_annex_b(
+            params,
+            Toy4x4SampledFrame::solid(palette.entry),
+            Some(palette),
+        );
+    }
+
     let frame = sample_toy_4x4_yuv_frame(input, params, format)?;
-    toy_4x4_yuv420p8_annex_b(params, frame)
+    toy_4x4_annex_b(params, frame, None)
 }
 
 pub fn sample_toy_4x4_first_yuv420p8(
@@ -499,6 +514,47 @@ fn read_toy_sample_as_8bit(input: &[u8], byte_offset: usize, format: PixelFormat
     (value >> (bit_depth - 8)) as u8
 }
 
+fn sample_toy_4x4_yuv444_palette(
+    input: &[u8],
+    params: Toy4x4EncodeParams,
+    format: PixelFormat,
+) -> Result<Toy4x4PaletteBlock, String> {
+    validate_toy_4x4_frame_count(params)?;
+    if format.chroma_sampling() != Some(crate::ChromaSampling::Cs444) {
+        return Err(format!(
+            "toy VVC palette path expects planar 4:4:4 input; got {format}"
+        ));
+    }
+
+    let frame_len = Picture::expected_len(4, 4, format);
+    let expected_len = frame_len * params.frames;
+    if input.len() != expected_len {
+        return Err(format!(
+            "toy VVC input size mismatch: got {} bytes, expected {} for 4x4 {format} with {} frame(s)",
+            input.len(),
+            expected_len,
+            params.frames
+        ));
+    }
+
+    let bytes_per_sample = format.bytes_per_sample();
+    let u_offset = 16 * bytes_per_sample;
+    let v_offset = u_offset + (16 * bytes_per_sample);
+    let entry = Toy4x4SampledColor {
+        y: read_toy_sample_as_8bit(input, 0, format),
+        u: read_toy_sample_as_8bit(input, u_offset, format),
+        v: read_toy_sample_as_8bit(input, v_offset, format),
+    };
+
+    // First milestone palette coding: one lossy palette entry, all 4x4 samples
+    // mapped to index 0. This keeps SW/RTL/VTM reconstruction aligned while
+    // establishing a real palette-token boundary for SCC experiments.
+    Ok(Toy4x4PaletteBlock {
+        entry,
+        indices: [0; 16],
+    })
+}
+
 pub fn quantize_toy_4x4_color(color: Toy4x4SampledColor) -> Toy4x4QuantizedColor {
     quantize_toy_4x4_frame(Toy4x4SampledFrame::solid(color))
 }
@@ -533,16 +589,62 @@ fn toy_4x4_yuv420p8_annex_b(
     params: Toy4x4EncodeParams,
     frame: Toy4x4SampledFrame,
 ) -> Result<Vec<u8>, String> {
+    toy_4x4_annex_b(params, frame, None)
+}
+
+fn toy_4x4_annex_b(
+    params: Toy4x4EncodeParams,
+    frame: Toy4x4SampledFrame,
+    palette: Option<Toy4x4PaletteBlock>,
+) -> Result<Vec<u8>, String> {
     let mut units = Vec::with_capacity(params.frames + 3);
     units.push(toy_4x4_sps_unit());
     units.push(toy_4x4_pps_unit());
     units.push(toy_4x4_color_filler_unit(frame.sampled_color()));
+    if let Some(palette) = palette {
+        units.push(toy_4x4_palette_sideband_unit(palette));
+    }
     let quantized = quantize_toy_4x4_frame(frame);
     units.push(toy_4x4_coeff_sideband_unit(quantized));
     for frame_idx in 0..params.frames {
         units.push(toy_4x4_slice_unit(frame_idx, quantized)?);
     }
     write_annex_b(&units)
+}
+
+fn toy_4x4_palette_sideband_unit(palette: Toy4x4PaletteBlock) -> VvcNalUnit {
+    VvcNalUnit {
+        nal_unit_type: VvcNalUnitType::ReservedNvcl30,
+        layer_id: 0,
+        temporal_id: 0,
+        rbsp_payload: toy_4x4_palette_sideband_payload(palette),
+    }
+}
+
+fn toy_4x4_palette_sideband_payload(palette: Toy4x4PaletteBlock) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(17);
+    payload.extend_from_slice(b"FFPL");
+    payload.push(0x81); // FrameForge toy palette sideband version 1.
+    payload.push(0x01); // One palette entry in this first 4:4:4 palette mode.
+    payload.push(b"Y"[0]);
+    payload.push(palette.entry.y);
+    payload.push(b"U"[0]);
+    payload.push(palette.entry.u);
+    payload.push(b"V"[0]);
+    payload.push(palette.entry.v);
+    for chunk in palette.indices.chunks(4) {
+        payload.push(0x40 | pack_palette_indices_2bit(chunk));
+    }
+    payload.push(0x80);
+    payload
+}
+
+fn pack_palette_indices_2bit(indices: &[u8]) -> u8 {
+    let mut packed = 0;
+    for (idx, value) in indices.iter().enumerate() {
+        packed |= (value & 0x03) << (6 - (idx * 2));
+    }
+    packed
 }
 
 fn toy_4x4_color_filler_unit(color: Toy4x4SampledColor) -> VvcNalUnit {
@@ -1935,12 +2037,7 @@ mod tests {
             Toy4x4EncodeParams { frames: 1 },
         )
         .unwrap();
-        for (format, chroma_samples) in [
-            (PixelFormat::Yuv422p8, 8),
-            (PixelFormat::Yuv444p8, 16),
-            (PixelFormat::Yuv422p10, 8),
-            (PixelFormat::Yuv444p12, 16),
-        ] {
+        for (format, chroma_samples) in [(PixelFormat::Yuv422p8, 8), (PixelFormat::Yuv422p10, 8)] {
             let input =
                 solid_yuv_planar_high(65, 128, 192, format.bit_depth().bits(), chroma_samples, 1);
             assert_eq!(
@@ -1949,6 +2046,24 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn toy_4x4_yuv444_input_uses_palette_sideband() {
+        let input = solid_yuv_planar_high(65, 128, 192, 8, 16, 1);
+        let bytes = toy_4x4_yuv_annex_b_from_input(
+            &input,
+            Toy4x4EncodeParams { frames: 1 },
+            PixelFormat::Yuv444p8,
+        )
+        .unwrap();
+        let infos = parse_annex_b_nal_units(&bytes).unwrap();
+        let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
+        assert_eq!(types, vec![15, 16, 25, 30, 30, 8]);
+        assert_eq!(infos[3].payload_len, 17);
+        assert_eq!(infos[4].payload_len, 23);
+        assert!(bytes.windows(4).any(|window| window == b"FFPL"));
+        assert!(bytes.windows(4).any(|window| window == b"FFAC"));
     }
 
     #[test]

@@ -4,7 +4,7 @@ FrameForge is an open-source lab for video compression, bitstream generation, RT
 
 FrameForge is starting with a minimal VVC/H.266 encoder foundation, but the project is not limited to VVC, H.266, screen-content coding, FPGA work, or encoding only. The long-term goal is a practical research workspace for codec block experiments, software golden models, bitstream generation, RTL acceleration, FPGA-oriented blocks, encoder and decoder research, and hardware/software co-verification.
 
-Current status: skeleton, experimental, not production-ready, and not conforming. The current VVC toy path can generate a tiny 4x4 stream for software/RTL/VTM validation from planar YUV 4:2:0, 4:2:2, or 4:4:4 input at 8, 10, 12, or 16 bits. The stream bytes depend on the sampled input Y/Cb/Cr values after normalization into the current 8-bit, 4:2:0 toy syntax. Luma and chroma are quantized onto the small decoded values currently supported by the toy residual syntax.
+Current status: skeleton, experimental, not production-ready, and not conforming. The current VVC toy path can generate a tiny 4x4 stream for software/RTL/VTM validation from planar YUV 4:2:0, 4:2:2, or 4:4:4 input at 8, 10, 12, or 16 bits. The 4:4:4 input path uses a first minimal palette-mode stage: one palette entry from the first Y/Cb/Cr triplet and a 4x4 all-zero index map. The emitted VTM-visible picture is still normalized into the current 8-bit, 4:2:0 toy syntax, so this is an SCC foundation step rather than conforming VVC palette coding.
 
 ## Near-Term Direction
 
@@ -116,7 +116,7 @@ cargo run -- vvc-toy-4x4-video --input /tmp/frameforge-toy-4x4-1f.yuv --frames 1
 make validate-decode BITSTREAM=/tmp/frameforge-toy-4x4-1f.vvc DECODED=/tmp/frameforge-toy-4x4-1f-dec.yuv
 ```
 
-This reads a 4x4 planar YUV input, samples the first Y/Cb/Cr values, and writes a generated Annex-B VVC stream for one IDR picture. FrameForge emits the sequence header, a color-derived Filler Data NAL unit, picture header, slice header, and toy residual packets internally. The decoded luma is the nearest value on the current toy quantization ladder; decoded chroma is currently quantized to the narrow set encoded by the toy syntax.
+This reads a 4x4 planar YUV input, samples the first Y/Cb/Cr values, and writes a generated Annex-B VVC stream for one IDR picture. FrameForge emits the sequence header, a color-derived Filler Data NAL unit, optional toy palette sideband for 4:4:4 input, picture header, slice header, and toy residual packets internally. The decoded luma is the nearest value on the current toy quantization ladder; decoded chroma is currently quantized to the narrow set encoded by the toy syntax.
 
 Generate the toy 2-frame 4x4 VVC validation stream:
 
@@ -202,7 +202,7 @@ make rtl-test SIM=icarus TOPLEVEL_LANG=verilog
 
 ## External Decoder Validation
 
-External decoder validation is partially wired. The `vvc-eos` command emits only a VVC EOS NAL unit, and `vvc-skeleton` uses placeholder RBSP payloads. The `vvc-toy-4x4-video` command assembles a tiny VTM-accepted stream from internally scheduled sequence and picture NALs, a color-derived Filler Data NAL, and quantized toy residual payloads; it is an incremental validation path, not a complete clean-room VVC encoder yet.
+External decoder validation is partially wired. The `vvc-eos` command emits only a VVC EOS NAL unit, and `vvc-skeleton` uses placeholder RBSP payloads. The `vvc-toy-4x4-video` command assembles a tiny VTM-accepted stream from internally scheduled sequence and picture NALs, a color-derived Filler Data NAL, an experimental 4:4:4 palette sideband when applicable, and quantized toy residual payloads; it is an incremental validation path, not a complete clean-room VVC encoder yet.
 
 FrameForge looks for decoder resources in this order:
 
@@ -254,7 +254,7 @@ The helper fails gracefully if `FRAMEFORGE_DECODER` is not set or the decoder ca
 - No conformance claims.
 - No VTM or VVdeC source import.
 - No inter prediction, B-frames, rate control, real RDO, or compression optimization.
-- No screen-content coding tools yet; palette coding, intra block copy, BDPCM, transform skip, and related techniques are planned areas only.
+- Screen-content coding is only at the first scaffolding step: the 4:4:4 toy path has a single-entry palette sideband, but conforming VVC palette coding, intra block copy, BDPCM, transform skip, and related tools are still future work.
 
 ## Contributing
 

@@ -8,7 +8,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - VVC Annex-B writer capable of emitting an EOS-only stream for NAL header and bytestream testing.
 - VVC skeleton stream containing VPS/SPS/PPS/IDR/EOS/EOB NAL units with placeholder RBSP payloads.
 - VVC Annex-B NAL header listing for comparing FrameForge output against VTM output.
-- Generated 1- or 2-frame 4x4 VVC toy stream assembled from one internally generated SPS/PPS sequence header, a color-derived Filler Data NAL unit, and generated picture slice NAL units. The current input path accepts planar YUV 4:2:0, 4:2:2, and 4:4:4 at 8, 10, 12, or 16 bits, then normalizes samples into the current 8-bit 4:2:0 toy syntax. The current decoded picture uses a small quantized luma ladder from toy residual payloads and a narrow decoded chroma set.
+- Generated 1- or 2-frame 4x4 VVC toy stream assembled from one internally generated SPS/PPS sequence header, a color-derived Filler Data NAL unit, optional toy 4:4:4 palette sideband, and generated picture slice NAL units. The current input path accepts planar YUV 4:2:0, 4:2:2, and 4:4:4 at 8, 10, 12, or 16 bits, then normalizes samples into the current 8-bit 4:2:0 toy syntax. The current decoded picture uses a small quantized luma ladder from toy residual payloads and a narrow decoded chroma set.
 - External VTM reference-encode helper that can generate a real 4x4 YUV VVC stream for validation.
 - Basic encoder trait boundary for replacing the placeholder path with real codec implementations.
 - Generic bitstream utilities:
@@ -19,6 +19,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - Named VVC syntax writer for `flag`, `u(n)`, `ue(v)`, `se(v)`, toy CABAC packets, RBSP trailing bits, and field-offset tracing.
 - Internally generated VVC NAL unit headers with named `forbidden_zero_bit`, `nuh_reserved_zero_bit`, `nuh_layer_id`, `nal_unit_type`, and `nuh_temporal_id_plus1` fields.
 - Internally generated toy SPS, PPS, picture header, slice header, and typed toy coding-tree events packetized into the entropy-coded body.
+- First toy screen-content coding step: 4:4:4 input uses a single-entry palette model and emits a reserved `FFPL` sideband carrying the palette entry and index map. This is not conforming VVC palette syntax yet.
 - Rust toy encoder input handling for 4x4 planar YUV frame sequences with 4:2:0, 4:2:2, or 4:4:4 chroma at 8, 10, 12, or 16 bits per sample, currently normalizing to the 8-bit 4:2:0 toy coding path.
 - RTL toy encoder input handling is parameterized with `SAMPLE_BITS` and `CHROMA_FORMAT_IDC` for wider input buses and chroma planes while emitting the same normalized toy VVC stream as software.
 - Software and RTL internal reconstructions are bitstream reconstructions. They must match external decoder output even when the encoder has sampled an input feature that is not encoded into the bitstream yet.
@@ -72,7 +73,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - Imported VTM or VVdeC source code.
 - CABAC completeness.
 - Transform, quantization, loop filters, inter prediction, B-frames, rate control, or production RDO.
-- SCC tools such as palette coding, intra block copy, BDPCM, and transform skip.
+- Conforming SCC tools such as VVC palette coding, intra block copy, BDPCM, and transform skip.
 - FPGA vendor integration or proprietary EDA requirements.
 
 ## VVC Isolation
