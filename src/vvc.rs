@@ -252,6 +252,12 @@ pub struct ToyVideoGeometry {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ToyCodedGeometry {
+    width: usize,
+    height: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToyVideoLimits {
     pub max_width: usize,
     pub max_height: usize,
@@ -303,11 +309,18 @@ impl ToyVideoGeometry {
     }
 
     fn coded_width(self) -> usize {
-        coded_canvas_dimension(self.width)
+        self.coded().width
     }
 
     fn coded_height(self) -> usize {
-        coded_canvas_dimension(self.height)
+        self.coded().height
+    }
+
+    fn coded(self) -> ToyCodedGeometry {
+        ToyCodedGeometry {
+            width: coded_canvas_dimension(self.width),
+            height: coded_canvas_dimension(self.height),
+        }
     }
 
     fn crop_right_420(self) -> u32 {
@@ -1280,7 +1293,11 @@ fn append_toy_4x4_chroma_tree_tokens(
 }
 
 fn toy_entropy_tokens_mapped_to_vtm_geometry(geometry: ToyVideoGeometry) -> bool {
-    geometry.coded_width() <= 8 && geometry.coded_height() <= 8
+    geometry.coded()
+        == (ToyCodedGeometry {
+            width: 8,
+            height: 8,
+        })
 }
 
 fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Vec<bool> {
@@ -2548,6 +2565,39 @@ mod tests {
         );
         assert_eq!(capacity.kind, ToyEntropyScheduleKind::CapacityPlaceholder);
         assert_eq!(capacity.tokens, mapped.tokens);
+    }
+
+    #[test]
+    fn toy_entropy_mapping_uses_coded_geometry_not_visible_shape() {
+        assert!(toy_entropy_tokens_mapped_to_vtm_geometry(
+            ToyVideoGeometry {
+                width: 4,
+                height: 8
+            }
+        ));
+        assert!(toy_entropy_tokens_mapped_to_vtm_geometry(
+            ToyVideoGeometry {
+                width: 8,
+                height: 4
+            }
+        ));
+        assert!(!toy_entropy_tokens_mapped_to_vtm_geometry(
+            ToyVideoGeometry {
+                width: 8,
+                height: 16
+            }
+        ));
+        assert_eq!(
+            ToyVideoGeometry {
+                width: 4,
+                height: 8
+            }
+            .coded(),
+            ToyCodedGeometry {
+                width: 8,
+                height: 8
+            }
+        );
     }
 
     #[test]

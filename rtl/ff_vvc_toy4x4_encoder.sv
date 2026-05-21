@@ -822,13 +822,21 @@ module ff_vvc_toy4x4_encoder #(
       st = cabac_start();
       if (toy_supports_16x16_trace(rem, chroma_rem)) begin
         st = toy_encode_16x16_trace(st, rem, chroma_rem);
-      end else begin
+      end else if (toy_supports_8x8_mapped_tree()) begin
         st = toy_encode_8x8_luma_tree(st, rem);
         st = toy_encode_4x4_chroma_tree(st, chroma_rem);
+      end else begin
+        st = toy_encode_capacity_placeholder_tree(st, rem, chroma_rem);
       end
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);
       toy_cabac_bitstream = { st[103:96], 32'd0, st[95:0] };
+    end
+  endfunction
+
+  function automatic logic toy_supports_8x8_mapped_tree();
+    begin
+      toy_supports_8x8_mapped_tree = (luma_cb_width() == 16'd8) && (luma_cb_height() == 16'd8);
     end
   endfunction
 
@@ -882,6 +890,23 @@ module ff_vvc_toy4x4_encoder #(
       st = cabac_encode_rem_abs_ep(st, chroma_rem, 3'd0);
       st = cabac_encode_bin_ep(st, 1'b1);
       toy_encode_4x4_chroma_tree = st;
+    end
+  endfunction
+
+  function automatic logic [255:0] toy_encode_capacity_placeholder_tree(
+    input logic [255:0] st_in,
+    input logic [4:0]   rem,
+    input logic [4:0]   chroma_rem
+  );
+    logic [255:0] st;
+
+    begin
+      // TODO(vvc): Replace this with geometry-specific coding-tree generation.
+      // Keeping it isolated prevents larger geometry support from looking like
+      // the VTM-mapped 8x8 path.
+      st = toy_encode_8x8_luma_tree(st_in, rem);
+      st = toy_encode_4x4_chroma_tree(st, chroma_rem);
+      toy_encode_capacity_placeholder_tree = st;
     end
   endfunction
 

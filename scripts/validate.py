@@ -314,9 +314,19 @@ def vtm_decode_supported(input_path: Path, info: InputInfo) -> bool:
     # drained by both software and RTL and must keep matching internally, but
     # external decode is enabled only once their geometry-dependent CABAC trees
     # are implemented instead of guessed.
-    if info.width <= 8 and info.height <= 8:
+    if coded_dimension(info.width) == 8 and coded_dimension(info.height) == 8:
         return True
     return is_toy_16x16_black_trace_path(input_path, info)
+
+
+def coded_dimension(value: int) -> int:
+    if value <= 8:
+        return 8
+    if value <= 16:
+        return 16
+    if value <= 32:
+        return 32
+    return 64
 
 
 def normalize_format(fmt: str) -> str:
