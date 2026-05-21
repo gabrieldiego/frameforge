@@ -305,8 +305,8 @@ fn parse_vvc_toy_4x4_video_cli(args: Vec<String>) -> Result<Command, String> {
     let mut frames = 2;
     let mut width = 4;
     let mut height = 4;
-    let mut max_width = 8;
-    let mut max_height = 8;
+    let mut max_width = 16;
+    let mut max_height = 16;
     let mut format = PixelFormat::Yuv420p8;
 
     let mut iter = args.into_iter();
@@ -377,7 +377,7 @@ fn parse_usize(value: String, flag: &str) -> Result<usize, String> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  frameforge encode --input <raw> --width <w> --height <h> --format gray8 --output <ffbs> [--trace <jsonl>]\n  frameforge decode --input <ffbs> --output <raw>\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-skeleton --output <vvc>\n  frameforge vvc-toy-4x4-video --input <yuv> --output <vvc> [--frames 1|2] [--width <w> --height <h>] [--max-width 8 --max-height 8] [--format yuv420p8|yuv422p8|yuv444p8|...]\n  frameforge vvc-list --input <vvc>\n\nThe encode subcommand is optional for compatibility."
+    "usage:\n  frameforge encode --input <raw> --width <w> --height <h> --format gray8 --output <ffbs> [--trace <jsonl>]\n  frameforge decode --input <ffbs> --output <raw>\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-skeleton --output <vvc>\n  frameforge vvc-toy-4x4-video --input <yuv> --output <vvc> [--frames 1|2] [--width <w> --height <h>] [--max-width 16 --max-height 16] [--format yuv420p8|yuv422p8|yuv444p8|...]\n  frameforge vvc-list --input <vvc>\n\nThe encode subcommand is optional for compatibility."
 }
 
 #[cfg(test)]
@@ -487,9 +487,9 @@ mod tests {
             "--height".into(),
             "4".into(),
             "--max-width".into(),
-            "8".into(),
+            "16".into(),
             "--max-height".into(),
-            "8".into(),
+            "16".into(),
             "--format".into(),
             "yuv420p8".into(),
         ])
@@ -503,8 +503,8 @@ mod tests {
         assert_eq!(cli.frames, 2);
         assert_eq!(cli.width, 4);
         assert_eq!(cli.height, 4);
-        assert_eq!(cli.max_width, 8);
-        assert_eq!(cli.max_height, 8);
+        assert_eq!(cli.max_width, 16);
+        assert_eq!(cli.max_height, 16);
         assert_eq!(cli.format, PixelFormat::Yuv420p8);
     }
 

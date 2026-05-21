@@ -47,8 +47,8 @@ module ff_vvc_toy4x4_encoder #(
 
   logic [8:0] index_q;
   logic [8:0] stream_len_q;
-  logic [9:0] input_count_q;
-  logic [9:0] input_len_q;
+  logic [11:0] input_count_q;
+  logic [11:0] input_len_q;
   logic       input_active_q;
   logic [(SAMPLE_BITS * 16) - 1:0] luma_samples_q;
   logic [(SAMPLE_BITS * 16) - 1:0] cb_samples_q;
@@ -165,7 +165,7 @@ module ff_vvc_toy4x4_encoder #(
     end
   end
 
-  function automatic logic [9:0] input_len(input logic [1:0] frames);
+  function automatic logic [11:0] input_len(input logic [1:0] frames);
     case (frames)
       2'd2: input_len = FRAME_SAMPLES * 2;
       default: input_len = FRAME_SAMPLES;
@@ -397,6 +397,12 @@ module ff_vvc_toy4x4_encoder #(
         sps_payload_bits = 248'h000b_0200_8000_4244_fb54_07d1_1ba2_11a2_1091_84d8_a315_0c1a_02ae_3f82_b040_80;
       end else if (VISIBLE_WIDTH == 8 && VISIBLE_HEIGHT == 8) begin
         sps_payload_bits = 240'h000b_0200_8000_4244_fd50_1f44_6e88_4688_4246_1362_8c54_3068_0ab8_fe0a_c102;
+      end else if (VISIBLE_WIDTH == 16 && VISIBLE_HEIGHT == 8) begin
+        sps_payload_bits = 248'h000b_0200_8000_4111_3f54_07d1_1ba2_11a2_1091_84d8_a315_0c1a_02ae_3f82_b040_80;
+      end else if (VISIBLE_WIDTH == 8 && VISIBLE_HEIGHT == 16) begin
+        sps_payload_bits = 248'h000b_0200_8000_4242_3f54_07d1_1ba2_11a2_1091_84d8_a315_0c1a_02ae_3f82_b040_80;
+      end else if (VISIBLE_WIDTH == 16 && VISIBLE_HEIGHT == 16) begin
+        sps_payload_bits = 248'h000b_0200_8000_4110_8fd5_01f4_46e8_8468_8424_6136_28c5_4306_80ab_8fe0_ac10_20;
       end else begin
         sps_payload_bits = {
           // sps_seq_parameter_set_id, sps_video_parameter_set_id,
@@ -420,13 +426,21 @@ module ff_vvc_toy4x4_encoder #(
 
   function automatic logic [111:0] pps_payload_bits();
     begin
-      pps_payload_bits = {
-        // PPS ids, 8x8 coded canvas for 4x4 conformance-cropped output, no
-        // picture partitioning, and default reference index syntax.
-        48'h0002_448a_4200,
-        // QP/chroma/deblocking syntax and rbsp_trailing_bits for the toy stream.
-        64'hc7b2_1459_4594_5880
-      };
+      if (VISIBLE_WIDTH == 16 && VISIBLE_HEIGHT == 8) begin
+        pps_payload_bits = 112'h0001_1122_9080_31ec_8516_5165_1620;
+      end else if (VISIBLE_WIDTH == 8 && VISIBLE_HEIGHT == 16) begin
+        pps_payload_bits = 112'h0002_4222_9080_31ec_8516_5165_1620;
+      end else if (VISIBLE_WIDTH == 16 && VISIBLE_HEIGHT == 16) begin
+        pps_payload_bits = 112'h0001_1088_a420_0c7b_2145_9459_4588;
+      end else begin
+        pps_payload_bits = {
+          // PPS ids, 8x8 coded canvas for conformance-cropped output, no
+          // picture partitioning, and default reference index syntax.
+          48'h0002_448a_4200,
+          // QP/chroma/deblocking syntax and rbsp_trailing_bits for the toy stream.
+          64'hc7b2_1459_4594_5880
+        };
+      end
     end
   endfunction
 

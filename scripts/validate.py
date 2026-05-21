@@ -66,8 +66,8 @@ def main() -> int:
     parser.add_argument("input", help="input YUV file")
     parser.add_argument("--width", type=int)
     parser.add_argument("--height", type=int)
-    parser.add_argument("--max-width", type=int, default=8)
-    parser.add_argument("--max-height", type=int, default=8)
+    parser.add_argument("--max-width", type=int, default=16)
+    parser.add_argument("--max-height", type=int, default=16)
     parser.add_argument("--frames", type=int)
     parser.add_argument("--format", default=None)
     parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
@@ -144,15 +144,17 @@ def main() -> int:
         env=env,
     )
 
-    run(
-        [
-            sys.executable,
-            "scripts/validate_decode.py",
-            str(rtl_bitstream),
-            "--output",
-            str(vtm_recon),
-        ]
-    )
+    has_vtm_recon = vtm_decode_supported(info)
+    if has_vtm_recon:
+        run(
+            [
+                sys.executable,
+                "scripts/validate_decode.py",
+                str(rtl_bitstream),
+                "--output",
+                str(vtm_recon),
+            ]
+        )
 
     digests = {
         "input_yuv": sha256(input_path),
@@ -160,7 +162,7 @@ def main() -> int:
         "rtl_bitstream": sha256(rtl_bitstream),
         "software_internal_recon": sha256(sw_internal_recon),
         "rtl_internal_recon": sha256(rtl_internal_recon),
-        "vtm_recon_from_rtl_bitstream": sha256(vtm_recon),
+        "vtm_recon_from_rtl_bitstream": sha256(vtm_recon) if has_vtm_recon else None,
     }
 
     print("FrameForge validation checksums")
@@ -169,15 +171,22 @@ def main() -> int:
         f"frames={info.frames} format={info.fmt}"
     )
     for name, digest in digests.items():
-        print(f"{digest}  {name}")
+        if digest is None:
+            print(f"SKIP  {name}")
+        else:
+            print(f"{digest}  {name}")
 
     if digests["software_bitstream"] != digests["rtl_bitstream"]:
         print("FAIL: software and RTL bitstreams differ", file=sys.stderr)
         return 1
-    if not (
-        digests["software_internal_recon"]
-        == digests["rtl_internal_recon"]
-        == digests["vtm_recon_from_rtl_bitstream"]
+    if digests["software_internal_recon"] != digests["rtl_internal_recon"]:
+        print(
+            "FAIL: software internal reconstruction and RTL internal reconstruction differ",
+            file=sys.stderr,
+        )
+        return 1
+    if has_vtm_recon and not (
+        digests["software_internal_recon"] == digests["vtm_recon_from_rtl_bitstream"]
     ):
         print(
             "FAIL: software internal reconstruction, RTL internal "
@@ -186,8 +195,12 @@ def main() -> int:
         )
         return 1
     print("OK: software and RTL bitstreams match")
-    print("OK: software, RTL, and VTM reconstructions match")
-    if input_has_nonzero_chroma(input_path, info):
+    print("OK: software and RTL internal reconstructions match")
+    if has_vtm_recon:
+        print("OK: software, RTL, and VTM reconstructions match")
+    else:
+        print("SKIP: VTM decode is not wired for toy geometries above 8x8 yet")
+    if has_vtm_recon and input_has_nonzero_chroma(input_path, info):
         validate_decoded_non_monochrome(vtm_recon, info)
         print("OK: VTM reconstruction contains decoder-visible chroma")
     return 0
@@ -264,6 +277,10 @@ def validate_supported_input(input_path: Path, info: InputInfo, max_width: int, 
         raise ValueError(
             f"input size mismatch: got {len(data)} bytes, expected {expected_len}"
         )
+
+
+def vtm_decode_supported(info: InputInfo) -> bool:
+    return info.width <= 8 and info.height <= 8
 
 
 def normalize_format(fmt: str) -> str:

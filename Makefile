@@ -8,8 +8,8 @@ RTL_SOURCE_SAMPLE_BITS ?= $(RTL_SAMPLE_BITS)
 RTL_CHROMA_FORMAT_IDC ?= 1
 RTL_VISIBLE_WIDTH ?= 4
 RTL_VISIBLE_HEIGHT ?= 4
-MAX_WIDTH ?= 8
-MAX_HEIGHT ?= 8
+MAX_WIDTH ?= 16
+MAX_HEIGHT ?= 16
 
 help:
 	@printf '%s\n' 'FrameForge targets:'
@@ -18,12 +18,12 @@ help:
 	@printf '%s\n' '  make test      - run Rust tests'
 	@printf '%s\n' '  make fmt       - format Rust code'
 	@printf '%s\n' '  make decoder-setup - find or build external VTM decoder'
-	@printf '%s\n' '  make validate INPUT=in.yuv [WIDTH=4|8 HEIGHT=4|8 MAX_WIDTH=8 MAX_HEIGHT=8 FRAMES=1 FORMAT=yuv420p8|yuv422p8|yuv444p8|...]'
+	@printf '%s\n' '  make validate INPUT=in.yuv [WIDTH=4|8|16 HEIGHT=4|8|16 MAX_WIDTH=16 MAX_HEIGHT=16 FRAMES=1 FORMAT=yuv420p8|yuv422p8|yuv444p8|...]'
 	@printf '%s\n' '  make validate-decode BITSTREAM=out.vvc [DECODED=out.yuv]'
 	@printf '%s\n' '  make rtl-test  - run cocotb RTL tests'
 	@printf '%s\n' '  make rtl-test DUT=encoder - run minimum encoder RTL smoke test'
 	@printf '%s\n' '  make rtl-test DUT=vvc-skeleton - run RTL/Rust VVC skeleton smoke test'
-	@printf '%s\n' '  make rtl-test DUT=vvc-toy4x4 [RTL_VISIBLE_WIDTH=4|8 RTL_VISIBLE_HEIGHT=4|8 RTL_SAMPLE_BITS=8|10|12|16 RTL_SOURCE_SAMPLE_BITS=8|10|12|16 RTL_CHROMA_FORMAT_IDC=1|2|3] - run generated RTL/software VVC toy stream test'
+	@printf '%s\n' '  make rtl-test DUT=vvc-toy4x4 [RTL_VISIBLE_WIDTH=4|8|16 RTL_VISIBLE_HEIGHT=4|8|16 RTL_SAMPLE_BITS=8|10|12|16 RTL_SOURCE_SAMPLE_BITS=8|10|12|16 RTL_CHROMA_FORMAT_IDC=1|2|3] - run generated RTL/software VVC toy stream test'
 	@printf '%s\n' '  make reference-vvc BITSTREAM=out.vvc [BIT_DEPTH=8|10|12|16 CHROMA_FORMAT=420|422|444] - create real VVC using VTM'
 	@printf '%s\n' '  make clean     - remove local build outputs'
 
@@ -43,7 +43,7 @@ decoder-setup:
 	python3 scripts/ensure_reference_decoder.py
 
 validate:
-	@test -n "$(INPUT)" || { echo 'usage: make validate INPUT=path/to/input_4x8_1f_yuv420p8.yuv [WIDTH=4|8 HEIGHT=4|8 MAX_WIDTH=8 MAX_HEIGHT=8 FRAMES=1 FORMAT=yuv420p8|yuv422p8|yuv444p8|...]'; exit 2; }
+	@test -n "$(INPUT)" || { echo 'usage: make validate INPUT=path/to/input_16x16_1f_yuv420p8.yuv [WIDTH=4|8|16 HEIGHT=4|8|16 MAX_WIDTH=16 MAX_HEIGHT=16 FRAMES=1 FORMAT=yuv420p8|yuv422p8|yuv444p8|...]'; exit 2; }
 	python3 scripts/validate.py "$(INPUT)" $(if $(WIDTH),--width "$(WIDTH)") $(if $(HEIGHT),--height "$(HEIGHT)") --max-width "$(MAX_WIDTH)" --max-height "$(MAX_HEIGHT)" $(if $(FRAMES),--frames "$(FRAMES)") $(if $(FORMAT),--format "$(FORMAT)")
 
 validate-decode:
