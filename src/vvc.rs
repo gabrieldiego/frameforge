@@ -732,9 +732,10 @@ fn toy_4x4_annex_b(
     units.push(toy_4x4_sps_unit(frame.geometry));
     units.push(toy_4x4_pps_unit(frame.geometry));
     units.push(toy_4x4_color_filler_unit(frame.sampled_color()));
+    let geometry = frame.geometry;
     let quantized = quantize_toy_4x4_frame(frame);
     for frame_idx in 0..params.frames {
-        units.push(toy_4x4_slice_unit(frame_idx, quantized)?);
+        units.push(toy_4x4_slice_unit(frame_idx, geometry, quantized)?);
     }
     write_annex_b(&units)
 }
@@ -781,7 +782,11 @@ fn toy_4x4_pps_unit(geometry: ToyVideoGeometry) -> VvcNalUnit {
     }
 }
 
-fn toy_4x4_slice_unit(frame_idx: usize, color: Toy4x4QuantizedColor) -> Result<VvcNalUnit, String> {
+fn toy_4x4_slice_unit(
+    frame_idx: usize,
+    geometry: ToyVideoGeometry,
+    color: Toy4x4QuantizedColor,
+) -> Result<VvcNalUnit, String> {
     let picture_kind = match frame_idx {
         0 => Toy4x4PictureKind::Idr,
         1 => Toy4x4PictureKind::Cra,
@@ -795,7 +800,7 @@ fn toy_4x4_slice_unit(frame_idx: usize, color: Toy4x4QuantizedColor) -> Result<V
         },
         layer_id: 0,
         temporal_id: 0,
-        rbsp_payload: toy_4x4_slice_payload(picture_kind, color),
+        rbsp_payload: toy_4x4_slice_payload(picture_kind, geometry, color),
     })
 }
 
@@ -976,7 +981,11 @@ fn toy_4x4_pps_payload(geometry: ToyVideoGeometry) -> Vec<u8> {
     writer.into_bytes()
 }
 
-fn toy_4x4_slice_payload(picture_kind: Toy4x4PictureKind, color: Toy4x4QuantizedColor) -> Vec<u8> {
+fn toy_4x4_slice_payload(
+    picture_kind: Toy4x4PictureKind,
+    geometry: ToyVideoGeometry,
+    color: Toy4x4QuantizedColor,
+) -> Vec<u8> {
     let mut writer = VvcSyntaxWriter::new();
     writer.write_flag("sh_picture_header_in_slice_header_flag", true);
     writer.write_flag("ph_gdr_or_irap_pic_flag", true);
@@ -1002,18 +1011,36 @@ fn toy_4x4_slice_payload(picture_kind: Toy4x4PictureKind, color: Toy4x4Quantized
         writer.write_flag("cabac_alignment_one_bit", true);
     }
     writer.byte_align_zero("cabac_alignment_zero_bit");
-    write_toy_coding_tree_entropy(&mut writer, color);
+    write_toy_coding_tree_entropy(&mut writer, geometry, color);
     writer.rbsp_trailing_bits();
     debug_assert!(writer.is_byte_aligned());
     writer.into_bytes()
 }
 
-fn write_toy_coding_tree_entropy(writer: &mut VvcSyntaxWriter, color: Toy4x4QuantizedColor) {
-    let bits = toy_cabac_bits(color);
+fn write_toy_coding_tree_entropy(
+    writer: &mut VvcSyntaxWriter,
+    geometry: ToyVideoGeometry,
+    color: Toy4x4QuantizedColor,
+) {
+    let bits = toy_cabac_bits(geometry, color);
     writer.write_cabac_bits("cabac_toy_quantized_residual_bits", &bits);
 }
 
-fn toy_4x4_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<ToyEntropyToken> {
+fn toy_4x4_entropy_tokens(
+    geometry: ToyVideoGeometry,
+    color: Toy4x4QuantizedColor,
+) -> Vec<ToyEntropyToken> {
+    if toy_entropy_tokens_mapped_to_vtm_geometry(geometry) {
+        return toy_8x8_mapped_entropy_tokens(color);
+    }
+
+    // Capacity geometries above 8x8 still use the same byte-level toy entropy
+    // body so software and RTL can stay aligned while the real larger VVC
+    // coding-tree token schedule is implemented.
+    toy_8x8_mapped_entropy_tokens(color)
+}
+
+fn toy_8x8_mapped_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<ToyEntropyToken> {
     vec![
         ToyEntropyToken {
             name: "split_cu_flag_luma_prefix",
@@ -1094,10 +1121,14 @@ fn toy_4x4_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<ToyEntropyToken> {
     ]
 }
 
-fn toy_cabac_bits(color: Toy4x4QuantizedColor) -> Vec<bool> {
+fn toy_entropy_tokens_mapped_to_vtm_geometry(geometry: ToyVideoGeometry) -> bool {
+    geometry.coded_width() <= 8 && geometry.coded_height() <= 8
+}
+
+fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Vec<bool> {
     let mut cabac = ToyCabacEncoder::new();
     cabac.start();
-    for token in toy_4x4_entropy_tokens(color) {
+    for token in toy_4x4_entropy_tokens(geometry, color) {
         match token.kind {
             ToyEntropyTokenKind::ContextBins { ctx_offset, bins } => {
                 cabac.encode_ctx_bins(&TOY_CTX_EVENTS[ctx_offset..ctx_offset + bins.len()], bins);
@@ -1939,12 +1970,13 @@ mod tests {
     #[test]
     fn toy_slice_header_is_generated_before_cabac_tokens() {
         let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
+        let geometry = ToyVideoGeometry::four_by_four();
         assert_eq!(
-            toy_4x4_slice_payload(Toy4x4PictureKind::Idr, black),
+            toy_4x4_slice_payload(Toy4x4PictureKind::Idr, geometry, black),
             hex_bytes("c400708062f5b7ebcb1f80")
         );
         assert_eq!(
-            toy_4x4_slice_payload(Toy4x4PictureKind::Cra, black),
+            toy_4x4_slice_payload(Toy4x4PictureKind::Cra, geometry, black),
             hex_bytes("c404788062f5b7ebcb1f80")
         );
     }
@@ -2070,7 +2102,11 @@ mod tests {
         for (luma_rem, expected_payload) in expected.iter().enumerate() {
             let color = toy_quantized_color(0, luma_rem as u8);
             assert_eq!(
-                toy_4x4_slice_payload(Toy4x4PictureKind::Idr, color),
+                toy_4x4_slice_payload(
+                    Toy4x4PictureKind::Idr,
+                    ToyVideoGeometry::four_by_four(),
+                    color
+                ),
                 hex_bytes(expected_payload)
             );
         }
@@ -2079,7 +2115,8 @@ mod tests {
     #[test]
     fn toy_coding_tree_entropy_is_generated_from_tokens() {
         let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
-        let tokens = toy_4x4_entropy_tokens(black);
+        let geometry = ToyVideoGeometry::four_by_four();
+        let tokens = toy_4x4_entropy_tokens(geometry, black);
         assert_eq!(tokens.len(), 11);
         assert_eq!(tokens[0].name, "split_cu_flag_luma_prefix");
         assert_eq!(
@@ -2099,7 +2136,7 @@ mod tests {
         );
         assert_eq!(tokens[10].kind, ToyEntropyTokenKind::Terminate);
         let mut writer = VvcSyntaxWriter::new();
-        write_toy_coding_tree_entropy(&mut writer, black);
+        write_toy_coding_tree_entropy(&mut writer, geometry, black);
         let rbsp = writer.finish();
         assert_eq!(rbsp.bytes, hex_bytes("8062f5b7ebcb1f"));
         assert!(rbsp

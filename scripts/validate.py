@@ -286,6 +286,11 @@ def validate_supported_input(input_path: Path, info: InputInfo, max_width: int, 
 
 
 def vtm_decode_supported(info: InputInfo) -> bool:
+    # The encoder capacity is 64x64, but the clean-room slice entropy body is
+    # still only mapped to VTM's coding-tree syntax through 8x8. Larger inputs
+    # are drained by both software and RTL and must keep matching internally,
+    # but external decode is enabled only once the geometry-dependent CABAC tree
+    # is implemented instead of guessed.
     return info.width <= 8 and info.height <= 8
 
 
