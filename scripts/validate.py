@@ -92,6 +92,7 @@ def main() -> int:
     sw_internal_recon = out_dir / f"{stem}_software_internal_rec.yuv"
     rtl_internal_recon = out_dir / f"{stem}_rtl_internal_rec.yuv"
     vtm_recon = out_dir / f"{stem}_vtm_from_rtl_dec.yuv"
+    palette_recon = out_dir / f"{stem}_frameforge_palette_dec.yuv"
     rtl_input_path = normalized_rtl_input(input_path, info, out_dir, stem)
 
     sw_internal_recon.write_bytes(software_internal_reconstruction(input_path, info))
@@ -142,6 +143,22 @@ def main() -> int:
         ]
     )
 
+    palette_lossless = supports_palette_lossless(info)
+    if palette_lossless:
+        run(
+            [
+                "cargo",
+                "run",
+                "--quiet",
+                "--",
+                "vvc-toy-4x4-decode",
+                "--input",
+                str(rtl_bitstream),
+                "--output",
+                str(palette_recon),
+            ]
+        )
+
     digests = {
         "input_yuv": sha256(input_path),
         "software_bitstream": sha256(sw_bitstream),
@@ -150,6 +167,8 @@ def main() -> int:
         "rtl_internal_recon": sha256(rtl_internal_recon),
         "vtm_recon_from_rtl_bitstream": sha256(vtm_recon),
     }
+    if palette_lossless:
+        digests["frameforge_palette_decode"] = sha256(palette_recon)
 
     print("FrameForge validation checksums")
     print(
@@ -173,9 +192,17 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    if palette_lossless and digests["frameforge_palette_decode"] != digests["input_yuv"]:
+        print(
+            "FAIL: FrameForge palette decode does not match the input YUV",
+            file=sys.stderr,
+        )
+        return 1
 
     print("OK: software and RTL bitstreams match")
     print("OK: software, RTL, and VTM reconstructions match")
+    if palette_lossless:
+        print("OK: FrameForge palette decode matches input losslessly")
     if input_has_nonzero_chroma(input_path, info):
         validate_decoded_non_monochrome(vtm_recon, info)
         print("OK: VTM reconstruction contains decoder-visible chroma")
@@ -426,6 +453,15 @@ def rtl_chroma_format_idc(info: InputInfo) -> int:
     if sampling == "444":
         return 3
     raise ValueError(f"unsupported chroma sampling for {info.fmt}")
+
+
+def supports_palette_lossless(info: InputInfo) -> bool:
+    return (
+        info.frames == 1
+        and info.width == 4
+        and info.height == 4
+        and normalize_format(info.fmt) == "yuv444p8"
+    )
 
 
 def quantized_luma(sample: int) -> int:

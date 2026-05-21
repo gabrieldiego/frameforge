@@ -83,6 +83,9 @@ module ff_residual_stub #(
       if (magnitude > 5'd8) begin
         magnitude = 5'd8;
       end
+      if (magnitude == 5'd0) begin
+        negative = 1'b0;
+      end
       quant_ac_token = 8'h40 | { 2'b00, negative, magnitude };
     end
   endfunction

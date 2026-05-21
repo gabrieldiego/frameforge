@@ -33,7 +33,7 @@ module ff_vvc_toy4x4_encoder #(
   localparam int SPS_PAYLOAD_LEN  = 31;
   localparam int PPS_PAYLOAD_LEN  = 14;
   localparam int COEFF_SIDEBAND_PAYLOAD_LEN = 23;
-  localparam int PALETTE_SIDEBAND_PAYLOAD_LEN = 19;
+  localparam int PALETTE_SIDEBAND_PAYLOAD_LEN = 119;
   localparam int NAL_OVERHEAD_LEN = 6;
   localparam int SPS_NAL_LEN = NAL_OVERHEAD_LEN + SPS_PAYLOAD_LEN;
   localparam int PPS_NAL_LEN = NAL_OVERHEAD_LEN + PPS_PAYLOAD_LEN;
@@ -47,12 +47,14 @@ module ff_vvc_toy4x4_encoder #(
   localparam int V_SAMPLE_INDEX = LUMA_SAMPLES + CHROMA_PLANE_SAMPLES;
   localparam bit PALETTE_MODE = (CHROMA_FORMAT_IDC == 3);
 
-  logic [7:0] index_q;
-  logic [7:0] stream_len_q;
+  logic [8:0] index_q;
+  logic [8:0] stream_len_q;
   logic [7:0] input_count_q;
   logic [7:0] input_len_q;
   logic       input_active_q;
   logic [(SAMPLE_BITS * 16) - 1:0] luma_samples_q;
+  logic [(SAMPLE_BITS * 16) - 1:0] cb_samples_q;
+  logic [(SAMPLE_BITS * 16) - 1:0] cr_samples_q;
   logic [4:0] quant_luma_rem_q;
   logic [4:0] quant_chroma_rem_q;
   logic [119:0] quant_luma_ac_tokens_q;
@@ -85,6 +87,8 @@ module ff_vvc_toy4x4_encoder #(
       sampled_u <= '0;
       sampled_v <= '0;
       luma_samples_q <= '0;
+      cb_samples_q <= '0;
+      cr_samples_q <= '0;
       quant_luma_rem_q <= 5'd16;
       quant_chroma_rem_q <= 5'd6;
       quant_luma_ac_tokens_q <= {15{8'h40}};
@@ -101,6 +105,8 @@ module ff_vvc_toy4x4_encoder #(
         input_error    <= 1'b0;
         sampled_color_valid <= 1'b0;
         luma_samples_q <= '0;
+        cb_samples_q <= '0;
+        cr_samples_q <= '0;
         quant_luma_rem_q <= 5'd16;
         quant_chroma_rem_q <= 5'd6;
         quant_luma_ac_tokens_q <= {15{8'h40}};
@@ -116,6 +122,12 @@ module ff_vvc_toy4x4_encoder #(
         end
         if (input_count_q < LUMA_SAMPLES) begin
           luma_samples_q[(15 - input_count_q[3:0]) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
+        end
+        if (PALETTE_MODE && input_count_q >= LUMA_SAMPLES && input_count_q < LUMA_SAMPLES + 8'd16) begin
+          cb_samples_q[(15 - (input_count_q - LUMA_SAMPLES)) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
+        end
+        if (PALETTE_MODE && input_count_q >= V_SAMPLE_INDEX && input_count_q < V_SAMPLE_INDEX + 8'd16) begin
+          cr_samples_q[(15 - (input_count_q - V_SAMPLE_INDEX)) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
         end
         if (input_count_q == LUMA_SAMPLES) begin
           quant_luma_rem_q <= residual_quant_luma_rem;
@@ -162,7 +174,7 @@ module ff_vvc_toy4x4_encoder #(
     endcase
   endfunction
 
-  function automatic logic [7:0] stream_len(input logic [1:0] frames);
+  function automatic logic [8:0] stream_len(input logic [1:0] frames);
     case (frames)
       2'd2: stream_len = PARAMETER_SET_LEN + color_filler_nal_len() + palette_sideband_nal_len() + COEFF_SIDEBAND_NAL_LEN + (slice_nal_len() * 2);
       default: stream_len = PARAMETER_SET_LEN + color_filler_nal_len() + palette_sideband_nal_len() + COEFF_SIDEBAND_NAL_LEN + slice_nal_len();
@@ -237,17 +249,17 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [7:0] palette_sideband_nal_len();
+  function automatic logic [8:0] palette_sideband_nal_len();
     begin
-      palette_sideband_nal_len = PALETTE_MODE ? PALETTE_SIDEBAND_NAL_LEN : 8'd0;
+      palette_sideband_nal_len = PALETTE_MODE ? PALETTE_SIDEBAND_NAL_LEN : 9'd0;
     end
   endfunction
 
-  function automatic logic [7:0] stream_byte(input logic [7:0] index);
+  function automatic logic [7:0] stream_byte(input logic [8:0] index);
     logic second_picture;
-    logic [7:0] slice_base;
-    logic [7:0] palette_base;
-    logic [7:0] coeff_base;
+    logic [8:0] slice_base;
+    logic [8:0] palette_base;
+    logic [8:0] coeff_base;
     logic [6:0] slice_index;
 
     begin
@@ -360,26 +372,73 @@ module ff_vvc_toy4x4_encoder #(
   endfunction
 
   function automatic logic [7:0] palette_sideband_payload_byte(input logic [6:0] index);
+    logic [6:0] entry_rel;
+    logic [3:0] entry_idx;
+    logic [2:0] entry_comp;
+    logic [7:0] entry_sample;
+
     begin
-      case (index)
-        7'd0: palette_sideband_payload_byte = 8'h46; // F
-        7'd1: palette_sideband_payload_byte = 8'h46; // F
-        7'd2: palette_sideband_payload_byte = 8'h50; // P
-        7'd3: palette_sideband_payload_byte = 8'h4c; // L
-        7'd4: palette_sideband_payload_byte = 8'h82; // sideband version 2
-        7'd5: palette_sideband_payload_byte = 8'h01; // one palette entry
-        7'd6: palette_sideband_payload_byte = CHROMA_FORMAT_IDC;
-        7'd7: palette_sideband_payload_byte = SOURCE_SAMPLE_BITS;
-        7'd8: palette_sideband_payload_byte = 8'h59; // Y
-        7'd9: palette_sideband_payload_byte = sample_to_8bit(sampled_y);
-        7'd10: palette_sideband_payload_byte = 8'h55; // U
-        7'd11: palette_sideband_payload_byte = sample_to_8bit(sampled_u);
-        7'd12: palette_sideband_payload_byte = 8'h56; // V
-        7'd13: palette_sideband_payload_byte = sample_to_8bit(sampled_v);
-        7'd14, 7'd15, 7'd16, 7'd17: palette_sideband_payload_byte = 8'h40;
-        7'd18: palette_sideband_payload_byte = 8'h80;
-        default: palette_sideband_payload_byte = 8'h00;
-      endcase
+      if (index == 7'd0 || index == 7'd1) begin
+        palette_sideband_payload_byte = 8'h46; // F
+      end else if (index == 7'd2) begin
+        palette_sideband_payload_byte = 8'h50; // P
+      end else if (index == 7'd3) begin
+        palette_sideband_payload_byte = 8'h4c; // L
+      end else if (index == 7'd4) begin
+        palette_sideband_payload_byte = 8'h84; // sideband version 4
+      end else if (index == 7'd5) begin
+        palette_sideband_payload_byte = 8'h10; // sixteen palette entries
+      end else if (index == 7'd6) begin
+        palette_sideband_payload_byte = CHROMA_FORMAT_IDC;
+      end else if (index == 7'd7) begin
+        palette_sideband_payload_byte = SOURCE_SAMPLE_BITS;
+      end else if (index == 7'd8) begin
+        palette_sideband_payload_byte = 8'h59; // Y
+      end else if (index == 7'd9) begin
+        palette_sideband_payload_byte = 8'h55; // U
+      end else if (index == 7'd10) begin
+        palette_sideband_payload_byte = 8'h56; // V
+      end else if (index >= 7'd11 && index < 7'd107) begin
+        entry_rel = index - 7'd11;
+        entry_idx = entry_rel / 6;
+        entry_comp = entry_rel - (entry_idx * 6);
+        case (entry_comp[2:1])
+          2'd0: entry_sample = luma_sample_8(entry_idx);
+          2'd1: entry_sample = cb_sample_8(entry_idx);
+          default: entry_sample = cr_sample_8(entry_idx);
+        endcase
+        palette_sideband_payload_byte = entry_comp[0] ? (8'h40 | entry_sample[3:0]) : (8'h40 | entry_sample[7:4]);
+      end else if (index == 7'd107) begin
+        palette_sideband_payload_byte = 8'h49; // I
+      end else if (index == 7'd108) begin
+        palette_sideband_payload_byte = 8'h44; // D
+      end else if (index == 7'd109) begin
+        palette_sideband_payload_byte = 8'h58; // X
+      end else if (index >= 7'd110 && index < 7'd118) begin
+        palette_sideband_payload_byte = ((index - 7'd110) << 5) | (((index - 7'd110) << 1) + 1'b1);
+      end else if (index == 7'd118) begin
+        palette_sideband_payload_byte = 8'h80;
+      end else begin
+        palette_sideband_payload_byte = 8'h00;
+      end
+    end
+  endfunction
+
+  function automatic logic [7:0] luma_sample_8(input logic [3:0] index);
+    begin
+      luma_sample_8 = sample_to_8bit(luma_samples_q[(15 - index) * SAMPLE_BITS +: SAMPLE_BITS]);
+    end
+  endfunction
+
+  function automatic logic [7:0] cb_sample_8(input logic [3:0] index);
+    begin
+      cb_sample_8 = sample_to_8bit(cb_samples_q[(15 - index) * SAMPLE_BITS +: SAMPLE_BITS]);
+    end
+  endfunction
+
+  function automatic logic [7:0] cr_sample_8(input logic [3:0] index);
+    begin
+      cr_sample_8 = sample_to_8bit(cr_samples_q[(15 - index) * SAMPLE_BITS +: SAMPLE_BITS]);
     end
   endfunction
 

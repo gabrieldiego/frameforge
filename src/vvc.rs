@@ -301,7 +301,17 @@ impl Toy4x4SampledFrame {
     }
 
     fn decoder_compat_frame(self) -> Self {
-        Self::solid(self.sampled_color())
+        let color = self.sampled_color();
+        Self {
+            format: Toy4x4PictureFormat {
+                chroma_sampling: ChromaSampling::Cs420,
+                bit_depth: SampleBitDepth::Eight,
+            },
+            luma: self.luma,
+            cb: [color.u; 16],
+            cr: [color.v; 16],
+            chroma_len: 4,
+        }
     }
 }
 
@@ -343,7 +353,7 @@ struct Toy4x4ReconstructedLumaBlock {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Toy4x4PaletteBlock {
     format: Toy4x4PictureFormat,
-    entry: Toy4x4SampledColor,
+    entries: [Toy4x4SampledColor; 16],
     indices: [u8; 16],
 }
 
@@ -553,13 +563,20 @@ fn derive_toy_4x4_palette(frame: Toy4x4SampledFrame) -> Option<Toy4x4PaletteBloc
     if frame.format.chroma_sampling != ChromaSampling::Cs444 {
         return None;
     }
-    // First milestone palette coding: one lossy palette entry, all 4x4 samples
-    // mapped to index 0. This keeps SW/RTL/VTM reconstruction aligned while
-    // establishing a real palette-token boundary for SCC experiments.
+    let mut entries = [Toy4x4SampledColor { y: 0, u: 0, v: 0 }; 16];
+    for (idx, entry) in entries.iter_mut().enumerate() {
+        *entry = Toy4x4SampledColor {
+            y: frame.luma[idx],
+            u: frame.cb[idx],
+            v: frame.cr[idx],
+        };
+    }
+    let indices = std::array::from_fn(|idx| idx as u8);
+
     Some(Toy4x4PaletteBlock {
         format: frame.format,
-        entry: frame.sampled_color(),
-        indices: [0; 16],
+        entries,
+        indices,
     })
 }
 
@@ -631,31 +648,150 @@ fn toy_4x4_palette_sideband_unit(palette: Toy4x4PaletteBlock) -> VvcNalUnit {
 }
 
 fn toy_4x4_palette_sideband_payload(palette: Toy4x4PaletteBlock) -> Vec<u8> {
-    let mut payload = Vec::with_capacity(19);
+    let mut payload = Vec::with_capacity(119);
     payload.extend_from_slice(b"FFPL");
-    payload.push(0x82); // FrameForge toy palette sideband version 2.
-    payload.push(0x01); // One palette entry in this first 4:4:4 palette mode.
+    payload.push(0x84); // FrameForge toy palette sideband version 4.
+    payload.push(palette.entries.len() as u8);
     payload.push(palette.format.chroma_format_idc());
     payload.push(palette.format.bit_depth.bits());
-    payload.push(b"Y"[0]);
-    payload.push(palette.entry.y);
-    payload.push(b"U"[0]);
-    payload.push(palette.entry.u);
-    payload.push(b"V"[0]);
-    payload.push(palette.entry.v);
-    for chunk in palette.indices.chunks(4) {
-        payload.push(0x40 | pack_palette_indices_2bit(chunk));
+    payload.extend_from_slice(b"YUV");
+    for entry in palette.entries {
+        push_palette_sample_token(&mut payload, entry.y);
+        push_palette_sample_token(&mut payload, entry.u);
+        push_palette_sample_token(&mut payload, entry.v);
+    }
+    payload.extend_from_slice(b"IDX");
+    for chunk in palette.indices.chunks(2) {
+        payload.push(pack_palette_indices_4bit(chunk));
     }
     payload.push(0x80);
     payload
 }
 
-fn pack_palette_indices_2bit(indices: &[u8]) -> u8 {
+fn push_palette_sample_token(payload: &mut Vec<u8>, sample: u8) {
+    payload.push(0x40 | (sample >> 4));
+    payload.push(0x40 | (sample & 0x0f));
+}
+
+fn pack_palette_indices_4bit(indices: &[u8]) -> u8 {
     let mut packed = 0;
     for (idx, value) in indices.iter().enumerate() {
-        packed |= (value & 0x03) << (6 - (idx * 2));
+        packed |= (value & 0x0f) << (4 - (idx * 4));
     }
     packed
+}
+
+pub fn toy_4x4_decode_palette_yuv444p8_annex_b(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let payload = find_toy_palette_payload(bytes)?
+        .ok_or_else(|| "no FrameForge toy palette sideband found".to_string())?;
+    decode_toy_palette_payload_yuv444p8(&payload)
+}
+
+fn find_toy_palette_payload(bytes: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    for (start, end) in annex_b_ranges(bytes) {
+        if end - start < 2 {
+            continue;
+        }
+        let nal_unit_type = bytes[start + 1] >> 3;
+        if nal_unit_type != VvcNalUnitType::ReservedNvcl30 as u8 {
+            continue;
+        }
+        let payload = remove_emulation_prevention_bytes(&bytes[start + 2..end])?;
+        if payload.starts_with(b"FFPL") {
+            return Ok(Some(payload));
+        }
+    }
+    Ok(None)
+}
+
+fn remove_emulation_prevention_bytes(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut zero_count = 0;
+    let mut idx = 0;
+    while idx < bytes.len() {
+        let byte = bytes[idx];
+        if zero_count >= 2 && byte == 0x03 {
+            idx += 1;
+            zero_count = 0;
+            continue;
+        }
+        out.push(byte);
+        zero_count = if byte == 0 { zero_count + 1 } else { 0 };
+        idx += 1;
+    }
+    Ok(out)
+}
+
+fn decode_toy_palette_payload_yuv444p8(payload: &[u8]) -> Result<Vec<u8>, String> {
+    if payload.len() < 119 || !payload.starts_with(b"FFPL") {
+        return Err("invalid FrameForge toy palette sideband".to_string());
+    }
+    if payload[4] != 0x84 {
+        return Err(format!(
+            "unsupported FrameForge toy palette version 0x{:02x}",
+            payload[4]
+        ));
+    }
+    let entry_count = payload[5] as usize;
+    if entry_count != 16 {
+        return Err(format!(
+            "toy palette decoder expects 16 entries for 4x4 lossless mode; got {entry_count}"
+        ));
+    }
+    if payload[6] != 3 || payload[7] != 8 {
+        return Err(format!(
+            "toy palette decoder currently supports only yuv444p8; got chroma_format_idc={} bit_depth={}",
+            payload[6], payload[7]
+        ));
+    }
+    if &payload[8..11] != b"YUV" {
+        return Err("invalid toy palette entry marker".to_string());
+    }
+    let entries_start = 11;
+    let index_marker = entries_start + (entry_count * 6);
+    if payload.get(index_marker..index_marker + 3) != Some(b"IDX") {
+        return Err("invalid toy palette index marker".to_string());
+    }
+    let indices_start = index_marker + 3;
+    let mut y = [0; 16];
+    let mut u = [0; 16];
+    let mut v = [0; 16];
+    for pos in 0..16 {
+        let packed = payload[indices_start + (pos / 2)];
+        let entry_idx = if pos % 2 == 0 {
+            packed >> 4
+        } else {
+            packed & 0x0f
+        } as usize;
+        if entry_idx >= entry_count {
+            return Err(format!("palette index {entry_idx} is out of range"));
+        }
+        let entry = entries_start + (entry_idx * 6);
+        y[pos] = decode_palette_sample_token(payload, entry)?;
+        u[pos] = decode_palette_sample_token(payload, entry + 2)?;
+        v[pos] = decode_palette_sample_token(payload, entry + 4)?;
+    }
+
+    let mut out = Vec::with_capacity(48);
+    out.extend_from_slice(&y);
+    out.extend_from_slice(&u);
+    out.extend_from_slice(&v);
+    Ok(out)
+}
+
+fn decode_palette_sample_token(payload: &[u8], offset: usize) -> Result<u8, String> {
+    let high = payload
+        .get(offset)
+        .copied()
+        .ok_or_else(|| "truncated toy palette sample token".to_string())?;
+    let low = payload
+        .get(offset + 1)
+        .copied()
+        .ok_or_else(|| "truncated toy palette sample token".to_string())?;
+    if high & 0xf0 != 0x40 || low & 0xf0 != 0x40 {
+        return Err("invalid toy palette sample token".to_string());
+    }
+    Ok(((high & 0x0f) << 4) | (low & 0x0f))
 }
 
 fn toy_4x4_color_filler_unit(color: Toy4x4SampledColor) -> VvcNalUnit {
@@ -2080,10 +2216,31 @@ mod tests {
         let infos = parse_annex_b_nal_units(&bytes).unwrap();
         let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
         assert_eq!(types, vec![15, 16, 25, 30, 30, 8]);
-        assert_eq!(infos[3].payload_len, 19);
+        assert_eq!(infos[3].payload_len, 119);
         assert_eq!(infos[4].payload_len, 23);
         assert!(bytes.windows(4).any(|window| window == b"FFPL"));
         assert!(bytes.windows(4).any(|window| window == b"FFAC"));
+    }
+
+    #[test]
+    fn toy_4x4_yuv444_palette_sideband_decodes_lossless_yuv444p8() {
+        let mut input = solid_yuv_planar_high(0, 0, 0, 8, 16, 1);
+        for idx in 0..16 {
+            input[idx] = idx as u8;
+            input[16 + idx] = 64 + idx as u8;
+            input[32 + idx] = 128 + idx as u8;
+        }
+
+        let bytes = toy_4x4_yuv_annex_b_from_input(
+            &input,
+            Toy4x4EncodeParams { frames: 1 },
+            PixelFormat::Yuv444p8,
+        )
+        .unwrap();
+        assert_eq!(
+            toy_4x4_decode_palette_yuv444p8_annex_b(&bytes).unwrap(),
+            input
+        );
     }
 
     #[test]

@@ -13,6 +13,7 @@ enum Command {
     VvcEos(VvcEosCli),
     VvcSkeleton(VvcSkeletonCli),
     VvcToy4x4Video(VvcToy4x4VideoCli),
+    VvcToy4x4Decode(VvcToy4x4DecodeCli),
     VvcList(VvcListCli),
 }
 
@@ -53,6 +54,12 @@ struct VvcToy4x4VideoCli {
 }
 
 #[derive(Debug)]
+struct VvcToy4x4DecodeCli {
+    input: PathBuf,
+    output: PathBuf,
+}
+
+#[derive(Debug)]
 struct VvcListCli {
     input: PathBuf,
 }
@@ -80,6 +87,7 @@ fn run(command: Command) -> Result<(), String> {
         Command::VvcEos(cli) => run_vvc_eos(cli),
         Command::VvcSkeleton(cli) => run_vvc_skeleton(cli),
         Command::VvcToy4x4Video(cli) => run_vvc_toy_4x4_video(cli),
+        Command::VvcToy4x4Decode(cli) => run_vvc_toy_4x4_decode(cli),
         Command::VvcList(cli) => run_vvc_list(cli),
     }
 }
@@ -161,6 +169,15 @@ fn run_vvc_toy_4x4_video(cli: VvcToy4x4VideoCli) -> Result<(), String> {
     Ok(())
 }
 
+fn run_vvc_toy_4x4_decode(cli: VvcToy4x4DecodeCli) -> Result<(), String> {
+    let bytes = fs::read(&cli.input)
+        .map_err(|err| format!("failed to read bitstream '{}': {err}", cli.input.display()))?;
+    let decoded = frameforge::vvc::toy_4x4_decode_palette_yuv444p8_annex_b(&bytes)?;
+    fs::write(&cli.output, decoded)
+        .map_err(|err| format!("failed to write output '{}': {err}", cli.output.display()))?;
+    Ok(())
+}
+
 fn run_vvc_list(cli: VvcListCli) -> Result<(), String> {
     let bytes = fs::read(&cli.input)
         .map_err(|err| format!("failed to read bitstream '{}': {err}", cli.input.display()))?;
@@ -188,6 +205,9 @@ fn parse_cli(args: Vec<String>) -> Result<Command, String> {
     }
     if args.first().map(String::as_str) == Some("vvc-toy-4x4-video") {
         return parse_vvc_toy_4x4_video_cli(args.into_iter().skip(1).collect());
+    }
+    if args.first().map(String::as_str) == Some("vvc-toy-4x4-decode") {
+        return parse_vvc_toy_4x4_decode_cli(args.into_iter().skip(1).collect());
     }
     if args.first().map(String::as_str) == Some("vvc-list") {
         return parse_vvc_list_cli(args.into_iter().skip(1).collect());
@@ -321,6 +341,26 @@ fn parse_vvc_toy_4x4_video_cli(args: Vec<String>) -> Result<Command, String> {
     }))
 }
 
+fn parse_vvc_toy_4x4_decode_cli(args: Vec<String>) -> Result<Command, String> {
+    let mut input = None;
+    let mut output = None;
+
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--input" => input = Some(next_value(&mut iter, "--input")?.into()),
+            "--output" => output = Some(next_value(&mut iter, "--output")?.into()),
+            "--help" | "-h" => return Err(String::new()),
+            other => return Err(format!("unknown vvc-toy-4x4-decode argument '{other}'")),
+        }
+    }
+
+    Ok(Command::VvcToy4x4Decode(VvcToy4x4DecodeCli {
+        input: input.ok_or_else(|| "missing --input <path>".to_string())?,
+        output: output.ok_or_else(|| "missing --output <path>".to_string())?,
+    }))
+}
+
 fn parse_vvc_list_cli(args: Vec<String>) -> Result<Command, String> {
     let mut input = None;
 
@@ -354,7 +394,7 @@ fn parse_usize(value: String, flag: &str) -> Result<usize, String> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  frameforge encode --input <raw> --width <w> --height <h> --format gray8 --output <ffbs> [--trace <jsonl>]\n  frameforge decode --input <ffbs> --output <raw>\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-skeleton --output <vvc>\n  frameforge vvc-toy-4x4-video --input <yuv> --output <vvc> [--frames 1|2] [--width 4 --height 4 --format yuv420p8|yuv422p8|yuv444p8|...]\n  frameforge vvc-list --input <vvc>\n\nThe encode subcommand is optional for compatibility."
+    "usage:\n  frameforge encode --input <raw> --width <w> --height <h> --format gray8 --output <ffbs> [--trace <jsonl>]\n  frameforge decode --input <ffbs> --output <raw>\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-skeleton --output <vvc>\n  frameforge vvc-toy-4x4-video --input <yuv> --output <vvc> [--frames 1|2] [--width 4 --height 4 --format yuv420p8|yuv422p8|yuv444p8|...]\n  frameforge vvc-toy-4x4-decode --input <vvc> --output <yuv444p8>\n  frameforge vvc-list --input <vvc>\n\nThe encode subcommand is optional for compatibility."
 }
 
 #[cfg(test)]
@@ -477,6 +517,24 @@ mod tests {
         assert_eq!(cli.width, 4);
         assert_eq!(cli.height, 4);
         assert_eq!(cli.format, PixelFormat::Yuv420p8);
+    }
+
+    #[test]
+    fn parse_cli_accepts_vvc_toy_4x4_decode_subcommand() {
+        let command = parse_cli(vec![
+            "vvc-toy-4x4-decode".into(),
+            "--input".into(),
+            "toy.vvc".into(),
+            "--output".into(),
+            "decoded.yuv".into(),
+        ])
+        .unwrap();
+
+        let Command::VvcToy4x4Decode(cli) = command else {
+            panic!("expected vvc-toy-4x4-decode command");
+        };
+        assert_eq!(cli.input, PathBuf::from("toy.vvc"));
+        assert_eq!(cli.output, PathBuf::from("decoded.yuv"));
     }
 
     #[test]

@@ -108,7 +108,8 @@ def forward_luma_dc(samples):
 def quant_ac_token(sample, dc_sample):
     coeff = sample - dc_sample
     magnitude = min((abs(coeff) + 8) >> 4, 8)
-    return 0x40 | ((1 if coeff < 0 else 0) << 5) | magnitude
+    negative = coeff < 0 and magnitude != 0
+    return 0x40 | ((1 if negative else 0) << 5) | magnitude
 
 
 def quant_ac_tokens(samples):
@@ -218,7 +219,7 @@ async def collect_stream(dut, frames):
     if dut.m_axis_valid.value == 1:
         observed.append(int(dut.m_axis_data.value))
 
-    for cycle in range(240):
+    for cycle in range(420):
         await RisingEdge(dut.clk)
         await ReadOnly()
         if dut.m_axis_valid.value == 1:

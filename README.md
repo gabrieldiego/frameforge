@@ -4,7 +4,7 @@ FrameForge is an open-source lab for video compression, bitstream generation, RT
 
 FrameForge is starting with a minimal VVC/H.266 encoder foundation, but the project is not limited to VVC, H.266, screen-content coding, FPGA work, or encoding only. The long-term goal is a practical research workspace for codec block experiments, software golden models, bitstream generation, RTL acceleration, FPGA-oriented blocks, encoder and decoder research, and hardware/software co-verification.
 
-Current status: skeleton, experimental, not production-ready, and not conforming. The current VVC toy path can generate a tiny 4x4 stream for software/RTL/VTM validation from planar YUV 4:2:0, 4:2:2, or 4:4:4 input at 8, 10, 12, or 16 bits. The 4:4:4 input path uses a first minimal palette-mode stage: one palette entry from the first Y/Cb/Cr triplet and a 4x4 all-zero index map. The emitted VTM-visible picture is still normalized into the current 8-bit, 4:2:0 toy syntax, so this is an SCC foundation step rather than conforming VVC palette coding.
+Current status: skeleton, experimental, not production-ready, and not conforming. The current VVC toy path can generate a tiny 4x4 stream for software/RTL/VTM validation from planar YUV 4:2:0, 4:2:2, or 4:4:4 input at 8, 10, 12, or 16 bits. The 4:4:4 8-bit input path now emits a first lossless FrameForge palette-token sideband with sixteen per-pixel YUV entries and 4-bit indices. The VTM-visible picture is still the current toy VVC syntax, so this is an SCC foundation step rather than conforming VVC palette coding.
 
 ## Near-Term Direction
 
@@ -116,7 +116,15 @@ cargo run -- vvc-toy-4x4-video --input /tmp/frameforge-toy-4x4-1f.yuv --frames 1
 make validate-decode BITSTREAM=/tmp/frameforge-toy-4x4-1f.vvc DECODED=/tmp/frameforge-toy-4x4-1f-dec.yuv
 ```
 
-This reads a 4x4 planar YUV input, samples the first Y/Cb/Cr values, and writes a generated Annex-B VVC stream for one IDR picture. FrameForge emits the sequence header, a color-derived Filler Data NAL unit, optional toy palette sideband for 4:4:4 input, picture header, slice header, and toy residual packets internally. The decoded luma is the nearest value on the current toy quantization ladder; decoded chroma is currently quantized to the narrow set encoded by the toy syntax.
+This reads a 4x4 planar YUV input and writes a generated Annex-B VVC stream for one IDR picture. FrameForge emits the sequence header, a color-derived Filler Data NAL unit, optional toy palette-token sideband for 4:4:4 input, picture header, slice header, and toy residual packets internally. The VTM-decoded luma is the nearest value on the current toy quantization ladder; decoded chroma is currently quantized to the narrow set encoded by the toy syntax.
+
+Decode the experimental FrameForge palette sideband losslessly for a 4x4 `yuv444p8` stream:
+
+```sh
+cargo run -- vvc-toy-4x4-decode --input /tmp/frameforge-toy-4x4-1f.vvc --output /tmp/frameforge-toy-4x4-1f-palette.yuv
+```
+
+This decoder reads the reserved `FFPL` sideband. It is a FrameForge experiment and is separate from VTM, which ignores the sideband.
 
 Generate the toy 2-frame 4x4 VVC validation stream:
 
@@ -139,7 +147,7 @@ dd if=/dev/zero of=/tmp/frameforge/black_4x4_2f_yuv420p8.yuv bs=48 count=1
 make validate INPUT=/tmp/frameforge/black_4x4_2f_yuv420p8.yuv
 ```
 
-The validation command infers resolution, frame count, and format from names such as `black_4x4_2f_yuv420p8.yuv`, `color_4x4_1f_yuv422p10le.yuv`, or `color_4x4_1f_yuv444p8.yuv`. You can override them with `WIDTH=4 HEIGHT=4 FRAMES=2 FORMAT=yuv422p8`. Supported toy input formats are planar `yuv420p`, `yuv422p`, and `yuv444p` at 8, 10, 12, or 16 bits, with common `i420`, `i422`, `i444`, `i010`, `i210`, and `i410` style aliases. Non-420 and high-bit-depth paths normalize samples into the current 8-bit 4:2:0 toy syntax before validation. Validation feeds the input YUV into both the software toy encoder and the RTL testbench, checks that their bitstreams match, taps the software and RTL internal reconstructions, decodes the RTL bitstream with VTM, and checks that the three reconstruction checksums match.
+The validation command infers resolution, frame count, and format from names such as `black_4x4_2f_yuv420p8.yuv`, `color_4x4_1f_yuv422p10le.yuv`, or `color_4x4_1f_yuv444p8.yuv`. You can override them with `WIDTH=4 HEIGHT=4 FRAMES=2 FORMAT=yuv422p8`. Supported toy input formats are planar `yuv420p`, `yuv422p`, and `yuv444p` at 8, 10, 12, or 16 bits, with common `i420`, `i422`, `i444`, `i010`, `i210`, and `i410` style aliases. Non-420 and high-bit-depth paths normalize samples into the current 8-bit 4:2:0 toy syntax before validation. Validation feeds the input YUV into both the software toy encoder and the RTL testbench, checks that their bitstreams match, taps the software and RTL internal reconstructions, decodes the RTL bitstream with VTM, and checks that the three reconstruction checksums match. For single-frame `yuv444p8`, validation also decodes the FrameForge palette sideband and checks that it matches the input losslessly.
 
 Internal reconstruction is always the reconstruction of the emitted bitstream. If a feature is not encoded into decoded picture syntax yet, the internal reconstruction must match what VTM decodes, not the intended input approximation.
 
@@ -254,7 +262,7 @@ The helper fails gracefully if `FRAMEFORGE_DECODER` is not set or the decoder ca
 - No conformance claims.
 - No VTM or VVdeC source import.
 - No inter prediction, B-frames, rate control, real RDO, or compression optimization.
-- Screen-content coding is only at the first scaffolding step: the 4:4:4 toy path has a single-entry palette sideband, but conforming VVC palette coding, intra block copy, BDPCM, transform skip, and related tools are still future work.
+- Screen-content coding is only at the first scaffolding step: the 4:4:4 toy path has a lossless FrameForge palette sideband, but conforming VVC palette coding, intra block copy, BDPCM, transform skip, and related tools are still future work.
 
 ## Contributing
 

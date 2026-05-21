@@ -19,10 +19,10 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - Named VVC syntax writer for `flag`, `u(n)`, `ue(v)`, `se(v)`, toy CABAC packets, RBSP trailing bits, and field-offset tracing.
 - Internally generated VVC NAL unit headers with named `forbidden_zero_bit`, `nuh_reserved_zero_bit`, `nuh_layer_id`, `nal_unit_type`, and `nuh_temporal_id_plus1` fields.
 - Internally generated toy SPS, PPS, picture header, slice header, and typed toy coding-tree events packetized into the entropy-coded body.
-- First toy screen-content coding step: 4:4:4 input uses a single-entry palette model and emits a reserved `FFPL` sideband carrying the palette entry and index map. This is not conforming VVC palette syntax yet.
+- First toy screen-content coding step: 4:4:4 8-bit input emits a reserved `FFPL` palette-token sideband with sixteen per-pixel YUV palette entries and 4-bit indices. FrameForge can decode this sideband losslessly back to `yuv444p8`; VTM still ignores this reserved sideband, so this is not conforming VVC palette syntax yet.
 - Rust toy encoder input handling for 4x4 planar YUV frame sequences with 4:2:0, 4:2:2, or 4:4:4 chroma at 8, 10, 12, or 16 bits per sample, currently normalizing to the 8-bit 4:2:0 toy coding path.
 - RTL toy encoder input handling is parameterized with `SAMPLE_BITS` and `CHROMA_FORMAT_IDC` for wider input buses and chroma planes while emitting the same normalized toy VVC stream as software.
-- Software and RTL internal reconstructions are bitstream reconstructions. They must match external decoder output even when the encoder has sampled an input feature that is not encoded into the bitstream yet.
+- Software and RTL internal reconstructions are VTM-visible bitstream reconstructions. They must match external decoder output even when the encoder also carries extra experimental sideband data. The separate FrameForge palette decode path checks lossless recovery from the reserved palette sideband for 4x4 `yuv444p8` input.
 - Basic placeholder NAL/Annex-B-style structures with TODOs for exact VVC syntax.
 - `EncoderParams`, `Picture`, reconstruction buffer skeleton, and fixed block traversal.
 - JSONL trace events.
