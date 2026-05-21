@@ -459,6 +459,8 @@ pub struct Toy4x4QuantizedColor {
     luma_ac_tokens: [u8; 15],
     second_luma_rem: u8,
     second_luma_ac_tokens: [u8; 15],
+    luma_tu_remainders: [u8; MAX_TOY_LUMA_TUS],
+    luma_tu_ac0_tokens: [u8; MAX_TOY_LUMA_TUS],
     luma_tu_count: usize,
     chroma_rem: u8,
 }
@@ -800,17 +802,19 @@ pub fn quantize_toy_4x4_color(color: Toy4x4SampledColor) -> Toy4x4QuantizedColor
 }
 
 fn quantize_toy_4x4_frame(frame: Toy4x4SampledFrame) -> Toy4x4QuantizedColor {
-    let first_block = first_residual_luma_block(&frame);
-    let luma_transform = transform_toy_4x4_luma(first_block);
-    let quantized_luma = quantize_toy_4x4_luma_dc(luma_transform);
+    let quantized_luma_tus = quantize_toy_4x4_luma_tus(&frame);
+    let quantized_luma = quantized_luma_tus[0];
     let reconstructed_luma = inverse_transform_toy_4x4_luma_dc(quantized_luma);
-    let second_luma = second_residual_luma_block(&frame).map(|block| {
-        let transform = transform_toy_4x4_luma(block);
-        quantize_toy_4x4_luma_dc(transform)
-    });
+    let second_luma = quantized_luma_tus.get(1).copied();
     let color = frame.sampled_color();
     let chroma_rem = quantize_toy_4x4_chroma(color.u, color.v);
     let reconstructed_chroma = reconstruct_toy_4x4_chroma(chroma_rem);
+    let mut luma_tu_remainders = [quantized_luma.abs_remainder; MAX_TOY_LUMA_TUS];
+    let mut luma_tu_ac0_tokens = [quantized_luma.ac_tokens[0]; MAX_TOY_LUMA_TUS];
+    for (index, quantized) in quantized_luma_tus.iter().enumerate() {
+        luma_tu_remainders[index] = quantized.abs_remainder;
+        luma_tu_ac0_tokens[index] = quantized.ac_tokens[0];
+    }
     Toy4x4QuantizedColor {
         y: reconstructed_luma.samples[0],
         u: reconstructed_chroma,
@@ -823,26 +827,46 @@ fn quantize_toy_4x4_frame(frame: Toy4x4SampledFrame) -> Toy4x4QuantizedColor {
         second_luma_ac_tokens: second_luma
             .map(|block| block.ac_tokens)
             .unwrap_or(quantized_luma.ac_tokens),
-        luma_tu_count: if second_luma.is_some() { 2 } else { 1 },
+        luma_tu_remainders,
+        luma_tu_ac0_tokens,
+        luma_tu_count: quantized_luma_tus.len(),
         chroma_rem,
     }
 }
 
+fn quantize_toy_4x4_luma_tus(frame: &Toy4x4SampledFrame) -> Vec<Toy4x4QuantizedTransformBlock> {
+    luma_tu_origins(frame.geometry)
+        .into_iter()
+        .map(|(x, y)| {
+            let block = residual_luma_block_at(frame, x, y);
+            let transform = transform_toy_4x4_luma(block);
+            quantize_toy_4x4_luma_dc(transform)
+        })
+        .collect()
+}
+
+fn luma_tu_origins(geometry: ToyVideoGeometry) -> Vec<(usize, usize)> {
+    let mut origins = Vec::new();
+    for y in (0..geometry.height).step_by(TOY_RESIDUAL_CB_SIZE) {
+        for x in (0..geometry.width).step_by(TOY_RESIDUAL_CB_SIZE) {
+            origins.push((x, y));
+        }
+    }
+    origins
+}
+
+#[cfg(test)]
 fn first_residual_luma_block(frame: &Toy4x4SampledFrame) -> [u8; TOY_RESIDUAL_LUMA_SAMPLES] {
     residual_luma_block_at(frame, 0, 0)
 }
 
+#[cfg(test)]
 fn second_residual_luma_block(
     frame: &Toy4x4SampledFrame,
 ) -> Option<[u8; TOY_RESIDUAL_LUMA_SAMPLES]> {
-    let (x, y) = if frame.geometry.width >= TOY_RESIDUAL_CB_SIZE * 2 {
-        (TOY_RESIDUAL_CB_SIZE, 0)
-    } else if frame.geometry.height >= TOY_RESIDUAL_CB_SIZE * 2 {
-        (0, TOY_RESIDUAL_CB_SIZE)
-    } else {
-        return None;
-    };
-    Some(residual_luma_block_at(frame, x, y))
+    luma_tu_origins(frame.geometry)
+        .get(1)
+        .map(|(x, y)| residual_luma_block_at(frame, *x, *y))
 }
 
 fn residual_luma_block_at(
@@ -1176,8 +1200,30 @@ fn write_toy_coding_tree_entropy(
     geometry: ToyVideoGeometry,
     color: Toy4x4QuantizedColor,
 ) {
-    let bits = toy_cabac_bits(geometry, color);
+    let bits = if toy_16x16_trace_params(geometry, color).is_none()
+        && !toy_entropy_tokens_mapped_to_vtm_geometry(geometry)
+    {
+        toy_capacity_tu_grid_bits(color)
+    } else {
+        toy_cabac_bits(geometry, color)
+    };
     writer.write_cabac_bits("cabac_toy_quantized_residual_bits", &bits);
+}
+
+fn toy_capacity_tu_grid_bits(color: Toy4x4QuantizedColor) -> Vec<bool> {
+    let mut bits = Vec::new();
+    append_fixed_bits(&mut bits, color.luma_tu_count as u64, 16);
+    for tu_index in 0..color.luma_tu_count {
+        append_fixed_bits(&mut bits, color.luma_tu_remainders[tu_index] as u64, 5);
+        append_fixed_bits(&mut bits, color.luma_tu_ac0_tokens[tu_index] as u64, 8);
+    }
+    bits
+}
+
+fn append_fixed_bits(bits: &mut Vec<bool>, value: u64, bit_count: u8) {
+    for bit in (0..bit_count).rev() {
+        bits.push(((value >> bit) & 1) != 0);
+    }
 }
 
 fn toy_4x4_entropy_tokens(
@@ -1263,14 +1309,14 @@ fn toy_capacity_placeholder_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<T
             },
         },
     );
-    if color.luma_tu_count > 1 {
+    for tu_index in 1..color.luma_tu_count {
         tokens.insert(
             tokens.len() - 1,
             ToyEntropyToken {
-                name: "luma_second_abs_remainder",
+                name: "luma_grid_abs_remainder",
                 kind: ToyEntropyTokenKind::RemAbsEp {
                     component: ToyResidualComponent::Luma,
-                    value: color.second_luma_rem,
+                    value: color.luma_tu_remainders[tu_index],
                     rice_param: 0,
                 },
             },
@@ -1278,10 +1324,10 @@ fn toy_capacity_placeholder_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<T
         tokens.insert(
             tokens.len() - 1,
             ToyEntropyToken {
-                name: "luma_second_ac_token",
+                name: "luma_grid_ac_token",
                 kind: ToyEntropyTokenKind::AcTokenEp {
                     component: ToyResidualComponent::Luma,
-                    token: color.second_luma_ac_tokens[0],
+                    token: color.luma_tu_ac0_tokens[tu_index],
                 },
             },
         );
@@ -1994,6 +2040,7 @@ fn nearest_quantized_luma(input: u8) -> (u8, u8) {
 const TOY_LUMA_DC_BASE: i16 = 114;
 const TOY_RESIDUAL_CB_SIZE: usize = 4;
 const TOY_RESIDUAL_LUMA_SAMPLES: usize = TOY_RESIDUAL_CB_SIZE * TOY_RESIDUAL_CB_SIZE;
+const MAX_TOY_LUMA_TUS: usize = 16 * 16;
 
 fn placeholder_rbsp() -> Vec<u8> {
     // TODO(vvc): Replace this rbsp_trailing_bits-only payload with real VPS,
@@ -2135,6 +2182,8 @@ mod tests {
             luma_ac_tokens: [0x40; 15],
             second_luma_rem: luma_rem,
             second_luma_ac_tokens: [0x40; 15],
+            luma_tu_remainders: [luma_rem; MAX_TOY_LUMA_TUS],
+            luma_tu_ac0_tokens: [0x40; MAX_TOY_LUMA_TUS],
             luma_tu_count: 1,
             chroma_rem: 6,
         }
@@ -2154,6 +2203,8 @@ mod tests {
             luma_ac_tokens: [0x40; 15],
             second_luma_rem: luma_rem,
             second_luma_ac_tokens: [0x40; 15],
+            luma_tu_remainders: [luma_rem; MAX_TOY_LUMA_TUS],
+            luma_tu_ac0_tokens: [0x40; MAX_TOY_LUMA_TUS],
             luma_tu_count: 1,
             chroma_rem,
         }
@@ -2522,6 +2573,8 @@ mod tests {
                 luma_ac_tokens: ac_tokens,
                 second_luma_rem: 5,
                 second_luma_ac_tokens: ac_tokens,
+                luma_tu_remainders: [5; MAX_TOY_LUMA_TUS],
+                luma_tu_ac0_tokens: [0x61; MAX_TOY_LUMA_TUS],
                 luma_tu_count: 1,
                 chroma_rem: 0
             }
@@ -2594,6 +2647,30 @@ mod tests {
 
         let single = Toy4x4SampledFrame::solid(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
         assert_eq!(second_residual_luma_block(&single), None);
+    }
+
+    #[test]
+    fn toy_frame_quantization_builds_full_64x64_luma_tu_grid() {
+        let frame = Toy4x4SampledFrame {
+            geometry: ToyVideoGeometry {
+                width: 64,
+                height: 64,
+            },
+            format: Toy4x4PictureFormat {
+                chroma_sampling: ChromaSampling::Cs420,
+                bit_depth: SampleBitDepth::Eight,
+            },
+            luma: vec![64; 64 * 64],
+            cb: vec![128; 32 * 32],
+            cr: vec![192; 32 * 32],
+            chroma_len: 32 * 32,
+        };
+        let color = quantize_toy_4x4_frame(frame);
+        assert_eq!(color.luma_tu_count, 256);
+        assert!(color.luma_tu_remainders[..color.luma_tu_count]
+            .iter()
+            .all(|rem| *rem == 7));
+        assert_eq!(toy_capacity_tu_grid_bits(color).len(), 16 + (256 * (5 + 8)));
     }
 
     #[test]

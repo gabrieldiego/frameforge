@@ -221,14 +221,36 @@ def decoded_reconstruction(frames, data):
     if is_toy_16x16_black_trace_path(data):
         return TOY_16X16_BLACK_TRACE_RECON * frames
 
-    y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(first_residual_luma_block(data))))
     chroma = reconstructed_chroma(sample_to_8bit(data[luma_samples()]), sample_to_8bit(data[v_sample_index()]))
+    if uses_capacity_tu_grid(data):
+        frame = bytearray([0] * luma_samples())
+        for origin_y in range(0, rtl_visible_height(), 4):
+            for origin_x in range(0, rtl_visible_width(), 4):
+                block = residual_luma_block(data, origin_x, origin_y)
+                y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(block)))
+                for y_off in range(min(4, rtl_visible_height() - origin_y)):
+                    row = (origin_y + y_off) * rtl_visible_width() + origin_x
+                    frame[row : row + min(4, rtl_visible_width() - origin_x)] = bytes(
+                        [y] * min(4, rtl_visible_width() - origin_x)
+                    )
+        frame.extend([chroma] * (luma_samples() // 4))
+        frame.extend([chroma] * (luma_samples() // 4))
+        return bytes(frame) * frames
+
+    y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(first_residual_luma_block(data))))
     frame = bytes(
         [y] * luma_samples()
         + [chroma] * (luma_samples() // 4)
         + [chroma] * (luma_samples() // 4)
     )
     return frame * frames
+
+
+def uses_capacity_tu_grid(data):
+    return not (
+        (rtl_visible_width() == 8 and rtl_visible_height() == 8)
+        or is_toy_16x16_black_trace_path(data)
+    )
 
 
 def is_toy_16x16_black_trace_path(data):
@@ -339,7 +361,7 @@ async def collect_stream(dut, frames):
     if dut.m_axis_valid.value == 1:
         observed.append(int(dut.m_axis_data.value))
 
-    for cycle in range(420):
+    for cycle in range(2000):
         await RisingEdge(dut.clk)
         await ReadOnly()
         if dut.m_axis_valid.value == 1:

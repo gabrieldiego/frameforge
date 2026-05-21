@@ -41,13 +41,15 @@ module ff_vvc_toy4x4_encoder #(
   localparam int INPUT_COUNT_BITS = $clog2((MAX_FRAME_SAMPLES * 2) + 1);
   localparam int TOY_RESIDUAL_CB_SIZE = 4;
   localparam int TOY_RESIDUAL_LUMA_SAMPLES = TOY_RESIDUAL_CB_SIZE * TOY_RESIDUAL_CB_SIZE;
+  localparam int MAX_SLICE_PAYLOAD_BITS = 4096;
   localparam bit PALETTE_MODE = (CHROMA_FORMAT_IDC == 3);
 
-  logic [8:0] index_q;
-  logic [8:0] stream_len_q;
+  logic [12:0] index_q;
+  logic [12:0] stream_len_q;
   logic [INPUT_COUNT_BITS - 1:0] input_count_q;
   logic [INPUT_COUNT_BITS - 1:0] input_len_q;
   logic       input_active_q;
+  logic [(SAMPLE_BITS * MAX_LUMA_SAMPLES) - 1:0] luma_frame_q;
   logic [(SAMPLE_BITS * TOY_RESIDUAL_LUMA_SAMPLES) - 1:0] luma_samples_q;
   logic [(SAMPLE_BITS * TOY_RESIDUAL_LUMA_SAMPLES) - 1:0] luma_samples_1_q;
   logic [(SAMPLE_BITS * 16) - 1:0] cb_samples_q;
@@ -99,6 +101,7 @@ module ff_vvc_toy4x4_encoder #(
       sampled_y <= '0;
       sampled_u <= '0;
       sampled_v <= '0;
+      luma_frame_q <= '0;
       luma_samples_q <= '0;
       luma_samples_1_q <= '0;
       cb_samples_q <= '0;
@@ -120,6 +123,7 @@ module ff_vvc_toy4x4_encoder #(
         stream_len_q   <= '0;
         input_error    <= 1'b0;
         sampled_color_valid <= 1'b0;
+        luma_frame_q <= '0;
         luma_samples_q <= '0;
         luma_samples_1_q <= '0;
         cb_samples_q <= '0;
@@ -138,6 +142,9 @@ module ff_vvc_toy4x4_encoder #(
         end
         if (input_count_q == 8'd0) begin
           sampled_y <= s_axis_data;
+        end
+        if (input_count_q < luma_samples()) begin
+          luma_frame_q[(MAX_LUMA_SAMPLES - 1 - input_count_q) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
         end
         if (is_residual_luma_sample(input_count_q)) begin
           luma_samples_q[(15 - residual_luma_sample_index(input_count_q)) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
@@ -171,7 +178,7 @@ module ff_vvc_toy4x4_encoder #(
           sampled_color_valid <= !input_error && s_axis_last;
           stream_len_q   <= stream_len(frame_count);
           m_axis_valid   <= 1'b1;
-          m_axis_data    <= stream_byte(8'd0);
+          m_axis_data    <= stream_byte(13'd0);
           m_axis_last    <= 1'b0;
           index_q        <= 8'd1;
         end else begin
@@ -305,47 +312,51 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [8:0] stream_len(input logic [1:0] frames);
+  function automatic logic [12:0] stream_len(input logic [1:0] frames);
     case (frames)
       2'd2: stream_len = parameter_set_len() + color_filler_nal_len() + (slice_nal_len() * 2);
       default: stream_len = parameter_set_len() + color_filler_nal_len() + slice_nal_len();
     endcase
   endfunction
 
-  function automatic logic [8:0] sps_nal_len();
+  function automatic logic [12:0] sps_nal_len();
     begin
       sps_nal_len = NAL_OVERHEAD_LEN + sps_payload_len();
     end
   endfunction
 
-  function automatic logic [8:0] pps_nal_len();
+  function automatic logic [12:0] pps_nal_len();
     begin
       pps_nal_len = NAL_OVERHEAD_LEN + pps_payload_len();
     end
   endfunction
 
-  function automatic logic [8:0] parameter_set_len();
+  function automatic logic [12:0] parameter_set_len();
     begin
       parameter_set_len = sps_nal_len() + pps_nal_len();
     end
   endfunction
 
-  function automatic logic [7:0] slice_payload_len();
+  function automatic logic [12:0] slice_payload_len();
     logic [135:0] cabac;
-    logic [7:0]   bit_len;
+    logic [12:0]  bit_len;
     begin
-      cabac = toy_cabac_bitstream(
-        quant_luma_rem(),
-        quant_luma_ac_tokens(),
-        quant_luma_rem_1(),
-        quant_luma_ac_tokens_1()
-      );
-      bit_len = 8'd24 + cabac[135:128] + 8'd1;
-      slice_payload_len = (bit_len + 8'd7) >> 3;
+      if (uses_capacity_tu_grid()) begin
+        bit_len = 13'd24 + capacity_tu_grid_bit_len() + 13'd1;
+      end else begin
+        cabac = toy_cabac_bitstream(
+          quant_luma_rem(),
+          quant_luma_ac_tokens(),
+          quant_luma_rem_1(),
+          quant_luma_ac_tokens_1()
+        );
+        bit_len = 13'd24 + {5'd0, cabac[135:128]} + 13'd1;
+      end
+      slice_payload_len = (bit_len + 13'd7) >> 3;
     end
   endfunction
 
-  function automatic logic [7:0] slice_nal_len();
+  function automatic logic [12:0] slice_nal_len();
     begin
       slice_nal_len = NAL_OVERHEAD_LEN + slice_payload_len();
     end
@@ -412,20 +423,20 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [7:0] color_filler_nal_len();
+  function automatic logic [12:0] color_filler_nal_len();
     begin
       color_filler_nal_len = NAL_OVERHEAD_LEN + color_filler_payload_len();
     end
   endfunction
 
-  function automatic logic [7:0] stream_byte(input logic [8:0] index);
+  function automatic logic [7:0] stream_byte(input logic [12:0] index);
     logic second_picture;
-    logic [8:0] slice_base;
-    logic [6:0] slice_index;
+    logic [12:0] slice_base;
+    logic [12:0] slice_index;
 
     begin
       if (index < sps_nal_len()) begin
-        stream_byte = nal_byte(3'd0, index[6:0], 1'b0);
+        stream_byte = nal_byte(3'd0, index, 1'b0);
       end else if (index < parameter_set_len()) begin
         stream_byte = nal_byte(3'd1, index - sps_nal_len(), 1'b0);
       end else if (index < parameter_set_len() + color_filler_nal_len()) begin
@@ -443,7 +454,7 @@ module ff_vvc_toy4x4_encoder #(
 
   function automatic logic [7:0] nal_byte(
     input logic [2:0] nal_kind,
-    input logic [8:0] nal_index,
+    input logic [12:0] nal_index,
     input logic       cra_picture
   );
     begin
@@ -509,7 +520,7 @@ module ff_vvc_toy4x4_encoder #(
 
   function automatic logic [7:0] payload_byte(
     input logic [2:0] nal_kind,
-    input logic [8:0] payload_index,
+    input logic [12:0] payload_index,
     input logic       cra_picture
   );
     begin
@@ -522,7 +533,7 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [7:0] color_filler_payload_byte(input logic [8:0] index);
+  function automatic logic [7:0] color_filler_payload_byte(input logic [12:0] index);
     begin
       if (index < color_filler_count()) begin
         color_filler_payload_byte = 8'hff;
@@ -534,7 +545,7 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [7:0] sps_payload_byte(input logic [8:0] index);
+  function automatic logic [7:0] sps_payload_byte(input logic [12:0] index);
     logic [264:0] payload;
 
     begin
@@ -547,7 +558,7 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [7:0] pps_payload_byte(input logic [8:0] index);
+  function automatic logic [7:0] pps_payload_byte(input logic [12:0] index);
     logic [264:0] payload;
 
     begin
@@ -834,7 +845,7 @@ module ff_vvc_toy4x4_encoder #(
   endfunction
 
   function automatic logic [7:0] slice_payload_byte(
-    input logic [6:0] index,
+    input logic [12:0] index,
     input logic       cra_picture
   );
     begin
@@ -854,66 +865,198 @@ module ff_vvc_toy4x4_encoder #(
     input logic [119:0] ac_tokens,
     input logic [4:0] rem_1,
     input logic [119:0] ac_tokens_1,
-    input logic [6:0] index,
+    input logic [12:0] index,
     input logic       cra_picture
   );
-    logic [255:0] payload;
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] payload;
 
     begin
       payload = toy_slice_payload_bits(rem, ac_tokens, rem_1, ac_tokens_1, cra_picture);
-      quant_luma_payload_byte = payload >> (((slice_payload_len() - 8'd1) - index) * 8);
+      quant_luma_payload_byte = payload >> (((slice_payload_len() - 13'd1) - index) * 8);
     end
   endfunction
 
-  function automatic logic [255:0] toy_slice_payload_bits(
+  function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] toy_slice_payload_bits(
     input logic [4:0] rem,
     input logic [119:0] ac_tokens,
     input logic [4:0] rem_1,
     input logic [119:0] ac_tokens_1,
     input logic       cra_picture
   );
-    logic [255:0] acc;
-    logic [7:0]   bit_len;
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] acc;
+    logic [12:0]  bit_len;
     logic [135:0] cabac;
     logic [95:0]  cabac_bits;
-    logic [7:0]   cabac_len;
-    logic [7:0]   payload_bits_len;
-    logic [7:0]   payload_byte_len;
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] capacity_bits;
+    logic [12:0]  payload_len;
+    logic [12:0]  payload_bits_len;
+    logic [12:0]  payload_byte_len;
 
     begin
       acc = '0;
-      bit_len = 8'd0;
+      bit_len = 13'd0;
 
       acc = (acc << 19) | slice_header_bits(cra_picture);
-      bit_len = bit_len + 8'd19;
+      bit_len = bit_len + 13'd19;
 
       acc = (acc << 1) | 1'b1; // cabac_alignment_one_bit
-      bit_len = bit_len + 8'd1;
+      bit_len = bit_len + 13'd1;
       if (cra_picture) begin
         acc = (acc << 1) | 1'b1; // current CRA slice alignment bit
-        bit_len = bit_len + 8'd1;
+        bit_len = bit_len + 13'd1;
       end
       while (bit_len[2:0] != 3'd0) begin
         acc = acc << 1;
-        bit_len = bit_len + 8'd1;
+        bit_len = bit_len + 13'd1;
       end
 
-      cabac = toy_cabac_bitstream(rem, ac_tokens, rem_1, ac_tokens_1);
-      cabac_len = cabac[135:128];
-      cabac_bits = cabac[95:0];
-      acc = (acc << cabac_len) | cabac_bits;
-      bit_len = bit_len + cabac_len;
+      if (uses_capacity_tu_grid()) begin
+        capacity_bits = capacity_tu_grid_bits();
+        payload_len = capacity_tu_grid_bit_len();
+        acc = (acc << payload_len) | capacity_bits;
+        bit_len = bit_len + payload_len;
+      end else begin
+        cabac = toy_cabac_bitstream(rem, ac_tokens, rem_1, ac_tokens_1);
+        payload_len = {5'd0, cabac[135:128]};
+        cabac_bits = cabac[95:0];
+        acc = (acc << payload_len) | cabac_bits;
+        bit_len = bit_len + payload_len;
+      end
 
       acc = (acc << 1) | 1'b1; // rbsp_stop_one_bit
-      bit_len = bit_len + 8'd1;
+      bit_len = bit_len + 13'd1;
       while (bit_len[2:0] != 3'd0) begin
         acc = acc << 1;
-        bit_len = bit_len + 8'd1;
+        bit_len = bit_len + 13'd1;
       end
 
       payload_byte_len = slice_payload_len();
       payload_bits_len = payload_byte_len << 3;
       toy_slice_payload_bits = acc << (payload_bits_len - bit_len);
+    end
+  endfunction
+
+  function automatic logic uses_capacity_tu_grid();
+    begin
+      uses_capacity_tu_grid = !toy_supports_8x8_mapped_tree() &&
+                              !toy_supports_16x16_trace(quant_luma_rem(), quant_chroma_rem());
+    end
+  endfunction
+
+  function automatic logic [12:0] luma_tu_count();
+    begin
+      luma_tu_count = ((visible_width + 16'd3) >> 2) * ((visible_height + 16'd3) >> 2);
+    end
+  endfunction
+
+  function automatic logic [12:0] capacity_tu_grid_bit_len();
+    begin
+      capacity_tu_grid_bit_len = 13'd16 + (luma_tu_count() * 13'd13);
+    end
+  endfunction
+
+  function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] capacity_tu_grid_bits();
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bits;
+    logic [12:0] tu;
+    begin
+      bits = luma_tu_count();
+      for (tu = 13'd0; tu < luma_tu_count(); tu = tu + 13'd1) begin
+        bits = (bits << 5) | quant_luma_rem_for_tu(tu);
+        bits = (bits << 8) | quant_luma_ac0_for_tu(tu);
+      end
+      capacity_tu_grid_bits = bits;
+    end
+  endfunction
+
+  function automatic logic [4:0] quant_luma_rem_for_tu(input logic [12:0] tu);
+    begin
+      quant_luma_rem_for_tu = quant_luma_rem_from_sample(forward_luma_dc_sample_for_tu(tu));
+    end
+  endfunction
+
+  function automatic logic [7:0] quant_luma_ac0_for_tu(input logic [12:0] tu);
+    logic [7:0] dc;
+    begin
+      dc = forward_luma_dc_sample_for_tu(tu);
+      quant_luma_ac0_for_tu = quant_ac_token_for_samples(luma_sample_for_tu(tu, 4'd1), dc);
+    end
+  endfunction
+
+  function automatic logic [7:0] forward_luma_dc_sample_for_tu(input logic [12:0] tu);
+    logic [12:0] sum;
+    integer i;
+    begin
+      sum = 13'd0;
+      for (i = 0; i < 16; i = i + 1) begin
+        sum = sum + {5'd0, luma_sample_for_tu(tu, i[3:0])};
+      end
+      forward_luma_dc_sample_for_tu = (sum + 13'd8) >> 4;
+    end
+  endfunction
+
+  function automatic logic [7:0] luma_sample_for_tu(input logic [12:0] tu, input logic [3:0] sample_index);
+    logic [15:0] tus_per_row;
+    logic [15:0] origin_x;
+    logic [15:0] origin_y;
+    logic [15:0] x;
+    logic [15:0] y;
+    logic [INPUT_COUNT_BITS - 1:0] linear_index;
+    logic [SAMPLE_BITS - 1:0] raw;
+    begin
+      tus_per_row = (visible_width + 16'd3) >> 2;
+      origin_x = (tu % tus_per_row) << 2;
+      origin_y = (tu / tus_per_row) << 2;
+      x = origin_x + {12'd0, sample_index[1:0]};
+      y = origin_y + {12'd0, sample_index[3:2]};
+      if ((x < visible_width) && (y < visible_height)) begin
+        linear_index = y * visible_width + x;
+        raw = luma_frame_q[(MAX_LUMA_SAMPLES - 1 - linear_index) * SAMPLE_BITS +: SAMPLE_BITS];
+        luma_sample_for_tu = sample_to_8bit(raw);
+      end else begin
+        luma_sample_for_tu = 8'd0;
+      end
+    end
+  endfunction
+
+  function automatic logic [7:0] quant_ac_token_for_samples(input logic [7:0] sample, input logic [7:0] dc);
+    logic signed [9:0] coeff;
+    logic [8:0] abs_coeff;
+    logic [4:0] magnitude;
+    logic negative;
+    begin
+      coeff = $signed({ 2'b00, sample }) - $signed({ 2'b00, dc });
+      negative = coeff < 0;
+      abs_coeff = negative ? -coeff : coeff;
+      magnitude = (abs_coeff + 9'd8) >> 4;
+      if (magnitude > 5'd8) begin
+        magnitude = 5'd8;
+      end
+      if (magnitude == 5'd0) begin
+        negative = 1'b0;
+      end
+      quant_ac_token_for_samples = 8'h40 | { 2'b00, negative, magnitude };
+    end
+  endfunction
+
+  function automatic logic [4:0] quant_luma_rem_from_sample(input logic [7:0] sample);
+    begin
+      if (sample >= 8'd111) quant_luma_rem_from_sample = 5'd0;
+      else if (sample >= 8'd104) quant_luma_rem_from_sample = 5'd1;
+      else if (sample >= 8'd97) quant_luma_rem_from_sample = 5'd2;
+      else if (sample >= 8'd90) quant_luma_rem_from_sample = 5'd3;
+      else if (sample >= 8'd82) quant_luma_rem_from_sample = 5'd4;
+      else if (sample >= 8'd75) quant_luma_rem_from_sample = 5'd5;
+      else if (sample >= 8'd68) quant_luma_rem_from_sample = 5'd6;
+      else if (sample >= 8'd61) quant_luma_rem_from_sample = 5'd7;
+      else if (sample >= 8'd54) quant_luma_rem_from_sample = 5'd8;
+      else if (sample >= 8'd46) quant_luma_rem_from_sample = 5'd9;
+      else if (sample >= 8'd40) quant_luma_rem_from_sample = 5'd10;
+      else if (sample >= 8'd33) quant_luma_rem_from_sample = 5'd11;
+      else if (sample >= 8'd25) quant_luma_rem_from_sample = 5'd12;
+      else if (sample >= 8'd18) quant_luma_rem_from_sample = 5'd13;
+      else if (sample >= 8'd11) quant_luma_rem_from_sample = 5'd14;
+      else if (sample >= 8'd4) quant_luma_rem_from_sample = 5'd15;
+      else quant_luma_rem_from_sample = 5'd16;
     end
   endfunction
 

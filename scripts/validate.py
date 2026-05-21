@@ -353,19 +353,50 @@ def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes
     frame = normalized_first_frame_to_yuv420p8(input_path, info)
     luma_len = info.width * info.height
     chroma_len = luma_len // 4
-    y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(first_residual_luma_block(frame, info))))
     chroma = reconstructed_chroma(frame[luma_len], frame[luma_len + chroma_len])
+    if uses_capacity_tu_grid(frame, info):
+        recon = bytearray(luma_len)
+        for origin_y in range(0, info.height, 4):
+            for origin_x in range(0, info.width, 4):
+                block = residual_luma_block(frame, info, origin_x, origin_y)
+                y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(block)))
+                width = min(4, info.width - origin_x)
+                for y_off in range(min(4, info.height - origin_y)):
+                    row = (origin_y + y_off) * info.width + origin_x
+                    recon[row : row + width] = bytes([y] * width)
+        recon.extend([chroma] * chroma_len)
+        recon.extend([chroma] * chroma_len)
+        return bytes(recon) * info.frames
+
+    y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(first_residual_luma_block(frame, info))))
     # This is the reconstruction of the emitted toy VVC bitstream, not the
     # original input. Keep this matched to VTM decode output after quantization.
     frame = bytes([y] * luma_len + [chroma] * chroma_len + [chroma] * chroma_len)
     return frame * info.frames
 
 
+def uses_capacity_tu_grid(frame: bytes, info: InputInfo) -> bool:
+    return not (
+        (info.width, info.height) == (8, 8)
+        or (
+            info.width == 16
+            and info.height == 16
+            and info.fmt == "yuv420p8"
+            and all(sample == 0 for sample in frame[: info.width * info.height * 3 // 2])
+        )
+    )
+
+
 def first_residual_luma_block(frame: bytes, info: InputInfo) -> bytes:
+    return residual_luma_block(frame, info, 0, 0)
+
+
+def residual_luma_block(frame: bytes, info: InputInfo, origin_x: int, origin_y: int) -> bytes:
     block = bytearray()
-    for y in range(4):
-        row = y * info.width
-        block.extend(frame[row : row + 4])
+    for y in range(min(4, info.height - origin_y)):
+        row = (origin_y + y) * info.width + origin_x
+        block.extend(frame[row : row + min(4, info.width - origin_x)])
+    block.extend([0] * (16 - len(block)))
     return bytes(block)
 
 
