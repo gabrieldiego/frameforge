@@ -19,10 +19,10 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - Named VVC syntax writer for `flag`, `u(n)`, `ue(v)`, `se(v)`, toy CABAC packets, RBSP trailing bits, and field-offset tracing.
 - Internally generated VVC NAL unit headers with named `forbidden_zero_bit`, `nuh_reserved_zero_bit`, `nuh_layer_id`, `nal_unit_type`, and `nuh_temporal_id_plus1` fields.
 - Internally generated toy SPS, PPS, picture header, slice header, and typed toy coding-tree events packetized into the entropy-coded body.
-- First toy screen-content coding step: 4:4:4 8-bit input emits a reserved `FFPL` palette-token sideband with sixteen per-pixel YUV palette entries and 4-bit indices. FrameForge can decode this sideband losslessly back to `yuv444p8`; VTM still ignores this reserved sideband, so this is not conforming VVC palette syntax yet.
+- First toy screen-content coding step: 4:4:4 input emits a reserved `FFPL` palette-token sideband with sixteen per-pixel YUV palette entries and 4-bit indices. FrameForge can decode this sideband losslessly back to `yuv444p8`, `yuv444p10le`, `yuv444p12le`, or `yuv444p16le`; VTM still ignores this reserved sideband, so this is not conforming VVC palette syntax yet.
 - Rust toy encoder input handling for 4x4 planar YUV frame sequences with 4:2:0, 4:2:2, or 4:4:4 chroma at 8, 10, 12, or 16 bits per sample, currently normalizing to the 8-bit 4:2:0 toy coding path.
 - RTL toy encoder input handling is parameterized with `SAMPLE_BITS` and `CHROMA_FORMAT_IDC` for wider input buses and chroma planes while emitting the same normalized toy VVC stream as software.
-- Software and RTL internal reconstructions are VTM-visible bitstream reconstructions. They must match external decoder output even when the encoder also carries extra experimental sideband data. The separate FrameForge palette decode path checks lossless recovery from the reserved palette sideband for 4x4 `yuv444p8` input.
+- Software and RTL internal reconstructions are VTM-visible bitstream reconstructions. They must match external decoder output even when the encoder also carries extra experimental sideband data. The separate FrameForge palette decode path checks lossless recovery from the reserved palette sideband for 4x4 4:4:4 input at 8, 10, 12, or 16 bits.
 - Basic placeholder NAL/Annex-B-style structures with TODOs for exact VVC syntax.
 - `EncoderParams`, `Picture`, reconstruction buffer skeleton, and fixed block traversal.
 - JSONL trace events.
@@ -60,6 +60,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - Carry profile or operating-point constraints separately from the generic sample bit-depth plumbing once real VVC profile handling is added.
 - Add clean-room VPS/SPS/PPS and a first intra picture after the EOS-only NAL writer is stable.
 - Replace placeholder VPS/SPS/PPS and IDR RBSP payloads with real clean-room syntax.
+- Replace the reserved `FFPL` sideband with conforming VVC palette coding only after the required SPS palette enable path, CU palette syntax, CABAC contexts, palette predictor reuse, palette entries, copy/run flags, indices, and escape-value behavior are implemented from the standard. VTM gates palette syntax on legal CU/block conditions, so the current 4x4 toy luma area is not a sufficient target for conforming palette signaling.
 - Define a narrow internal packet model for coding-tree traversal.
 - Add a software golden model for one small intra prediction mode.
 - Add block-level RTL/software comparison through cocotb.

@@ -120,7 +120,8 @@ def main() -> int:
     )
 
     env = os.environ.copy()
-    env["RTL_SAMPLE_BITS"] = "8"
+    rtl_sample_bits = format_bit_depth(info.fmt) if format_chroma_sampling(info.fmt) == "444" else 8
+    env["RTL_SAMPLE_BITS"] = str(rtl_sample_bits)
     env["RTL_SOURCE_SAMPLE_BITS"] = str(format_bit_depth(info.fmt))
     env["RTL_CHROMA_FORMAT_IDC"] = str(rtl_chroma_format_idc(info))
     if info.frames == 1:
@@ -338,6 +339,8 @@ def validate_decoded_non_monochrome(path: Path, info: InputInfo) -> None:
 
 
 def normalized_rtl_input(input_path: Path, info: InputInfo, out_dir: Path, stem: str) -> Path:
+    if format_chroma_sampling(info.fmt) == "444":
+        return input_path
     if format_bit_depth(info.fmt) == 8:
         return input_path
 
@@ -460,15 +463,17 @@ def supports_palette_lossless(info: InputInfo) -> bool:
         info.frames == 1
         and info.width == 4
         and info.height == 4
-        and normalize_format(info.fmt) == "yuv444p8"
+        and format_chroma_sampling(info.fmt) == "444"
+        and format_bit_depth(info.fmt) in (8, 10, 12, 16)
     )
 
 
 def quantized_luma(sample: int) -> int:
-    return min(
-        (((16 - rem) * 114 + 8) // 16 for rem in range(17)),
-        key=lambda value: abs(value - sample),
+    best_rem = min(
+        range(17),
+        key=lambda rem: abs((((16 - rem) * 114 + 8) // 16) - sample),
     )
+    return ((16 - best_rem) * 114) // 16
 
 
 if __name__ == "__main__":

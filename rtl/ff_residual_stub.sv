@@ -128,16 +128,16 @@ module ff_residual_stub #(
     begin
       if (sample >= 8'd111) quant_luma_rem_from_sample = 5'd0;
       else if (sample >= 8'd104) quant_luma_rem_from_sample = 5'd1;
-      else if (sample >= 8'd96) quant_luma_rem_from_sample = 5'd2;
-      else if (sample >= 8'd89) quant_luma_rem_from_sample = 5'd3;
+      else if (sample >= 8'd97) quant_luma_rem_from_sample = 5'd2;
+      else if (sample >= 8'd90) quant_luma_rem_from_sample = 5'd3;
       else if (sample >= 8'd82) quant_luma_rem_from_sample = 5'd4;
       else if (sample >= 8'd75) quant_luma_rem_from_sample = 5'd5;
       else if (sample >= 8'd68) quant_luma_rem_from_sample = 5'd6;
       else if (sample >= 8'd61) quant_luma_rem_from_sample = 5'd7;
       else if (sample >= 8'd54) quant_luma_rem_from_sample = 5'd8;
       else if (sample >= 8'd46) quant_luma_rem_from_sample = 5'd9;
-      else if (sample >= 8'd39) quant_luma_rem_from_sample = 5'd10;
-      else if (sample >= 8'd32) quant_luma_rem_from_sample = 5'd11;
+      else if (sample >= 8'd40) quant_luma_rem_from_sample = 5'd10;
+      else if (sample >= 8'd33) quant_luma_rem_from_sample = 5'd11;
       else if (sample >= 8'd25) quant_luma_rem_from_sample = 5'd12;
       else if (sample >= 8'd18) quant_luma_rem_from_sample = 5'd13;
       else if (sample >= 8'd11) quant_luma_rem_from_sample = 5'd14;

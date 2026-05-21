@@ -33,7 +33,12 @@ module ff_vvc_toy4x4_encoder #(
   localparam int SPS_PAYLOAD_LEN  = 31;
   localparam int PPS_PAYLOAD_LEN  = 14;
   localparam int COEFF_SIDEBAND_PAYLOAD_LEN = 23;
-  localparam int PALETTE_SIDEBAND_PAYLOAD_LEN = 119;
+  localparam int PALETTE_SAMPLE_NIBBLES = (SOURCE_SAMPLE_BITS + 3) / 4;
+  localparam int PALETTE_ENTRY_PAYLOAD_LEN = 16 * 3 * PALETTE_SAMPLE_NIBBLES;
+  localparam int PALETTE_ENTRY_START = 11;
+  localparam int PALETTE_INDEX_MARKER_START = PALETTE_ENTRY_START + PALETTE_ENTRY_PAYLOAD_LEN;
+  localparam int PALETTE_INDEX_START = PALETTE_INDEX_MARKER_START + 3;
+  localparam int PALETTE_SIDEBAND_PAYLOAD_LEN = PALETTE_INDEX_START + 8 + 1;
   localparam int NAL_OVERHEAD_LEN = 6;
   localparam int SPS_NAL_LEN = NAL_OVERHEAD_LEN + SPS_PAYLOAD_LEN;
   localparam int PPS_NAL_LEN = NAL_OVERHEAD_LEN + PPS_PAYLOAD_LEN;
@@ -288,7 +293,7 @@ module ff_vvc_toy4x4_encoder #(
 
   function automatic logic [7:0] nal_byte(
     input logic [2:0] nal_kind,
-    input logic [6:0] nal_index,
+    input logic [8:0] nal_index,
     input logic       cra_picture
   );
     begin
@@ -356,7 +361,7 @@ module ff_vvc_toy4x4_encoder #(
 
   function automatic logic [7:0] payload_byte(
     input logic [2:0] nal_kind,
-    input logic [6:0] payload_index,
+    input logic [8:0] payload_index,
     input logic       cra_picture
   );
     begin
@@ -371,11 +376,13 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [7:0] palette_sideband_payload_byte(input logic [6:0] index);
-    logic [6:0] entry_rel;
+  function automatic logic [7:0] palette_sideband_payload_byte(input logic [8:0] index);
+    logic [8:0] entry_rel;
+    logic [8:0] entry_token;
     logic [3:0] entry_idx;
-    logic [2:0] entry_comp;
-    logic [7:0] entry_sample;
+    logic [1:0] entry_comp;
+    logic [3:0] sample_nibble;
+    logic [15:0] entry_sample;
 
     begin
       if (index == 7'd0 || index == 7'd1) begin
@@ -385,7 +392,7 @@ module ff_vvc_toy4x4_encoder #(
       end else if (index == 7'd3) begin
         palette_sideband_payload_byte = 8'h4c; // L
       end else if (index == 7'd4) begin
-        palette_sideband_payload_byte = 8'h84; // sideband version 4
+        palette_sideband_payload_byte = 8'h85; // sideband version 5
       end else if (index == 7'd5) begin
         palette_sideband_payload_byte = 8'h10; // sixteen palette entries
       end else if (index == 7'd6) begin
@@ -398,25 +405,27 @@ module ff_vvc_toy4x4_encoder #(
         palette_sideband_payload_byte = 8'h55; // U
       end else if (index == 7'd10) begin
         palette_sideband_payload_byte = 8'h56; // V
-      end else if (index >= 7'd11 && index < 7'd107) begin
-        entry_rel = index - 7'd11;
-        entry_idx = entry_rel / 6;
-        entry_comp = entry_rel - (entry_idx * 6);
-        case (entry_comp[2:1])
-          2'd0: entry_sample = luma_sample_8(entry_idx);
-          2'd1: entry_sample = cb_sample_8(entry_idx);
-          default: entry_sample = cr_sample_8(entry_idx);
+      end else if (index >= PALETTE_ENTRY_START && index < PALETTE_INDEX_MARKER_START) begin
+        entry_rel = index - PALETTE_ENTRY_START;
+        entry_idx = entry_rel / (3 * PALETTE_SAMPLE_NIBBLES);
+        entry_token = entry_rel - (entry_idx * 3 * PALETTE_SAMPLE_NIBBLES);
+        entry_comp = entry_token / PALETTE_SAMPLE_NIBBLES;
+        sample_nibble = (PALETTE_SAMPLE_NIBBLES - 1) - (entry_token - (entry_comp * PALETTE_SAMPLE_NIBBLES));
+        case (entry_comp)
+          2'd0: entry_sample = luma_sample_source(entry_idx);
+          2'd1: entry_sample = cb_sample_source(entry_idx);
+          default: entry_sample = cr_sample_source(entry_idx);
         endcase
-        palette_sideband_payload_byte = entry_comp[0] ? (8'h40 | entry_sample[3:0]) : (8'h40 | entry_sample[7:4]);
-      end else if (index == 7'd107) begin
+        palette_sideband_payload_byte = 8'h40 | ((entry_sample >> (sample_nibble * 4)) & 16'h000f);
+      end else if (index == PALETTE_INDEX_MARKER_START) begin
         palette_sideband_payload_byte = 8'h49; // I
-      end else if (index == 7'd108) begin
+      end else if (index == PALETTE_INDEX_MARKER_START + 1) begin
         palette_sideband_payload_byte = 8'h44; // D
-      end else if (index == 7'd109) begin
+      end else if (index == PALETTE_INDEX_MARKER_START + 2) begin
         palette_sideband_payload_byte = 8'h58; // X
-      end else if (index >= 7'd110 && index < 7'd118) begin
-        palette_sideband_payload_byte = ((index - 7'd110) << 5) | (((index - 7'd110) << 1) + 1'b1);
-      end else if (index == 7'd118) begin
+      end else if (index >= PALETTE_INDEX_START && index < PALETTE_INDEX_START + 8) begin
+        palette_sideband_payload_byte = ((index - PALETTE_INDEX_START) << 5) | (((index - PALETTE_INDEX_START) << 1) + 1'b1);
+      end else if (index == PALETTE_INDEX_START + 8) begin
         palette_sideband_payload_byte = 8'h80;
       end else begin
         palette_sideband_payload_byte = 8'h00;
@@ -430,9 +439,21 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
+  function automatic logic [15:0] luma_sample_source(input logic [3:0] index);
+    begin
+      luma_sample_source = sample_to_source(luma_samples_q[(15 - index) * SAMPLE_BITS +: SAMPLE_BITS]);
+    end
+  endfunction
+
   function automatic logic [7:0] cb_sample_8(input logic [3:0] index);
     begin
       cb_sample_8 = sample_to_8bit(cb_samples_q[(15 - index) * SAMPLE_BITS +: SAMPLE_BITS]);
+    end
+  endfunction
+
+  function automatic logic [15:0] cb_sample_source(input logic [3:0] index);
+    begin
+      cb_sample_source = sample_to_source(cb_samples_q[(15 - index) * SAMPLE_BITS +: SAMPLE_BITS]);
     end
   endfunction
 
@@ -442,7 +463,25 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [7:0] color_filler_payload_byte(input logic [6:0] index);
+  function automatic logic [15:0] cr_sample_source(input logic [3:0] index);
+    begin
+      cr_sample_source = sample_to_source(cr_samples_q[(15 - index) * SAMPLE_BITS +: SAMPLE_BITS]);
+    end
+  endfunction
+
+  function automatic logic [15:0] sample_to_source(input logic [SAMPLE_BITS - 1:0] sample);
+    begin
+      if (SOURCE_SAMPLE_BITS > SAMPLE_BITS) begin
+        sample_to_source = sample << (SOURCE_SAMPLE_BITS - SAMPLE_BITS);
+      end else if (SOURCE_SAMPLE_BITS < SAMPLE_BITS) begin
+        sample_to_source = sample >> (SAMPLE_BITS - SOURCE_SAMPLE_BITS);
+      end else begin
+        sample_to_source = sample;
+      end
+    end
+  endfunction
+
+  function automatic logic [7:0] color_filler_payload_byte(input logic [8:0] index);
     begin
       if (index < color_filler_count()) begin
         color_filler_payload_byte = 8'hff;
@@ -454,7 +493,7 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [7:0] coeff_sideband_payload_byte(input logic [6:0] index);
+  function automatic logic [7:0] coeff_sideband_payload_byte(input logic [8:0] index);
     begin
       case (index)
         7'd0: coeff_sideband_payload_byte = 8'h46; // F
@@ -473,7 +512,7 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [7:0] sps_payload_byte(input logic [6:0] index);
+  function automatic logic [7:0] sps_payload_byte(input logic [8:0] index);
     logic [247:0] payload_bits;
 
     begin
@@ -486,7 +525,7 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [7:0] pps_payload_byte(input logic [6:0] index);
+  function automatic logic [7:0] pps_payload_byte(input logic [8:0] index);
     logic [111:0] payload_bits;
 
     begin

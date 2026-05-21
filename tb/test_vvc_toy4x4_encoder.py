@@ -33,9 +33,19 @@ def input_data(frames):
     specific = os.environ.get(f"FRAMEFORGE_RTL_TOY4X4_INPUT_{frames}F")
     generic = os.environ.get("FRAMEFORGE_RTL_TOY4X4_INPUT")
     if path := specific or generic:
-        data = Path(path).read_bytes()
-        return data[: frame_samples() * frames]
-    return solid_yuv_planar8(0, 0, 0, frames, chroma_plane_samples())
+        return input_samples_from_bytes(Path(path).read_bytes(), frames)
+    return list(solid_yuv_planar8(0, 0, 0, frames, chroma_plane_samples()))
+
+
+def input_samples_from_bytes(data, frames):
+    sample_count = frame_samples() * frames
+    bits = rtl_sample_bits()
+    if bits <= 8:
+        return list(data[:sample_count])
+    samples = []
+    for offset in range(0, sample_count * 2, 2):
+        samples.append(int.from_bytes(data[offset : offset + 2], byteorder="little"))
+    return samples
 
 
 def rtl_sample_bits():
@@ -72,18 +82,25 @@ def software_format():
 def software_input_bytes(data):
     bits = rtl_source_sample_bits()
     if bits <= 8:
-        return data
+        return bytes(source_sample(sample) for sample in data)
     out = bytearray()
     for sample in data:
-        out.extend((sample << (bits - 8)).to_bytes(2, byteorder="little"))
+        out.extend(source_sample(sample).to_bytes(2, byteorder="little"))
     return bytes(out)
 
 
+def source_sample(sample):
+    source_bits = rtl_source_sample_bits()
+    sample_bits = rtl_sample_bits()
+    if source_bits > sample_bits:
+        return sample << (source_bits - sample_bits)
+    if source_bits < sample_bits:
+        return sample >> (sample_bits - source_bits)
+    return sample
+
+
 def rtl_input_samples(data):
-    bits = rtl_sample_bits()
-    if bits <= 8:
-        return list(data)
-    return [sample << (bits - 8) for sample in data]
+    return list(data)
 
 
 def packed_rtl_luma_value(data):
@@ -95,17 +112,20 @@ def packed_rtl_luma_value(data):
 
 
 def quantized_luma(sample):
-    return min(
-        (((16 - rem) * 114 + 8) // 16 for rem in range(17)),
-        key=lambda value: abs(value - sample),
+    best_rem = min(
+        range(17),
+        key=lambda rem: abs((((16 - rem) * 114 + 8) // 16) - sample),
     )
+    return ((16 - best_rem) * 114) // 16
 
 
 def forward_luma_dc(samples):
+    samples = [sample_to_8bit(sample) for sample in samples]
     return ((sum(samples) + 8) >> 4) - 114
 
 
 def quant_ac_token(sample, dc_sample):
+    sample = sample_to_8bit(sample)
     coeff = sample - dc_sample
     magnitude = min((abs(coeff) + 8) >> 4, 8)
     negative = coeff < 0 and magnitude != 0
@@ -113,7 +133,7 @@ def quant_ac_token(sample, dc_sample):
 
 
 def quant_ac_tokens(samples):
-    dc_sample = (sum(samples) + 8) >> 4
+    dc_sample = (sum(sample_to_8bit(sample) for sample in samples) + 8) >> 4
     return bytes(quant_ac_token(sample, dc_sample) for sample in samples[1:16])
 
 
@@ -133,9 +153,16 @@ def reconstructed_chroma(u, v):
 def decoded_reconstruction(frames, data):
     # This is the reconstruction of the emitted VVC bitstream.
     y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(data[:16])))
-    chroma = reconstructed_chroma(data[16], data[v_sample_index()])
+    chroma = reconstructed_chroma(sample_to_8bit(data[16]), sample_to_8bit(data[v_sample_index()]))
     frame = bytes([y] * 16 + [chroma] * 4 + [chroma] * 4)
     return frame * frames
+
+
+def sample_to_8bit(sample):
+    bits = rtl_sample_bits()
+    if bits <= 8:
+        return sample
+    return sample >> (bits - 8)
 
 
 def software_stream(frames, data):
