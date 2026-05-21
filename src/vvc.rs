@@ -457,6 +457,9 @@ pub struct Toy4x4QuantizedColor {
     pub v: u8,
     luma_rem: u8,
     luma_ac_tokens: [u8; 15],
+    second_luma_rem: u8,
+    second_luma_ac_tokens: [u8; 15],
+    luma_tu_count: usize,
     chroma_rem: u8,
 }
 
@@ -801,6 +804,10 @@ fn quantize_toy_4x4_frame(frame: Toy4x4SampledFrame) -> Toy4x4QuantizedColor {
     let luma_transform = transform_toy_4x4_luma(first_block);
     let quantized_luma = quantize_toy_4x4_luma_dc(luma_transform);
     let reconstructed_luma = inverse_transform_toy_4x4_luma_dc(quantized_luma);
+    let second_luma = second_residual_luma_block(&frame).map(|block| {
+        let transform = transform_toy_4x4_luma(block);
+        quantize_toy_4x4_luma_dc(transform)
+    });
     let color = frame.sampled_color();
     let chroma_rem = quantize_toy_4x4_chroma(color.u, color.v);
     let reconstructed_chroma = reconstruct_toy_4x4_chroma(chroma_rem);
@@ -810,16 +817,44 @@ fn quantize_toy_4x4_frame(frame: Toy4x4SampledFrame) -> Toy4x4QuantizedColor {
         v: reconstructed_chroma,
         luma_rem: quantized_luma.abs_remainder,
         luma_ac_tokens: quantized_luma.ac_tokens,
+        second_luma_rem: second_luma
+            .map(|block| block.abs_remainder)
+            .unwrap_or(quantized_luma.abs_remainder),
+        second_luma_ac_tokens: second_luma
+            .map(|block| block.ac_tokens)
+            .unwrap_or(quantized_luma.ac_tokens),
+        luma_tu_count: if second_luma.is_some() { 2 } else { 1 },
         chroma_rem,
     }
 }
 
 fn first_residual_luma_block(frame: &Toy4x4SampledFrame) -> [u8; TOY_RESIDUAL_LUMA_SAMPLES] {
+    residual_luma_block_at(frame, 0, 0)
+}
+
+fn second_residual_luma_block(
+    frame: &Toy4x4SampledFrame,
+) -> Option<[u8; TOY_RESIDUAL_LUMA_SAMPLES]> {
+    let (x, y) = if frame.geometry.width >= TOY_RESIDUAL_CB_SIZE * 2 {
+        (TOY_RESIDUAL_CB_SIZE, 0)
+    } else if frame.geometry.height >= TOY_RESIDUAL_CB_SIZE * 2 {
+        (0, TOY_RESIDUAL_CB_SIZE)
+    } else {
+        return None;
+    };
+    Some(residual_luma_block_at(frame, x, y))
+}
+
+fn residual_luma_block_at(
+    frame: &Toy4x4SampledFrame,
+    origin_x: usize,
+    origin_y: usize,
+) -> [u8; TOY_RESIDUAL_LUMA_SAMPLES] {
     let mut block = [0; TOY_RESIDUAL_LUMA_SAMPLES];
-    let cb_width = TOY_RESIDUAL_CB_SIZE.min(frame.geometry.width);
-    let cb_height = TOY_RESIDUAL_CB_SIZE.min(frame.geometry.height);
+    let cb_width = TOY_RESIDUAL_CB_SIZE.min(frame.geometry.width - origin_x);
+    let cb_height = TOY_RESIDUAL_CB_SIZE.min(frame.geometry.height - origin_y);
     for y in 0..cb_height {
-        let src = y * frame.geometry.width;
+        let src = (origin_y + y) * frame.geometry.width + origin_x;
         let dst = y * TOY_RESIDUAL_CB_SIZE;
         block[dst..dst + cb_width].copy_from_slice(&frame.luma[src..src + cb_width]);
     }
@@ -1228,6 +1263,29 @@ fn toy_capacity_placeholder_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<T
             },
         },
     );
+    if color.luma_tu_count > 1 {
+        tokens.insert(
+            tokens.len() - 1,
+            ToyEntropyToken {
+                name: "luma_second_abs_remainder",
+                kind: ToyEntropyTokenKind::RemAbsEp {
+                    component: ToyResidualComponent::Luma,
+                    value: color.second_luma_rem,
+                    rice_param: 0,
+                },
+            },
+        );
+        tokens.insert(
+            tokens.len() - 1,
+            ToyEntropyToken {
+                name: "luma_second_ac_token",
+                kind: ToyEntropyTokenKind::AcTokenEp {
+                    component: ToyResidualComponent::Luma,
+                    token: color.second_luma_ac_tokens[0],
+                },
+            },
+        );
+    }
     tokens
 }
 
@@ -2075,6 +2133,9 @@ mod tests {
             v: 0,
             luma_rem,
             luma_ac_tokens: [0x40; 15],
+            second_luma_rem: luma_rem,
+            second_luma_ac_tokens: [0x40; 15],
+            luma_tu_count: 1,
             chroma_rem: 6,
         }
     }
@@ -2091,6 +2152,9 @@ mod tests {
             v: chroma,
             luma_rem,
             luma_ac_tokens: [0x40; 15],
+            second_luma_rem: luma_rem,
+            second_luma_ac_tokens: [0x40; 15],
+            luma_tu_count: 1,
             chroma_rem,
         }
     }
@@ -2456,6 +2520,9 @@ mod tests {
                 v: 96,
                 luma_rem: 5,
                 luma_ac_tokens: ac_tokens,
+                second_luma_rem: 5,
+                second_luma_ac_tokens: ac_tokens,
+                luma_tu_count: 1,
                 chroma_rem: 0
             }
         );
@@ -2482,6 +2549,51 @@ mod tests {
             first_residual_luma_block(&frame),
             [0, 1, 2, 3, 16, 17, 18, 19, 32, 33, 34, 35, 48, 49, 50, 51]
         );
+    }
+
+    #[test]
+    fn toy_residual_path_juxtaposes_second_4x4_tu_by_geometry() {
+        let luma: Vec<u8> = (0..256).map(|sample| sample as u8).collect();
+        let wide = Toy4x4SampledFrame {
+            geometry: ToyVideoGeometry {
+                width: 16,
+                height: 8,
+            },
+            format: Toy4x4PictureFormat {
+                chroma_sampling: ChromaSampling::Cs420,
+                bit_depth: SampleBitDepth::Eight,
+            },
+            luma: luma[..128].to_vec(),
+            cb: vec![0; 32],
+            cr: vec![0; 32],
+            chroma_len: 32,
+        };
+        assert_eq!(
+            second_residual_luma_block(&wide),
+            Some([4, 5, 6, 7, 20, 21, 22, 23, 36, 37, 38, 39, 52, 53, 54, 55])
+        );
+
+        let tall = Toy4x4SampledFrame {
+            geometry: ToyVideoGeometry {
+                width: 4,
+                height: 8,
+            },
+            format: Toy4x4PictureFormat {
+                chroma_sampling: ChromaSampling::Cs420,
+                bit_depth: SampleBitDepth::Eight,
+            },
+            luma: (0..32).map(|sample| sample as u8).collect(),
+            cb: vec![0; 8],
+            cr: vec![0; 8],
+            chroma_len: 8,
+        };
+        assert_eq!(
+            second_residual_luma_block(&tall),
+            Some([16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31])
+        );
+
+        let single = Toy4x4SampledFrame::solid(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
+        assert_eq!(second_residual_luma_block(&single), None);
     }
 
     #[test]

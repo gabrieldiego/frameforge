@@ -142,17 +142,37 @@ def rtl_input_samples(data):
 
 
 def packed_rtl_luma_value(data):
+    return packed_luma_value(first_residual_luma_block(data))
+
+
+def packed_second_rtl_luma_value(data):
+    return packed_luma_value(second_residual_luma_block(data))
+
+
+def packed_luma_value(samples):
     bits = rtl_sample_bits()
     value = 0
-    for sample in rtl_input_samples(first_residual_luma_block(data)):
+    for sample in rtl_input_samples(samples):
         value = (value << bits) | sample
     return value
 
 
 def first_residual_luma_block(data):
+    return residual_luma_block(data, 0, 0)
+
+
+def second_residual_luma_block(data):
+    if rtl_visible_width() >= 8:
+        return residual_luma_block(data, 4, 0)
+    if rtl_visible_height() >= 8:
+        return residual_luma_block(data, 0, 4)
+    return [0] * 16
+
+
+def residual_luma_block(data, origin_x, origin_y):
     block = []
     for y in range(4):
-        start = y * rtl_visible_width()
+        start = (origin_y + y) * rtl_visible_width() + origin_x
         block.extend(data[start : start + 4])
     return block
 
@@ -307,8 +327,12 @@ async def collect_stream(dut, frames):
     assert int(dut.sampled_u.value) == samples[luma_samples()]
     assert int(dut.sampled_v.value) == samples[v_sample_index()]
     assert int(dut.luma_samples_q.value) == packed_rtl_luma_value(data)
+    assert int(dut.luma_samples_1_q.value) == packed_second_rtl_luma_value(data)
     assert int(dut.quant_luma_ac_tokens_q.value) == int.from_bytes(
         quant_ac_tokens(first_residual_luma_block(data)), "big"
+    )
+    assert int(dut.quant_luma_ac_tokens_1_q.value) == int.from_bytes(
+        quant_ac_tokens(second_residual_luma_block(data)), "big"
     )
 
     observed = bytearray()
@@ -362,8 +386,12 @@ async def drain_sampled_color(dut, frames, y, u, v):
     assert int(dut.sampled_u.value) == samples[luma_samples()]
     assert int(dut.sampled_v.value) == samples[v_sample_index()]
     assert int(dut.luma_samples_q.value) == packed_rtl_luma_value(data)
+    assert int(dut.luma_samples_1_q.value) == packed_second_rtl_luma_value(data)
     assert int(dut.quant_luma_ac_tokens_q.value) == int.from_bytes(
         quant_ac_tokens(first_residual_luma_block(data)), "big"
+    )
+    assert int(dut.quant_luma_ac_tokens_1_q.value) == int.from_bytes(
+        quant_ac_tokens(second_residual_luma_block(data)), "big"
     )
 
 
