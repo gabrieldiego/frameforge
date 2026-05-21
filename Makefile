@@ -4,6 +4,7 @@ SIM ?= icarus
 TOPLEVEL_LANG ?= verilog
 DUT ?= intra
 RTL_SAMPLE_BITS ?= 8
+RTL_SOURCE_SAMPLE_BITS ?= $(RTL_SAMPLE_BITS)
 RTL_CHROMA_FORMAT_IDC ?= 1
 
 help:
@@ -18,7 +19,7 @@ help:
 	@printf '%s\n' '  make rtl-test  - run cocotb RTL tests'
 	@printf '%s\n' '  make rtl-test DUT=encoder - run minimum encoder RTL smoke test'
 	@printf '%s\n' '  make rtl-test DUT=vvc-skeleton - run RTL/Rust VVC skeleton smoke test'
-	@printf '%s\n' '  make rtl-test DUT=vvc-toy4x4 [RTL_SAMPLE_BITS=8|10|12|16 RTL_CHROMA_FORMAT_IDC=1|2|3] - run generated RTL/software VVC toy stream test'
+	@printf '%s\n' '  make rtl-test DUT=vvc-toy4x4 [RTL_SAMPLE_BITS=8|10|12|16 RTL_SOURCE_SAMPLE_BITS=8|10|12|16 RTL_CHROMA_FORMAT_IDC=1|2|3] - run generated RTL/software VVC toy stream test'
 	@printf '%s\n' '  make reference-vvc BITSTREAM=out.vvc [BIT_DEPTH=8|10|12|16 CHROMA_FORMAT=420|422|444] - create real VVC using VTM'
 	@printf '%s\n' '  make clean     - remove local build outputs'
 
@@ -50,7 +51,7 @@ reference-vvc:
 	python3 scripts/reference_encode_vvc.py --output "$(BITSTREAM)" --frames "$(or $(FRAMES),1)" $(if $(BIT_DEPTH),--bit-depth "$(BIT_DEPTH)") $(if $(CHROMA_FORMAT),--chroma-format "$(CHROMA_FORMAT)") $(if $(RECON),--recon "$(RECON)")
 
 rtl-test:
-	$(MAKE) -C tb SIM=$(SIM) TOPLEVEL_LANG=$(TOPLEVEL_LANG) DUT=$(DUT) RTL_SAMPLE_BITS=$(RTL_SAMPLE_BITS) RTL_CHROMA_FORMAT_IDC=$(RTL_CHROMA_FORMAT_IDC)
+	$(MAKE) -C tb SIM=$(SIM) TOPLEVEL_LANG=$(TOPLEVEL_LANG) DUT=$(DUT) RTL_SAMPLE_BITS=$(RTL_SAMPLE_BITS) RTL_SOURCE_SAMPLE_BITS=$(RTL_SOURCE_SAMPLE_BITS) RTL_CHROMA_FORMAT_IDC=$(RTL_CHROMA_FORMAT_IDC)
 
 clean:
 	cargo clean

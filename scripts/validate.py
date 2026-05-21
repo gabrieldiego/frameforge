@@ -119,6 +119,8 @@ def main() -> int:
     )
 
     env = os.environ.copy()
+    env["RTL_SAMPLE_BITS"] = "8"
+    env["RTL_SOURCE_SAMPLE_BITS"] = str(format_bit_depth(info.fmt))
     env["RTL_CHROMA_FORMAT_IDC"] = str(rtl_chroma_format_idc(info))
     if info.frames == 1:
         env["FRAMEFORGE_RTL_TOY4X4_INPUT_1F"] = str(rtl_input_path)

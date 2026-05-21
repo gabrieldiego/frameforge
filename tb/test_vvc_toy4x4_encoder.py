@@ -42,6 +42,10 @@ def rtl_sample_bits():
     return int(os.environ.get("RTL_SAMPLE_BITS", "8"))
 
 
+def rtl_source_sample_bits():
+    return int(os.environ.get("RTL_SOURCE_SAMPLE_BITS", str(rtl_sample_bits())))
+
+
 def rtl_chroma_format_idc():
     return int(os.environ.get("RTL_CHROMA_FORMAT_IDC", "1"))
 
@@ -59,9 +63,20 @@ def v_sample_index():
 
 
 def software_format():
-    return {1: "yuv420p8", 2: "yuv422p8", 3: "yuv444p8"}.get(
-        rtl_chroma_format_idc(), "yuv420p8"
+    suffix = "8" if rtl_source_sample_bits() <= 8 else f"{rtl_source_sample_bits()}le"
+    return {1: f"yuv420p{suffix}", 2: f"yuv422p{suffix}", 3: f"yuv444p{suffix}"}.get(
+        rtl_chroma_format_idc(), f"yuv420p{suffix}"
     )
+
+
+def software_input_bytes(data):
+    bits = rtl_source_sample_bits()
+    if bits <= 8:
+        return data
+    out = bytearray()
+    for sample in data:
+        out.extend((sample << (bits - 8)).to_bytes(2, byteorder="little"))
+    return bytes(out)
 
 
 def rtl_input_samples(data):
@@ -127,7 +142,7 @@ def software_stream(frames, data):
         fmt = software_format()
         input_yuv = Path(tmpdir) / f"input_4x4_{frames}f_{fmt}.yuv"
         output = Path(tmpdir) / "toy.vvc"
-        input_yuv.write_bytes(data)
+        input_yuv.write_bytes(software_input_bytes(data))
         subprocess.run(
             [
                 "cargo",

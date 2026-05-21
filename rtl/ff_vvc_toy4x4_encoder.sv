@@ -2,6 +2,7 @@
 
 module ff_vvc_toy4x4_encoder #(
   parameter int SAMPLE_BITS = 8,
+  parameter int SOURCE_SAMPLE_BITS = SAMPLE_BITS,
   // VVC chroma_format_idc values: 1=4:2:0, 2=4:2:2, 3=4:4:4.
   // The current generated bitstream remains the toy 4:2:0 validation stream,
   // but the input drain and first-chroma sampling are parameterized so wider
@@ -32,7 +33,7 @@ module ff_vvc_toy4x4_encoder #(
   localparam int SPS_PAYLOAD_LEN  = 31;
   localparam int PPS_PAYLOAD_LEN  = 14;
   localparam int COEFF_SIDEBAND_PAYLOAD_LEN = 23;
-  localparam int PALETTE_SIDEBAND_PAYLOAD_LEN = 17;
+  localparam int PALETTE_SIDEBAND_PAYLOAD_LEN = 19;
   localparam int NAL_OVERHEAD_LEN = 6;
   localparam int SPS_NAL_LEN = NAL_OVERHEAD_LEN + SPS_PAYLOAD_LEN;
   localparam int PPS_NAL_LEN = NAL_OVERHEAD_LEN + PPS_PAYLOAD_LEN;
@@ -365,16 +366,18 @@ module ff_vvc_toy4x4_encoder #(
         7'd1: palette_sideband_payload_byte = 8'h46; // F
         7'd2: palette_sideband_payload_byte = 8'h50; // P
         7'd3: palette_sideband_payload_byte = 8'h4c; // L
-        7'd4: palette_sideband_payload_byte = 8'h81; // sideband version 1
+        7'd4: palette_sideband_payload_byte = 8'h82; // sideband version 2
         7'd5: palette_sideband_payload_byte = 8'h01; // one palette entry
-        7'd6: palette_sideband_payload_byte = 8'h59; // Y
-        7'd7: palette_sideband_payload_byte = sample_to_8bit(sampled_y);
-        7'd8: palette_sideband_payload_byte = 8'h55; // U
-        7'd9: palette_sideband_payload_byte = sample_to_8bit(sampled_u);
-        7'd10: palette_sideband_payload_byte = 8'h56; // V
-        7'd11: palette_sideband_payload_byte = sample_to_8bit(sampled_v);
-        7'd12, 7'd13, 7'd14, 7'd15: palette_sideband_payload_byte = 8'h40;
-        7'd16: palette_sideband_payload_byte = 8'h80;
+        7'd6: palette_sideband_payload_byte = CHROMA_FORMAT_IDC;
+        7'd7: palette_sideband_payload_byte = SOURCE_SAMPLE_BITS;
+        7'd8: palette_sideband_payload_byte = 8'h59; // Y
+        7'd9: palette_sideband_payload_byte = sample_to_8bit(sampled_y);
+        7'd10: palette_sideband_payload_byte = 8'h55; // U
+        7'd11: palette_sideband_payload_byte = sample_to_8bit(sampled_u);
+        7'd12: palette_sideband_payload_byte = 8'h56; // V
+        7'd13: palette_sideband_payload_byte = sample_to_8bit(sampled_v);
+        7'd14, 7'd15, 7'd16, 7'd17: palette_sideband_payload_byte = 8'h40;
+        7'd18: palette_sideband_payload_byte = 8'h80;
         default: palette_sideband_payload_byte = 8'h00;
       endcase
     end
