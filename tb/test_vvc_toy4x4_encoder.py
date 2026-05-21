@@ -64,11 +64,15 @@ def inverse_transform_luma_dc(dc_coeff):
     return max(0, min(255, dc_coeff + 114))
 
 
+def reconstructed_chroma(u, v):
+    return 0 if u == 0 and v == 0 else 96
+
+
 def decoded_reconstruction(frames, data):
-    # This is the reconstruction of the emitted VVC bitstream. Chroma remains
-    # quantized to zero until the toy residual path supports chroma color.
+    # This is the reconstruction of the emitted VVC bitstream.
     y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(data[:16])))
-    frame = bytes([y] * 16 + [0] * 4 + [0] * 4)
+    chroma = reconstructed_chroma(data[16], data[20])
+    frame = bytes([y] * 16 + [chroma] * 4 + [chroma] * 4)
     return frame * frames
 
 
@@ -198,7 +202,11 @@ async def vvc_toy4x4_encoder_matches_software_stream(dut):
     cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
 
     one_frame, one_frame_input = await collect_stream(dut, frames=1)
-    assert one_frame == software_stream(frames=1, data=one_frame_input)
+    expected_one_frame = software_stream(frames=1, data=one_frame_input)
+    assert one_frame == expected_one_frame, (
+        one_frame.hex(),
+        expected_one_frame.hex(),
+    )
     if path := os.environ.get("FRAMEFORGE_RTL_TOY4X4_OUT_1F"):
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -217,7 +225,11 @@ async def vvc_toy4x4_encoder_matches_software_stream(dut):
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(decoded_reconstruction(frames=2, data=two_frame_input))
-    assert two_frames == software_stream(frames=2, data=two_frame_input)
+    expected_two_frames = software_stream(frames=2, data=two_frame_input)
+    assert two_frames == expected_two_frames, (
+        two_frames.hex(),
+        expected_two_frames.hex(),
+    )
 
 
 @cocotb.test()

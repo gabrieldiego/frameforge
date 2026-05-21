@@ -466,13 +466,15 @@ fn quantize_toy_4x4_frame(frame: Toy4x4SampledFrame) -> Toy4x4QuantizedColor {
     let luma_transform = transform_toy_4x4_luma(frame.luma);
     let quantized_luma = quantize_toy_4x4_luma_dc(luma_transform);
     let reconstructed_luma = inverse_transform_toy_4x4_luma_dc(quantized_luma);
+    let chroma_rem = quantize_toy_4x4_chroma(frame.u, frame.v);
+    let reconstructed_chroma = reconstruct_toy_4x4_chroma(chroma_rem);
     Toy4x4QuantizedColor {
         y: reconstructed_luma.samples[0],
-        u: 0,
-        v: 0,
+        u: reconstructed_chroma,
+        v: reconstructed_chroma,
         luma_rem: quantized_luma.abs_remainder,
         luma_ac_tokens: quantized_luma.ac_tokens,
-        chroma_rem: 6,
+        chroma_rem,
     }
 }
 
@@ -1244,6 +1246,22 @@ fn quantize_toy_ac_coeff(coeff: i16) -> i8 {
     }
 }
 
+fn quantize_toy_4x4_chroma(u: u8, v: u8) -> u8 {
+    if u == 0 && v == 0 {
+        6
+    } else {
+        0
+    }
+}
+
+fn reconstruct_toy_4x4_chroma(chroma_rem: u8) -> u8 {
+    if chroma_rem == 0 {
+        96
+    } else {
+        0
+    }
+}
+
 fn nearest_quantized_luma(input: u8) -> (u8, u8) {
     let mut best_value = 0;
     let mut best_rem = 16;
@@ -1401,6 +1419,22 @@ mod tests {
             luma_rem,
             luma_ac_tokens: [0x40; 15],
             chroma_rem: 6,
+        }
+    }
+
+    fn toy_quantized_color_with_chroma(
+        y: u8,
+        luma_rem: u8,
+        chroma: u8,
+        chroma_rem: u8,
+    ) -> Toy4x4QuantizedColor {
+        Toy4x4QuantizedColor {
+            y,
+            u: chroma,
+            v: chroma,
+            luma_rem,
+            luma_ac_tokens: [0x40; 15],
+            chroma_rem,
         }
     }
 
@@ -1644,7 +1678,7 @@ mod tests {
     fn toy_color_quantization_uses_inverse_transform_reconstruction() {
         assert_eq!(
             quantize_toy_4x4_color(Toy4x4SampledColor { y: 65, u: 9, v: 7 }),
-            toy_quantized_color(64, 7)
+            toy_quantized_color_with_chroma(64, 7, 96, 0)
         );
     }
 
@@ -1658,13 +1692,21 @@ mod tests {
             quantize_toy_4x4_frame(Toy4x4SampledFrame { luma, u: 9, v: 7 }),
             Toy4x4QuantizedColor {
                 y: 78,
-                u: 0,
-                v: 0,
+                u: 96,
+                v: 96,
                 luma_rem: 5,
                 luma_ac_tokens: ac_tokens,
-                chroma_rem: 6
+                chroma_rem: 0
             }
         );
+    }
+
+    #[test]
+    fn toy_chroma_quantization_keeps_black_neutral_and_nonzero_colored() {
+        assert_eq!(quantize_toy_4x4_chroma(0, 0), 6);
+        assert_eq!(reconstruct_toy_4x4_chroma(6), 0);
+        assert_eq!(quantize_toy_4x4_chroma(128, 192), 0);
+        assert_eq!(reconstruct_toy_4x4_chroma(0), 96);
     }
 
     #[test]

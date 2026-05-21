@@ -39,6 +39,7 @@ module ff_vvc_toy4x4_encoder (
   logic       input_active_q;
   logic [127:0] luma_samples_q;
   logic [4:0] quant_luma_rem_q;
+  logic [4:0] quant_chroma_rem_q;
   logic [119:0] quant_luma_ac_tokens_q;
   logic [4:0] residual_quant_luma_rem;
   logic [119:0] residual_quant_luma_ac_tokens;
@@ -68,6 +69,7 @@ module ff_vvc_toy4x4_encoder (
       sampled_v <= '0;
       luma_samples_q <= '0;
       quant_luma_rem_q <= 5'd16;
+      quant_chroma_rem_q <= 5'd6;
       quant_luma_ac_tokens_q <= {15{8'h40}};
       m_axis_valid <= 1'b0;
       m_axis_data  <= '0;
@@ -83,6 +85,7 @@ module ff_vvc_toy4x4_encoder (
         sampled_color_valid <= 1'b0;
         luma_samples_q <= '0;
         quant_luma_rem_q <= 5'd16;
+        quant_chroma_rem_q <= 5'd6;
         quant_luma_ac_tokens_q <= {15{8'h40}};
         m_axis_valid   <= 1'b0;
         m_axis_last    <= 1'b0;
@@ -106,6 +109,7 @@ module ff_vvc_toy4x4_encoder (
         end
         if (input_count_q == 8'd20) begin
           sampled_v <= s_axis_data;
+          quant_chroma_rem_q <= quant_chroma_rem_from_samples(sampled_u, s_axis_data);
         end
 
         if (input_count_q == input_len_q - 1'b1) begin
@@ -155,6 +159,9 @@ module ff_vvc_toy4x4_encoder (
         5'd3, 5'd4, 5'd5, 5'd6, 5'd7, 5'd8, 5'd9, 5'd10, 5'd11: slice_payload_len = 8'd10;
         default: slice_payload_len = 8'd11;
       endcase
+      if (quant_chroma_rem() == 5'd0) begin
+        slice_payload_len = slice_payload_len - 8'd1;
+      end
     end
   endfunction
 
@@ -167,6 +174,21 @@ module ff_vvc_toy4x4_encoder (
   function automatic logic [4:0] quant_luma_rem();
     begin
       quant_luma_rem = quant_luma_rem_q;
+    end
+  endfunction
+
+  function automatic logic [4:0] quant_chroma_rem();
+    begin
+      quant_chroma_rem = quant_chroma_rem_q;
+    end
+  endfunction
+
+  function automatic logic [4:0] quant_chroma_rem_from_samples(
+    input logic [7:0] u,
+    input logic [7:0] v
+  );
+    begin
+      quant_chroma_rem_from_samples = (u == 8'd0 && v == 8'd0) ? 5'd6 : 5'd0;
     end
   endfunction
 
@@ -476,7 +498,7 @@ module ff_vvc_toy4x4_encoder (
       st = cabac_encode_ctx_bins(st, 5'd9,  8'b0000_1011, 4'd4);
       st = cabac_encode_ctx_bins(st, 5'd13, 8'b0000_0100, 4'd3);
       st = cabac_encode_ctx_bins(st, 5'd16, 8'b0000_0101, 4'd3);
-      st = cabac_encode_rem_abs_ep(st, 5'd6, 3'd0);
+      st = cabac_encode_rem_abs_ep(st, quant_chroma_rem(), 3'd0);
       st = cabac_encode_bin_ep(st, 1'b1);
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);

@@ -137,6 +137,9 @@ def main() -> int:
 
     print("OK: software and RTL bitstreams match")
     print("OK: software, RTL, and VTM reconstructions match")
+    if input_has_nonzero_chroma(input_path, info):
+        validate_decoded_non_monochrome(vtm_recon, info)
+        print("OK: VTM reconstruction contains decoder-visible chroma")
     return 0
 
 
@@ -223,9 +226,10 @@ def sha256(path: Path) -> str:
 def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes:
     data = input_path.read_bytes()
     y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(data[:16])))
+    chroma = reconstructed_chroma(data[16], data[20])
     # This is the reconstruction of the emitted toy VVC bitstream, not the
     # original input. Keep this matched to VTM decode output after quantization.
-    frame = bytes([y] * 16 + [0] * 4 + [0] * 4)
+    frame = bytes([y] * 16 + [chroma] * 4 + [chroma] * 4)
     return frame * info.frames
 
 
@@ -240,6 +244,26 @@ def quantized_luma_dc(dc_coeff: int) -> int:
 
 def inverse_transform_luma_dc(dc_coeff: int) -> int:
     return max(0, min(255, dc_coeff + 114))
+
+
+def reconstructed_chroma(u: int, v: int) -> int:
+    return 0 if u == 0 and v == 0 else 96
+
+
+def input_has_nonzero_chroma(input_path: Path, info: InputInfo) -> bool:
+    frame_len = info.width * info.height * 3 // 2
+    luma_len = info.width * info.height
+    first_frame = input_path.read_bytes()[:frame_len]
+    return any(sample != 0 for sample in first_frame[luma_len:])
+
+
+def validate_decoded_non_monochrome(path: Path, info: InputInfo) -> None:
+    data = path.read_bytes()
+    luma_len = info.width * info.height
+    chroma_len = luma_len // 4
+    first_frame_chroma = data[luma_len : luma_len + (chroma_len * 2)]
+    if not any(sample != 0 for sample in first_frame_chroma):
+        raise SystemExit("FAIL: VTM reconstruction has no decoder-visible chroma")
 
 
 def quantized_luma(sample: int) -> int:
