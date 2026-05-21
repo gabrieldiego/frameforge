@@ -404,6 +404,8 @@ module ff_vvc_toy4x4_encoder #(
         sps_payload_bits = 248'h000b_0200_8000_4242_3f54_07d1_1ba2_11a2_1091_84d8_a315_0c1a_02ae_3f82_b040_80;
       end else if (VISIBLE_WIDTH == 16 && VISIBLE_HEIGHT == 16) begin
         sps_payload_bits = 248'h000b_0200_8000_4110_8fd5_01f4_46e8_8468_8424_6136_28c5_4306_80ab_8fe0_ac10_20;
+      end else if (VISIBLE_WIDTH == 32 && VISIBLE_HEIGHT == 16) begin
+        sps_payload_bits = 248'h000b_0200_8000_4084_23f5_407d_11ba_211a_2109_184d_8a31_50c1_a02a_e3f8_2b04_08;
       end else if (VISIBLE_WIDTH == 64 && VISIBLE_HEIGHT == 64) begin
         sps_payload_bits = 256'h000b_0200_8000_4041_020f_d501_f446_e884_6884_2461_3628_c543_0680_ab8f_e0ac_1020;
       end else begin
@@ -435,6 +437,8 @@ module ff_vvc_toy4x4_encoder #(
         pps_payload_bits = 112'h0002_4222_9080_31ec_8516_5165_1620;
       end else if (VISIBLE_WIDTH == 16 && VISIBLE_HEIGHT == 16) begin
         pps_payload_bits = 112'h0001_1088_a420_0c7b_2145_9459_4588;
+      end else if (VISIBLE_WIDTH == 32 && VISIBLE_HEIGHT == 16) begin
+        pps_payload_bits = 112'h0000_8422_2908_031e_c851_6516_5162;
       end else if (VISIBLE_WIDTH == 64 && VISIBLE_HEIGHT == 64) begin
         pps_payload_bits = 120'h0000_4102_08a4_200c_7b21_4594_5945_88;
       end else begin

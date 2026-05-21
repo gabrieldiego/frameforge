@@ -203,6 +203,12 @@ def main() -> int:
     if has_vtm_recon and input_has_nonzero_chroma(input_path, info):
         validate_decoded_non_monochrome(vtm_recon, info)
         print("OK: VTM reconstruction contains decoder-visible chroma")
+    if input_is_all_zero(input_path):
+        validate_zero_reconstruction(sw_internal_recon, "software internal reconstruction")
+        validate_zero_reconstruction(rtl_internal_recon, "RTL internal reconstruction")
+        if has_vtm_recon:
+            validate_zero_reconstruction(vtm_recon, "VTM reconstruction")
+        print("OK: black input reconstructs to all-zero output")
     return 0
 
 
@@ -342,6 +348,21 @@ def validate_decoded_non_monochrome(path: Path, info: InputInfo) -> None:
     first_frame_chroma = data[luma_len : luma_len + (chroma_len * 2)]
     if not any(sample != 0 for sample in first_frame_chroma):
         raise SystemExit("FAIL: VTM reconstruction has no decoder-visible chroma")
+
+
+def input_is_all_zero(path: Path) -> bool:
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            if any(chunk):
+                return False
+    return True
+
+
+def validate_zero_reconstruction(path: Path, label: str) -> None:
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            if any(chunk):
+                raise SystemExit(f"FAIL: black input produced non-zero {label}")
 
 
 def normalized_rtl_input(input_path: Path, info: InputInfo, out_dir: Path, stem: str) -> Path:
