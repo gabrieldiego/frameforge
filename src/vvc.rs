@@ -479,9 +479,21 @@ struct ToyTraceCtxBin {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ToyTraceBin {
+enum ToyTraceBinKind {
     Ctx(ToyTraceCtxBin),
     Ep(bool),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ToyTraceBin {
+    syntax: &'static str,
+    kind: ToyTraceBinKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Toy16x16TraceParams {
+    luma_rem: u8,
+    chroma_rem: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1214,12 +1226,8 @@ fn toy_entropy_tokens_mapped_to_vtm_geometry(geometry: ToyVideoGeometry) -> bool
 }
 
 fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Vec<bool> {
-    if geometry.coded_width() == 16
-        && geometry.coded_height() == 16
-        && color.luma_rem == 16
-        && color.chroma_rem == 6
-    {
-        return toy_16x16_black_trace_cabac_bits();
+    if let Some(params) = toy_16x16_trace_params(geometry, color) {
+        return toy_16x16_trace_cabac_bits(params);
     }
 
     let mut cabac = ToyCabacEncoder::new();
@@ -1245,337 +1253,180 @@ fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Ve
     cabac.finish()
 }
 
-fn toy_16x16_black_trace_cabac_bits() -> Vec<bool> {
+fn toy_16x16_trace_params(
+    geometry: ToyVideoGeometry,
+    color: Toy4x4QuantizedColor,
+) -> Option<Toy16x16TraceParams> {
+    if geometry.coded_width() == 16
+        && geometry.coded_height() == 16
+        && color.luma_rem == 16
+        && color.chroma_rem == 6
+    {
+        return Some(Toy16x16TraceParams {
+            luma_rem: color.luma_rem,
+            chroma_rem: color.chroma_rem,
+        });
+    }
+    None
+}
+
+fn toy_16x16_trace_cabac_bits(params: Toy16x16TraceParams) -> Vec<bool> {
+    debug_assert_eq!(params.luma_rem, 16);
+    debug_assert_eq!(params.chroma_rem, 6);
+
     let mut cabac = ToyCabacEncoder::new();
     cabac.start();
     for bin in TOY_16X16_BLACK_TRACE_BINS {
-        match *bin {
-            ToyTraceBin::Ctx(ctx) => cabac.encode_bin(
+        match bin.kind {
+            ToyTraceBinKind::Ctx(ctx) => cabac.encode_bin(
                 ctx.bin,
                 ToyCtxEvent {
                     lps: ctx.lps,
                     mps: ctx.mps,
                 },
             ),
-            ToyTraceBin::Ep(bin) => cabac.encode_bin_ep(bin),
+            ToyTraceBinKind::Ep(value) => cabac.encode_bin_ep(value),
         }
     }
     cabac.encode_bin_trm(true);
     cabac.finish()
 }
 
+const fn trace_ctx(syntax: &'static str, lps: u16, mps: bool, bin: bool) -> ToyTraceBin {
+    ToyTraceBin {
+        syntax,
+        kind: ToyTraceBinKind::Ctx(ToyTraceCtxBin { lps, mps, bin }),
+    }
+}
+
+const fn trace_ep(syntax: &'static str, bin: bool) -> ToyTraceBin {
+    ToyTraceBin {
+        syntax,
+        kind: ToyTraceBinKind::Ep(bin),
+    }
+}
+
 const TOY_16X16_BLACK_TRACE_BINS: &[ToyTraceBin] = &[
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 214,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 67,
-        mps: true,
-        bin: false,
-    }),
-    ToyTraceBin::Ep(false),
-    ToyTraceBin::Ep(true),
-    ToyTraceBin::Ep(true),
-    ToyTraceBin::Ep(false),
-    ToyTraceBin::Ep(true),
-    ToyTraceBin::Ep(false),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 52,
-        mps: true,
-        bin: true,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 166,
-        mps: true,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 109,
-        mps: true,
-        bin: true,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 134,
-        mps: true,
-        bin: true,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 116,
-        mps: true,
-        bin: true,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 142,
-        mps: true,
-        bin: true,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 221,
-        mps: false,
-        bin: true,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 205,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ep(false),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 39,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 101,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 99,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 4,
-        mps: true,
-        bin: true,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 67,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ep(false),
-    ToyTraceBin::Ep(true),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 64,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 54,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 40,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 176,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 103,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 130,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 88,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 114,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 80,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 4,
-        mps: true,
-        bin: true,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 53,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 26,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 96,
-        mps: false,
-        bin: true,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 112,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 4,
-        mps: true,
-        bin: true,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 72,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 112,
-        mps: true,
-        bin: true,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 72,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 88,
-        mps: true,
-        bin: true,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 84,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 4,
-        mps: true,
-        bin: true,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 206,
-        mps: true,
-        bin: false,
-    }),
-    ToyTraceBin::Ep(true),
-    ToyTraceBin::Ep(true),
-    ToyTraceBin::Ep(true),
-    ToyTraceBin::Ep(true),
-    ToyTraceBin::Ep(false),
-    ToyTraceBin::Ep(true),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 160,
-        mps: false,
-        bin: true,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 29,
-        mps: false,
-        bin: true,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 172,
-        mps: true,
-        bin: true,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 107,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 136,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 67,
-        mps: false,
-        bin: true,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 100,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 124,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 160,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 20,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ep(true),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 169,
-        mps: true,
-        bin: true,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 103,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 147,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 68,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 140,
-        mps: true,
-        bin: true,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 103,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 119,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 56,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 118,
-        mps: true,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 130,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 104,
-        mps: false,
-        bin: false,
-    }),
-    ToyTraceBin::Ctx(ToyTraceCtxBin {
-        lps: 81,
-        mps: false,
-        bin: false,
-    }),
+    trace_ctx("luma split_cu_mode split=1", 214, false, false),
+    trace_ctx("luma split_cu_mode qt=1", 67, true, false),
+    trace_ep("luma intra_luma_pred_mode[5]", false),
+    trace_ep("luma intra_luma_pred_mode[4]", true),
+    trace_ep("luma intra_luma_pred_mode[3]", true),
+    trace_ep("luma intra_luma_pred_mode[2]", false),
+    trace_ep("luma intra_luma_pred_mode[1]", true),
+    trace_ep("luma intra_luma_pred_mode[0]", false),
+    trace_ctx("luma split_cu_mode split=1", 52, true, true),
+    trace_ctx("luma split_cu_mode qt=1", 166, true, false),
+    trace_ctx("luma split_cu_mode split=0", 109, true, true),
+    trace_ctx("luma cbf_comp etype=0 cbf=1", 134, true, true),
+    trace_ctx("luma residual_coding sig_coeff_group_flag", 116, true, true),
+    trace_ctx("luma residual_coding sig_coeff_group_flag", 142, true, true),
+    trace_ctx(
+        "luma residual_coding last_sig_coeff_x_prefix",
+        221,
+        false,
+        true,
+    ),
+    trace_ctx(
+        "luma residual_coding last_sig_coeff_y_prefix",
+        205,
+        false,
+        false,
+    ),
+    trace_ep("luma residual_coding last_sig_coeff_suffix", false),
+    trace_ctx("luma residual_coding sig_coeff_flag", 39, false, false),
+    trace_ctx("luma residual_coding sig_coeff_flag", 101, false, false),
+    trace_ctx("luma residual_coding sig_coeff_flag", 99, false, false),
+    trace_ctx("luma residual_coding sig_coeff_flag", 4, true, true),
+    trace_ctx("luma residual_coding abs_level_gtx_flag", 67, false, false),
+    trace_ep("luma residual_coding remainder_prefix", false),
+    trace_ep("luma residual_coding coeff_sign_flag", true),
+    trace_ctx("luma residual_coding ts_flag=0", 64, false, false),
+    trace_ctx("luma residual_coding mts_idx=0", 54, false, false),
+    trace_ctx("chroma split_cu_mode split=1", 40, false, false),
+    trace_ctx("chroma split_cu_mode qt=1", 176, false, false),
+    trace_ctx("chroma split_cu_mode split=1", 103, false, false),
+    trace_ctx("chroma split_cu_mode qt=1", 130, false, false),
+    trace_ctx("chroma split_cu_mode split=1", 88, false, false),
+    trace_ctx("chroma split_cu_mode qt=1", 114, false, false),
+    trace_ctx("chroma split_cu_mode split=0", 80, false, false),
+    trace_ctx("chroma cbf_comp Cb(0,0)=0", 4, true, true),
+    trace_ctx("chroma cbf_comp Cr(0,0)=1", 53, false, false),
+    trace_ctx(
+        "chroma residual_coding sig_coeff_group_flag",
+        26,
+        false,
+        false,
+    ),
+    trace_ctx(
+        "chroma residual_coding last_sig_coeff_x_prefix",
+        96,
+        false,
+        true,
+    ),
+    trace_ctx(
+        "chroma residual_coding last_sig_coeff_y_prefix",
+        112,
+        false,
+        false,
+    ),
+    trace_ctx("chroma residual_coding sig_coeff_flag", 4, true, true),
+    trace_ctx(
+        "chroma residual_coding abs_level_gtx_flag",
+        72,
+        false,
+        false,
+    ),
+    trace_ctx("chroma residual_coding sig_coeff_flag", 112, true, true),
+    trace_ctx(
+        "chroma residual_coding abs_level_gtx_flag",
+        72,
+        false,
+        false,
+    ),
+    trace_ctx("chroma residual_coding sig_coeff_flag", 88, true, true),
+    trace_ctx(
+        "chroma residual_coding abs_level_gtx_flag",
+        84,
+        false,
+        false,
+    ),
+    trace_ctx("chroma residual_coding sig_coeff_flag", 4, true, true),
+    trace_ctx(
+        "chroma residual_coding abs_level_gtx_flag",
+        206,
+        true,
+        false,
+    ),
+    trace_ep("chroma residual_coding remainder_prefix", true),
+    trace_ep("chroma residual_coding remainder_prefix", true),
+    trace_ep("chroma residual_coding remainder_prefix", true),
+    trace_ep("chroma residual_coding remainder_prefix", true),
+    trace_ep("chroma residual_coding remainder_suffix", false),
+    trace_ep("chroma residual_coding coeff_sign_flag", true),
+    trace_ctx("chroma residual_coding ts_flag=0", 160, false, true),
+    trace_ctx("chroma residual_coding mts_idx=0", 29, false, true),
+    trace_ctx("chroma split_cu_mode split=0 at (4,0)", 172, true, true),
+    trace_ctx("chroma cbf_comp Cb(4,0)=0", 107, false, false),
+    trace_ctx("chroma cbf_comp Cr(4,0)=0", 136, false, false),
+    trace_ctx("chroma mts_idx=0 at (4,0)", 67, false, true),
+    trace_ctx("chroma split_cu_mode split=0 at (0,4)", 100, false, false),
+    trace_ctx("chroma cbf_comp Cb(0,4)=0", 124, false, false),
+    trace_ctx("chroma cbf_comp Cr(0,4)=0", 160, false, false),
+    trace_ctx("chroma mts_idx=0 at (0,4)", 20, false, false),
+    trace_ep("chroma alignment/trace EP before final block", true),
+    trace_ctx("chroma split_cu_mode split=0 at (4,4)", 169, true, true),
+    trace_ctx("chroma cbf_comp Cb(4,4)=0", 103, false, false),
+    trace_ctx("chroma cbf_comp Cr(4,4)=0", 147, false, false),
+    trace_ctx("chroma mts_idx=0 at (4,4)", 68, false, false),
+    trace_ctx("chroma final empty-tu context", 140, true, true),
+    trace_ctx("chroma final empty-tu context", 103, false, false),
+    trace_ctx("chroma final empty-tu context", 119, false, false),
+    trace_ctx("chroma final empty-tu context", 56, false, false),
+    trace_ctx("chroma final empty-tu context", 118, true, false),
+    trace_ctx("chroma final empty-tu context", 130, false, false),
+    trace_ctx("chroma final cbf cleanup", 104, false, false),
+    trace_ctx("chroma final cbf cleanup", 81, false, false),
 ];
 
 #[derive(Debug, Clone, Copy)]
@@ -2598,6 +2449,34 @@ mod tests {
         );
         assert_eq!(capacity.kind, ToyEntropyScheduleKind::CapacityPlaceholder);
         assert_eq!(capacity.tokens, mapped.tokens);
+    }
+
+    #[test]
+    fn toy_16x16_trace_bins_are_named_and_parameter_selected() {
+        let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
+        let geometry = ToyVideoGeometry {
+            width: 16,
+            height: 16,
+        };
+        let params = toy_16x16_trace_params(geometry, black).expect("black 16x16 is supported");
+        assert_eq!(
+            params,
+            Toy16x16TraceParams {
+                luma_rem: 16,
+                chroma_rem: 6
+            }
+        );
+        assert_eq!(TOY_16X16_BLACK_TRACE_BINS.len(), 75);
+        assert!(TOY_16X16_BLACK_TRACE_BINS
+            .iter()
+            .all(|bin| !bin.syntax.is_empty()));
+
+        let nonzero = quantize_toy_4x4_color(Toy4x4SampledColor {
+            y: 64,
+            u: 128,
+            v: 192,
+        });
+        assert_eq!(toy_16x16_trace_params(geometry, nonzero), None);
     }
 
     #[test]
