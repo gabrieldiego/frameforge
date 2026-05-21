@@ -784,6 +784,22 @@ module ff_vvc_toy4x4_encoder #(
 
     begin
       st = cabac_start();
+      st = toy_encode_8x8_luma_tree(st, rem);
+      st = toy_encode_4x4_chroma_tree(st, quant_chroma_rem());
+      st = cabac_encode_bin_trm(st, 1'b1);
+      st = cabac_finish(st);
+      toy_cabac_bitstream = { st[103:96], 32'd0, st[95:0] };
+    end
+  endfunction
+
+  function automatic logic [255:0] toy_encode_8x8_luma_tree(
+    input logic [255:0] st_in,
+    input logic [4:0]   rem
+  );
+    logic [255:0] st;
+
+    begin
+      st = st_in;
       st = cabac_encode_ctx_bins(st, 5'd0,  8'b0000_0101, 4'd4);
       st = cabac_encode_ctx_bins(st, 5'd4,  8'b0000_0010, 4'd4);
       st = cabac_encode_ctx_bins(st, 5'd8,  8'b0000_0001, 4'd1);
@@ -791,12 +807,22 @@ module ff_vvc_toy4x4_encoder #(
       st = cabac_encode_bin_ep(st, 1'b1);
       st = cabac_encode_ctx_bins(st, 5'd9,  8'b0000_1011, 4'd4);
       st = cabac_encode_ctx_bins(st, 5'd13, 8'b0000_0100, 4'd3);
+      toy_encode_8x8_luma_tree = st;
+    end
+  endfunction
+
+  function automatic logic [255:0] toy_encode_4x4_chroma_tree(
+    input logic [255:0] st_in,
+    input logic [4:0]   chroma_rem
+  );
+    logic [255:0] st;
+
+    begin
+      st = st_in;
       st = cabac_encode_ctx_bins(st, 5'd16, 8'b0000_0101, 4'd3);
-      st = cabac_encode_rem_abs_ep(st, quant_chroma_rem(), 3'd0);
+      st = cabac_encode_rem_abs_ep(st, chroma_rem, 3'd0);
       st = cabac_encode_bin_ep(st, 1'b1);
-      st = cabac_encode_bin_trm(st, 1'b1);
-      st = cabac_finish(st);
-      toy_cabac_bitstream = { st[103:96], 32'd0, st[95:0] };
+      toy_encode_4x4_chroma_tree = st;
     end
   endfunction
 

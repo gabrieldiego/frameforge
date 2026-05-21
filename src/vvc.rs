@@ -459,6 +459,18 @@ struct ToyEntropyToken {
     kind: ToyEntropyTokenKind,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToyEntropyScheduleKind {
+    VtmMapped8x8,
+    CapacityPlaceholder,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ToyEntropySchedule {
+    kind: ToyEntropyScheduleKind,
+    tokens: Vec<ToyEntropyToken>,
+}
+
 impl VvcNalUnit {
     pub fn eos() -> Self {
         Self {
@@ -1030,18 +1042,38 @@ fn toy_4x4_entropy_tokens(
     geometry: ToyVideoGeometry,
     color: Toy4x4QuantizedColor,
 ) -> Vec<ToyEntropyToken> {
-    if toy_entropy_tokens_mapped_to_vtm_geometry(geometry) {
-        return toy_8x8_mapped_entropy_tokens(color);
-    }
+    toy_entropy_schedule(geometry, color).tokens
+}
 
-    // Capacity geometries above 8x8 still use the same byte-level toy entropy
-    // body so software and RTL can stay aligned while the real larger VVC
-    // coding-tree token schedule is implemented.
-    toy_8x8_mapped_entropy_tokens(color)
+fn toy_entropy_schedule(
+    geometry: ToyVideoGeometry,
+    color: Toy4x4QuantizedColor,
+) -> ToyEntropySchedule {
+    let kind = if toy_entropy_tokens_mapped_to_vtm_geometry(geometry) {
+        ToyEntropyScheduleKind::VtmMapped8x8
+    } else {
+        ToyEntropyScheduleKind::CapacityPlaceholder
+    };
+
+    ToyEntropySchedule {
+        kind,
+        tokens: toy_8x8_mapped_entropy_tokens(color),
+    }
 }
 
 fn toy_8x8_mapped_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<ToyEntropyToken> {
-    vec![
+    let mut tokens = Vec::new();
+    append_toy_8x8_luma_tree_tokens(&mut tokens, color);
+    append_toy_4x4_chroma_tree_tokens(&mut tokens, color);
+    tokens.push(ToyEntropyToken {
+        name: "end_of_slice_segment_flag",
+        kind: ToyEntropyTokenKind::Terminate,
+    });
+    tokens
+}
+
+fn append_toy_8x8_luma_tree_tokens(tokens: &mut Vec<ToyEntropyToken>, color: Toy4x4QuantizedColor) {
+    tokens.extend([
         ToyEntropyToken {
             name: "split_cu_flag_luma_prefix",
             kind: ToyEntropyTokenKind::ContextBins {
@@ -1092,6 +1124,14 @@ fn toy_8x8_mapped_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<ToyEntropyT
                 bins: &[true, false, false],
             },
         },
+    ]);
+}
+
+fn append_toy_4x4_chroma_tree_tokens(
+    tokens: &mut Vec<ToyEntropyToken>,
+    color: Toy4x4QuantizedColor,
+) {
+    tokens.extend([
         ToyEntropyToken {
             name: "chroma_tree_prefix",
             kind: ToyEntropyTokenKind::ContextBins {
@@ -1114,11 +1154,7 @@ fn toy_8x8_mapped_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<ToyEntropyT
                 negative: true,
             },
         },
-        ToyEntropyToken {
-            name: "end_of_slice_segment_flag",
-            kind: ToyEntropyTokenKind::Terminate,
-        },
-    ]
+    ]);
 }
 
 fn toy_entropy_tokens_mapped_to_vtm_geometry(geometry: ToyVideoGeometry) -> bool {
@@ -2145,6 +2181,30 @@ mod tests {
             .all(|field| field.code == VvcSyntaxCode::CabacToken));
         assert_eq!(rbsp.fields.len(), 1);
         assert_eq!(rbsp.fields[0].bit_count, 56);
+    }
+
+    #[test]
+    fn toy_entropy_schedule_marks_vtm_mapped_and_capacity_paths() {
+        let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
+        let mapped = toy_entropy_schedule(
+            ToyVideoGeometry {
+                width: 8,
+                height: 8,
+            },
+            black,
+        );
+        assert_eq!(mapped.kind, ToyEntropyScheduleKind::VtmMapped8x8);
+        assert_eq!(mapped.tokens.len(), 11);
+
+        let capacity = toy_entropy_schedule(
+            ToyVideoGeometry {
+                width: 64,
+                height: 64,
+            },
+            black,
+        );
+        assert_eq!(capacity.kind, ToyEntropyScheduleKind::CapacityPlaceholder);
+        assert_eq!(capacity.tokens, mapped.tokens);
     }
 
     #[test]
