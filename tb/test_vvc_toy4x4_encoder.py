@@ -144,9 +144,17 @@ def rtl_input_samples(data):
 def packed_rtl_luma_value(data):
     bits = rtl_sample_bits()
     value = 0
-    for sample in rtl_input_samples(data[:16]):
+    for sample in rtl_input_samples(first_residual_luma_block(data)):
         value = (value << bits) | sample
     return value
+
+
+def first_residual_luma_block(data):
+    block = []
+    for y in range(4):
+        start = y * rtl_visible_width()
+        block.extend(data[start : start + 4])
+    return block
 
 
 def quantized_luma(sample):
@@ -193,7 +201,7 @@ def decoded_reconstruction(frames, data):
     if is_toy_16x16_black_trace_path(data):
         return TOY_16X16_BLACK_TRACE_RECON * frames
 
-    y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(data[:16])))
+    y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(first_residual_luma_block(data))))
     chroma = reconstructed_chroma(sample_to_8bit(data[luma_samples()]), sample_to_8bit(data[v_sample_index()]))
     frame = bytes(
         [y] * luma_samples()
@@ -300,7 +308,7 @@ async def collect_stream(dut, frames):
     assert int(dut.sampled_v.value) == samples[v_sample_index()]
     assert int(dut.luma_samples_q.value) == packed_rtl_luma_value(data)
     assert int(dut.quant_luma_ac_tokens_q.value) == int.from_bytes(
-        quant_ac_tokens(data[:16]), "big"
+        quant_ac_tokens(first_residual_luma_block(data)), "big"
     )
 
     observed = bytearray()
@@ -355,7 +363,7 @@ async def drain_sampled_color(dut, frames, y, u, v):
     assert int(dut.sampled_v.value) == samples[v_sample_index()]
     assert int(dut.luma_samples_q.value) == packed_rtl_luma_value(data)
     assert int(dut.quant_luma_ac_tokens_q.value) == int.from_bytes(
-        quant_ac_tokens(data[:16]), "big"
+        quant_ac_tokens(first_residual_luma_block(data)), "big"
     )
 
 

@@ -1,13 +1,16 @@
 `timescale 1ns/1ps
 
 module ff_residual_stub #(
-  parameter int SAMPLE_BITS = 8
+  parameter int SAMPLE_BITS = 8,
+  parameter int LUMA_CB_SIZE = 4
 ) (
-  input  logic [(SAMPLE_BITS * 16) - 1:0] luma_samples,
+  input  logic [(SAMPLE_BITS * LUMA_CB_SIZE * LUMA_CB_SIZE) - 1:0] luma_samples,
   output logic [4:0]   quant_luma_rem,
   output logic [119:0] quant_luma_ac_tokens,
   output logic [7:0]   recon_luma_sample
 );
+  localparam int LUMA_SAMPLE_COUNT = LUMA_CB_SIZE * LUMA_CB_SIZE;
+
   logic signed [9:0] dc_coeff;
   logic signed [9:0] quantized_dc_coeff;
   logic [7:0] dc_sample;
@@ -20,7 +23,7 @@ module ff_residual_stub #(
   assign recon_luma_sample = inverse_luma_dc_coeff(quantized_dc_coeff);
 
   function automatic logic [7:0] forward_luma_dc_sample(
-    input logic [(SAMPLE_BITS * 16) - 1:0] samples
+    input logic [(SAMPLE_BITS * LUMA_SAMPLE_COUNT) - 1:0] samples
   );
     logic [12:0] sum;
     begin
@@ -41,7 +44,7 @@ module ff_residual_stub #(
   endfunction
 
   function automatic logic [119:0] quant_ac_tokens(
-    input logic [(SAMPLE_BITS * 16) - 1:0] samples,
+    input logic [(SAMPLE_BITS * LUMA_SAMPLE_COUNT) - 1:0] samples,
     input logic [7:0]   dc
   );
     logic [119:0] tokens;
@@ -56,7 +59,7 @@ module ff_residual_stub #(
   endfunction
 
   function automatic logic [7:0] sample_at(
-    input logic [(SAMPLE_BITS * 16) - 1:0] samples,
+    input logic [(SAMPLE_BITS * LUMA_SAMPLE_COUNT) - 1:0] samples,
     input logic [3:0] index
   );
     logic [SAMPLE_BITS - 1:0] raw;

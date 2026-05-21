@@ -311,11 +311,35 @@ impl ToyVideoGeometry {
     }
 
     fn crop_right_420(self) -> u32 {
-        ((self.coded_width() - self.width) / 2) as u32
+        self.crop_right(ChromaSampling::Cs420)
     }
 
     fn crop_bottom_420(self) -> u32 {
-        ((self.coded_height() - self.height) / 2) as u32
+        self.crop_bottom(ChromaSampling::Cs420)
+    }
+
+    fn crop_right(self, chroma_sampling: ChromaSampling) -> u32 {
+        ((self.coded_width() - self.width) / chroma_subsample_x(chroma_sampling)) as u32
+    }
+
+    fn crop_bottom(self, chroma_sampling: ChromaSampling) -> u32 {
+        ((self.coded_height() - self.height) / chroma_subsample_y(chroma_sampling)) as u32
+    }
+}
+
+fn chroma_subsample_x(chroma_sampling: ChromaSampling) -> usize {
+    match chroma_sampling {
+        ChromaSampling::Monochrome => 1,
+        ChromaSampling::Cs420 | ChromaSampling::Cs422 => 2,
+        ChromaSampling::Cs444 => 1,
+    }
+}
+
+fn chroma_subsample_y(chroma_sampling: ChromaSampling) -> usize {
+    match chroma_sampling {
+        ChromaSampling::Monochrome => 1,
+        ChromaSampling::Cs420 => 2,
+        ChromaSampling::Cs422 | ChromaSampling::Cs444 => 1,
     }
 }
 
@@ -352,6 +376,19 @@ struct Toy4x4SampledFrame {
 struct Toy4x4PictureFormat {
     chroma_sampling: ChromaSampling,
     bit_depth: SampleBitDepth,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ToyCodingTreeConfig {
+    chroma_sampling: ChromaSampling,
+}
+
+impl ToyCodingTreeConfig {
+    const fn yuv420() -> Self {
+        Self {
+            chroma_sampling: ChromaSampling::Cs420,
+        }
+    }
 }
 
 impl Toy4x4SampledFrame {
@@ -492,6 +529,9 @@ struct ToyTraceBin {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Toy16x16TraceParams {
+    luma_cb_width: usize,
+    luma_cb_height: usize,
+    chroma_tu_count: usize,
     luma_rem: u8,
     chroma_rem: u8,
 }
@@ -740,8 +780,7 @@ pub fn quantize_toy_4x4_color(color: Toy4x4SampledColor) -> Toy4x4QuantizedColor
 }
 
 fn quantize_toy_4x4_frame(frame: Toy4x4SampledFrame) -> Toy4x4QuantizedColor {
-    let mut first_block = [0; 16];
-    first_block.copy_from_slice(&frame.luma[..16]);
+    let first_block = first_residual_luma_block(&frame);
     let luma_transform = transform_toy_4x4_luma(first_block);
     let quantized_luma = quantize_toy_4x4_luma_dc(luma_transform);
     let reconstructed_luma = inverse_transform_toy_4x4_luma_dc(quantized_luma);
@@ -756,6 +795,18 @@ fn quantize_toy_4x4_frame(frame: Toy4x4SampledFrame) -> Toy4x4QuantizedColor {
         luma_ac_tokens: quantized_luma.ac_tokens,
         chroma_rem,
     }
+}
+
+fn first_residual_luma_block(frame: &Toy4x4SampledFrame) -> [u8; TOY_RESIDUAL_LUMA_SAMPLES] {
+    let mut block = [0; TOY_RESIDUAL_LUMA_SAMPLES];
+    let cb_width = TOY_RESIDUAL_CB_SIZE.min(frame.geometry.width);
+    let cb_height = TOY_RESIDUAL_CB_SIZE.min(frame.geometry.height);
+    for y in 0..cb_height {
+        let src = y * frame.geometry.width;
+        let dst = y * TOY_RESIDUAL_CB_SIZE;
+        block[dst..dst + cb_width].copy_from_slice(&frame.luma[src..src + cb_width]);
+    }
+    block
 }
 
 fn validate_toy_4x4_frame_count(params: Toy4x4EncodeParams) -> Result<(), String> {
@@ -1102,14 +1153,21 @@ fn toy_entropy_schedule(
 }
 
 fn toy_coding_tree_plan(geometry: ToyVideoGeometry) -> Vec<ToyCodingTreeStep> {
+    toy_coding_tree_plan_with_config(geometry, ToyCodingTreeConfig::yuv420())
+}
+
+fn toy_coding_tree_plan_with_config(
+    geometry: ToyVideoGeometry,
+    config: ToyCodingTreeConfig,
+) -> Vec<ToyCodingTreeStep> {
     let mut steps = Vec::new();
     steps.push(ToyCodingTreeStep::LumaTransformUnit {
         width: geometry.coded_width(),
         height: geometry.coded_height(),
     });
 
-    let chroma_width = geometry.coded_width() / 2;
-    let chroma_height = geometry.coded_height() / 2;
+    let chroma_width = geometry.coded_width() / chroma_subsample_x(config.chroma_sampling);
+    let chroma_height = geometry.coded_height() / chroma_subsample_y(config.chroma_sampling);
     for y in (0..chroma_height).step_by(4) {
         for x in (0..chroma_width).step_by(4) {
             let first = x == 0 && y == 0;
@@ -1257,12 +1315,18 @@ fn toy_16x16_trace_params(
     geometry: ToyVideoGeometry,
     color: Toy4x4QuantizedColor,
 ) -> Option<Toy16x16TraceParams> {
-    if geometry.coded_width() == 16
-        && geometry.coded_height() == 16
-        && color.luma_rem == 16
-        && color.chroma_rem == 6
+    let plan = toy_coding_tree_plan(geometry);
+    let luma_cb = first_luma_transform_unit(&plan)?;
+    let chroma_tu_count = plan
+        .iter()
+        .filter(|step| matches!(step, ToyCodingTreeStep::ChromaTransformUnit { .. }))
+        .count();
+    if luma_cb == (16, 16) && chroma_tu_count == 4 && color.luma_rem == 16 && color.chroma_rem == 6
     {
         return Some(Toy16x16TraceParams {
+            luma_cb_width: luma_cb.0,
+            luma_cb_height: luma_cb.1,
+            chroma_tu_count,
             luma_rem: color.luma_rem,
             chroma_rem: color.chroma_rem,
         });
@@ -1270,7 +1334,17 @@ fn toy_16x16_trace_params(
     None
 }
 
+fn first_luma_transform_unit(plan: &[ToyCodingTreeStep]) -> Option<(usize, usize)> {
+    plan.iter().find_map(|step| match *step {
+        ToyCodingTreeStep::LumaTransformUnit { width, height } => Some((width, height)),
+        ToyCodingTreeStep::ChromaTransformUnit { .. } => None,
+    })
+}
+
 fn toy_16x16_trace_cabac_bits(params: Toy16x16TraceParams) -> Vec<bool> {
+    debug_assert_eq!(params.luma_cb_width, 16);
+    debug_assert_eq!(params.luma_cb_height, 16);
+    debug_assert_eq!(params.chroma_tu_count, 4);
     debug_assert_eq!(params.luma_rem, 16);
     debug_assert_eq!(params.chroma_rem, 6);
 
@@ -1725,7 +1799,7 @@ fn renorm_bits(mut range: u32) -> u32 {
     bits
 }
 
-fn transform_toy_4x4_luma(samples: [u8; 16]) -> Toy4x4TransformBlock {
+fn transform_toy_4x4_luma(samples: [u8; TOY_RESIDUAL_LUMA_SAMPLES]) -> Toy4x4TransformBlock {
     let sum: u16 = samples.iter().map(|sample| *sample as u16).sum();
     let dc_sample = ((sum + 8) >> 4) as u8;
     let mut ac_coeffs = [0; 15];
@@ -1816,6 +1890,8 @@ fn nearest_quantized_luma(input: u8) -> (u8, u8) {
 }
 
 const TOY_LUMA_DC_BASE: i16 = 114;
+const TOY_RESIDUAL_CB_SIZE: usize = 4;
+const TOY_RESIDUAL_LUMA_SAMPLES: usize = TOY_RESIDUAL_CB_SIZE * TOY_RESIDUAL_CB_SIZE;
 
 fn placeholder_rbsp() -> Vec<u8> {
     // TODO(vvc): Replace this rbsp_trailing_bits-only payload with real VPS,
@@ -2342,6 +2418,29 @@ mod tests {
     }
 
     #[test]
+    fn toy_residual_path_reads_first_implemented_cb_by_geometry_stride() {
+        let luma: Vec<u8> = (0..256).map(|sample| sample as u8).collect();
+        let frame = Toy4x4SampledFrame {
+            geometry: ToyVideoGeometry {
+                width: 16,
+                height: 16,
+            },
+            format: Toy4x4PictureFormat {
+                chroma_sampling: ChromaSampling::Cs420,
+                bit_depth: SampleBitDepth::Eight,
+            },
+            luma,
+            cb: vec![0; 64],
+            cr: vec![0; 64],
+            chroma_len: 64,
+        };
+        assert_eq!(
+            first_residual_luma_block(&frame),
+            [0, 1, 2, 3, 16, 17, 18, 19, 32, 33, 34, 35, 48, 49, 50, 51]
+        );
+    }
+
+    #[test]
     fn toy_chroma_quantization_keeps_black_neutral_and_nonzero_colored() {
         assert_eq!(quantize_toy_4x4_chroma(0, 0), 6);
         assert_eq!(reconstruct_toy_4x4_chroma(6), 0);
@@ -2462,6 +2561,9 @@ mod tests {
         assert_eq!(
             params,
             Toy16x16TraceParams {
+                luma_cb_width: 16,
+                luma_cb_height: 16,
+                chroma_tu_count: 4,
                 luma_rem: 16,
                 chroma_rem: 6
             }
@@ -2477,6 +2579,43 @@ mod tests {
             v: 192,
         });
         assert_eq!(toy_16x16_trace_params(geometry, nonzero), None);
+    }
+
+    #[test]
+    fn toy_16x16_trace_selection_uses_coding_tree_geometry() {
+        let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
+        assert_eq!(
+            first_luma_transform_unit(&toy_coding_tree_plan(ToyVideoGeometry {
+                width: 16,
+                height: 16
+            })),
+            Some((16, 16))
+        );
+        assert!(toy_16x16_trace_params(
+            ToyVideoGeometry {
+                width: 16,
+                height: 16
+            },
+            black
+        )
+        .is_some());
+        assert_eq!(
+            first_luma_transform_unit(&toy_coding_tree_plan(ToyVideoGeometry {
+                width: 8,
+                height: 8
+            })),
+            Some((8, 8))
+        );
+        assert_eq!(
+            toy_16x16_trace_params(
+                ToyVideoGeometry {
+                    width: 8,
+                    height: 8
+                },
+                black
+            ),
+            None
+        );
     }
 
     #[test]
@@ -2537,6 +2676,35 @@ mod tests {
             height: 64,
         });
         assert_eq!(capacity_64x64.len(), 65);
+    }
+
+    #[test]
+    fn toy_coding_tree_plan_carries_chroma_sampling_parameter() {
+        let geometry = ToyVideoGeometry {
+            width: 16,
+            height: 16,
+        };
+        let yuv420 = toy_coding_tree_plan_with_config(geometry, ToyCodingTreeConfig::yuv420());
+        let yuv444 = toy_coding_tree_plan_with_config(
+            geometry,
+            ToyCodingTreeConfig {
+                chroma_sampling: ChromaSampling::Cs444,
+            },
+        );
+        assert_eq!(
+            yuv420
+                .iter()
+                .filter(|step| matches!(step, ToyCodingTreeStep::ChromaTransformUnit { .. }))
+                .count(),
+            4
+        );
+        assert_eq!(
+            yuv444
+                .iter()
+                .filter(|step| matches!(step, ToyCodingTreeStep::ChromaTransformUnit { .. }))
+                .count(),
+            16
+        );
     }
 
     #[test]

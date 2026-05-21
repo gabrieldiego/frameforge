@@ -39,6 +39,8 @@ module ff_vvc_toy4x4_encoder #(
   localparam int MAX_CHROMA_PLANE_SAMPLES = MAX_LUMA_SAMPLES;
   localparam int MAX_FRAME_SAMPLES = MAX_LUMA_SAMPLES + (MAX_CHROMA_PLANE_SAMPLES * 2);
   localparam int INPUT_COUNT_BITS = $clog2((MAX_FRAME_SAMPLES * 2) + 1);
+  localparam int TOY_RESIDUAL_CB_SIZE = 4;
+  localparam int TOY_RESIDUAL_LUMA_SAMPLES = TOY_RESIDUAL_CB_SIZE * TOY_RESIDUAL_CB_SIZE;
   localparam bit PALETTE_MODE = (CHROMA_FORMAT_IDC == 3);
 
   logic [8:0] index_q;
@@ -46,7 +48,7 @@ module ff_vvc_toy4x4_encoder #(
   logic [INPUT_COUNT_BITS - 1:0] input_count_q;
   logic [INPUT_COUNT_BITS - 1:0] input_len_q;
   logic       input_active_q;
-  logic [(SAMPLE_BITS * 16) - 1:0] luma_samples_q;
+  logic [(SAMPLE_BITS * TOY_RESIDUAL_LUMA_SAMPLES) - 1:0] luma_samples_q;
   logic [(SAMPLE_BITS * 16) - 1:0] cb_samples_q;
   logic [(SAMPLE_BITS * 16) - 1:0] cr_samples_q;
   logic [4:0] quant_luma_rem_q;
@@ -59,7 +61,8 @@ module ff_vvc_toy4x4_encoder #(
   assign busy = input_active_q || m_axis_valid || (index_q != 0);
 
   ff_residual_stub #(
-    .SAMPLE_BITS(SAMPLE_BITS)
+    .SAMPLE_BITS(SAMPLE_BITS),
+    .LUMA_CB_SIZE(TOY_RESIDUAL_CB_SIZE)
   ) residual_block (
     .luma_samples(luma_samples_q),
     .quant_luma_rem(residual_quant_luma_rem),
@@ -114,8 +117,8 @@ module ff_vvc_toy4x4_encoder #(
         if (input_count_q == 8'd0) begin
           sampled_y <= s_axis_data;
         end
-        if (input_count_q < 10'd16) begin
-          luma_samples_q[(15 - input_count_q[3:0]) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
+        if (is_residual_luma_sample(input_count_q)) begin
+          luma_samples_q[(15 - residual_luma_sample_index(input_count_q)) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
         end
         if (PALETTE_MODE && input_count_q >= luma_samples() && input_count_q < luma_samples() + 10'd16) begin
           cb_samples_q[(15 - (input_count_q - luma_samples())) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
@@ -176,10 +179,25 @@ module ff_vvc_toy4x4_encoder #(
 
   function automatic logic [INPUT_COUNT_BITS - 1:0] chroma_plane_samples();
     begin
+      chroma_plane_samples = (visible_width / chroma_subsample_x()) *
+                             (visible_height / chroma_subsample_y());
+    end
+  endfunction
+
+  function automatic logic [1:0] chroma_subsample_x();
+    begin
       case (CHROMA_FORMAT_IDC)
-        3: chroma_plane_samples = luma_samples();
-        2: chroma_plane_samples = luma_samples() >> 1;
-        default: chroma_plane_samples = luma_samples() >> 2;
+        1, 2: chroma_subsample_x = 2'd2;
+        default: chroma_subsample_x = 2'd1;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [1:0] chroma_subsample_y();
+    begin
+      case (CHROMA_FORMAT_IDC)
+        1: chroma_subsample_y = 2'd2;
+        default: chroma_subsample_y = 2'd1;
       endcase
     end
   endfunction
@@ -193,6 +211,22 @@ module ff_vvc_toy4x4_encoder #(
   function automatic logic [INPUT_COUNT_BITS - 1:0] v_sample_index();
     begin
       v_sample_index = luma_samples() + chroma_plane_samples();
+    end
+  endfunction
+
+  function automatic logic is_residual_luma_sample(input logic [INPUT_COUNT_BITS - 1:0] sample_index);
+    begin
+      is_residual_luma_sample = (sample_index < luma_samples()) &&
+                                ((sample_index % visible_width) < TOY_RESIDUAL_CB_SIZE) &&
+                                ((sample_index / visible_width) < TOY_RESIDUAL_CB_SIZE);
+    end
+  endfunction
+
+  function automatic logic [3:0] residual_luma_sample_index(input logic [INPUT_COUNT_BITS - 1:0] sample_index);
+    logic [INPUT_COUNT_BITS - 1:0] index;
+    begin
+      index = ((sample_index / visible_width) * TOY_RESIDUAL_CB_SIZE) + (sample_index % visible_width);
+      residual_luma_sample_index = index[3:0];
     end
   endfunction
 
@@ -800,8 +834,20 @@ module ff_vvc_toy4x4_encoder #(
 
   function automatic logic toy_supports_16x16_trace(input logic [4:0] rem, input logic [4:0] chroma_rem);
     begin
-      toy_supports_16x16_trace = (visible_width == 16'd16) && (visible_height == 16'd16) &&
+      toy_supports_16x16_trace = (luma_cb_width() == 16'd16) && (luma_cb_height() == 16'd16) &&
                                  (rem == 5'd16) && (chroma_rem == 5'd6);
+    end
+  endfunction
+
+  function automatic logic [15:0] luma_cb_width();
+    begin
+      luma_cb_width = coded_dimension(visible_width);
+    end
+  endfunction
+
+  function automatic logic [15:0] luma_cb_height();
+    begin
+      luma_cb_height = coded_dimension(visible_height);
     end
   endfunction
 
