@@ -258,10 +258,10 @@ pub struct ToyVideoLimits {
 }
 
 impl ToyVideoLimits {
-    pub const fn max_16x16() -> Self {
+    pub const fn max_64x64() -> Self {
         Self {
-            max_width: 16,
-            max_height: 16,
+            max_width: 64,
+            max_height: 64,
         }
     }
 }
@@ -303,19 +303,11 @@ impl ToyVideoGeometry {
     }
 
     fn coded_width(self) -> usize {
-        if self.width <= 8 {
-            8
-        } else {
-            16
-        }
+        coded_canvas_dimension(self.width)
     }
 
     fn coded_height(self) -> usize {
-        if self.height <= 8 {
-            8
-        } else {
-            16
-        }
+        coded_canvas_dimension(self.height)
     }
 
     fn crop_right_420(self) -> u32 {
@@ -327,6 +319,18 @@ impl ToyVideoGeometry {
     }
 }
 
+fn coded_canvas_dimension(value: usize) -> usize {
+    if value <= 8 {
+        8
+    } else if value <= 16 {
+        16
+    } else if value <= 32 {
+        32
+    } else {
+        64
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Toy4x4SampledColor {
     pub y: u8,
@@ -334,13 +338,13 @@ pub struct Toy4x4SampledColor {
     pub v: u8,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Toy4x4SampledFrame {
     geometry: ToyVideoGeometry,
     format: Toy4x4PictureFormat,
-    luma: [u8; 256],
-    cb: [u8; 256],
-    cr: [u8; 256],
+    luma: Vec<u8>,
+    cb: Vec<u8>,
+    cr: Vec<u8>,
     chroma_len: usize,
 }
 
@@ -358,14 +362,14 @@ impl Toy4x4SampledFrame {
                 chroma_sampling: ChromaSampling::Cs420,
                 bit_depth: SampleBitDepth::Eight,
             },
-            luma: [color.y; 256],
-            cb: [color.u; 256],
-            cr: [color.v; 256],
+            luma: vec![color.y; 16],
+            cb: vec![color.u; 4],
+            cr: vec![color.v; 4],
             chroma_len: 4,
         }
     }
 
-    fn sampled_color(self) -> Toy4x4SampledColor {
+    fn sampled_color(&self) -> Toy4x4SampledColor {
         Toy4x4SampledColor {
             y: self.luma[0],
             u: self.cb[0],
@@ -375,6 +379,7 @@ impl Toy4x4SampledFrame {
 
     fn decoder_compat_frame(self) -> Self {
         let color = self.sampled_color();
+        let chroma_len = self.geometry.luma_samples() / 4;
         Self {
             geometry: self.geometry,
             format: Toy4x4PictureFormat {
@@ -382,9 +387,9 @@ impl Toy4x4SampledFrame {
                 bit_depth: SampleBitDepth::Eight,
             },
             luma: self.luma,
-            cb: [color.u; 256],
-            cr: [color.v; 256],
-            chroma_len: self.geometry.luma_samples() / 4,
+            cb: vec![color.u; chroma_len],
+            cr: vec![color.v; chroma_len],
+            chroma_len,
         }
     }
 }
@@ -567,7 +572,7 @@ pub fn toy_yuv_annex_b_from_input(
         input,
         params,
         geometry,
-        ToyVideoLimits::max_16x16(),
+        ToyVideoLimits::max_64x64(),
         format,
     )
 }
@@ -626,7 +631,7 @@ fn sample_toy_yuv_frame(
     }
 
     let luma_samples = geometry.luma_samples();
-    let mut luma = [0; 256];
+    let mut luma = vec![0; luma_samples];
     let bytes_per_sample = format.bytes_per_sample();
     for (idx, sample) in luma.iter_mut().take(luma_samples).enumerate() {
         let raw = read_toy_sample_raw(input, idx * bytes_per_sample, format);
@@ -638,8 +643,8 @@ fn sample_toy_yuv_frame(
         .chroma_plane_samples(geometry.width, geometry.height)
         .ok_or_else(|| format!("toy VVC input expects chroma samples; got {format}"))?;
     let v_offset = u_offset + (chroma_plane_samples * bytes_per_sample);
-    let mut cb = [0; 256];
-    let mut cr = [0; 256];
+    let mut cb = vec![0; chroma_plane_samples];
+    let mut cr = vec![0; chroma_plane_samples];
     for idx in 0..chroma_plane_samples {
         let raw_cb = read_toy_sample_raw(input, u_offset + idx * bytes_per_sample, format);
         let raw_cr = read_toy_sample_raw(input, v_offset + idx * bytes_per_sample, format);
@@ -1916,6 +1921,22 @@ mod tests {
     }
 
     #[test]
+    fn toy_parameter_sets_can_signal_64x64_visible_geometry() {
+        let geometry = ToyVideoGeometry {
+            width: 64,
+            height: 64,
+        };
+        assert_eq!(
+            toy_4x4_sps_payload(geometry),
+            hex_bytes("000b020080004041020fd501f446e884688424613628c5430680ab8fe0ac1020")
+        );
+        assert_eq!(
+            toy_4x4_pps_payload(geometry),
+            hex_bytes("0000410208a4200c7b214594594588")
+        );
+    }
+
+    #[test]
     fn toy_slice_header_is_generated_before_cabac_tokens() {
         let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
         assert_eq!(
@@ -1992,9 +2013,9 @@ mod tests {
                     chroma_sampling: ChromaSampling::Cs420,
                     bit_depth: SampleBitDepth::Eight,
                 },
-                luma,
-                cb: [9; 256],
-                cr: [7; 256],
+                luma: luma.to_vec(),
+                cb: vec![9; 4],
+                cr: vec![7; 4],
                 chroma_len: 4,
             }),
             Toy4x4QuantizedColor {

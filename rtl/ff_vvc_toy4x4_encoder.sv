@@ -32,8 +32,9 @@ module ff_vvc_toy4x4_encoder #(
   output logic [7:0] m_axis_data,
   output logic       m_axis_last
 );
-  localparam int SPS_PAYLOAD_LEN  = (VISIBLE_WIDTH == 8 && VISIBLE_HEIGHT == 8) ? 30 : 31;
-  localparam int PPS_PAYLOAD_LEN  = 14;
+  localparam int SPS_PAYLOAD_LEN  = (VISIBLE_WIDTH == 8 && VISIBLE_HEIGHT == 8) ? 30 :
+                                    ((VISIBLE_WIDTH == 64 && VISIBLE_HEIGHT == 64) ? 32 : 31);
+  localparam int PPS_PAYLOAD_LEN  = (VISIBLE_WIDTH == 64 && VISIBLE_HEIGHT == 64) ? 15 : 14;
   localparam int NAL_OVERHEAD_LEN = 6;
   localparam int SPS_NAL_LEN = NAL_OVERHEAD_LEN + SPS_PAYLOAD_LEN;
   localparam int PPS_NAL_LEN = NAL_OVERHEAD_LEN + PPS_PAYLOAD_LEN;
@@ -47,8 +48,8 @@ module ff_vvc_toy4x4_encoder #(
 
   logic [8:0] index_q;
   logic [8:0] stream_len_q;
-  logic [11:0] input_count_q;
-  logic [11:0] input_len_q;
+  logic [14:0] input_count_q;
+  logic [14:0] input_len_q;
   logic       input_active_q;
   logic [(SAMPLE_BITS * 16) - 1:0] luma_samples_q;
   logic [(SAMPLE_BITS * 16) - 1:0] cb_samples_q;
@@ -165,7 +166,7 @@ module ff_vvc_toy4x4_encoder #(
     end
   end
 
-  function automatic logic [11:0] input_len(input logic [1:0] frames);
+  function automatic logic [14:0] input_len(input logic [1:0] frames);
     case (frames)
       2'd2: input_len = FRAME_SAMPLES * 2;
       default: input_len = FRAME_SAMPLES;
@@ -364,7 +365,7 @@ module ff_vvc_toy4x4_encoder #(
   endfunction
 
   function automatic logic [7:0] sps_payload_byte(input logic [8:0] index);
-    logic [247:0] payload_bits;
+    logic [255:0] payload_bits;
 
     begin
       payload_bits = sps_payload_bits();
@@ -377,19 +378,19 @@ module ff_vvc_toy4x4_encoder #(
   endfunction
 
   function automatic logic [7:0] pps_payload_byte(input logic [8:0] index);
-    logic [111:0] payload_bits;
+    logic [119:0] payload_bits;
 
     begin
       payload_bits = pps_payload_bits();
-      if (index < 7'd14) begin
-        pps_payload_byte = payload_bits >> ((7'd13 - index) * 8);
+      if (index < PPS_PAYLOAD_LEN) begin
+        pps_payload_byte = payload_bits >> (((PPS_PAYLOAD_LEN - 1) - index) * 8);
       end else begin
         pps_payload_byte = 8'h00;
       end
     end
   endfunction
 
-  function automatic logic [247:0] sps_payload_bits();
+  function automatic logic [255:0] sps_payload_bits();
     begin
       if (VISIBLE_WIDTH == 4 && VISIBLE_HEIGHT == 8) begin
         sps_payload_bits = 248'h000b_0200_8000_4244_ef54_07d1_1ba2_11a2_1091_84d8_a315_0c1a_02ae_3f82_b040_80;
@@ -403,6 +404,8 @@ module ff_vvc_toy4x4_encoder #(
         sps_payload_bits = 248'h000b_0200_8000_4242_3f54_07d1_1ba2_11a2_1091_84d8_a315_0c1a_02ae_3f82_b040_80;
       end else if (VISIBLE_WIDTH == 16 && VISIBLE_HEIGHT == 16) begin
         sps_payload_bits = 248'h000b_0200_8000_4110_8fd5_01f4_46e8_8468_8424_6136_28c5_4306_80ab_8fe0_ac10_20;
+      end else if (VISIBLE_WIDTH == 64 && VISIBLE_HEIGHT == 64) begin
+        sps_payload_bits = 256'h000b_0200_8000_4041_020f_d501_f446_e884_6884_2461_3628_c543_0680_ab8f_e0ac_1020;
       end else begin
         sps_payload_bits = {
           // sps_seq_parameter_set_id, sps_video_parameter_set_id,
@@ -424,7 +427,7 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [111:0] pps_payload_bits();
+  function automatic logic [119:0] pps_payload_bits();
     begin
       if (VISIBLE_WIDTH == 16 && VISIBLE_HEIGHT == 8) begin
         pps_payload_bits = 112'h0001_1122_9080_31ec_8516_5165_1620;
@@ -432,6 +435,8 @@ module ff_vvc_toy4x4_encoder #(
         pps_payload_bits = 112'h0002_4222_9080_31ec_8516_5165_1620;
       end else if (VISIBLE_WIDTH == 16 && VISIBLE_HEIGHT == 16) begin
         pps_payload_bits = 112'h0001_1088_a420_0c7b_2145_9459_4588;
+      end else if (VISIBLE_WIDTH == 64 && VISIBLE_HEIGHT == 64) begin
+        pps_payload_bits = 120'h0000_4102_08a4_200c_7b21_4594_5945_88;
       end else begin
         pps_payload_bits = {
           // PPS ids, 8x8 coded canvas for conformance-cropped output, no
