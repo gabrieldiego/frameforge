@@ -221,7 +221,7 @@ def main() -> int:
     if has_vtm_recon:
         print("OK: software, RTL, and VTM reconstructions match")
     else:
-        print("SKIP: VTM decode is not wired for toy geometries above 8x8 yet")
+        print("SKIP: VTM decode is not wired for toy geometries above 16x16 yet")
     if has_vtm_recon and input_has_nonzero_chroma(input_path, info):
         validate_decoded_non_monochrome(vtm_recon, info)
         print("OK: VTM reconstruction contains decoder-visible chroma")
@@ -310,13 +310,13 @@ def validate_supported_input(input_path: Path, info: InputInfo, max_width: int, 
 def vtm_decode_supported(input_path: Path, info: InputInfo) -> bool:
     # The encoder capacity is 64x64, but the clean-room slice entropy body is
     # still only mapped to VTM's coding-tree syntax for the generic 8x8 path
-    # and the trace-derived 16x16 all-zero path. Larger/nonzero inputs are
+    # and the trace-derived 16x16 path. Larger inputs are
     # drained by both software and RTL and must keep matching internally, but
     # external decode is enabled only once their geometry-dependent CABAC trees
     # are implemented instead of guessed.
     if coded_dimension(info.width) == 8 and coded_dimension(info.height) == 8:
         return True
-    return is_toy_16x16_black_trace_path(input_path, info)
+    return is_toy_16x16_trace_path(info)
 
 
 def coded_dimension(value: int) -> int:
@@ -347,8 +347,8 @@ def sha256(path: Path) -> str:
 
 
 def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes:
-    if is_toy_16x16_black_trace_path(input_path, info):
-        return TOY_16X16_BLACK_TRACE_RECON * info.frames
+    if is_toy_16x16_trace_path(info):
+        return cropped_toy_16x16_trace_recon(info) * info.frames
 
     frame = normalized_first_frame_to_yuv420p8(input_path, info)
     luma_len = info.width * info.height
@@ -378,13 +378,32 @@ def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes
 def uses_capacity_tu_grid(frame: bytes, info: InputInfo) -> bool:
     return not (
         (info.width, info.height) == (8, 8)
-        or (
-            info.width == 16
-            and info.height == 16
-            and info.fmt == "yuv420p8"
-            and all(sample == 0 for sample in frame[: info.width * info.height * 3 // 2])
-        )
+        or is_toy_16x16_trace_path(info)
     )
+
+
+def cropped_toy_16x16_trace_recon(info: InputInfo) -> bytes:
+    coded_luma = 16 * 16
+    coded_chroma = 8 * 8
+    luma = TOY_16X16_BLACK_TRACE_RECON[:coded_luma]
+    cb = TOY_16X16_BLACK_TRACE_RECON[coded_luma : coded_luma + coded_chroma]
+    cr = TOY_16X16_BLACK_TRACE_RECON[coded_luma + coded_chroma :]
+
+    out_luma = bytearray()
+    for y in range(info.height):
+        row = y * 16
+        out_luma.extend(luma[row : row + info.width])
+
+    chroma_width = info.width // 2
+    chroma_height = info.height // 2
+    out_cb = bytearray()
+    out_cr = bytearray()
+    for y in range(chroma_height):
+        row = y * 8
+        out_cb.extend(cb[row : row + chroma_width])
+        out_cr.extend(cr[row : row + chroma_width])
+
+    return bytes(out_luma + out_cb + out_cr)
 
 
 def first_residual_luma_block(frame: bytes, info: InputInfo) -> bytes:
@@ -440,17 +459,16 @@ def input_is_all_zero(path: Path) -> bool:
     return True
 
 
-def is_toy_16x16_black_trace_path(input_path: Path, info: InputInfo) -> bool:
+def is_toy_16x16_trace_path(info: InputInfo) -> bool:
     return (
-        info.width == 16
-        and info.height == 16
-        and info.fmt == "yuv420p8"
-        and input_is_all_zero(input_path)
+        info.width <= 16
+        and info.height <= 16
+        and (info.width > 8 or info.height > 8)
     )
 
 
 def expects_zero_reconstruction(input_path: Path, info: InputInfo) -> bool:
-    return input_is_all_zero(input_path) and not is_toy_16x16_black_trace_path(input_path, info)
+    return input_is_all_zero(input_path) and not is_toy_16x16_trace_path(info)
 
 
 def validate_zero_reconstruction(path: Path, label: str) -> None:

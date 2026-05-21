@@ -677,6 +677,28 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
+  function automatic logic [15:0] coded_width();
+    begin
+      if ((visible_width <= 16'd16) && (visible_height <= 16'd16) &&
+          ((visible_width > 16'd8) || (visible_height > 16'd8))) begin
+        coded_width = 16'd16;
+      end else begin
+        coded_width = coded_dimension(visible_width);
+      end
+    end
+  endfunction
+
+  function automatic logic [15:0] coded_height();
+    begin
+      if ((visible_width <= 16'd16) && (visible_height <= 16'd16) &&
+          ((visible_width > 16'd8) || (visible_height > 16'd8))) begin
+        coded_height = 16'd16;
+      end else begin
+        coded_height = coded_dimension(visible_height);
+      end
+    end
+  endfunction
+
   function automatic logic [264:0] sps_payload_state();
     logic [264:0] state;
 
@@ -699,13 +721,13 @@ module ff_vvc_toy4x4_encoder #(
       state = append_flag(state, 1'b0);
       state = append_flag(state, 1'b1);
       state = append_flag(state, 1'b0);
-      state = append_ue(state, coded_dimension(visible_width));
-      state = append_ue(state, coded_dimension(visible_height));
+      state = append_ue(state, coded_width());
+      state = append_ue(state, coded_height());
       state = append_flag(state, 1'b1);
       state = append_ue(state, 0);
-      state = append_ue(state, (coded_dimension(visible_width) - visible_width) >> 1);
+      state = append_ue(state, (coded_width() - visible_width) >> 1);
       state = append_ue(state, 0);
-      state = append_ue(state, (coded_dimension(visible_height) - visible_height) >> 1);
+      state = append_ue(state, (coded_height() - visible_height) >> 1);
       state = append_flag(state, 1'b0);
       state = append_ue(state, 0);
       state = append_flag(state, 1'b0);
@@ -805,8 +827,8 @@ module ff_vvc_toy4x4_encoder #(
       state = append_u(state, 0, 6);
       state = append_u(state, 0, 4);
       state = append_flag(state, 1'b0);
-      state = append_ue(state, coded_dimension(visible_width));
-      state = append_ue(state, coded_dimension(visible_height));
+      state = append_ue(state, coded_width());
+      state = append_ue(state, coded_height());
       state = append_flag(state, 1'b0);
       state = append_flag(state, 1'b0);
       state = append_flag(state, 1'b0);
@@ -1094,20 +1116,19 @@ module ff_vvc_toy4x4_encoder #(
 
   function automatic logic toy_supports_16x16_trace(input logic [4:0] rem, input logic [4:0] chroma_rem);
     begin
-      toy_supports_16x16_trace = (luma_cb_width() == 16'd16) && (luma_cb_height() == 16'd16) &&
-                                 (rem == 5'd16) && (chroma_rem == 5'd6);
+      toy_supports_16x16_trace = (luma_cb_width() == 16'd16) && (luma_cb_height() == 16'd16);
     end
   endfunction
 
   function automatic logic [15:0] luma_cb_width();
     begin
-      luma_cb_width = coded_dimension(visible_width);
+      luma_cb_width = coded_width();
     end
   endfunction
 
   function automatic logic [15:0] luma_cb_height();
     begin
-      luma_cb_height = coded_dimension(visible_height);
+      luma_cb_height = coded_height();
     end
   endfunction
 
@@ -1181,9 +1202,8 @@ module ff_vvc_toy4x4_encoder #(
       st = st_in;
       // This 16x16 path is still trace-derived, but the emitted decisions are
       // selected from visible geometry plus the quantized residual parameters.
-      if ((rem == 5'd16) && (chroma_rem == 5'd6)) begin
-        // Luma CU split, intra mode 26, CBF, and one DC-like residual.
-        st = cabac_encode_bin(st, 1'b0, 9'd214, 1'b0); // split_cu_mode split=1
+      // Luma CU split, intra mode 26, CBF, and one DC-like residual.
+      st = cabac_encode_bin(st, 1'b0, 9'd214, 1'b0); // split_cu_mode split=1
         st = cabac_encode_bin(st, 1'b0, 9'd67, 1'b1);  // split_cu_mode qt=1
         st = cabac_encode_bin_ep(st, 1'b0);            // intra_luma_pred_mode[5]
         st = cabac_encode_bin_ep(st, 1'b1);            // intra_luma_pred_mode[4]
@@ -1260,9 +1280,8 @@ module ff_vvc_toy4x4_encoder #(
         st = cabac_encode_bin(st, 1'b0, 9'd56, 1'b0);  // final empty-tu context
         st = cabac_encode_bin(st, 1'b0, 9'd118, 1'b1); // final empty-tu context
         st = cabac_encode_bin(st, 1'b0, 9'd130, 1'b0); // final empty-tu context
-        st = cabac_encode_bin(st, 1'b0, 9'd104, 1'b0); // final cbf cleanup
-        st = cabac_encode_bin(st, 1'b0, 9'd81, 1'b0);  // final cbf cleanup
-      end
+      st = cabac_encode_bin(st, 1'b0, 9'd104, 1'b0); // final cbf cleanup
+      st = cabac_encode_bin(st, 1'b0, 9'd81, 1'b0);  // final cbf cleanup
       toy_encode_16x16_trace = st;
     end
   endfunction

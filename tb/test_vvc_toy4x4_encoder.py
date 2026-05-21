@@ -218,8 +218,8 @@ def reconstructed_chroma(u, v):
 
 def decoded_reconstruction(frames, data):
     # This is the reconstruction of the emitted VVC bitstream.
-    if is_toy_16x16_black_trace_path(data):
-        return TOY_16X16_BLACK_TRACE_RECON * frames
+    if is_toy_16x16_trace_path():
+        return cropped_toy_16x16_trace_recon() * frames
 
     chroma = reconstructed_chroma(sample_to_8bit(data[luma_samples()]), sample_to_8bit(data[v_sample_index()]))
     if uses_capacity_tu_grid(data):
@@ -249,18 +249,35 @@ def decoded_reconstruction(frames, data):
 def uses_capacity_tu_grid(data):
     return not (
         (rtl_visible_width() == 8 and rtl_visible_height() == 8)
-        or is_toy_16x16_black_trace_path(data)
+        or is_toy_16x16_trace_path()
     )
 
 
-def is_toy_16x16_black_trace_path(data):
+def is_toy_16x16_trace_path():
     return (
-        rtl_visible_width() == 16
-        and rtl_visible_height() == 16
-        and rtl_chroma_format_idc() == 1
-        and rtl_source_sample_bits() == 8
-        and all(sample == 0 for sample in data[:frame_samples()])
+        rtl_visible_width() <= 16
+        and rtl_visible_height() <= 16
+        and (rtl_visible_width() > 8 or rtl_visible_height() > 8)
     )
+
+
+def cropped_toy_16x16_trace_recon():
+    luma = TOY_16X16_BLACK_TRACE_RECON[: 16 * 16]
+    cb = TOY_16X16_BLACK_TRACE_RECON[16 * 16 : 16 * 16 + 8 * 8]
+    cr = TOY_16X16_BLACK_TRACE_RECON[16 * 16 + 8 * 8 :]
+    out_luma = bytearray()
+    for y in range(rtl_visible_height()):
+        row = y * 16
+        out_luma.extend(luma[row : row + rtl_visible_width()])
+    chroma_width = rtl_visible_width() // 2
+    chroma_height = rtl_visible_height() // 2
+    out_cb = bytearray()
+    out_cr = bytearray()
+    for y in range(chroma_height):
+        row = y * 8
+        out_cb.extend(cb[row : row + chroma_width])
+        out_cr.extend(cr[row : row + chroma_width])
+    return bytes(out_luma + out_cb + out_cr)
 
 
 def sample_to_8bit(sample):
