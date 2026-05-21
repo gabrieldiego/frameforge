@@ -24,9 +24,11 @@ module ff_vvc_toy4x4_encoder (
 );
   localparam int SPS_PAYLOAD_LEN  = 31;
   localparam int PPS_PAYLOAD_LEN  = 14;
+  localparam int COEFF_SIDEBAND_PAYLOAD_LEN = 23;
   localparam int NAL_OVERHEAD_LEN = 6;
   localparam int SPS_NAL_LEN = NAL_OVERHEAD_LEN + SPS_PAYLOAD_LEN;
   localparam int PPS_NAL_LEN = NAL_OVERHEAD_LEN + PPS_PAYLOAD_LEN;
+  localparam int COEFF_SIDEBAND_NAL_LEN = NAL_OVERHEAD_LEN + COEFF_SIDEBAND_PAYLOAD_LEN;
   localparam int PARAMETER_SET_LEN = SPS_NAL_LEN + PPS_NAL_LEN;
   localparam int FRAME_BYTES = 24;
 
@@ -37,7 +39,9 @@ module ff_vvc_toy4x4_encoder (
   logic       input_active_q;
   logic [127:0] luma_samples_q;
   logic [4:0] quant_luma_rem_q;
+  logic [119:0] quant_luma_ac_tokens_q;
   logic [4:0] residual_quant_luma_rem;
+  logic [119:0] residual_quant_luma_ac_tokens;
   logic [7:0] residual_recon_luma_sample;
 
   assign busy = input_active_q || m_axis_valid || (index_q != 0);
@@ -45,6 +49,7 @@ module ff_vvc_toy4x4_encoder (
   ff_residual_stub residual_block (
     .luma_samples(luma_samples_q),
     .quant_luma_rem(residual_quant_luma_rem),
+    .quant_luma_ac_tokens(residual_quant_luma_ac_tokens),
     .recon_luma_sample(residual_recon_luma_sample)
   );
 
@@ -63,6 +68,7 @@ module ff_vvc_toy4x4_encoder (
       sampled_v <= '0;
       luma_samples_q <= '0;
       quant_luma_rem_q <= 5'd16;
+      quant_luma_ac_tokens_q <= {15{8'h40}};
       m_axis_valid <= 1'b0;
       m_axis_data  <= '0;
       m_axis_last  <= 1'b0;
@@ -77,6 +83,7 @@ module ff_vvc_toy4x4_encoder (
         sampled_color_valid <= 1'b0;
         luma_samples_q <= '0;
         quant_luma_rem_q <= 5'd16;
+        quant_luma_ac_tokens_q <= {15{8'h40}};
         m_axis_valid   <= 1'b0;
         m_axis_last    <= 1'b0;
         index_q        <= '0;
@@ -92,6 +99,7 @@ module ff_vvc_toy4x4_encoder (
         end
         if (input_count_q == 8'd16) begin
           quant_luma_rem_q <= residual_quant_luma_rem;
+          quant_luma_ac_tokens_q <= residual_quant_luma_ac_tokens;
         end
         if (input_count_q == 8'd16) begin
           sampled_u <= s_axis_data;
@@ -135,8 +143,8 @@ module ff_vvc_toy4x4_encoder (
 
   function automatic logic [7:0] stream_len(input logic [1:0] frames);
     case (frames)
-      2'd2: stream_len = PARAMETER_SET_LEN + color_filler_nal_len() + (slice_nal_len() * 2);
-      default: stream_len = PARAMETER_SET_LEN + color_filler_nal_len() + slice_nal_len();
+      2'd2: stream_len = PARAMETER_SET_LEN + color_filler_nal_len() + COEFF_SIDEBAND_NAL_LEN + (slice_nal_len() * 2);
+      default: stream_len = PARAMETER_SET_LEN + color_filler_nal_len() + COEFF_SIDEBAND_NAL_LEN + slice_nal_len();
     endcase
   endfunction
 
@@ -183,28 +191,32 @@ module ff_vvc_toy4x4_encoder (
   function automatic logic [7:0] stream_byte(input logic [7:0] index);
     logic second_picture;
     logic [7:0] slice_base;
+    logic [7:0] coeff_base;
     logic [6:0] slice_index;
 
     begin
       if (index < SPS_NAL_LEN) begin
-        stream_byte = nal_byte(2'd0, index[6:0], 1'b0);
+        stream_byte = nal_byte(3'd0, index[6:0], 1'b0);
       end else if (index < PARAMETER_SET_LEN) begin
-        stream_byte = nal_byte(2'd1, index - SPS_NAL_LEN, 1'b0);
+        stream_byte = nal_byte(3'd1, index - SPS_NAL_LEN, 1'b0);
       end else if (index < PARAMETER_SET_LEN + color_filler_nal_len()) begin
-        stream_byte = nal_byte(2'd3, index - PARAMETER_SET_LEN, 1'b0);
+        stream_byte = nal_byte(3'd3, index - PARAMETER_SET_LEN, 1'b0);
+      end else if (index < PARAMETER_SET_LEN + color_filler_nal_len() + COEFF_SIDEBAND_NAL_LEN) begin
+        coeff_base = PARAMETER_SET_LEN + color_filler_nal_len();
+        stream_byte = nal_byte(3'd4, index - coeff_base, 1'b0);
       end else begin
-        slice_base = PARAMETER_SET_LEN + color_filler_nal_len();
+        slice_base = PARAMETER_SET_LEN + color_filler_nal_len() + COEFF_SIDEBAND_NAL_LEN;
         second_picture = (index >= slice_base + slice_nal_len());
         slice_index = second_picture
           ? (index - (slice_base + slice_nal_len()))
           : (index - slice_base);
-        stream_byte = nal_byte(2'd2, slice_index, second_picture);
+        stream_byte = nal_byte(3'd2, slice_index, second_picture);
       end
     end
   endfunction
 
   function automatic logic [7:0] nal_byte(
-    input logic [1:0] nal_kind,
+    input logic [2:0] nal_kind,
     input logic [6:0] nal_index,
     input logic       cra_picture
   );
@@ -227,7 +239,7 @@ module ff_vvc_toy4x4_encoder (
   endfunction
 
   function automatic logic [7:0] nal_header_byte(
-    input logic [1:0] nal_kind,
+    input logic [2:0] nal_kind,
     input logic       byte_index,
     input logic       cra_picture
   );
@@ -240,14 +252,15 @@ module ff_vvc_toy4x4_encoder (
   endfunction
 
   function automatic logic [4:0] nal_unit_type(
-    input logic [1:0] nal_kind,
+    input logic [2:0] nal_kind,
     input logic       cra_picture
   );
     begin
       case (nal_kind)
-        2'd0: nal_unit_type = 5'd15; // SPS.
-        2'd1: nal_unit_type = 5'd16; // PPS.
-        2'd3: nal_unit_type = 5'd25; // Filler data.
+        3'd0: nal_unit_type = 5'd15; // SPS.
+        3'd1: nal_unit_type = 5'd16; // PPS.
+        3'd3: nal_unit_type = 5'd25; // Filler data.
+        3'd4: nal_unit_type = 5'd30; // Reserved FrameForge coefficient sideband.
         default: nal_unit_type = cra_picture ? 5'd9 : 5'd8;
       endcase
     end
@@ -270,15 +283,16 @@ module ff_vvc_toy4x4_encoder (
   endfunction
 
   function automatic logic [7:0] payload_byte(
-    input logic [1:0] nal_kind,
+    input logic [2:0] nal_kind,
     input logic [6:0] payload_index,
     input logic       cra_picture
   );
     begin
       case (nal_kind)
-        2'd0: payload_byte = sps_payload_byte(payload_index);
-        2'd1: payload_byte = pps_payload_byte(payload_index);
-        2'd3: payload_byte = color_filler_payload_byte(payload_index);
+        3'd0: payload_byte = sps_payload_byte(payload_index);
+        3'd1: payload_byte = pps_payload_byte(payload_index);
+        3'd3: payload_byte = color_filler_payload_byte(payload_index);
+        3'd4: payload_byte = coeff_sideband_payload_byte(payload_index);
         default: payload_byte = slice_payload_byte(payload_index, cra_picture);
       endcase
     end
@@ -293,6 +307,25 @@ module ff_vvc_toy4x4_encoder (
       end else begin
         color_filler_payload_byte = 8'h00;
       end
+    end
+  endfunction
+
+  function automatic logic [7:0] coeff_sideband_payload_byte(input logic [6:0] index);
+    begin
+      case (index)
+        7'd0: coeff_sideband_payload_byte = 8'h46; // F
+        7'd1: coeff_sideband_payload_byte = 8'h46; // F
+        7'd2: coeff_sideband_payload_byte = 8'h41; // A
+        7'd3: coeff_sideband_payload_byte = 8'h43; // C
+        7'd4: coeff_sideband_payload_byte = 8'h81; // sideband version 1
+        7'd5: coeff_sideband_payload_byte = 8'h4f; // 15 AC tokens
+        7'd6: coeff_sideband_payload_byte = 8'h40 | {3'b000, quant_luma_rem()};
+        7'd7, 7'd8, 7'd9, 7'd10, 7'd11, 7'd12, 7'd13, 7'd14,
+        7'd15, 7'd16, 7'd17, 7'd18, 7'd19, 7'd20, 7'd21:
+          coeff_sideband_payload_byte = quant_luma_ac_tokens_q[(21 - index) * 8 +: 8];
+        7'd22: coeff_sideband_payload_byte = 8'h80;
+        default: coeff_sideband_payload_byte = 8'h00;
+      endcase
     end
   endfunction
 

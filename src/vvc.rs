@@ -211,6 +211,7 @@ pub enum VvcNalUnitType {
     PrefixSei = 23,
     SuffixSei = 24,
     FillerData = 25,
+    ReservedNvcl30 = 30,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -288,18 +289,22 @@ pub struct Toy4x4QuantizedColor {
     pub u: u8,
     pub v: u8,
     luma_rem: u8,
+    luma_ac_tokens: [u8; 15],
     chroma_rem: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Toy4x4TransformBlock {
     dc_coeff: i16,
+    ac_coeffs: [i16; 15],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Toy4x4QuantizedTransformBlock {
     reconstructed_dc_coeff: i16,
+    reconstructed_ac_coeffs: [i16; 15],
     abs_remainder: u8,
+    ac_tokens: [u8; 15],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -466,6 +471,7 @@ fn quantize_toy_4x4_frame(frame: Toy4x4SampledFrame) -> Toy4x4QuantizedColor {
         u: 0,
         v: 0,
         luma_rem: quantized_luma.abs_remainder,
+        luma_ac_tokens: quantized_luma.ac_tokens,
         chroma_rem: 6,
     }
 }
@@ -489,6 +495,7 @@ fn toy_4x4_yuv420p8_annex_b(
     units.push(toy_4x4_pps_unit());
     units.push(toy_4x4_color_filler_unit(frame.sampled_color()));
     let quantized = quantize_toy_4x4_frame(frame);
+    units.push(toy_4x4_coeff_sideband_unit(quantized));
     for frame_idx in 0..params.frames {
         units.push(toy_4x4_slice_unit(frame_idx, quantized)?);
     }
@@ -513,6 +520,30 @@ fn toy_4x4_color_filler_payload(color: Toy4x4SampledColor) -> Vec<u8> {
 
 fn toy_4x4_color_filler_count(color: Toy4x4SampledColor) -> usize {
     ((color.y as usize) + (color.u as usize) + (color.v as usize)) & 0x0f
+}
+
+fn toy_4x4_coeff_sideband_unit(color: Toy4x4QuantizedColor) -> VvcNalUnit {
+    VvcNalUnit {
+        nal_unit_type: VvcNalUnitType::ReservedNvcl30,
+        layer_id: 0,
+        temporal_id: 0,
+        rbsp_payload: toy_4x4_coeff_sideband_payload(color),
+    }
+}
+
+fn toy_4x4_coeff_sideband_payload(color: Toy4x4QuantizedColor) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(23);
+    payload.extend_from_slice(b"FFAC");
+    payload.push(0x81); // FrameForge toy coefficient sideband version 1.
+    payload.push(0x4f); // Fifteen AC tokens follow the DC token.
+    payload.push(encode_toy_coeff_token(false, color.luma_rem));
+    payload.extend(color.luma_ac_tokens);
+    payload.push(0x80);
+    payload
+}
+
+fn encode_toy_coeff_token(negative: bool, magnitude: u8) -> u8 {
+    0x40 | (u8::from(negative) << 5) | (magnitude & 0x1f)
 }
 
 fn toy_4x4_sps_unit() -> VvcNalUnit {
@@ -1157,17 +1188,35 @@ fn renorm_bits(mut range: u32) -> u32 {
 fn transform_toy_4x4_luma(samples: [u8; 16]) -> Toy4x4TransformBlock {
     let sum: u16 = samples.iter().map(|sample| *sample as u16).sum();
     let dc_sample = ((sum + 8) >> 4) as u8;
+    let mut ac_coeffs = [0; 15];
+    for (dst, sample) in ac_coeffs.iter_mut().zip(samples.iter().skip(1)) {
+        *dst = *sample as i16 - dc_sample as i16;
+    }
     Toy4x4TransformBlock {
         dc_coeff: dc_sample as i16 - TOY_LUMA_DC_BASE,
+        ac_coeffs,
     }
 }
 
 fn quantize_toy_4x4_luma_dc(block: Toy4x4TransformBlock) -> Toy4x4QuantizedTransformBlock {
     let sample = (block.dc_coeff + TOY_LUMA_DC_BASE).clamp(0, u8::MAX as i16) as u8;
     let (reconstructed_sample, abs_remainder) = nearest_quantized_luma(sample);
+    let mut reconstructed_ac_coeffs = [0; 15];
+    let mut ac_tokens = [0; 15];
+    for ((reconstructed, token), coeff) in reconstructed_ac_coeffs
+        .iter_mut()
+        .zip(ac_tokens.iter_mut())
+        .zip(block.ac_coeffs)
+    {
+        let quantized = quantize_toy_ac_coeff(coeff);
+        *reconstructed = quantized as i16 * 16;
+        *token = encode_toy_coeff_token(quantized < 0, quantized.unsigned_abs());
+    }
     Toy4x4QuantizedTransformBlock {
         reconstructed_dc_coeff: reconstructed_sample as i16 - TOY_LUMA_DC_BASE,
+        reconstructed_ac_coeffs,
         abs_remainder,
+        ac_tokens,
     }
 }
 
@@ -1175,8 +1224,23 @@ fn inverse_transform_toy_4x4_luma_dc(
     block: Toy4x4QuantizedTransformBlock,
 ) -> Toy4x4ReconstructedLumaBlock {
     let sample = (block.reconstructed_dc_coeff + TOY_LUMA_DC_BASE).clamp(0, u8::MAX as i16) as u8;
-    Toy4x4ReconstructedLumaBlock {
-        samples: [sample; 16],
+    let mut samples = [sample; 16];
+    for (dst, coeff) in samples
+        .iter_mut()
+        .skip(1)
+        .zip(block.reconstructed_ac_coeffs)
+    {
+        *dst = (sample as i16 + coeff).clamp(0, u8::MAX as i16) as u8;
+    }
+    Toy4x4ReconstructedLumaBlock { samples }
+}
+
+fn quantize_toy_ac_coeff(coeff: i16) -> i8 {
+    let magnitude = ((coeff.unsigned_abs() + 8) >> 4).min(8) as i8;
+    if coeff < 0 {
+        -magnitude
+    } else {
+        magnitude
     }
 }
 
@@ -1309,6 +1373,36 @@ fn annex_b_ranges(bytes: &[u8]) -> Vec<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn toy_transform_block(dc_coeff: i16) -> Toy4x4TransformBlock {
+        Toy4x4TransformBlock {
+            dc_coeff,
+            ac_coeffs: [0; 15],
+        }
+    }
+
+    fn toy_quantized_block(
+        reconstructed_dc_coeff: i16,
+        abs_remainder: u8,
+    ) -> Toy4x4QuantizedTransformBlock {
+        Toy4x4QuantizedTransformBlock {
+            reconstructed_dc_coeff,
+            reconstructed_ac_coeffs: [0; 15],
+            abs_remainder,
+            ac_tokens: [0x40; 15],
+        }
+    }
+
+    fn toy_quantized_color(y: u8, luma_rem: u8) -> Toy4x4QuantizedColor {
+        Toy4x4QuantizedColor {
+            y,
+            u: 0,
+            v: 0,
+            luma_rem,
+            luma_ac_tokens: [0x40; 15],
+            chroma_rem: 6,
+        }
+    }
 
     #[test]
     fn eos_header_matches_vvc_packing() {
@@ -1467,14 +1561,15 @@ mod tests {
     #[test]
     fn parses_toy_black_4x4_one_frame_headers() {
         let bytes = toy_black_4x4_yuv420p8_annex_b(Toy4x4EncodeParams { frames: 1 }).unwrap();
-        assert_eq!(bytes.len(), 81);
+        assert_eq!(bytes.len(), 110);
         let infos = parse_annex_b_nal_units(&bytes).unwrap();
         let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
-        assert_eq!(types, vec![15, 16, 25, 8]);
+        assert_eq!(types, vec![15, 16, 25, 30, 8]);
         assert_eq!(infos[0].payload_len, 31);
         assert_eq!(infos[1].payload_len, 14);
         assert_eq!(infos[2].payload_len, 1);
-        assert_eq!(infos[3].payload_len, 11);
+        assert_eq!(infos[3].payload_len, 23);
+        assert_eq!(infos[4].payload_len, 11);
     }
 
     #[test]
@@ -1504,66 +1599,41 @@ mod tests {
 
     #[test]
     fn toy_solid_luma_transform_generates_dc_only() {
-        assert_eq!(
-            transform_toy_4x4_luma([0; 16]),
-            Toy4x4TransformBlock { dc_coeff: -114 }
-        );
-        assert_eq!(
-            transform_toy_4x4_luma([64; 16]),
-            Toy4x4TransformBlock { dc_coeff: -50 }
-        );
-        assert_eq!(
-            transform_toy_4x4_luma([114; 16]),
-            Toy4x4TransformBlock { dc_coeff: 0 }
-        );
+        assert_eq!(transform_toy_4x4_luma([0; 16]), toy_transform_block(-114));
+        assert_eq!(transform_toy_4x4_luma([64; 16]), toy_transform_block(-50));
+        assert_eq!(transform_toy_4x4_luma([114; 16]), toy_transform_block(0));
     }
 
     #[test]
     fn toy_luma_transform_dc_uses_all_samples() {
         let mut samples = [64; 16];
         samples[3] = 255;
+        let mut ac_coeffs = [-12; 15];
+        ac_coeffs[2] = 179;
         assert_eq!(
             transform_toy_4x4_luma(samples),
-            Toy4x4TransformBlock { dc_coeff: -38 }
+            Toy4x4TransformBlock {
+                dc_coeff: -38,
+                ac_coeffs
+            }
         );
     }
 
     #[test]
     fn toy_luma_dc_quantization_matches_existing_ladder() {
         let black = quantize_toy_4x4_luma_dc(transform_toy_4x4_luma([0; 16]));
-        assert_eq!(
-            black,
-            Toy4x4QuantizedTransformBlock {
-                reconstructed_dc_coeff: -114,
-                abs_remainder: 16
-            }
-        );
+        assert_eq!(black, toy_quantized_block(-114, 16));
 
         let mid = quantize_toy_4x4_luma_dc(transform_toy_4x4_luma([65; 16]));
-        assert_eq!(
-            mid,
-            Toy4x4QuantizedTransformBlock {
-                reconstructed_dc_coeff: -50,
-                abs_remainder: 7
-            }
-        );
+        assert_eq!(mid, toy_quantized_block(-50, 7));
 
         let white = quantize_toy_4x4_luma_dc(transform_toy_4x4_luma([255; 16]));
-        assert_eq!(
-            white,
-            Toy4x4QuantizedTransformBlock {
-                reconstructed_dc_coeff: 0,
-                abs_remainder: 0
-            }
-        );
+        assert_eq!(white, toy_quantized_block(0, 0));
     }
 
     #[test]
     fn toy_inverse_transform_reconstructs_solid_luma_block() {
-        let quantized = Toy4x4QuantizedTransformBlock {
-            reconstructed_dc_coeff: -50,
-            abs_remainder: 7,
-        };
+        let quantized = toy_quantized_block(-50, 7);
         assert_eq!(
             inverse_transform_toy_4x4_luma_dc(quantized),
             Toy4x4ReconstructedLumaBlock { samples: [64; 16] }
@@ -1574,13 +1644,7 @@ mod tests {
     fn toy_color_quantization_uses_inverse_transform_reconstruction() {
         assert_eq!(
             quantize_toy_4x4_color(Toy4x4SampledColor { y: 65, u: 9, v: 7 }),
-            Toy4x4QuantizedColor {
-                y: 64,
-                u: 0,
-                v: 0,
-                luma_rem: 7,
-                chroma_rem: 6
-            }
+            toy_quantized_color(64, 7)
         );
     }
 
@@ -1588,6 +1652,8 @@ mod tests {
     fn toy_frame_quantization_uses_all_luma_samples_for_dc() {
         let mut luma = [64; 16];
         luma[3] = 255;
+        let mut ac_tokens = [0x61; 15];
+        ac_tokens[2] = 0x48;
         assert_eq!(
             quantize_toy_4x4_frame(Toy4x4SampledFrame { luma, u: 9, v: 7 }),
             Toy4x4QuantizedColor {
@@ -1595,8 +1661,27 @@ mod tests {
                 u: 0,
                 v: 0,
                 luma_rem: 5,
+                luma_ac_tokens: ac_tokens,
                 chroma_rem: 6
             }
+        );
+    }
+
+    #[test]
+    fn toy_inverse_transform_reconstructs_quantized_ac_coefficients() {
+        let mut block = toy_quantized_block(-36, 5);
+        block.reconstructed_ac_coeffs[2] = 128;
+        block.ac_tokens[2] = 0x48;
+        assert_eq!(inverse_transform_toy_4x4_luma_dc(block).samples[3], 206);
+    }
+
+    #[test]
+    fn toy_coefficient_sideband_serializes_ac_tokens() {
+        let mut color = toy_quantized_color(78, 5);
+        color.luma_ac_tokens[2] = 0x48;
+        assert_eq!(
+            toy_4x4_coeff_sideband_payload(color),
+            hex_bytes("46464143814f4540404840404040404040404040404080")
         );
     }
 
@@ -1623,13 +1708,7 @@ mod tests {
         ];
 
         for (luma_rem, expected_payload) in expected.iter().enumerate() {
-            let color = Toy4x4QuantizedColor {
-                y: 0,
-                u: 0,
-                v: 0,
-                luma_rem: luma_rem as u8,
-                chroma_rem: 6,
-            };
+            let color = toy_quantized_color(0, luma_rem as u8);
             assert_eq!(
                 toy_4x4_slice_payload(Toy4x4PictureKind::Idr, color),
                 hex_bytes(expected_payload)
@@ -1674,12 +1753,13 @@ mod tests {
     #[test]
     fn parses_toy_black_4x4_two_frame_headers() {
         let bytes = toy_black_4x4_yuv420p8_annex_b(Toy4x4EncodeParams { frames: 2 }).unwrap();
-        assert_eq!(bytes.len(), 98);
+        assert_eq!(bytes.len(), 127);
         let infos = parse_annex_b_nal_units(&bytes).unwrap();
         let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
-        assert_eq!(types, vec![15, 16, 25, 8, 9]);
-        assert_eq!(infos[4].offset, 85);
-        assert_eq!(infos[4].payload_len, 11);
+        assert_eq!(types, vec![15, 16, 25, 30, 8, 9]);
+        assert_eq!(infos[3].payload_len, 23);
+        assert_eq!(infos[5].offset, 114);
+        assert_eq!(infos[5].payload_len, 11);
     }
 
     #[test]
@@ -1735,8 +1815,9 @@ mod tests {
             toy_4x4_yuv420p8_annex_b_from_input(&input, Toy4x4EncodeParams { frames: 1 }).unwrap();
         let infos = parse_annex_b_nal_units(&bytes).unwrap();
         let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
-        assert_eq!(types, vec![15, 16, 25, 8]);
+        assert_eq!(types, vec![15, 16, 25, 30, 8]);
         assert_eq!(infos[2].payload_len, 2);
+        assert_eq!(infos[3].payload_len, 23);
     }
 
     #[test]

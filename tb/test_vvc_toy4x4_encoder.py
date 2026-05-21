@@ -44,6 +44,17 @@ def forward_luma_dc(samples):
     return ((sum(samples) + 8) >> 4) - 114
 
 
+def quant_ac_token(sample, dc_sample):
+    coeff = sample - dc_sample
+    magnitude = min((abs(coeff) + 8) >> 4, 8)
+    return 0x40 | ((1 if coeff < 0 else 0) << 5) | magnitude
+
+
+def quant_ac_tokens(samples):
+    dc_sample = (sum(samples) + 8) >> 4
+    return bytes(quant_ac_token(sample, dc_sample) for sample in samples[1:16])
+
+
 def quantized_luma_dc(dc_coeff):
     sample = max(0, min(255, dc_coeff + 114))
     return quantized_luma(sample) - 114
@@ -129,6 +140,9 @@ async def collect_stream(dut, frames):
     assert int(dut.sampled_u.value) == data[16]
     assert int(dut.sampled_v.value) == data[20]
     assert int(dut.luma_samples_q.value) == int.from_bytes(data[:16], "big")
+    assert int(dut.quant_luma_ac_tokens_q.value) == int.from_bytes(
+        quant_ac_tokens(data[:16]), "big"
+    )
 
     observed = bytearray()
     if dut.m_axis_valid.value == 1:
@@ -174,6 +188,9 @@ async def drain_sampled_color(dut, frames, y, u, v):
     assert int(dut.sampled_u.value) == u
     assert int(dut.sampled_v.value) == v
     assert int(dut.luma_samples_q.value) == int.from_bytes(data[:16], "big")
+    assert int(dut.quant_luma_ac_tokens_q.value) == int.from_bytes(
+        quant_ac_tokens(data[:16]), "big"
+    )
 
 
 @cocotb.test()

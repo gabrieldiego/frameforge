@@ -3,19 +3,22 @@
 module ff_residual_stub (
   input  logic [127:0] luma_samples,
   output logic [4:0]   quant_luma_rem,
+  output logic [119:0] quant_luma_ac_tokens,
   output logic [7:0]   recon_luma_sample
 );
   logic signed [9:0] dc_coeff;
   logic signed [9:0] quantized_dc_coeff;
+  logic [7:0] dc_sample;
 
-  assign dc_coeff = forward_luma_dc_coeff(luma_samples);
+  assign dc_sample = forward_luma_dc_sample(luma_samples);
+  assign dc_coeff = $signed({ 2'b00, dc_sample }) - 10'sd114;
   assign quant_luma_rem = quant_luma_rem_from_dc_coeff(dc_coeff);
+  assign quant_luma_ac_tokens = quant_ac_tokens(luma_samples, dc_sample);
   assign quantized_dc_coeff = reconstructed_dc_coeff_from_rem(quant_luma_rem);
   assign recon_luma_sample = inverse_luma_dc_coeff(quantized_dc_coeff);
 
-  function automatic signed [9:0] forward_luma_dc_coeff(input logic [127:0] samples);
+  function automatic logic [7:0] forward_luma_dc_sample(input logic [127:0] samples);
     logic [12:0] sum;
-    logic [7:0] dc_sample;
     begin
       // Current token generation still emits only the DC coefficient, but the
       // residual block consumes all luma samples so SW and RTL share the same
@@ -29,8 +32,45 @@ module ff_residual_stub (
         {5'd0, samples[47:40]}   + {5'd0, samples[39:32]}   +
         {5'd0, samples[31:24]}   + {5'd0, samples[23:16]}   +
         {5'd0, samples[15:8]}    + {5'd0, samples[7:0]};
-      dc_sample = (sum + 13'd8) >> 4;
-      forward_luma_dc_coeff = $signed({ 2'b00, dc_sample }) - 10'sd114;
+      forward_luma_dc_sample = (sum + 13'd8) >> 4;
+    end
+  endfunction
+
+  function automatic logic [119:0] quant_ac_tokens(
+    input logic [127:0] samples,
+    input logic [7:0]   dc
+  );
+    logic [119:0] tokens;
+    integer i;
+    begin
+      tokens = '0;
+      for (i = 1; i < 16; i = i + 1) begin
+        tokens = (tokens << 8) | quant_ac_token(sample_at(samples, i[3:0]), dc);
+      end
+      quant_ac_tokens = tokens;
+    end
+  endfunction
+
+  function automatic logic [7:0] sample_at(input logic [127:0] samples, input logic [3:0] index);
+    begin
+      sample_at = samples[(15 - index) * 8 +: 8];
+    end
+  endfunction
+
+  function automatic logic [7:0] quant_ac_token(input logic [7:0] sample, input logic [7:0] dc);
+    logic signed [9:0] coeff;
+    logic [8:0] abs_coeff;
+    logic [4:0] magnitude;
+    logic negative;
+    begin
+      coeff = $signed({ 2'b00, sample }) - $signed({ 2'b00, dc });
+      negative = coeff < 0;
+      abs_coeff = negative ? -coeff : coeff;
+      magnitude = (abs_coeff + 9'd8) >> 4;
+      if (magnitude > 5'd8) begin
+        magnitude = 5'd8;
+      end
+      quant_ac_token = 8'h40 | { 2'b00, negative, magnitude };
     end
   endfunction
 
