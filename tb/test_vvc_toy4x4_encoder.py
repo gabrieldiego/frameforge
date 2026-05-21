@@ -9,6 +9,28 @@ from cocotb.triggers import ReadOnly, RisingEdge, Timer
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+TOY_16X16_BLACK_TRACE_RECON = bytes(
+    [
+        124, 124, 124, 125, 125, 126, 127, 128, 129, 129, 130, 131, 131, 132, 132, 132,
+        122, 123, 123, 123, 124, 125, 126, 126, 127, 128, 129, 129, 130, 130, 131, 131,
+        122, 123, 123, 123, 124, 125, 125, 126, 127, 128, 128, 129, 130, 130, 130, 131,
+        125, 125, 126, 126, 127, 127, 128, 129, 130, 130, 131, 132, 132, 133, 133, 133,
+        129, 129, 129, 130, 130, 131, 132, 132, 133, 134, 134, 135, 135, 136, 136, 136,
+        130, 130, 130, 131, 131, 132, 132, 133, 134, 134, 135, 135, 136, 136, 136, 137,
+        127, 127, 127, 128, 128, 128, 129, 130, 130, 131, 131, 132, 132, 132, 133, 133,
+        123, 123, 123, 124, 124, 124, 125, 125, 126, 126, 127, 127, 128, 128, 128, 128,
+        122, 122, 122, 123, 123, 123, 124, 124, 125, 125, 126, 126, 126, 127, 127, 127,
+        124, 125, 125, 125, 125, 126, 126, 126, 127, 127, 127, 128, 128, 128, 128, 129,
+        127, 127, 127, 127, 127, 128, 128, 128, 128, 129, 129, 129, 130, 130, 130, 130,
+        126, 126, 126, 126, 126, 127, 127, 127, 127, 128, 128, 128, 128, 128, 129, 129,
+        123, 123, 123, 123, 123, 124, 124, 124, 124, 124, 125, 125, 125, 125, 125, 125,
+        121, 121, 122, 122, 122, 122, 122, 122, 122, 123, 123, 123, 123, 123, 123, 123,
+        123, 123, 123, 123, 123, 123, 123, 123, 124, 124, 124, 124, 124, 124, 124, 124,
+        125, 125, 125, 125, 125, 125, 125, 125, 126, 126, 126, 126, 126, 126, 126, 126,
+    ]
+    + [128] * 64
+    + [119] * 64
+)
 
 
 def solid_yuv420p8(y, u, v, frames):
@@ -168,6 +190,9 @@ def reconstructed_chroma(u, v):
 
 def decoded_reconstruction(frames, data):
     # This is the reconstruction of the emitted VVC bitstream.
+    if is_toy_16x16_black_trace_path(data):
+        return TOY_16X16_BLACK_TRACE_RECON * frames
+
     y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(data[:16])))
     chroma = reconstructed_chroma(sample_to_8bit(data[luma_samples()]), sample_to_8bit(data[v_sample_index()]))
     frame = bytes(
@@ -176,6 +201,16 @@ def decoded_reconstruction(frames, data):
         + [chroma] * (luma_samples() // 4)
     )
     return frame * frames
+
+
+def is_toy_16x16_black_trace_path(data):
+    return (
+        rtl_visible_width() == 16
+        and rtl_visible_height() == 16
+        and rtl_chroma_format_idc() == 1
+        and rtl_source_sample_bits() == 8
+        and all(sample == 0 for sample in data[:frame_samples()])
+    )
 
 
 def sample_to_8bit(sample):

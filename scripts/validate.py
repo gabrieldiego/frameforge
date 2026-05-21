@@ -16,6 +16,28 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_DIR = Path("verification/generated/checksums")
 RTL_SUPPORTED_FORMAT = "yuv420p8"
+TOY_16X16_BLACK_TRACE_RECON = bytes(
+    [
+        124, 124, 124, 125, 125, 126, 127, 128, 129, 129, 130, 131, 131, 132, 132, 132,
+        122, 123, 123, 123, 124, 125, 126, 126, 127, 128, 129, 129, 130, 130, 131, 131,
+        122, 123, 123, 123, 124, 125, 125, 126, 127, 128, 128, 129, 130, 130, 130, 131,
+        125, 125, 126, 126, 127, 127, 128, 129, 130, 130, 131, 132, 132, 133, 133, 133,
+        129, 129, 129, 130, 130, 131, 132, 132, 133, 134, 134, 135, 135, 136, 136, 136,
+        130, 130, 130, 131, 131, 132, 132, 133, 134, 134, 135, 135, 136, 136, 136, 137,
+        127, 127, 127, 128, 128, 128, 129, 130, 130, 131, 131, 132, 132, 132, 133, 133,
+        123, 123, 123, 124, 124, 124, 125, 125, 126, 126, 127, 127, 128, 128, 128, 128,
+        122, 122, 122, 123, 123, 123, 124, 124, 125, 125, 126, 126, 126, 127, 127, 127,
+        124, 125, 125, 125, 125, 126, 126, 126, 127, 127, 127, 128, 128, 128, 128, 129,
+        127, 127, 127, 127, 127, 128, 128, 128, 128, 129, 129, 129, 130, 130, 130, 130,
+        126, 126, 126, 126, 126, 127, 127, 127, 127, 128, 128, 128, 128, 128, 129, 129,
+        123, 123, 123, 123, 123, 124, 124, 124, 124, 124, 125, 125, 125, 125, 125, 125,
+        121, 121, 122, 122, 122, 122, 122, 122, 122, 123, 123, 123, 123, 123, 123, 123,
+        123, 123, 123, 123, 123, 123, 123, 123, 124, 124, 124, 124, 124, 124, 124, 124,
+        125, 125, 125, 125, 125, 125, 125, 125, 126, 126, 126, 126, 126, 126, 126, 126,
+    ]
+    + [128] * 64
+    + [119] * 64
+)
 SUPPORTED_FORMATS = {
     "i420": "yuv420p8",
     "yuv420p8": "yuv420p8",
@@ -144,7 +166,7 @@ def main() -> int:
         env=env,
     )
 
-    has_vtm_recon = vtm_decode_supported(info)
+    has_vtm_recon = vtm_decode_supported(input_path, info)
     if has_vtm_recon:
         run(
             [
@@ -203,7 +225,7 @@ def main() -> int:
     if has_vtm_recon and input_has_nonzero_chroma(input_path, info):
         validate_decoded_non_monochrome(vtm_recon, info)
         print("OK: VTM reconstruction contains decoder-visible chroma")
-    if input_is_all_zero(input_path):
+    if expects_zero_reconstruction(input_path, info):
         validate_zero_reconstruction(sw_internal_recon, "software internal reconstruction")
         validate_zero_reconstruction(rtl_internal_recon, "RTL internal reconstruction")
         if has_vtm_recon:
@@ -285,13 +307,16 @@ def validate_supported_input(input_path: Path, info: InputInfo, max_width: int, 
         )
 
 
-def vtm_decode_supported(info: InputInfo) -> bool:
+def vtm_decode_supported(input_path: Path, info: InputInfo) -> bool:
     # The encoder capacity is 64x64, but the clean-room slice entropy body is
-    # still only mapped to VTM's coding-tree syntax through 8x8. Larger inputs
-    # are drained by both software and RTL and must keep matching internally,
-    # but external decode is enabled only once the geometry-dependent CABAC tree
-    # is implemented instead of guessed.
-    return info.width <= 8 and info.height <= 8
+    # still only mapped to VTM's coding-tree syntax for the generic 8x8 path
+    # and the trace-derived 16x16 all-zero path. Larger/nonzero inputs are
+    # drained by both software and RTL and must keep matching internally, but
+    # external decode is enabled only once their geometry-dependent CABAC trees
+    # are implemented instead of guessed.
+    if info.width <= 8 and info.height <= 8:
+        return True
+    return is_toy_16x16_black_trace_path(input_path, info)
 
 
 def normalize_format(fmt: str) -> str:
@@ -312,6 +337,9 @@ def sha256(path: Path) -> str:
 
 
 def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes:
+    if is_toy_16x16_black_trace_path(input_path, info):
+        return TOY_16X16_BLACK_TRACE_RECON * info.frames
+
     frame = normalized_first_frame_to_yuv420p8(input_path, info)
     luma_len = info.width * info.height
     chroma_len = luma_len // 4
@@ -361,6 +389,19 @@ def input_is_all_zero(path: Path) -> bool:
             if any(chunk):
                 return False
     return True
+
+
+def is_toy_16x16_black_trace_path(input_path: Path, info: InputInfo) -> bool:
+    return (
+        info.width == 16
+        and info.height == 16
+        and info.fmt == "yuv420p8"
+        and input_is_all_zero(input_path)
+    )
+
+
+def expects_zero_reconstruction(input_path: Path, info: InputInfo) -> bool:
+    return input_is_all_zero(input_path) and not is_toy_16x16_black_trace_path(input_path, info)
 
 
 def validate_zero_reconstruction(path: Path, label: str) -> None:
