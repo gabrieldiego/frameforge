@@ -11,8 +11,10 @@ endif
 RTL_DIR := ../rtl
 DUT ?= intra
 RTL_SAMPLE_BITS ?= 8
-SIM_BUILD ?= sim_build/$(DUT)-$(RTL_SAMPLE_BITS)b
+RTL_CHROMA_FORMAT_IDC ?= 1
+SIM_BUILD ?= sim_build/$(DUT)-$(RTL_SAMPLE_BITS)b-cf$(RTL_CHROMA_FORMAT_IDC)
 export RTL_SAMPLE_BITS
+export RTL_CHROMA_FORMAT_IDC
 
 ifeq ($(DUT),encoder)
 VERILOG_SOURCES := $(RTL_DIR)/ff_min_encoder_stub.sv
@@ -36,6 +38,7 @@ COMPILE_ARGS += -g2012
 ifeq ($(DUT),vvc-toy4x4)
 ifeq ($(SIM),icarus)
 COMPILE_ARGS += -P$(TOPLEVEL).SAMPLE_BITS=$(RTL_SAMPLE_BITS)
+COMPILE_ARGS += -P$(TOPLEVEL).CHROMA_FORMAT_IDC=$(RTL_CHROMA_FORMAT_IDC)
 endif
 endif
 

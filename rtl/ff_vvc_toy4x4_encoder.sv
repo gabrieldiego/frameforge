@@ -1,7 +1,12 @@
 `timescale 1ns/1ps
 
 module ff_vvc_toy4x4_encoder #(
-  parameter int SAMPLE_BITS = 8
+  parameter int SAMPLE_BITS = 8,
+  // VVC chroma_format_idc values: 1=4:2:0, 2=4:2:2, 3=4:4:4.
+  // The current generated bitstream remains the toy 4:2:0 validation stream,
+  // but the input drain and first-chroma sampling are parameterized so wider
+  // RTL input front-ends can be tested independently.
+  parameter int CHROMA_FORMAT_IDC = 1
 ) (
   input  logic       clk,
   input  logic       rst_n,
@@ -32,7 +37,11 @@ module ff_vvc_toy4x4_encoder #(
   localparam int PPS_NAL_LEN = NAL_OVERHEAD_LEN + PPS_PAYLOAD_LEN;
   localparam int COEFF_SIDEBAND_NAL_LEN = NAL_OVERHEAD_LEN + COEFF_SIDEBAND_PAYLOAD_LEN;
   localparam int PARAMETER_SET_LEN = SPS_NAL_LEN + PPS_NAL_LEN;
-  localparam int FRAME_BYTES = 24;
+  localparam int LUMA_SAMPLES = 16;
+  localparam int CHROMA_PLANE_SAMPLES = (CHROMA_FORMAT_IDC == 3) ? 16 :
+                                       ((CHROMA_FORMAT_IDC == 2) ? 8 : 4);
+  localparam int FRAME_SAMPLES = LUMA_SAMPLES + (CHROMA_PLANE_SAMPLES * 2);
+  localparam int V_SAMPLE_INDEX = LUMA_SAMPLES + CHROMA_PLANE_SAMPLES;
 
   logic [7:0] index_q;
   logic [7:0] stream_len_q;
@@ -101,17 +110,17 @@ module ff_vvc_toy4x4_encoder #(
         if (input_count_q == 8'd0) begin
           sampled_y <= s_axis_data;
         end
-        if (input_count_q < 8'd16) begin
+        if (input_count_q < LUMA_SAMPLES) begin
           luma_samples_q[(15 - input_count_q[3:0]) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
         end
-        if (input_count_q == 8'd16) begin
+        if (input_count_q == LUMA_SAMPLES) begin
           quant_luma_rem_q <= residual_quant_luma_rem;
           quant_luma_ac_tokens_q <= residual_quant_luma_ac_tokens;
         end
-        if (input_count_q == 8'd16) begin
+        if (input_count_q == LUMA_SAMPLES) begin
           sampled_u <= s_axis_data;
         end
-        if (input_count_q == 8'd20) begin
+        if (input_count_q == V_SAMPLE_INDEX) begin
           sampled_v <= s_axis_data;
           quant_chroma_rem_q <= quant_chroma_rem_from_samples(sampled_u, s_axis_data);
         end
@@ -144,8 +153,8 @@ module ff_vvc_toy4x4_encoder #(
 
   function automatic logic [7:0] input_len(input logic [1:0] frames);
     case (frames)
-      2'd2: input_len = FRAME_BYTES * 2;
-      default: input_len = FRAME_BYTES;
+      2'd2: input_len = FRAME_SAMPLES * 2;
+      default: input_len = FRAME_SAMPLES;
     endcase
   endfunction
 

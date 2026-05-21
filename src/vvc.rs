@@ -421,7 +421,7 @@ pub fn toy_4x4_yuv420p8_annex_b_from_input(
     input: &[u8],
     params: Toy4x4EncodeParams,
 ) -> Result<Vec<u8>, String> {
-    toy_4x4_yuv420p_annex_b_from_input(input, params, PixelFormat::Yuv420p8)
+    toy_4x4_yuv_annex_b_from_input(input, params, PixelFormat::Yuv420p8)
 }
 
 pub fn toy_4x4_yuv420p_annex_b_from_input(
@@ -429,7 +429,15 @@ pub fn toy_4x4_yuv420p_annex_b_from_input(
     params: Toy4x4EncodeParams,
     format: PixelFormat,
 ) -> Result<Vec<u8>, String> {
-    let frame = sample_toy_4x4_yuv420p_frame(input, params, format)?;
+    toy_4x4_yuv_annex_b_from_input(input, params, format)
+}
+
+pub fn toy_4x4_yuv_annex_b_from_input(
+    input: &[u8],
+    params: Toy4x4EncodeParams,
+    format: PixelFormat,
+) -> Result<Vec<u8>, String> {
+    let frame = sample_toy_4x4_yuv_frame(input, params, format)?;
     toy_4x4_yuv420p8_annex_b(params, frame)
 }
 
@@ -437,18 +445,18 @@ pub fn sample_toy_4x4_first_yuv420p8(
     input: &[u8],
     params: Toy4x4EncodeParams,
 ) -> Result<Toy4x4SampledColor, String> {
-    Ok(sample_toy_4x4_yuv420p_frame(input, params, PixelFormat::Yuv420p8)?.sampled_color())
+    Ok(sample_toy_4x4_yuv_frame(input, params, PixelFormat::Yuv420p8)?.sampled_color())
 }
 
-fn sample_toy_4x4_yuv420p_frame(
+fn sample_toy_4x4_yuv_frame(
     input: &[u8],
     params: Toy4x4EncodeParams,
     format: PixelFormat,
 ) -> Result<Toy4x4SampledFrame, String> {
     validate_toy_4x4_frame_count(params)?;
-    if !format.is_yuv420() {
+    if !format.is_yuv() {
         return Err(format!(
-            "toy VVC input expects yuv420p format; got {format}"
+            "toy VVC input expects planar YUV format; got {format}"
         ));
     }
     let frame_len = Picture::expected_len(4, 4, format);
@@ -469,7 +477,10 @@ fn sample_toy_4x4_yuv420p_frame(
     }
 
     let u_offset = 16 * bytes_per_sample;
-    let v_offset = u_offset + (4 * bytes_per_sample);
+    let chroma_plane_samples = format
+        .chroma_plane_samples(4, 4)
+        .ok_or_else(|| format!("toy VVC input expects chroma samples; got {format}"))?;
+    let v_offset = u_offset + (chroma_plane_samples * bytes_per_sample);
 
     Ok(Toy4x4SampledFrame {
         luma,
@@ -1918,6 +1929,29 @@ mod tests {
     }
 
     #[test]
+    fn toy_4x4_input_path_accepts_supported_yuv_subsampling() {
+        let expected = toy_4x4_yuv420p8_annex_b_from_input(
+            &solid_yuv420p8(65, 128, 192, 1),
+            Toy4x4EncodeParams { frames: 1 },
+        )
+        .unwrap();
+        for (format, chroma_samples) in [
+            (PixelFormat::Yuv422p8, 8),
+            (PixelFormat::Yuv444p8, 16),
+            (PixelFormat::Yuv422p10, 8),
+            (PixelFormat::Yuv444p12, 16),
+        ] {
+            let input =
+                solid_yuv_planar_high(65, 128, 192, format.bit_depth().bits(), chroma_samples, 1);
+            assert_eq!(
+                toy_4x4_yuv_annex_b_from_input(&input, Toy4x4EncodeParams { frames: 1 }, format)
+                    .unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn toy_4x4_input_path_changes_bitstream_from_sampled_color() {
         let mut input = solid_yuv420p8(65, 128, 192, 2);
         input[1] = 0;
@@ -1958,11 +1992,31 @@ mod tests {
     }
 
     fn solid_yuv420p_high(y: u8, u: u8, v: u8, bit_depth: u8, frames: usize) -> Vec<u8> {
+        solid_yuv_planar_high(y, u, v, bit_depth, 4, frames)
+    }
+
+    fn solid_yuv_planar_high(
+        y: u8,
+        u: u8,
+        v: u8,
+        bit_depth: u8,
+        chroma_samples: usize,
+        frames: usize,
+    ) -> Vec<u8> {
         let mut out = Vec::new();
         for _ in 0..frames {
-            for sample in [y; 16].into_iter().chain([u; 4]).chain([v; 4]) {
+            for sample in [y]
+                .repeat(16)
+                .into_iter()
+                .chain([u].repeat(chroma_samples))
+                .chain([v].repeat(chroma_samples))
+            {
                 let value = (sample as u16) << (bit_depth - 8);
-                out.extend(value.to_le_bytes());
+                if bit_depth == 8 {
+                    out.push(sample);
+                } else {
+                    out.extend(value.to_le_bytes());
+                }
             }
         }
         out

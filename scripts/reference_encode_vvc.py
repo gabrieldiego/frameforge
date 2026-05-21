@@ -16,17 +16,24 @@ DEFAULT_GENERATED_DIR = Path("verification/generated")
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", help="optional planar YUV420 input path matching --bit-depth")
+    parser.add_argument("--input", help="optional planar YUV input path matching --bit-depth and --chroma-format")
     parser.add_argument("--output", required=True, help="VVC bitstream output path")
     parser.add_argument("--recon", help="optional reconstructed YUV output path")
     parser.add_argument("--width", type=int, default=4)
     parser.add_argument("--height", type=int, default=4)
     parser.add_argument("--frames", type=int, default=1)
     parser.add_argument("--bit-depth", type=int, choices=(8, 10, 12, 16), default=8)
+    parser.add_argument("--chroma-format", choices=("420", "422", "444"), default="420")
     args = parser.parse_args()
 
-    if args.width <= 0 or args.height <= 0 or args.width % 2 or args.height % 2:
-        print("reference VVC encode currently expects positive even dimensions", file=sys.stderr)
+    if args.width <= 0 or args.height <= 0:
+        print("reference VVC encode expects positive dimensions", file=sys.stderr)
+        return 2
+    if args.chroma_format == "420" and (args.width % 2 or args.height % 2):
+        print("reference VVC 4:2:0 encode expects even width and height", file=sys.stderr)
+        return 2
+    if args.chroma_format == "422" and args.width % 2:
+        print("reference VVC 4:2:2 encode expects even width", file=sys.stderr)
         return 2
     if args.frames <= 0:
         print("reference VVC encode expects at least one frame", file=sys.stderr)
@@ -41,7 +48,13 @@ def main() -> int:
     input_path = (
         Path(args.input)
         if args.input
-        else default_black_yuv420(args.width, args.height, args.frames, args.bit_depth)
+        else default_black_yuv(
+            args.width,
+            args.height,
+            args.frames,
+            args.bit_depth,
+            args.chroma_format,
+        )
     )
     output_path = Path(args.output)
     recon_path = Path(args.recon) if args.recon else output_path.with_suffix(".rec.yuv")
@@ -66,8 +79,8 @@ def main() -> int:
         str(args.frames),
         "-fr",
         "1",
-        "--InputChromaFormat=420",
-        "--ChromaFormatIDC=420",
+        f"--InputChromaFormat={args.chroma_format}",
+        f"--ChromaFormatIDC={args.chroma_format}",
         f"--InputBitDepth={args.bit_depth}",
         f"--InternalBitDepth={args.bit_depth}",
         f"--OutputBitDepth={args.bit_depth}",
@@ -134,17 +147,34 @@ def vtm_root() -> Path:
     return Path(os.environ.get("FRAMEFORGE_REF_DIR", DEFAULT_REF_DIR)) / "vtm"
 
 
-def default_black_yuv420(width: int, height: int, frames: int, bit_depth: int) -> Path:
+def default_black_yuv(
+    width: int,
+    height: int,
+    frames: int,
+    bit_depth: int,
+    chroma_format: str,
+) -> Path:
     out_dir = Path(os.environ.get("FRAMEFORGE_GENERATED_DIR", DEFAULT_GENERATED_DIR))
     out_dir.mkdir(parents=True, exist_ok=True)
-    suffix = "yuv420p8" if bit_depth == 8 else f"yuv420p{bit_depth}le"
+    suffix = f"yuv{chroma_format}p8" if bit_depth == 8 else f"yuv{chroma_format}p{bit_depth}le"
     path = out_dir / f"black_{width}x{height}_{frames}f_{suffix}.yuv"
-    frame_len = width * height * 3 // 2
+    frame_len = frame_samples(width, height, chroma_format)
     if bit_depth == 8:
         path.write_bytes(bytes(frame_len * frames))
     else:
         path.write_bytes(bytes(frame_len * frames * 2))
     return path
+
+
+def frame_samples(width: int, height: int, chroma_format: str) -> int:
+    luma = width * height
+    if chroma_format == "420":
+        return luma + (2 * (luma // 4))
+    if chroma_format == "422":
+        return luma + (2 * (luma // 2))
+    if chroma_format == "444":
+        return luma * 3
+    raise ValueError(f"unsupported chroma format {chroma_format}")
 
 
 if __name__ == "__main__":

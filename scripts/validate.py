@@ -15,7 +15,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_DIR = Path("verification/generated/checksums")
-SUPPORTED_FORMAT = "yuv420p8"
+RTL_SUPPORTED_FORMAT = "yuv420p8"
 SUPPORTED_FORMATS = {
     "i420": "yuv420p8",
     "yuv420p8": "yuv420p8",
@@ -28,6 +28,28 @@ SUPPORTED_FORMATS = {
     "yuv420p16": "yuv420p16le",
     "yuv420p16le": "yuv420p16le",
     "i016": "yuv420p16le",
+    "i422": "yuv422p8",
+    "yuv422p8": "yuv422p8",
+    "yuv422p10": "yuv422p10le",
+    "yuv422p10le": "yuv422p10le",
+    "i210": "yuv422p10le",
+    "yuv422p12": "yuv422p12le",
+    "yuv422p12le": "yuv422p12le",
+    "i212": "yuv422p12le",
+    "yuv422p16": "yuv422p16le",
+    "yuv422p16le": "yuv422p16le",
+    "i216": "yuv422p16le",
+    "i444": "yuv444p8",
+    "yuv444p8": "yuv444p8",
+    "yuv444p10": "yuv444p10le",
+    "yuv444p10le": "yuv444p10le",
+    "i410": "yuv444p10le",
+    "yuv444p12": "yuv444p12le",
+    "yuv444p12le": "yuv444p12le",
+    "i412": "yuv444p12le",
+    "yuv444p16": "yuv444p16le",
+    "yuv444p16le": "yuv444p16le",
+    "i416": "yuv444p16le",
 }
 
 
@@ -187,7 +209,7 @@ def infer_from_filename(name: str) -> InputInfo:
     pattern = re.compile(
         r"(?P<width>\d+)x(?P<height>\d+)"
         r"(?:[_-](?P<frames>\d+)f)?"
-        r"(?:[_-](?P<fmt>yuv420p8|i420|yuv420p10le?|i010|yuv420p12le?|i012|yuv420p16le?|i016))?",
+        r"(?:[_-](?P<fmt>yuv(?:420|422|444)p(?:8|10le?|12le?|16le?)|i(?:420|422|444|010|012|016|210|212|216|410|412|416)))?",
         re.IGNORECASE,
     )
     match = pattern.search(name)
@@ -198,7 +220,7 @@ def infer_from_filename(name: str) -> InputInfo:
         width=int(match.group("width")),
         height=int(match.group("height")),
         frames=int(match.group("frames") or 1),
-        fmt=normalize_format(match.group("fmt") or SUPPORTED_FORMAT),
+        fmt=normalize_format(match.group("fmt") or RTL_SUPPORTED_FORMAT),
     )
 
 
@@ -206,10 +228,15 @@ def validate_supported_input(input_path: Path, info: InputInfo) -> None:
     if normalize_format(info.fmt) not in SUPPORTED_FORMATS.values():
         raise ValueError(
             f"unsupported format {info.fmt}; supported toy formats are "
-            "yuv420p8, yuv420p10le, yuv420p12le, and yuv420p16le"
+            "yuv420p/yuv422p/yuv444p at 8, 10, 12, or 16 bits"
         )
     if info.width != 4 or info.height != 4:
         raise ValueError("toy VVC validation currently supports only 4x4 input")
+    sampling = format_chroma_sampling(info.fmt)
+    if sampling == "420" and (info.width % 2 or info.height % 2):
+        raise ValueError("yuv420p formats require even width and height")
+    if sampling == "422" and info.width % 2:
+        raise ValueError("yuv422p formats require even width")
     if info.frames not in (1, 2):
         raise ValueError("toy VVC validation currently supports only 1 or 2 frames")
 
@@ -239,7 +266,7 @@ def sha256(path: Path) -> str:
 
 
 def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes:
-    frame = normalized_first_frame(input_path, info)
+    frame = normalized_first_frame_to_yuv420p8(input_path, info)
     y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(frame[:16])))
     chroma = reconstructed_chroma(frame[16], frame[20])
     # This is the reconstruction of the emitted toy VVC bitstream, not the
@@ -266,7 +293,7 @@ def reconstructed_chroma(u: int, v: int) -> int:
 
 
 def input_has_nonzero_chroma(input_path: Path, info: InputInfo) -> bool:
-    first_frame = normalized_first_frame(input_path, info)
+    first_frame = normalized_first_frame_to_yuv420p8(input_path, info)
     luma_len = info.width * info.height
     return any(sample != 0 for sample in first_frame[luma_len:])
 
@@ -281,42 +308,71 @@ def validate_decoded_non_monochrome(path: Path, info: InputInfo) -> None:
 
 
 def normalized_rtl_input(input_path: Path, info: InputInfo, out_dir: Path, stem: str) -> Path:
-    if normalize_format(info.fmt) == SUPPORTED_FORMAT:
+    if normalize_format(info.fmt) == RTL_SUPPORTED_FORMAT:
         return input_path
 
     out = out_dir / f"{stem}_rtl_input_yuv420p8.yuv"
-    out.write_bytes(normalized_input(input_path, info))
+    out.write_bytes(normalized_input_to_yuv420p8(input_path, info))
     return out
 
 
-def normalized_input(input_path: Path, info: InputInfo) -> bytes:
+def normalized_input_to_yuv420p8(input_path: Path, info: InputInfo) -> bytes:
     data = input_path.read_bytes()
     src_frame_len = frame_len(info)
     out = bytearray()
     for frame_idx in range(info.frames):
         frame = data[frame_idx * src_frame_len : (frame_idx + 1) * src_frame_len]
-        out.extend(normalize_frame_bytes(frame, info))
+        out.extend(normalize_frame_to_yuv420p8(frame, info))
     return bytes(out)
 
 
-def normalized_first_frame(input_path: Path, info: InputInfo) -> bytes:
-    return normalize_frame_bytes(input_path.read_bytes()[: frame_len(info)], info)
+def normalized_first_frame_to_yuv420p8(input_path: Path, info: InputInfo) -> bytes:
+    return normalize_frame_to_yuv420p8(input_path.read_bytes()[: frame_len(info)], info)
 
 
-def normalize_frame_bytes(frame: bytes, info: InputInfo) -> bytes:
+def normalize_frame_to_yuv420p8(frame: bytes, info: InputInfo) -> bytes:
+    luma_samples = info.width * info.height
+    chroma_samples = chroma_plane_samples(info)
+    luma = [
+        read_normalized_sample(frame, sample_idx, info)
+        for sample_idx in range(luma_samples)
+    ]
+    if chroma_samples == 0:
+        u = 0
+        v = 0
+    else:
+        u = read_normalized_sample(frame, luma_samples, info)
+        v = read_normalized_sample(frame, luma_samples + chroma_samples, info)
+    return bytes(luma + [u] * (luma_samples // 4) + [v] * (luma_samples // 4))
+
+
+def read_normalized_sample(frame: bytes, sample_idx: int, info: InputInfo) -> int:
     bit_depth = format_bit_depth(info.fmt)
+    sample_bytes = bytes_per_sample(info.fmt)
+    offset = sample_idx * sample_bytes
     if bit_depth == 8:
-        return frame
+        return frame[offset]
 
-    out = bytearray()
-    for offset in range(0, len(frame), 2):
-        sample = int.from_bytes(frame[offset : offset + 2], "little")
-        out.append(sample >> (bit_depth - 8))
-    return bytes(out)
+    sample = int.from_bytes(frame[offset : offset + 2], "little")
+    return sample >> (bit_depth - 8)
 
 
 def frame_len(info: InputInfo) -> int:
-    return info.width * info.height * 3 // 2 * bytes_per_sample(info.fmt)
+    return (info.width * info.height + (chroma_plane_samples(info) * 2)) * bytes_per_sample(
+        info.fmt
+    )
+
+
+def chroma_plane_samples(info: InputInfo) -> int:
+    luma = info.width * info.height
+    sampling = format_chroma_sampling(info.fmt)
+    if sampling == "420":
+        return luma // 4
+    if sampling == "422":
+        return luma // 2
+    if sampling == "444":
+        return luma
+    raise ValueError(f"unsupported chroma sampling for {info.fmt}")
 
 
 def bytes_per_sample(fmt: str) -> int:
@@ -325,14 +381,25 @@ def bytes_per_sample(fmt: str) -> int:
 
 def format_bit_depth(fmt: str) -> int:
     normalized = normalize_format(fmt)
-    if normalized == "yuv420p8":
+    if normalized.endswith("p8"):
         return 8
-    if normalized == "yuv420p10le":
+    if normalized.endswith("p10le"):
         return 10
-    if normalized == "yuv420p12le":
+    if normalized.endswith("p12le"):
         return 12
-    if normalized == "yuv420p16le":
+    if normalized.endswith("p16le"):
         return 16
+    raise ValueError(f"unsupported format {fmt}")
+
+
+def format_chroma_sampling(fmt: str) -> str:
+    normalized = normalize_format(fmt)
+    if normalized.startswith("yuv420p"):
+        return "420"
+    if normalized.startswith("yuv422p"):
+        return "422"
+    if normalized.startswith("yuv444p"):
+        return "444"
     raise ValueError(f"unsupported format {fmt}")
 
 

@@ -16,6 +16,11 @@ def solid_yuv420p8(y, u, v, frames):
     return frame * frames
 
 
+def solid_yuv_planar8(y, u, v, frames, chroma_samples):
+    frame = bytes([y] * 16 + [u] * chroma_samples + [v] * chroma_samples)
+    return frame * frames
+
+
 def varied_yuv420p8(y, u, v, frames):
     frame = bytearray(solid_yuv420p8(y, u, v, 1))
     frame[3] = (y + 17) & 0xFF
@@ -29,12 +34,34 @@ def input_data(frames):
     generic = os.environ.get("FRAMEFORGE_RTL_TOY4X4_INPUT")
     if path := specific or generic:
         data = Path(path).read_bytes()
-        return data[: len(solid_yuv420p8(0, 0, 0, frames))]
-    return solid_yuv420p8(0, 0, 0, frames)
+        return data[: frame_samples() * frames]
+    return solid_yuv_planar8(0, 0, 0, frames, chroma_plane_samples())
 
 
 def rtl_sample_bits():
     return int(os.environ.get("RTL_SAMPLE_BITS", "8"))
+
+
+def rtl_chroma_format_idc():
+    return int(os.environ.get("RTL_CHROMA_FORMAT_IDC", "1"))
+
+
+def chroma_plane_samples():
+    return {1: 4, 2: 8, 3: 16}.get(rtl_chroma_format_idc(), 4)
+
+
+def frame_samples():
+    return 16 + (chroma_plane_samples() * 2)
+
+
+def v_sample_index():
+    return 16 + chroma_plane_samples()
+
+
+def software_format():
+    return {1: "yuv420p8", 2: "yuv422p8", 3: "yuv444p8"}.get(
+        rtl_chroma_format_idc(), "yuv420p8"
+    )
 
 
 def rtl_input_samples(data):
@@ -90,14 +117,15 @@ def reconstructed_chroma(u, v):
 def decoded_reconstruction(frames, data):
     # This is the reconstruction of the emitted VVC bitstream.
     y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(data[:16])))
-    chroma = reconstructed_chroma(data[16], data[20])
+    chroma = reconstructed_chroma(data[16], data[v_sample_index()])
     frame = bytes([y] * 16 + [chroma] * 4 + [chroma] * 4)
     return frame * frames
 
 
 def software_stream(frames, data):
     with tempfile.TemporaryDirectory() as tmpdir:
-        input_yuv = Path(tmpdir) / f"input_4x4_{frames}f_yuv420p8.yuv"
+        fmt = software_format()
+        input_yuv = Path(tmpdir) / f"input_4x4_{frames}f_{fmt}.yuv"
         output = Path(tmpdir) / "toy.vvc"
         input_yuv.write_bytes(data)
         subprocess.run(
@@ -113,6 +141,8 @@ def software_stream(frames, data):
                 str(frames),
                 "--output",
                 str(output),
+                "--format",
+                fmt,
             ],
             cwd=REPO_ROOT,
             check=True,
@@ -163,7 +193,7 @@ async def collect_stream(dut, frames):
     samples = rtl_input_samples(data)
     assert int(dut.sampled_y.value) == samples[0]
     assert int(dut.sampled_u.value) == samples[16]
-    assert int(dut.sampled_v.value) == samples[20]
+    assert int(dut.sampled_v.value) == samples[v_sample_index()]
     assert int(dut.luma_samples_q.value) == packed_rtl_luma_value(data)
     assert int(dut.quant_luma_ac_tokens_q.value) == int.from_bytes(
         quant_ac_tokens(data[:16]), "big"
@@ -204,7 +234,11 @@ async def drain_sampled_color(dut, frames, y, u, v):
     await RisingEdge(dut.clk)
     dut.start.value = 0
 
-    data = varied_yuv420p8(y, u, v, frames)
+    data = bytearray(solid_yuv_planar8(y, u, v, frames, chroma_plane_samples()))
+    data[3] = (y + 17) & 0xFF
+    data[17] = (u + 29) & 0xFF
+    data[v_sample_index() + 1] = (v + 43) & 0xFF
+    data = bytes(data)
     await feed_input(dut, data)
     await ReadOnly()
     assert dut.input_error.value == 0
@@ -212,7 +246,7 @@ async def drain_sampled_color(dut, frames, y, u, v):
     samples = rtl_input_samples(data)
     assert int(dut.sampled_y.value) == samples[0]
     assert int(dut.sampled_u.value) == samples[16]
-    assert int(dut.sampled_v.value) == samples[20]
+    assert int(dut.sampled_v.value) == samples[v_sample_index()]
     assert int(dut.luma_samples_q.value) == packed_rtl_luma_value(data)
     assert int(dut.quant_luma_ac_tokens_q.value) == int.from_bytes(
         quant_ac_tokens(data[:16]), "big"

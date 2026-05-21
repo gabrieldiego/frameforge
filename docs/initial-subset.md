@@ -8,8 +8,8 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - VVC Annex-B writer capable of emitting an EOS-only stream for NAL header and bytestream testing.
 - VVC skeleton stream containing VPS/SPS/PPS/IDR/EOS/EOB NAL units with placeholder RBSP payloads.
 - VVC Annex-B NAL header listing for comparing FrameForge output against VTM output.
-- Generated 1- or 2-frame 4x4 YUV420 VVC toy stream assembled from one internally generated SPS/PPS sequence header, a color-derived Filler Data NAL unit, and generated picture slice NAL units. The current input path accepts 8-, 10-, 12-, and 16-bit little-endian planar YUV420 and normalizes samples into the current 8-bit toy syntax. The current decoded picture uses a small quantized luma ladder from toy residual payloads and a narrow decoded chroma set.
-- External VTM reference-encode helper that can generate a real 4x4 YUV420 VVC stream for validation.
+- Generated 1- or 2-frame 4x4 VVC toy stream assembled from one internally generated SPS/PPS sequence header, a color-derived Filler Data NAL unit, and generated picture slice NAL units. The current input path accepts planar YUV 4:2:0, 4:2:2, and 4:4:4 at 8, 10, 12, or 16 bits, then normalizes samples into the current 8-bit 4:2:0 toy syntax. The current decoded picture uses a small quantized luma ladder from toy residual payloads and a narrow decoded chroma set.
+- External VTM reference-encode helper that can generate a real 4x4 YUV VVC stream for validation.
 - Basic encoder trait boundary for replacing the placeholder path with real codec implementations.
 - Generic bitstream utilities:
   - `BitWriter`
@@ -19,8 +19,8 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - Named VVC syntax writer for `flag`, `u(n)`, `ue(v)`, `se(v)`, toy CABAC packets, RBSP trailing bits, and field-offset tracing.
 - Internally generated VVC NAL unit headers with named `forbidden_zero_bit`, `nuh_reserved_zero_bit`, `nuh_layer_id`, `nal_unit_type`, and `nuh_temporal_id_plus1` fields.
 - Internally generated toy SPS, PPS, picture header, slice header, and typed toy coding-tree events packetized into the entropy-coded body.
-- Rust toy encoder input handling for 4x4 YUV420 frame sequences at 8, 10, 12, or 16 bits per sample, currently normalizing to the 8-bit toy coding path.
-- RTL toy encoder input handling is parameterized with `SAMPLE_BITS` for 8-, 10-, 12-, and 16-bit input buses while emitting the same normalized toy VVC stream as software.
+- Rust toy encoder input handling for 4x4 planar YUV frame sequences with 4:2:0, 4:2:2, or 4:4:4 chroma at 8, 10, 12, or 16 bits per sample, currently normalizing to the 8-bit 4:2:0 toy coding path.
+- RTL toy encoder input handling is parameterized with `SAMPLE_BITS` and `CHROMA_FORMAT_IDC` for wider input buses and chroma planes while emitting the same normalized toy VVC stream as software.
 - Software and RTL internal reconstructions are bitstream reconstructions. They must match external decoder output even when the encoder has sampled an input feature that is not encoded into the bitstream yet.
 - Basic placeholder NAL/Annex-B-style structures with TODOs for exact VVC syntax.
 - `EncoderParams`, `Picture`, reconstruction buffer skeleton, and fixed block traversal.
@@ -30,7 +30,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - SystemVerilog RTL stubs with AXI-stream-style handshakes.
 - Minimum RTL encoder shell that drains an input stream and emits a fixed placeholder output packet.
 - RTL VVC skeleton emitter that matches Rust `vvc-skeleton` byte-for-byte.
-- RTL toy VVC generator that drains a 4x4 YUV420 input stream, samples color, and emits a sequence header, color-derived filler NAL, quantized residual payloads, per-picture Annex-B start codes, VVC NAL headers, and NAL payload bytes to match the Rust toy stream.
+- RTL toy VVC generator that drains a 4x4 planar YUV input stream, samples color, and emits a sequence header, color-derived filler NAL, quantized residual payloads, per-picture Annex-B start codes, VVC NAL headers, and NAL payload bytes to match the Rust toy stream.
 - cocotb/Icarus verification skeleton.
 - Local contribution and license files for an open-source starting point.
 
