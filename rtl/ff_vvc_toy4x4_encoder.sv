@@ -256,15 +256,12 @@ module ff_vvc_toy4x4_encoder #(
   endfunction
 
   function automatic logic [7:0] slice_payload_len();
+    logic [135:0] cabac;
+    logic [7:0]   bit_len;
     begin
-      case (quant_luma_rem())
-        5'd0, 5'd1, 5'd2: slice_payload_len = 8'd9;
-        5'd3, 5'd4, 5'd5, 5'd6, 5'd7, 5'd8, 5'd9, 5'd10, 5'd11: slice_payload_len = 8'd10;
-        default: slice_payload_len = 8'd11;
-      endcase
-      if (quant_chroma_rem() == 5'd0) begin
-        slice_payload_len = slice_payload_len - 8'd1;
-      end
+      cabac = toy_cabac_bitstream(quant_luma_rem(), quant_luma_ac_tokens());
+      bit_len = 8'd24 + cabac[135:128] + 8'd1;
+      slice_payload_len = (bit_len + 8'd7) >> 3;
     end
   endfunction
 
@@ -283,6 +280,12 @@ module ff_vvc_toy4x4_encoder #(
   function automatic logic [4:0] quant_chroma_rem();
     begin
       quant_chroma_rem = quant_chroma_rem_q;
+    end
+  endfunction
+
+  function automatic logic [119:0] quant_luma_ac_tokens();
+    begin
+      quant_luma_ac_tokens = quant_luma_ac_tokens_q;
     end
   endfunction
 
@@ -743,32 +746,30 @@ module ff_vvc_toy4x4_encoder #(
     input logic       cra_picture
   );
     begin
-      slice_payload_byte = quant_luma_payload_byte(quant_luma_rem(), index, cra_picture);
+      slice_payload_byte = quant_luma_payload_byte(quant_luma_rem(), quant_luma_ac_tokens(), index, cra_picture);
     end
   endfunction
 
   function automatic logic [7:0] quant_luma_payload_byte(
     input logic [4:0] rem,
+    input logic [119:0] ac_tokens,
     input logic [6:0] index,
     input logic       cra_picture
   );
-    logic [87:0] payload;
+    logic [255:0] payload;
 
     begin
-      payload = toy_slice_payload_bits(rem, cra_picture);
-      case (slice_payload_len())
-        8'd9: quant_luma_payload_byte = payload >> ((7'd8 - index) * 8);
-        8'd10: quant_luma_payload_byte = payload >> ((7'd9 - index) * 8);
-        default: quant_luma_payload_byte = payload >> ((7'd10 - index) * 8);
-      endcase
+      payload = toy_slice_payload_bits(rem, ac_tokens, cra_picture);
+      quant_luma_payload_byte = payload >> (((slice_payload_len() - 8'd1) - index) * 8);
     end
   endfunction
 
-  function automatic logic [87:0] toy_slice_payload_bits(
+  function automatic logic [255:0] toy_slice_payload_bits(
     input logic [4:0] rem,
+    input logic [119:0] ac_tokens,
     input logic       cra_picture
   );
-    logic [127:0] acc;
+    logic [255:0] acc;
     logic [7:0]   bit_len;
     logic [135:0] cabac;
     logic [95:0]  cabac_bits;
@@ -794,7 +795,7 @@ module ff_vvc_toy4x4_encoder #(
         bit_len = bit_len + 8'd1;
       end
 
-      cabac = toy_cabac_bitstream(rem);
+      cabac = toy_cabac_bitstream(rem, ac_tokens);
       cabac_len = cabac[135:128];
       cabac_bits = cabac[95:0];
       acc = (acc << cabac_len) | cabac_bits;
@@ -813,7 +814,10 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [135:0] toy_cabac_bitstream(input logic [4:0] rem);
+  function automatic logic [135:0] toy_cabac_bitstream(
+    input logic [4:0]   rem,
+    input logic [119:0] ac_tokens
+  );
     logic [255:0] st;
     logic [4:0]   chroma_rem;
 
@@ -826,7 +830,7 @@ module ff_vvc_toy4x4_encoder #(
         st = toy_encode_8x8_luma_tree(st, rem);
         st = toy_encode_4x4_chroma_tree(st, chroma_rem);
       end else begin
-        st = toy_encode_capacity_placeholder_tree(st, rem, chroma_rem);
+        st = toy_encode_capacity_placeholder_tree(st, rem, chroma_rem, ac_tokens);
       end
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);
@@ -896,7 +900,8 @@ module ff_vvc_toy4x4_encoder #(
   function automatic logic [255:0] toy_encode_capacity_placeholder_tree(
     input logic [255:0] st_in,
     input logic [4:0]   rem,
-    input logic [4:0]   chroma_rem
+    input logic [4:0]   chroma_rem,
+    input logic [119:0] ac_tokens
   );
     logic [255:0] st;
 
@@ -906,6 +911,7 @@ module ff_vvc_toy4x4_encoder #(
       // the VTM-mapped 8x8 path.
       st = toy_encode_8x8_luma_tree(st_in, rem);
       st = toy_encode_4x4_chroma_tree(st, chroma_rem);
+      st = cabac_encode_bins_ep(st, {24'd0, ac_tokens[119:112]}, 6'd8);
       toy_encode_capacity_placeholder_tree = st;
     end
   endfunction

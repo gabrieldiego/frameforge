@@ -353,12 +353,20 @@ def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes
     frame = normalized_first_frame_to_yuv420p8(input_path, info)
     luma_len = info.width * info.height
     chroma_len = luma_len // 4
-    y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(frame[:16])))
+    y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(first_residual_luma_block(frame, info))))
     chroma = reconstructed_chroma(frame[luma_len], frame[luma_len + chroma_len])
     # This is the reconstruction of the emitted toy VVC bitstream, not the
     # original input. Keep this matched to VTM decode output after quantization.
     frame = bytes([y] * luma_len + [chroma] * chroma_len + [chroma] * chroma_len)
     return frame * info.frames
+
+
+def first_residual_luma_block(frame: bytes, info: InputInfo) -> bytes:
+    block = bytearray()
+    for y in range(4):
+        row = y * info.width
+        block.extend(frame[row : row + 4])
+    return bytes(block)
 
 
 def forward_luma_dc(samples: bytes) -> int:

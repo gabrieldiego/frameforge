@@ -500,6 +500,10 @@ enum ToyEntropyTokenKind {
         component: ToyResidualComponent,
         negative: bool,
     },
+    AcTokenEp {
+        component: ToyResidualComponent,
+        token: u8,
+    },
     Terminate,
 }
 
@@ -1161,7 +1165,12 @@ fn toy_entropy_schedule(
 
     ToyEntropySchedule {
         kind,
-        tokens: toy_8x8_mapped_entropy_tokens(color),
+        tokens: match kind {
+            ToyEntropyScheduleKind::VtmMapped8x8 => toy_8x8_mapped_entropy_tokens(color),
+            ToyEntropyScheduleKind::CapacityPlaceholder => {
+                toy_capacity_placeholder_entropy_tokens(color)
+            }
+        },
     }
 }
 
@@ -1204,6 +1213,21 @@ fn toy_8x8_mapped_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<ToyEntropyT
         name: "end_of_slice_segment_flag",
         kind: ToyEntropyTokenKind::Terminate,
     });
+    tokens
+}
+
+fn toy_capacity_placeholder_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<ToyEntropyToken> {
+    let mut tokens = toy_8x8_mapped_entropy_tokens(color);
+    tokens.insert(
+        tokens.len() - 1,
+        ToyEntropyToken {
+            name: "luma_first_ac_token",
+            kind: ToyEntropyTokenKind::AcTokenEp {
+                component: ToyResidualComponent::Luma,
+                token: color.luma_ac_tokens[0],
+            },
+        },
+    );
     tokens
 }
 
@@ -1319,6 +1343,9 @@ fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Ve
             }
             ToyEntropyTokenKind::SignEp { negative, .. } => {
                 cabac.encode_bin_ep(negative);
+            }
+            ToyEntropyTokenKind::AcTokenEp { token, .. } => {
+                cabac.encode_bins_ep(token as u32, 8);
             }
             ToyEntropyTokenKind::Terminate => {
                 cabac.encode_bin_trm(true);
@@ -2564,7 +2591,14 @@ mod tests {
             black,
         );
         assert_eq!(capacity.kind, ToyEntropyScheduleKind::CapacityPlaceholder);
-        assert_eq!(capacity.tokens, mapped.tokens);
+        assert_eq!(capacity.tokens.len(), mapped.tokens.len() + 1);
+        assert_eq!(
+            capacity.tokens[capacity.tokens.len() - 2].kind,
+            ToyEntropyTokenKind::AcTokenEp {
+                component: ToyResidualComponent::Luma,
+                token: 0x40
+            }
+        );
     }
 
     #[test]
