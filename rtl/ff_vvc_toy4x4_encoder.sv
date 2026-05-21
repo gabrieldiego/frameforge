@@ -1,8 +1,8 @@
 `timescale 1ns/1ps
 
 module ff_vvc_toy4x4_encoder #(
-  parameter int VISIBLE_WIDTH = 4,
-  parameter int VISIBLE_HEIGHT = 4,
+  parameter int MAX_VISIBLE_WIDTH = 64,
+  parameter int MAX_VISIBLE_HEIGHT = 64,
   parameter int SAMPLE_BITS = 8,
   parameter int SOURCE_SAMPLE_BITS = SAMPLE_BITS,
   // VVC chroma_format_idc values: 1=4:2:0, 2=4:2:2, 3=4:4:4.
@@ -15,6 +15,8 @@ module ff_vvc_toy4x4_encoder #(
   input  logic       rst_n,
   input  logic       start,
   input  logic [1:0] frame_count,
+  input  logic [15:0] visible_width,
+  input  logic [15:0] visible_height,
   output logic       busy,
 
   input  logic       s_axis_valid,
@@ -32,24 +34,17 @@ module ff_vvc_toy4x4_encoder #(
   output logic [7:0] m_axis_data,
   output logic       m_axis_last
 );
-  localparam int SPS_PAYLOAD_LEN  = (VISIBLE_WIDTH == 8 && VISIBLE_HEIGHT == 8) ? 30 :
-                                    ((VISIBLE_WIDTH == 64 && VISIBLE_HEIGHT == 64) ? 32 : 31);
-  localparam int PPS_PAYLOAD_LEN  = (VISIBLE_WIDTH == 64 && VISIBLE_HEIGHT == 64) ? 15 : 14;
   localparam int NAL_OVERHEAD_LEN = 6;
-  localparam int SPS_NAL_LEN = NAL_OVERHEAD_LEN + SPS_PAYLOAD_LEN;
-  localparam int PPS_NAL_LEN = NAL_OVERHEAD_LEN + PPS_PAYLOAD_LEN;
-  localparam int PARAMETER_SET_LEN = SPS_NAL_LEN + PPS_NAL_LEN;
-  localparam int LUMA_SAMPLES = VISIBLE_WIDTH * VISIBLE_HEIGHT;
-  localparam int CHROMA_PLANE_SAMPLES = (CHROMA_FORMAT_IDC == 3) ? LUMA_SAMPLES :
-                                       ((CHROMA_FORMAT_IDC == 2) ? (LUMA_SAMPLES / 2) : (LUMA_SAMPLES / 4));
-  localparam int FRAME_SAMPLES = LUMA_SAMPLES + (CHROMA_PLANE_SAMPLES * 2);
-  localparam int V_SAMPLE_INDEX = LUMA_SAMPLES + CHROMA_PLANE_SAMPLES;
+  localparam int MAX_LUMA_SAMPLES = MAX_VISIBLE_WIDTH * MAX_VISIBLE_HEIGHT;
+  localparam int MAX_CHROMA_PLANE_SAMPLES = MAX_LUMA_SAMPLES;
+  localparam int MAX_FRAME_SAMPLES = MAX_LUMA_SAMPLES + (MAX_CHROMA_PLANE_SAMPLES * 2);
+  localparam int INPUT_COUNT_BITS = $clog2((MAX_FRAME_SAMPLES * 2) + 1);
   localparam bit PALETTE_MODE = (CHROMA_FORMAT_IDC == 3);
 
   logic [8:0] index_q;
   logic [8:0] stream_len_q;
-  logic [14:0] input_count_q;
-  logic [14:0] input_len_q;
+  logic [INPUT_COUNT_BITS - 1:0] input_count_q;
+  logic [INPUT_COUNT_BITS - 1:0] input_len_q;
   logic       input_active_q;
   logic [(SAMPLE_BITS * 16) - 1:0] luma_samples_q;
   logic [(SAMPLE_BITS * 16) - 1:0] cb_samples_q;
@@ -122,20 +117,20 @@ module ff_vvc_toy4x4_encoder #(
         if (input_count_q < 10'd16) begin
           luma_samples_q[(15 - input_count_q[3:0]) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
         end
-        if (PALETTE_MODE && input_count_q >= LUMA_SAMPLES && input_count_q < LUMA_SAMPLES + 10'd16) begin
-          cb_samples_q[(15 - (input_count_q - LUMA_SAMPLES)) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
+        if (PALETTE_MODE && input_count_q >= luma_samples() && input_count_q < luma_samples() + 10'd16) begin
+          cb_samples_q[(15 - (input_count_q - luma_samples())) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
         end
-        if (PALETTE_MODE && input_count_q >= V_SAMPLE_INDEX && input_count_q < V_SAMPLE_INDEX + 10'd16) begin
-          cr_samples_q[(15 - (input_count_q - V_SAMPLE_INDEX)) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
+        if (PALETTE_MODE && input_count_q >= v_sample_index() && input_count_q < v_sample_index() + 10'd16) begin
+          cr_samples_q[(15 - (input_count_q - v_sample_index())) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
         end
-        if (input_count_q == LUMA_SAMPLES) begin
+        if (input_count_q == luma_samples()) begin
           quant_luma_rem_q <= residual_quant_luma_rem;
           quant_luma_ac_tokens_q <= residual_quant_luma_ac_tokens;
         end
-        if (input_count_q == LUMA_SAMPLES) begin
+        if (input_count_q == luma_samples()) begin
           sampled_u <= s_axis_data;
         end
-        if (input_count_q == V_SAMPLE_INDEX) begin
+        if (input_count_q == v_sample_index()) begin
           sampled_v <= s_axis_data;
           quant_chroma_rem_q <= quant_chroma_rem_from_samples(sampled_u, s_axis_data);
         end
@@ -166,18 +161,64 @@ module ff_vvc_toy4x4_encoder #(
     end
   end
 
-  function automatic logic [14:0] input_len(input logic [1:0] frames);
+  function automatic logic [INPUT_COUNT_BITS - 1:0] input_len(input logic [1:0] frames);
     case (frames)
-      2'd2: input_len = FRAME_SAMPLES * 2;
-      default: input_len = FRAME_SAMPLES;
+      2'd2: input_len = frame_samples() * 2;
+      default: input_len = frame_samples();
     endcase
+  endfunction
+
+  function automatic logic [INPUT_COUNT_BITS - 1:0] luma_samples();
+    begin
+      luma_samples = visible_width * visible_height;
+    end
+  endfunction
+
+  function automatic logic [INPUT_COUNT_BITS - 1:0] chroma_plane_samples();
+    begin
+      case (CHROMA_FORMAT_IDC)
+        3: chroma_plane_samples = luma_samples();
+        2: chroma_plane_samples = luma_samples() >> 1;
+        default: chroma_plane_samples = luma_samples() >> 2;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [INPUT_COUNT_BITS - 1:0] frame_samples();
+    begin
+      frame_samples = luma_samples() + (chroma_plane_samples() << 1);
+    end
+  endfunction
+
+  function automatic logic [INPUT_COUNT_BITS - 1:0] v_sample_index();
+    begin
+      v_sample_index = luma_samples() + chroma_plane_samples();
+    end
   endfunction
 
   function automatic logic [8:0] stream_len(input logic [1:0] frames);
     case (frames)
-      2'd2: stream_len = PARAMETER_SET_LEN + color_filler_nal_len() + (slice_nal_len() * 2);
-      default: stream_len = PARAMETER_SET_LEN + color_filler_nal_len() + slice_nal_len();
+      2'd2: stream_len = parameter_set_len() + color_filler_nal_len() + (slice_nal_len() * 2);
+      default: stream_len = parameter_set_len() + color_filler_nal_len() + slice_nal_len();
     endcase
+  endfunction
+
+  function automatic logic [8:0] sps_nal_len();
+    begin
+      sps_nal_len = NAL_OVERHEAD_LEN + sps_payload_len();
+    end
+  endfunction
+
+  function automatic logic [8:0] pps_nal_len();
+    begin
+      pps_nal_len = NAL_OVERHEAD_LEN + pps_payload_len();
+    end
+  endfunction
+
+  function automatic logic [8:0] parameter_set_len();
+    begin
+      parameter_set_len = sps_nal_len() + pps_nal_len();
+    end
   endfunction
 
   function automatic logic [7:0] slice_payload_len();
@@ -254,14 +295,14 @@ module ff_vvc_toy4x4_encoder #(
     logic [6:0] slice_index;
 
     begin
-      if (index < SPS_NAL_LEN) begin
+      if (index < sps_nal_len()) begin
         stream_byte = nal_byte(3'd0, index[6:0], 1'b0);
-      end else if (index < PARAMETER_SET_LEN) begin
-        stream_byte = nal_byte(3'd1, index - SPS_NAL_LEN, 1'b0);
-      end else if (index < PARAMETER_SET_LEN + color_filler_nal_len()) begin
-        stream_byte = nal_byte(3'd3, index - PARAMETER_SET_LEN, 1'b0);
+      end else if (index < parameter_set_len()) begin
+        stream_byte = nal_byte(3'd1, index - sps_nal_len(), 1'b0);
+      end else if (index < parameter_set_len() + color_filler_nal_len()) begin
+        stream_byte = nal_byte(3'd3, index - parameter_set_len(), 1'b0);
       end else begin
-        slice_base = PARAMETER_SET_LEN + color_filler_nal_len();
+        slice_base = parameter_set_len() + color_filler_nal_len();
         second_picture = (index >= slice_base + slice_nal_len());
         slice_index = second_picture
           ? (index - (slice_base + slice_nal_len()))
@@ -365,12 +406,12 @@ module ff_vvc_toy4x4_encoder #(
   endfunction
 
   function automatic logic [7:0] sps_payload_byte(input logic [8:0] index);
-    logic [255:0] payload_bits;
+    logic [264:0] payload;
 
     begin
-      payload_bits = sps_payload_bits();
-      if (index < SPS_PAYLOAD_LEN) begin
-        sps_payload_byte = payload_bits >> (((SPS_PAYLOAD_LEN - 1) - index) * 8);
+      payload = sps_payload_state();
+      if (index < sps_payload_len()) begin
+        sps_payload_byte = payload[255:0] >> (((sps_payload_len() - 1) - index) * 8);
       end else begin
         sps_payload_byte = 8'h00;
       end
@@ -378,78 +419,288 @@ module ff_vvc_toy4x4_encoder #(
   endfunction
 
   function automatic logic [7:0] pps_payload_byte(input logic [8:0] index);
-    logic [119:0] payload_bits;
+    logic [264:0] payload;
 
     begin
-      payload_bits = pps_payload_bits();
-      if (index < PPS_PAYLOAD_LEN) begin
-        pps_payload_byte = payload_bits >> (((PPS_PAYLOAD_LEN - 1) - index) * 8);
+      payload = pps_payload_state();
+      if (index < pps_payload_len()) begin
+        pps_payload_byte = payload[255:0] >> (((pps_payload_len() - 1) - index) * 8);
       end else begin
         pps_payload_byte = 8'h00;
       end
     end
   endfunction
 
-  function automatic logic [255:0] sps_payload_bits();
+  function automatic logic [8:0] sps_payload_len();
+    logic [264:0] payload;
+
     begin
-      if (VISIBLE_WIDTH == 4 && VISIBLE_HEIGHT == 8) begin
-        sps_payload_bits = 248'h000b_0200_8000_4244_ef54_07d1_1ba2_11a2_1091_84d8_a315_0c1a_02ae_3f82_b040_80;
-      end else if (VISIBLE_WIDTH == 8 && VISIBLE_HEIGHT == 4) begin
-        sps_payload_bits = 248'h000b_0200_8000_4244_fb54_07d1_1ba2_11a2_1091_84d8_a315_0c1a_02ae_3f82_b040_80;
-      end else if (VISIBLE_WIDTH == 8 && VISIBLE_HEIGHT == 8) begin
-        sps_payload_bits = 240'h000b_0200_8000_4244_fd50_1f44_6e88_4688_4246_1362_8c54_3068_0ab8_fe0a_c102;
-      end else if (VISIBLE_WIDTH == 16 && VISIBLE_HEIGHT == 8) begin
-        sps_payload_bits = 248'h000b_0200_8000_4111_3f54_07d1_1ba2_11a2_1091_84d8_a315_0c1a_02ae_3f82_b040_80;
-      end else if (VISIBLE_WIDTH == 8 && VISIBLE_HEIGHT == 16) begin
-        sps_payload_bits = 248'h000b_0200_8000_4242_3f54_07d1_1ba2_11a2_1091_84d8_a315_0c1a_02ae_3f82_b040_80;
-      end else if (VISIBLE_WIDTH == 16 && VISIBLE_HEIGHT == 16) begin
-        sps_payload_bits = 248'h000b_0200_8000_4110_8fd5_01f4_46e8_8468_8424_6136_28c5_4306_80ab_8fe0_ac10_20;
-      end else if (VISIBLE_WIDTH == 32 && VISIBLE_HEIGHT == 16) begin
-        sps_payload_bits = 248'h000b_0200_8000_4084_23f5_407d_11ba_211a_2109_184d_8a31_50c1_a02a_e3f8_2b04_08;
-      end else if (VISIBLE_WIDTH == 64 && VISIBLE_HEIGHT == 64) begin
-        sps_payload_bits = 256'h000b_0200_8000_4041_020f_d501_f446_e884_6884_2461_3628_c543_0680_ab8f_e0ac_1020;
+      payload = sps_payload_state();
+      sps_payload_len = payload[264:256] >> 3;
+    end
+  endfunction
+
+  function automatic logic [8:0] pps_payload_len();
+    logic [264:0] payload;
+
+    begin
+      payload = pps_payload_state();
+      pps_payload_len = payload[264:256] >> 3;
+    end
+  endfunction
+
+  function automatic logic [264:0] append_u(
+    input logic [264:0] state,
+    input logic [31:0]  value,
+    input int unsigned  width
+  );
+    logic [8:0] len;
+    logic [255:0] bits;
+    logic [63:0] mask;
+
+    begin
+      len = state[264:256];
+      bits = state[255:0];
+      if (width == 0) begin
+        append_u = state;
       end else begin
-        sps_payload_bits = {
-          // sps_seq_parameter_set_id, sps_video_parameter_set_id,
-          // sps_max_sub_layers_minus1, sps_chroma_format_idc,
-          // sps_log2_ctu_size_minus5, sps_ptl_dpb_hrd_params_present_flag.
-          16'h000b,
-          // profile_tier_level prefix and general constraints for the toy stream.
-          32'h0200_8000,
-          // ptl_num_sub_profiles, SPS picture size, conformance window, and
-          // early SPS tool flags through sps_entry_point_offsets_present_flag.
-          64'h4244_eed5_01f4_46e8,
-          // POC/extra-header/DPB fields and intra/inter partition constraints.
-          64'h8468_8424_6136_28c5,
-          // Transform, chroma QP table, prediction-tool, intra-tool, and
-          // extension/trailing fields for the current 4x4 all-intra target.
-          72'h4306_80ab_8fe0_ac10_20
-        };
+        mask = (64'd1 << width) - 64'd1;
+        bits = (bits << width) | (value & mask);
+        len = len + width[8:0];
+        append_u = {len, bits};
       end
     end
   endfunction
 
-  function automatic logic [119:0] pps_payload_bits();
+  function automatic logic [264:0] append_flag(input logic [264:0] state, input logic value);
     begin
-      if (VISIBLE_WIDTH == 16 && VISIBLE_HEIGHT == 8) begin
-        pps_payload_bits = 112'h0001_1122_9080_31ec_8516_5165_1620;
-      end else if (VISIBLE_WIDTH == 8 && VISIBLE_HEIGHT == 16) begin
-        pps_payload_bits = 112'h0002_4222_9080_31ec_8516_5165_1620;
-      end else if (VISIBLE_WIDTH == 16 && VISIBLE_HEIGHT == 16) begin
-        pps_payload_bits = 112'h0001_1088_a420_0c7b_2145_9459_4588;
-      end else if (VISIBLE_WIDTH == 32 && VISIBLE_HEIGHT == 16) begin
-        pps_payload_bits = 112'h0000_8422_2908_031e_c851_6516_5162;
-      end else if (VISIBLE_WIDTH == 64 && VISIBLE_HEIGHT == 64) begin
-        pps_payload_bits = 120'h0000_4102_08a4_200c_7b21_4594_5945_88;
-      end else begin
-        pps_payload_bits = {
-          // PPS ids, 8x8 coded canvas for conformance-cropped output, no
-          // picture partitioning, and default reference index syntax.
-          48'h0002_448a_4200,
-          // QP/chroma/deblocking syntax and rbsp_trailing_bits for the toy stream.
-          64'hc7b2_1459_4594_5880
-        };
+      append_flag = append_u(state, {31'd0, value}, 1);
+    end
+  endfunction
+
+  function automatic logic [264:0] append_ue(input logic [264:0] state, input logic [31:0] value);
+    begin
+      append_ue = append_exp_golomb_code(state, value + 32'd1);
+    end
+  endfunction
+
+  function automatic logic [264:0] append_exp_golomb_code(
+    input logic [264:0] state,
+    input logic [31:0] code_num
+  );
+    int unsigned prefix;
+
+    begin
+      prefix = 0;
+      while ((code_num >> prefix) > 1) begin
+        prefix = prefix + 1;
       end
+      state = append_u(state, 32'd0, prefix);
+      append_exp_golomb_code = append_u(state, code_num, prefix + 1);
+    end
+  endfunction
+
+  function automatic logic [264:0] append_se(input logic [264:0] state, input int signed value);
+    logic [31:0] mapped;
+
+    begin
+      if (value > 0) begin
+        mapped = value * 2;
+      end else begin
+        mapped = (-value * 2) + 1;
+      end
+      append_se = append_exp_golomb_code(state, mapped);
+    end
+  endfunction
+
+  function automatic logic [264:0] append_trailing_bits(input logic [264:0] state);
+    begin
+      state = append_flag(state, 1'b1);
+      while (state[258:256] != 3'd0) begin
+        state = append_flag(state, 1'b0);
+      end
+      append_trailing_bits = state;
+    end
+  endfunction
+
+  function automatic logic [15:0] coded_dimension(input logic [15:0] value);
+    begin
+      if (value <= 16'd8) begin
+        coded_dimension = 16'd8;
+      end else if (value <= 16'd16) begin
+        coded_dimension = 16'd16;
+      end else if (value <= 16'd32) begin
+        coded_dimension = 16'd32;
+      end else begin
+        coded_dimension = 16'd64;
+      end
+    end
+  endfunction
+
+  function automatic logic [264:0] sps_payload_state();
+    logic [264:0] state;
+
+    begin
+      state = '0;
+      state = append_u(state, 0, 4);
+      state = append_u(state, 0, 4);
+      state = append_u(state, 0, 3);
+      state = append_u(state, 1, 2);
+      state = append_u(state, 1, 2);
+      state = append_flag(state, 1'b1);
+      state = append_u(state, 1, 7);
+      state = append_flag(state, 1'b0);
+      state = append_u(state, 0, 8);
+      state = append_flag(state, 1'b1);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      repeat (5) state = append_flag(state, 1'b0);
+      state = append_u(state, 0, 8);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b1);
+      state = append_flag(state, 1'b0);
+      state = append_ue(state, coded_dimension(visible_width));
+      state = append_ue(state, coded_dimension(visible_height));
+      state = append_flag(state, 1'b1);
+      state = append_ue(state, 0);
+      state = append_ue(state, (coded_dimension(visible_width) - visible_width) >> 1);
+      state = append_ue(state, 0);
+      state = append_ue(state, (coded_dimension(visible_height) - visible_height) >> 1);
+      state = append_flag(state, 1'b0);
+      state = append_ue(state, 0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b1);
+      state = append_u(state, 4, 4);
+      state = append_flag(state, 1'b0);
+      state = append_u(state, 0, 2);
+      state = append_u(state, 0, 2);
+      state = append_ue(state, 0);
+      state = append_ue(state, 0);
+      state = append_ue(state, 0);
+      state = append_ue(state, 0);
+      state = append_flag(state, 1'b1);
+      state = append_ue(state, 1);
+      state = append_ue(state, 3);
+      state = append_ue(state, 2);
+      state = append_ue(state, 2);
+      state = append_flag(state, 1'b1);
+      state = append_ue(state, 1);
+      state = append_ue(state, 3);
+      state = append_ue(state, 3);
+      state = append_ue(state, 2);
+      state = append_ue(state, 1);
+      state = append_ue(state, 3);
+      state = append_ue(state, 3);
+      state = append_ue(state, 3);
+      state = append_flag(state, 1'b1);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b1);
+      state = append_flag(state, 1'b1);
+      state = append_se(state, -9);
+      state = append_ue(state, 2);
+      state = append_ue(state, 9);
+      state = append_ue(state, 5);
+      state = append_ue(state, 4);
+      state = append_ue(state, 1);
+      state = append_ue(state, 11);
+      state = append_ue(state, 12);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b1);
+      state = append_ue(state, 1);
+      state = append_ue(state, 0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b1);
+      state = append_flag(state, 1'b1);
+      state = append_flag(state, 1'b1);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b1);
+      state = append_flag(state, 1'b1);
+      state = append_ue(state, 0);
+      state = append_flag(state, 1'b1);
+      state = append_flag(state, 1'b1);
+      state = append_ue(state, 0);
+      state = append_flag(state, 1'b1);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_ue(state, 0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b1);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b1);
+      state = append_flag(state, 1'b1);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b1);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      sps_payload_state = append_trailing_bits(state);
+    end
+  endfunction
+
+  function automatic logic [264:0] pps_payload_state();
+    logic [264:0] state;
+
+    begin
+      state = '0;
+      state = append_u(state, 0, 6);
+      state = append_u(state, 0, 4);
+      state = append_flag(state, 1'b0);
+      state = append_ue(state, coded_dimension(visible_width));
+      state = append_ue(state, coded_dimension(visible_height));
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b1);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b1);
+      state = append_ue(state, 3);
+      state = append_ue(state, 3);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_se(state, 6);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b1);
+      state = append_se(state, 0);
+      state = append_se(state, 0);
+      state = append_flag(state, 1'b1);
+      state = append_se(state, -1);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b1);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_se(state, -2);
+      state = append_se(state, -5);
+      state = append_se(state, -2);
+      state = append_se(state, -5);
+      state = append_se(state, -2);
+      state = append_se(state, -5);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      state = append_flag(state, 1'b0);
+      pps_payload_state = append_trailing_bits(state);
     end
   endfunction
 
