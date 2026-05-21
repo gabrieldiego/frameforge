@@ -246,6 +246,72 @@ pub struct Toy4x4EncodeParams {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToyVideoGeometry {
+    pub width: usize,
+    pub height: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToyVideoLimits {
+    pub max_width: usize,
+    pub max_height: usize,
+}
+
+impl ToyVideoLimits {
+    pub const fn max_8x8() -> Self {
+        Self {
+            max_width: 8,
+            max_height: 8,
+        }
+    }
+}
+
+impl ToyVideoGeometry {
+    pub const fn four_by_four() -> Self {
+        Self {
+            width: 4,
+            height: 4,
+        }
+    }
+
+    pub fn validate_against(self, limits: ToyVideoLimits) -> Result<(), String> {
+        self.validate_shape()?;
+        if self.width > limits.max_width || self.height > limits.max_height {
+            return Err(format!(
+                "toy VVC geometry supports at most {}x{} visible pictures at this entry point; got {}x{}",
+                limits.max_width, limits.max_height, self.width, self.height
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_shape(self) -> Result<(), String> {
+        if self.width == 0 || self.height == 0 {
+            return Err("toy VVC geometry expects non-zero width and height".to_string());
+        }
+        if self.width % 2 != 0 || self.height % 2 != 0 {
+            return Err(format!(
+                "toy VVC geometry currently requires even dimensions for the emitted 4:2:0 stream; got {}x{}",
+                self.width, self.height
+            ));
+        }
+        Ok(())
+    }
+
+    fn luma_samples(self) -> usize {
+        self.width * self.height
+    }
+
+    fn crop_right_420(self) -> u32 {
+        ((8 - self.width) / 2) as u32
+    }
+
+    fn crop_bottom_420(self) -> u32 {
+        ((8 - self.height) / 2) as u32
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Toy4x4SampledColor {
     pub y: u8,
     pub u: u8,
@@ -254,10 +320,11 @@ pub struct Toy4x4SampledColor {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Toy4x4SampledFrame {
+    geometry: ToyVideoGeometry,
     format: Toy4x4PictureFormat,
-    luma: [u8; 16],
-    cb: [u8; 16],
-    cr: [u8; 16],
+    luma: [u8; 64],
+    cb: [u8; 64],
+    cr: [u8; 64],
     chroma_len: usize,
 }
 
@@ -270,13 +337,14 @@ struct Toy4x4PictureFormat {
 impl Toy4x4SampledFrame {
     fn solid(color: Toy4x4SampledColor) -> Self {
         Self {
+            geometry: ToyVideoGeometry::four_by_four(),
             format: Toy4x4PictureFormat {
                 chroma_sampling: ChromaSampling::Cs420,
                 bit_depth: SampleBitDepth::Eight,
             },
-            luma: [color.y; 16],
-            cb: [color.u; 16],
-            cr: [color.v; 16],
+            luma: [color.y; 64],
+            cb: [color.u; 64],
+            cr: [color.v; 64],
             chroma_len: 4,
         }
     }
@@ -292,14 +360,15 @@ impl Toy4x4SampledFrame {
     fn decoder_compat_frame(self) -> Self {
         let color = self.sampled_color();
         Self {
+            geometry: self.geometry,
             format: Toy4x4PictureFormat {
                 chroma_sampling: ChromaSampling::Cs420,
                 bit_depth: SampleBitDepth::Eight,
             },
             luma: self.luma,
-            cb: [color.u; 16],
-            cr: [color.v; 16],
-            chroma_len: 4,
+            cb: [color.u; 64],
+            cr: [color.v; 64],
+            chroma_len: self.geometry.luma_samples() / 4,
         }
     }
 }
@@ -448,7 +517,12 @@ pub fn toy_4x4_yuv420p8_annex_b_from_input(
     input: &[u8],
     params: Toy4x4EncodeParams,
 ) -> Result<Vec<u8>, String> {
-    toy_4x4_yuv_annex_b_from_input(input, params, PixelFormat::Yuv420p8)
+    toy_yuv_annex_b_from_input(
+        input,
+        params,
+        ToyVideoGeometry::four_by_four(),
+        PixelFormat::Yuv420p8,
+    )
 }
 
 pub fn toy_4x4_yuv420p_annex_b_from_input(
@@ -456,7 +530,7 @@ pub fn toy_4x4_yuv420p_annex_b_from_input(
     params: Toy4x4EncodeParams,
     format: PixelFormat,
 ) -> Result<Vec<u8>, String> {
-    toy_4x4_yuv_annex_b_from_input(input, params, format)
+    toy_yuv_annex_b_from_input(input, params, ToyVideoGeometry::four_by_four(), format)
 }
 
 pub fn toy_4x4_yuv_annex_b_from_input(
@@ -464,7 +538,33 @@ pub fn toy_4x4_yuv_annex_b_from_input(
     params: Toy4x4EncodeParams,
     format: PixelFormat,
 ) -> Result<Vec<u8>, String> {
-    let source_frame = sample_toy_4x4_yuv_frame(input, params, format)?;
+    toy_yuv_annex_b_from_input(input, params, ToyVideoGeometry::four_by_four(), format)
+}
+
+pub fn toy_yuv_annex_b_from_input(
+    input: &[u8],
+    params: Toy4x4EncodeParams,
+    geometry: ToyVideoGeometry,
+    format: PixelFormat,
+) -> Result<Vec<u8>, String> {
+    toy_yuv_annex_b_from_input_with_limits(
+        input,
+        params,
+        geometry,
+        ToyVideoLimits::max_8x8(),
+        format,
+    )
+}
+
+pub fn toy_yuv_annex_b_from_input_with_limits(
+    input: &[u8],
+    params: Toy4x4EncodeParams,
+    geometry: ToyVideoGeometry,
+    limits: ToyVideoLimits,
+    format: PixelFormat,
+) -> Result<Vec<u8>, String> {
+    geometry.validate_against(limits)?;
+    let source_frame = sample_toy_yuv_frame(input, params, geometry, format)?;
     let compat_frame = source_frame.decoder_compat_frame();
     toy_4x4_annex_b(params, compat_frame)
 }
@@ -473,45 +573,57 @@ pub fn sample_toy_4x4_first_yuv420p8(
     input: &[u8],
     params: Toy4x4EncodeParams,
 ) -> Result<Toy4x4SampledColor, String> {
-    Ok(sample_toy_4x4_yuv_frame(input, params, PixelFormat::Yuv420p8)?.sampled_color())
+    Ok(sample_toy_yuv_frame(
+        input,
+        params,
+        ToyVideoGeometry::four_by_four(),
+        PixelFormat::Yuv420p8,
+    )?
+    .sampled_color())
 }
 
-fn sample_toy_4x4_yuv_frame(
+fn sample_toy_yuv_frame(
     input: &[u8],
     params: Toy4x4EncodeParams,
+    geometry: ToyVideoGeometry,
     format: PixelFormat,
 ) -> Result<Toy4x4SampledFrame, String> {
     validate_toy_4x4_frame_count(params)?;
+    geometry.validate_shape()?;
     if !format.is_yuv() {
         return Err(format!(
             "toy VVC input expects planar YUV format; got {format}"
         ));
     }
-    let frame_len = Picture::expected_len(4, 4, format);
+    Picture::validate_shape(geometry.width, geometry.height, format)?;
+    let frame_len = Picture::expected_len(geometry.width, geometry.height, format);
     let expected_len = frame_len * params.frames;
     if input.len() != expected_len {
         return Err(format!(
-            "toy VVC input size mismatch: got {} bytes, expected {} for 4x4 {format} with {} frame(s)",
+            "toy VVC input size mismatch: got {} bytes, expected {} for {}x{} {format} with {} frame(s)",
             input.len(),
             expected_len,
+            geometry.width,
+            geometry.height,
             params.frames
         ));
     }
 
-    let mut luma = [0; 16];
+    let luma_samples = geometry.luma_samples();
+    let mut luma = [0; 64];
     let bytes_per_sample = format.bytes_per_sample();
-    for (idx, sample) in luma.iter_mut().enumerate() {
+    for (idx, sample) in luma.iter_mut().take(luma_samples).enumerate() {
         let raw = read_toy_sample_raw(input, idx * bytes_per_sample, format);
         *sample = toy_sample_to_8bit(raw, format.bit_depth());
     }
 
-    let u_offset = 16 * bytes_per_sample;
+    let u_offset = luma_samples * bytes_per_sample;
     let chroma_plane_samples = format
-        .chroma_plane_samples(4, 4)
+        .chroma_plane_samples(geometry.width, geometry.height)
         .ok_or_else(|| format!("toy VVC input expects chroma samples; got {format}"))?;
     let v_offset = u_offset + (chroma_plane_samples * bytes_per_sample);
-    let mut cb = [0; 16];
-    let mut cr = [0; 16];
+    let mut cb = [0; 64];
+    let mut cr = [0; 64];
     for idx in 0..chroma_plane_samples {
         let raw_cb = read_toy_sample_raw(input, u_offset + idx * bytes_per_sample, format);
         let raw_cr = read_toy_sample_raw(input, v_offset + idx * bytes_per_sample, format);
@@ -520,6 +632,7 @@ fn sample_toy_4x4_yuv_frame(
     }
 
     Ok(Toy4x4SampledFrame {
+        geometry,
         format: Toy4x4PictureFormat {
             chroma_sampling: format
                 .chroma_sampling()
@@ -555,7 +668,9 @@ pub fn quantize_toy_4x4_color(color: Toy4x4SampledColor) -> Toy4x4QuantizedColor
 }
 
 fn quantize_toy_4x4_frame(frame: Toy4x4SampledFrame) -> Toy4x4QuantizedColor {
-    let luma_transform = transform_toy_4x4_luma(frame.luma);
+    let mut first_block = [0; 16];
+    first_block.copy_from_slice(&frame.luma[..16]);
+    let luma_transform = transform_toy_4x4_luma(first_block);
     let quantized_luma = quantize_toy_4x4_luma_dc(luma_transform);
     let reconstructed_luma = inverse_transform_toy_4x4_luma_dc(quantized_luma);
     let color = frame.sampled_color();
@@ -593,7 +708,7 @@ fn toy_4x4_annex_b(
     frame: Toy4x4SampledFrame,
 ) -> Result<Vec<u8>, String> {
     let mut units = Vec::with_capacity(params.frames + 3);
-    units.push(toy_4x4_sps_unit());
+    units.push(toy_4x4_sps_unit(frame.geometry));
     units.push(toy_4x4_pps_unit());
     units.push(toy_4x4_color_filler_unit(frame.sampled_color()));
     let quantized = quantize_toy_4x4_frame(frame);
@@ -627,12 +742,12 @@ fn encode_toy_coeff_token(negative: bool, magnitude: u8) -> u8 {
     0x40 | (u8::from(negative) << 5) | (magnitude & 0x1f)
 }
 
-fn toy_4x4_sps_unit() -> VvcNalUnit {
+fn toy_4x4_sps_unit(geometry: ToyVideoGeometry) -> VvcNalUnit {
     VvcNalUnit {
         nal_unit_type: VvcNalUnitType::Sps,
         layer_id: 0,
         temporal_id: 0,
-        rbsp_payload: toy_4x4_sps_payload(),
+        rbsp_payload: toy_4x4_sps_payload(geometry),
     }
 }
 
@@ -663,7 +778,7 @@ fn toy_4x4_slice_unit(frame_idx: usize, color: Toy4x4QuantizedColor) -> Result<V
     })
 }
 
-fn toy_4x4_sps_payload() -> Vec<u8> {
+fn toy_4x4_sps_payload(geometry: ToyVideoGeometry) -> Vec<u8> {
     let mut writer = VvcSyntaxWriter::new();
     writer.write_u("sps_seq_parameter_set_id", 0, 4);
     writer.write_u("sps_video_parameter_set_id", 0, 4);
@@ -688,9 +803,9 @@ fn toy_4x4_sps_payload() -> Vec<u8> {
     writer.write_ue("sps_pic_height_max_in_luma_samples", 8);
     writer.write_flag("sps_conformance_window_flag", true);
     writer.write_ue("sps_conf_win_left_offset", 0);
-    writer.write_ue("sps_conf_win_right_offset", 2);
+    writer.write_ue("sps_conf_win_right_offset", geometry.crop_right_420());
     writer.write_ue("sps_conf_win_top_offset", 0);
-    writer.write_ue("sps_conf_win_bottom_offset", 2);
+    writer.write_ue("sps_conf_win_bottom_offset", geometry.crop_bottom_420());
     writer.write_flag("sps_subpic_info_present_flag", false);
     writer.write_ue("sps_bitdepth_minus8", 0);
     writer.write_flag("sps_entropy_coding_sync_enabled_flag", false);
@@ -1686,12 +1801,45 @@ mod tests {
     #[test]
     fn toy_parameter_sets_are_generated_from_named_syntax() {
         assert_eq!(
-            toy_4x4_sps_payload(),
+            toy_4x4_sps_payload(ToyVideoGeometry::four_by_four()),
             hex_bytes("000b020080004244eed501f446e884688424613628c5430680ab8fe0ac1020")
         );
         assert_eq!(
             toy_4x4_pps_payload(),
             hex_bytes("0002448a4200c7b2145945945880")
+        );
+    }
+
+    #[test]
+    fn toy_sps_can_signal_4x8_visible_geometry() {
+        assert_eq!(
+            toy_4x4_sps_payload(ToyVideoGeometry {
+                width: 4,
+                height: 8,
+            }),
+            hex_bytes("000b020080004244ef5407d11ba211a2109184d8a3150c1a02ae3f82b04080")
+        );
+    }
+
+    #[test]
+    fn toy_sps_can_signal_8x4_visible_geometry() {
+        assert_eq!(
+            toy_4x4_sps_payload(ToyVideoGeometry {
+                width: 8,
+                height: 4,
+            }),
+            hex_bytes("000b020080004244fb5407d11ba211a2109184d8a3150c1a02ae3f82b04080")
+        );
+    }
+
+    #[test]
+    fn toy_sps_can_signal_8x8_visible_geometry() {
+        assert_eq!(
+            toy_4x4_sps_payload(ToyVideoGeometry {
+                width: 8,
+                height: 8,
+            }),
+            hex_bytes("000b020080004244fd501f446e884688424613628c5430680ab8fe0ac102")
         );
     }
 
@@ -1761,19 +1909,20 @@ mod tests {
 
     #[test]
     fn toy_frame_quantization_uses_all_luma_samples_for_dc() {
-        let mut luma = [64; 16];
+        let mut luma = [64; 64];
         luma[3] = 255;
         let mut ac_tokens = [0x61; 15];
         ac_tokens[2] = 0x48;
         assert_eq!(
             quantize_toy_4x4_frame(Toy4x4SampledFrame {
+                geometry: ToyVideoGeometry::four_by_four(),
                 format: Toy4x4PictureFormat {
                     chroma_sampling: ChromaSampling::Cs420,
                     bit_depth: SampleBitDepth::Eight,
                 },
                 luma,
-                cb: [9; 16],
-                cr: [7; 16],
+                cb: [9; 64],
+                cr: [7; 64],
                 chroma_len: 4,
             }),
             Toy4x4QuantizedColor {
@@ -1886,6 +2035,24 @@ mod tests {
             toy_4x4_yuv420p8_annex_b_from_input(&input, Toy4x4EncodeParams { frames: 2 }).unwrap();
         let generated = toy_black_4x4_yuv420p8_annex_b(Toy4x4EncodeParams { frames: 2 }).unwrap();
         assert_eq!(from_input, generated);
+    }
+
+    #[test]
+    fn toy_input_path_accepts_4x8_yuv420p8_frames() {
+        let input = vec![0; Picture::expected_len(4, 8, PixelFormat::Yuv420p8)];
+        let bytes = toy_yuv_annex_b_from_input(
+            &input,
+            Toy4x4EncodeParams { frames: 1 },
+            ToyVideoGeometry {
+                width: 4,
+                height: 8,
+            },
+            PixelFormat::Yuv420p8,
+        )
+        .unwrap();
+        let infos = parse_annex_b_nal_units(&bytes).unwrap();
+        let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
+        assert_eq!(types, vec![15, 16, 25, 8]);
     }
 
     #[test]

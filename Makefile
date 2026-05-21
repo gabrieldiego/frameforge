@@ -6,6 +6,10 @@ DUT ?= intra
 RTL_SAMPLE_BITS ?= 8
 RTL_SOURCE_SAMPLE_BITS ?= $(RTL_SAMPLE_BITS)
 RTL_CHROMA_FORMAT_IDC ?= 1
+RTL_VISIBLE_WIDTH ?= 4
+RTL_VISIBLE_HEIGHT ?= 4
+MAX_WIDTH ?= 8
+MAX_HEIGHT ?= 8
 
 help:
 	@printf '%s\n' 'FrameForge targets:'
@@ -14,12 +18,12 @@ help:
 	@printf '%s\n' '  make test      - run Rust tests'
 	@printf '%s\n' '  make fmt       - format Rust code'
 	@printf '%s\n' '  make decoder-setup - find or build external VTM decoder'
-	@printf '%s\n' '  make validate INPUT=in.yuv [WIDTH=4 HEIGHT=4 FRAMES=1 FORMAT=yuv420p8|yuv422p8|yuv444p8|...]'
+	@printf '%s\n' '  make validate INPUT=in.yuv [WIDTH=4|8 HEIGHT=4|8 MAX_WIDTH=8 MAX_HEIGHT=8 FRAMES=1 FORMAT=yuv420p8|yuv422p8|yuv444p8|...]'
 	@printf '%s\n' '  make validate-decode BITSTREAM=out.vvc [DECODED=out.yuv]'
 	@printf '%s\n' '  make rtl-test  - run cocotb RTL tests'
 	@printf '%s\n' '  make rtl-test DUT=encoder - run minimum encoder RTL smoke test'
 	@printf '%s\n' '  make rtl-test DUT=vvc-skeleton - run RTL/Rust VVC skeleton smoke test'
-	@printf '%s\n' '  make rtl-test DUT=vvc-toy4x4 [RTL_SAMPLE_BITS=8|10|12|16 RTL_SOURCE_SAMPLE_BITS=8|10|12|16 RTL_CHROMA_FORMAT_IDC=1|2|3] - run generated RTL/software VVC toy stream test'
+	@printf '%s\n' '  make rtl-test DUT=vvc-toy4x4 [RTL_VISIBLE_WIDTH=4|8 RTL_VISIBLE_HEIGHT=4|8 RTL_SAMPLE_BITS=8|10|12|16 RTL_SOURCE_SAMPLE_BITS=8|10|12|16 RTL_CHROMA_FORMAT_IDC=1|2|3] - run generated RTL/software VVC toy stream test'
 	@printf '%s\n' '  make reference-vvc BITSTREAM=out.vvc [BIT_DEPTH=8|10|12|16 CHROMA_FORMAT=420|422|444] - create real VVC using VTM'
 	@printf '%s\n' '  make clean     - remove local build outputs'
 
@@ -39,8 +43,8 @@ decoder-setup:
 	python3 scripts/ensure_reference_decoder.py
 
 validate:
-	@test -n "$(INPUT)" || { echo 'usage: make validate INPUT=path/to/input_4x4_1f_yuv420p8.yuv [WIDTH=4 HEIGHT=4 FRAMES=1 FORMAT=yuv420p8|yuv422p8|yuv444p8|...]'; exit 2; }
-	python3 scripts/validate.py "$(INPUT)" $(if $(WIDTH),--width "$(WIDTH)") $(if $(HEIGHT),--height "$(HEIGHT)") $(if $(FRAMES),--frames "$(FRAMES)") $(if $(FORMAT),--format "$(FORMAT)")
+	@test -n "$(INPUT)" || { echo 'usage: make validate INPUT=path/to/input_4x8_1f_yuv420p8.yuv [WIDTH=4|8 HEIGHT=4|8 MAX_WIDTH=8 MAX_HEIGHT=8 FRAMES=1 FORMAT=yuv420p8|yuv422p8|yuv444p8|...]'; exit 2; }
+	python3 scripts/validate.py "$(INPUT)" $(if $(WIDTH),--width "$(WIDTH)") $(if $(HEIGHT),--height "$(HEIGHT)") --max-width "$(MAX_WIDTH)" --max-height "$(MAX_HEIGHT)" $(if $(FRAMES),--frames "$(FRAMES)") $(if $(FORMAT),--format "$(FORMAT)")
 
 validate-decode:
 	@test -n "$(BITSTREAM)" || { echo 'usage: make validate-decode BITSTREAM=path/to/stream.vvc [DECODED=decoded.yuv]'; exit 2; }
@@ -51,7 +55,7 @@ reference-vvc:
 	python3 scripts/reference_encode_vvc.py --output "$(BITSTREAM)" --frames "$(or $(FRAMES),1)" $(if $(BIT_DEPTH),--bit-depth "$(BIT_DEPTH)") $(if $(CHROMA_FORMAT),--chroma-format "$(CHROMA_FORMAT)") $(if $(RECON),--recon "$(RECON)")
 
 rtl-test:
-	$(MAKE) -C tb SIM=$(SIM) TOPLEVEL_LANG=$(TOPLEVEL_LANG) DUT=$(DUT) RTL_SAMPLE_BITS=$(RTL_SAMPLE_BITS) RTL_SOURCE_SAMPLE_BITS=$(RTL_SOURCE_SAMPLE_BITS) RTL_CHROMA_FORMAT_IDC=$(RTL_CHROMA_FORMAT_IDC)
+	$(MAKE) -C tb SIM=$(SIM) TOPLEVEL_LANG=$(TOPLEVEL_LANG) DUT=$(DUT) RTL_SAMPLE_BITS=$(RTL_SAMPLE_BITS) RTL_SOURCE_SAMPLE_BITS=$(RTL_SOURCE_SAMPLE_BITS) RTL_CHROMA_FORMAT_IDC=$(RTL_CHROMA_FORMAT_IDC) RTL_VISIBLE_WIDTH=$(RTL_VISIBLE_WIDTH) RTL_VISIBLE_HEIGHT=$(RTL_VISIBLE_HEIGHT)
 
 clean:
 	cargo clean

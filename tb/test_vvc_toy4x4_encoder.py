@@ -12,20 +12,20 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def solid_yuv420p8(y, u, v, frames):
-    frame = bytes([y] * 16 + [u] * 4 + [v] * 4)
+    frame = bytes([y] * luma_samples() + [u] * chroma_plane_samples() + [v] * chroma_plane_samples())
     return frame * frames
 
 
 def solid_yuv_planar8(y, u, v, frames, chroma_samples):
-    frame = bytes([y] * 16 + [u] * chroma_samples + [v] * chroma_samples)
+    frame = bytes([y] * luma_samples() + [u] * chroma_samples + [v] * chroma_samples)
     return frame * frames
 
 
 def varied_yuv420p8(y, u, v, frames):
     frame = bytearray(solid_yuv420p8(y, u, v, 1))
     frame[3] = (y + 17) & 0xFF
-    frame[17] = (u + 29) & 0xFF
-    frame[21] = (v + 43) & 0xFF
+    frame[luma_samples() + 1] = (u + 29) & 0xFF
+    frame[v_sample_index() + 1] = (v + 43) & 0xFF
     return bytes(frame) * frames
 
 
@@ -60,16 +60,32 @@ def rtl_chroma_format_idc():
     return int(os.environ.get("RTL_CHROMA_FORMAT_IDC", "1"))
 
 
+def rtl_visible_width():
+    return int(os.environ.get("RTL_VISIBLE_WIDTH", "4"))
+
+
+def rtl_visible_height():
+    return int(os.environ.get("RTL_VISIBLE_HEIGHT", "4"))
+
+
+def luma_samples():
+    return rtl_visible_width() * rtl_visible_height()
+
+
 def chroma_plane_samples():
-    return {1: 4, 2: 8, 3: 16}.get(rtl_chroma_format_idc(), 4)
+    return {
+        1: luma_samples() // 4,
+        2: luma_samples() // 2,
+        3: luma_samples(),
+    }.get(rtl_chroma_format_idc(), luma_samples() // 4)
 
 
 def frame_samples():
-    return 16 + (chroma_plane_samples() * 2)
+    return luma_samples() + (chroma_plane_samples() * 2)
 
 
 def v_sample_index():
-    return 16 + chroma_plane_samples()
+    return luma_samples() + chroma_plane_samples()
 
 
 def software_format():
@@ -153,8 +169,12 @@ def reconstructed_chroma(u, v):
 def decoded_reconstruction(frames, data):
     # This is the reconstruction of the emitted VVC bitstream.
     y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(data[:16])))
-    chroma = reconstructed_chroma(sample_to_8bit(data[16]), sample_to_8bit(data[v_sample_index()]))
-    frame = bytes([y] * 16 + [chroma] * 4 + [chroma] * 4)
+    chroma = reconstructed_chroma(sample_to_8bit(data[luma_samples()]), sample_to_8bit(data[v_sample_index()]))
+    frame = bytes(
+        [y] * luma_samples()
+        + [chroma] * (luma_samples() // 4)
+        + [chroma] * (luma_samples() // 4)
+    )
     return frame * frames
 
 
@@ -168,7 +188,7 @@ def sample_to_8bit(sample):
 def software_stream(frames, data):
     with tempfile.TemporaryDirectory() as tmpdir:
         fmt = software_format()
-        input_yuv = Path(tmpdir) / f"input_4x4_{frames}f_{fmt}.yuv"
+        input_yuv = Path(tmpdir) / f"input_{rtl_visible_width()}x{rtl_visible_height()}_{frames}f_{fmt}.yuv"
         output = Path(tmpdir) / "toy.vvc"
         input_yuv.write_bytes(software_input_bytes(data))
         subprocess.run(
@@ -182,6 +202,10 @@ def software_stream(frames, data):
                 str(input_yuv),
                 "--frames",
                 str(frames),
+                "--width",
+                str(rtl_visible_width()),
+                "--height",
+                str(rtl_visible_height()),
                 "--output",
                 str(output),
                 "--format",
@@ -235,7 +259,7 @@ async def collect_stream(dut, frames):
     assert dut.sampled_color_valid.value == 1
     samples = rtl_input_samples(data)
     assert int(dut.sampled_y.value) == samples[0]
-    assert int(dut.sampled_u.value) == samples[16]
+    assert int(dut.sampled_u.value) == samples[luma_samples()]
     assert int(dut.sampled_v.value) == samples[v_sample_index()]
     assert int(dut.luma_samples_q.value) == packed_rtl_luma_value(data)
     assert int(dut.quant_luma_ac_tokens_q.value) == int.from_bytes(
@@ -279,7 +303,7 @@ async def drain_sampled_color(dut, frames, y, u, v):
 
     data = bytearray(solid_yuv_planar8(y, u, v, frames, chroma_plane_samples()))
     data[3] = (y + 17) & 0xFF
-    data[17] = (u + 29) & 0xFF
+    data[luma_samples() + 1] = (u + 29) & 0xFF
     data[v_sample_index() + 1] = (v + 43) & 0xFF
     data = bytes(data)
     await feed_input(dut, data)
@@ -288,7 +312,7 @@ async def drain_sampled_color(dut, frames, y, u, v):
     assert dut.sampled_color_valid.value == 1
     samples = rtl_input_samples(data)
     assert int(dut.sampled_y.value) == samples[0]
-    assert int(dut.sampled_u.value) == samples[16]
+    assert int(dut.sampled_u.value) == samples[luma_samples()]
     assert int(dut.sampled_v.value) == samples[v_sample_index()]
     assert int(dut.luma_samples_q.value) == packed_rtl_luma_value(data)
     assert int(dut.quant_luma_ac_tokens_q.value) == int.from_bytes(

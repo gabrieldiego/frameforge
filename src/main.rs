@@ -49,6 +49,8 @@ struct VvcToy4x4VideoCli {
     frames: usize,
     width: usize,
     height: usize,
+    max_width: usize,
+    max_height: usize,
     format: PixelFormat,
 }
 
@@ -145,17 +147,28 @@ fn run_vvc_skeleton(cli: VvcSkeletonCli) -> Result<(), String> {
 }
 
 fn run_vvc_toy_4x4_video(cli: VvcToy4x4VideoCli) -> Result<(), String> {
-    if cli.width != 4 || cli.height != 4 || !cli.format.is_yuv() {
+    if !cli.format.is_yuv() {
         return Err(format!(
-            "toy VVC encoder currently supports only 4x4 planar YUV input; got {}x{} {}",
+            "toy VVC encoder expects planar YUV input; got {}x{} {}",
             cli.width, cli.height, cli.format
         ));
     }
 
     let params = frameforge::vvc::Toy4x4EncodeParams { frames: cli.frames };
+    let geometry = frameforge::vvc::ToyVideoGeometry {
+        width: cli.width,
+        height: cli.height,
+    };
+    let limits = frameforge::vvc::ToyVideoLimits {
+        max_width: cli.max_width,
+        max_height: cli.max_height,
+    };
+    geometry.validate_against(limits)?;
     let data = fs::read(&cli.input)
         .map_err(|err| format!("failed to read input '{}': {err}", cli.input.display()))?;
-    let bytes = frameforge::vvc::toy_4x4_yuv_annex_b_from_input(&data, params, cli.format)?;
+    let bytes = frameforge::vvc::toy_yuv_annex_b_from_input_with_limits(
+        &data, params, geometry, limits, cli.format,
+    )?;
     fs::write(&cli.output, bytes)
         .map_err(|err| format!("failed to write output '{}': {err}", cli.output.display()))?;
     Ok(())
@@ -292,6 +305,8 @@ fn parse_vvc_toy_4x4_video_cli(args: Vec<String>) -> Result<Command, String> {
     let mut frames = 2;
     let mut width = 4;
     let mut height = 4;
+    let mut max_width = 8;
+    let mut max_height = 8;
     let mut format = PixelFormat::Yuv420p8;
 
     let mut iter = args.into_iter();
@@ -302,6 +317,12 @@ fn parse_vvc_toy_4x4_video_cli(args: Vec<String>) -> Result<Command, String> {
             "--frames" => frames = parse_usize(next_value(&mut iter, "--frames")?, "--frames")?,
             "--width" => width = parse_usize(next_value(&mut iter, "--width")?, "--width")?,
             "--height" => height = parse_usize(next_value(&mut iter, "--height")?, "--height")?,
+            "--max-width" => {
+                max_width = parse_usize(next_value(&mut iter, "--max-width")?, "--max-width")?
+            }
+            "--max-height" => {
+                max_height = parse_usize(next_value(&mut iter, "--max-height")?, "--max-height")?
+            }
             "--format" => {
                 let value = next_value(&mut iter, "--format")?;
                 format = value.parse::<PixelFormat>()?;
@@ -317,6 +338,8 @@ fn parse_vvc_toy_4x4_video_cli(args: Vec<String>) -> Result<Command, String> {
         frames,
         width,
         height,
+        max_width,
+        max_height,
         format,
     }))
 }
@@ -354,7 +377,7 @@ fn parse_usize(value: String, flag: &str) -> Result<usize, String> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  frameforge encode --input <raw> --width <w> --height <h> --format gray8 --output <ffbs> [--trace <jsonl>]\n  frameforge decode --input <ffbs> --output <raw>\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-skeleton --output <vvc>\n  frameforge vvc-toy-4x4-video --input <yuv> --output <vvc> [--frames 1|2] [--width 4 --height 4 --format yuv420p8|yuv422p8|yuv444p8|...]\n  frameforge vvc-list --input <vvc>\n\nThe encode subcommand is optional for compatibility."
+    "usage:\n  frameforge encode --input <raw> --width <w> --height <h> --format gray8 --output <ffbs> [--trace <jsonl>]\n  frameforge decode --input <ffbs> --output <raw>\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-skeleton --output <vvc>\n  frameforge vvc-toy-4x4-video --input <yuv> --output <vvc> [--frames 1|2] [--width <w> --height <h>] [--max-width 8 --max-height 8] [--format yuv420p8|yuv422p8|yuv444p8|...]\n  frameforge vvc-list --input <vvc>\n\nThe encode subcommand is optional for compatibility."
 }
 
 #[cfg(test)]
@@ -463,6 +486,10 @@ mod tests {
             "4".into(),
             "--height".into(),
             "4".into(),
+            "--max-width".into(),
+            "8".into(),
+            "--max-height".into(),
+            "8".into(),
             "--format".into(),
             "yuv420p8".into(),
         ])
@@ -476,6 +503,8 @@ mod tests {
         assert_eq!(cli.frames, 2);
         assert_eq!(cli.width, 4);
         assert_eq!(cli.height, 4);
+        assert_eq!(cli.max_width, 8);
+        assert_eq!(cli.max_height, 8);
         assert_eq!(cli.format, PixelFormat::Yuv420p8);
     }
 

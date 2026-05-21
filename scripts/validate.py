@@ -66,6 +66,8 @@ def main() -> int:
     parser.add_argument("input", help="input YUV file")
     parser.add_argument("--width", type=int)
     parser.add_argument("--height", type=int)
+    parser.add_argument("--max-width", type=int, default=8)
+    parser.add_argument("--max-height", type=int, default=8)
     parser.add_argument("--frames", type=int)
     parser.add_argument("--format", default=None)
     parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
@@ -78,7 +80,7 @@ def main() -> int:
 
     try:
         info = resolve_input_info(input_path, args)
-        validate_supported_input(input_path, info)
+        validate_supported_input(input_path, info, args.max_width, args.max_height)
     except ValueError as err:
         print(f"FAIL: {err}", file=sys.stderr)
         return 2
@@ -131,7 +133,16 @@ def main() -> int:
         env["FRAMEFORGE_RTL_TOY4X4_INPUT"] = str(rtl_input_path)
         env["FRAMEFORGE_RTL_TOY4X4_OUT"] = str(rtl_bitstream)
         env["FRAMEFORGE_RTL_TOY4X4_RECON_OUT"] = str(rtl_internal_recon)
-    run(["make", "rtl-test", "DUT=vvc-toy4x4"], env=env)
+    run(
+        [
+            "make",
+            "rtl-test",
+            "DUT=vvc-toy4x4",
+            f"RTL_VISIBLE_WIDTH={info.width}",
+            f"RTL_VISIBLE_HEIGHT={info.height}",
+        ],
+        env=env,
+    )
 
     run(
         [
@@ -227,14 +238,18 @@ def infer_from_filename(name: str) -> InputInfo:
     )
 
 
-def validate_supported_input(input_path: Path, info: InputInfo) -> None:
+def validate_supported_input(input_path: Path, info: InputInfo, max_width: int, max_height: int) -> None:
     if normalize_format(info.fmt) not in SUPPORTED_FORMATS.values():
         raise ValueError(
             f"unsupported format {info.fmt}; supported toy formats are "
             "yuv420p/yuv422p/yuv444p at 8, 10, 12, or 16 bits"
         )
-    if info.width != 4 or info.height != 4:
-        raise ValueError("toy VVC validation currently supports only 4x4 input")
+    if info.width > max_width or info.height > max_height:
+        raise ValueError(
+            f"toy VVC validation supports at most {max_width}x{max_height} input at this entry point; got {info.width}x{info.height}"
+        )
+    if info.width % 2 or info.height % 2:
+        raise ValueError("toy VVC validation currently requires even width and height")
     sampling = format_chroma_sampling(info.fmt)
     if sampling == "420" and (info.width % 2 or info.height % 2):
         raise ValueError("yuv420p formats require even width and height")
@@ -270,11 +285,13 @@ def sha256(path: Path) -> str:
 
 def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes:
     frame = normalized_first_frame_to_yuv420p8(input_path, info)
+    luma_len = info.width * info.height
+    chroma_len = luma_len // 4
     y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(frame[:16])))
-    chroma = reconstructed_chroma(frame[16], frame[20])
+    chroma = reconstructed_chroma(frame[luma_len], frame[luma_len + chroma_len])
     # This is the reconstruction of the emitted toy VVC bitstream, not the
     # original input. Keep this matched to VTM decode output after quantization.
-    frame = bytes([y] * 16 + [chroma] * 4 + [chroma] * 4)
+    frame = bytes([y] * luma_len + [chroma] * chroma_len + [chroma] * chroma_len)
     return frame * info.frames
 
 
