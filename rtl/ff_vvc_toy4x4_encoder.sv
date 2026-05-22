@@ -1027,17 +1027,18 @@ module ff_vvc_toy4x4_encoder #(
 
   function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] palette_444_payload_bits();
     logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bits;
-    logic [15:0] sample_count;
     begin
       // Toy single-entry palette packet:
       // each nibble is emitted as 1xxx_xxxx to avoid zero-byte runs before
       // the RTL byte streamer grows a generic emulation-prevention inserter.
-      // Fields: visible sample count, Y, Cb, Cr, index_bits_minus1.
-      sample_count = luma_samples();
-      bits = palette_prefixed_u16(sample_count);
+      // Fields are derived from H.266 palette_coding syntax for the current
+      // single-entry subset: num_signalled_palette_entries, Y, Cb, Cr,
+      // palette_escape_val_present_flag, MaxPaletteIndex.
+      bits = palette_prefixed_u8(8'd1);
       bits = (bits << 16) | palette_prefixed_u8(sample_to_8bit(sampled_y));
       bits = (bits << 16) | palette_prefixed_u8(sample_to_8bit(sampled_u));
       bits = (bits << 16) | palette_prefixed_u8(sample_to_8bit(sampled_v));
+      bits = (bits << 16) | palette_prefixed_u8(8'd0);
       bits = (bits << 16) | palette_prefixed_u8(8'd0);
       palette_444_payload_bits = bits;
     end

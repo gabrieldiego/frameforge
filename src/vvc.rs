@@ -539,6 +539,27 @@ struct ToyCodingTreeBody {
     coded: ToyCodedGeometry,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToyPaletteTreeType {
+    SingleTree,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ToyPalette444Syntax {
+    tree_type: ToyPaletteTreeType,
+    cb_width: usize,
+    cb_height: usize,
+    start_comp: u8,
+    num_comps: u8,
+    max_num_palette_entries: u8,
+    num_predicted_palette_entries: u8,
+    num_signalled_palette_entries: u8,
+    new_palette_entries: [Toy4x4SampledColor; 1],
+    current_palette_size: u8,
+    palette_escape_val_present_flag: bool,
+    max_palette_index: u8,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ToyEntropySchedule {
     kind: ToyEntropyScheduleKind,
@@ -1353,18 +1374,85 @@ fn write_toy_palette_444_entropy(
 }
 
 fn toy_palette_444_bits(geometry: ToyVideoGeometry, color: Toy4x4SampledColor) -> Vec<bool> {
+    let syntax = toy_palette_444_single_entry_syntax(geometry, color);
+    debug_assert_eq!(toy_palette_444_binarized_syntax_bits(syntax).len(), 28);
+    toy_palette_444_transport_bits(syntax)
+}
+
+fn toy_palette_444_single_entry_syntax(
+    geometry: ToyVideoGeometry,
+    color: Toy4x4SampledColor,
+) -> ToyPalette444Syntax {
+    // H.266 7.3.11.6, single-tree 4:4:4 subset:
+    // - no predictor reuse because the initial predictor palette is empty,
+    // - exactly one explicitly signalled palette entry,
+    // - no escape-coded samples,
+    // - MaxPaletteIndex == 0, so all sample indices are inferred as 0 and
+    //   run/copy/index syntax is not present.
+    ToyPalette444Syntax {
+        tree_type: ToyPaletteTreeType::SingleTree,
+        cb_width: geometry.width,
+        cb_height: geometry.height,
+        start_comp: 0,
+        num_comps: 3,
+        max_num_palette_entries: 31,
+        num_predicted_palette_entries: 0,
+        num_signalled_palette_entries: 1,
+        new_palette_entries: [color],
+        current_palette_size: 1,
+        palette_escape_val_present_flag: false,
+        max_palette_index: 0,
+    }
+}
+
+fn toy_palette_444_binarized_syntax_bits(syntax: ToyPalette444Syntax) -> Vec<bool> {
+    debug_assert_eq!(syntax.tree_type, ToyPaletteTreeType::SingleTree);
+    debug_assert_eq!(syntax.start_comp, 0);
+    debug_assert_eq!(syntax.num_comps, 3);
+    debug_assert_eq!(syntax.max_num_palette_entries, 31);
+    debug_assert_eq!(syntax.num_predicted_palette_entries, 0);
+    debug_assert_eq!(
+        syntax.current_palette_size,
+        syntax.num_signalled_palette_entries
+    );
+    debug_assert_eq!(syntax.max_palette_index, 0);
+
     let mut bits = Vec::new();
-    append_palette_prefixed_u16(&mut bits, geometry.luma_samples() as u16);
-    append_palette_prefixed_u8(&mut bits, color.y);
-    append_palette_prefixed_u8(&mut bits, color.u);
-    append_palette_prefixed_u8(&mut bits, color.v);
-    append_palette_prefixed_u8(&mut bits, 0);
+    append_eg0_bits(&mut bits, syntax.num_signalled_palette_entries as u32);
+    for entry in syntax.new_palette_entries {
+        append_fixed_bits(&mut bits, entry.y as u64, 8);
+        append_fixed_bits(&mut bits, entry.u as u64, 8);
+        append_fixed_bits(&mut bits, entry.v as u64, 8);
+    }
+    append_fixed_bits(
+        &mut bits,
+        u64::from(syntax.palette_escape_val_present_flag),
+        1,
+    );
     bits
 }
 
-fn append_palette_prefixed_u16(bits: &mut Vec<bool>, value: u16) {
-    for shift in [12, 8, 4, 0] {
-        append_fixed_bits(bits, 0x80 | (((value >> shift) & 0x0f) as u64), 8);
+fn toy_palette_444_transport_bits(syntax: ToyPalette444Syntax) -> Vec<bool> {
+    let mut bits = Vec::new();
+    append_palette_prefixed_u8(&mut bits, syntax.num_signalled_palette_entries);
+    for entry in syntax.new_palette_entries {
+        append_palette_prefixed_u8(&mut bits, entry.y);
+        append_palette_prefixed_u8(&mut bits, entry.u);
+        append_palette_prefixed_u8(&mut bits, entry.v);
+    }
+    append_palette_prefixed_u8(&mut bits, u8::from(syntax.palette_escape_val_present_flag));
+    append_palette_prefixed_u8(&mut bits, syntax.max_palette_index);
+    bits
+}
+
+fn append_eg0_bits(bits: &mut Vec<bool>, value: u32) {
+    let code_num = value + 1;
+    let bit_count = 32 - code_num.leading_zeros();
+    for _ in 0..bit_count - 1 {
+        bits.push(false);
+    }
+    for bit in (0..bit_count).rev() {
+        bits.push(((code_num >> bit) & 1) != 0);
     }
 }
 
@@ -4182,9 +4270,39 @@ mod tests {
         assert_eq!(types, vec![15, 16, 25, 8]);
         assert_ne!(bytes, transform_bytes);
         assert!(bytes.windows(12).any(|window| window
-            == [0x80, 0x80, 0x81, 0x80, 0x84, 0x81, 0x88, 0x80, 0x8c, 0x80, 0x80, 0x80]));
+            == [0x80, 0x81, 0x84, 0x81, 0x88, 0x80, 0x8c, 0x80, 0x80, 0x80, 0x80, 0x80]));
         assert!(!bytes.windows(4).any(|window| window == b"FFPL"));
         assert!(!bytes.windows(4).any(|window| window == b"FFAC"));
+    }
+
+    #[test]
+    fn toy_palette_444_syntax_uses_spec_single_entry_subset() {
+        let syntax = toy_palette_444_single_entry_syntax(
+            ToyVideoGeometry {
+                width: 16,
+                height: 16,
+            },
+            Toy4x4SampledColor {
+                y: 65,
+                u: 128,
+                v: 192,
+            },
+        );
+        assert_eq!(syntax.tree_type, ToyPaletteTreeType::SingleTree);
+        assert_eq!(syntax.cb_width, 16);
+        assert_eq!(syntax.cb_height, 16);
+        assert_eq!(syntax.start_comp, 0);
+        assert_eq!(syntax.num_comps, 3);
+        assert_eq!(syntax.max_num_palette_entries, 31);
+        assert_eq!(syntax.num_predicted_palette_entries, 0);
+        assert_eq!(syntax.num_signalled_palette_entries, 1);
+        assert_eq!(syntax.current_palette_size, 1);
+        assert!(!syntax.palette_escape_val_present_flag);
+        assert_eq!(syntax.max_palette_index, 0);
+
+        let bits = toy_palette_444_binarized_syntax_bits(syntax);
+        assert_eq!(bits.len(), 28);
+        assert_eq!(&bits[0..3], &[false, true, false]); // EG0 for value 1.
     }
 
     #[test]
