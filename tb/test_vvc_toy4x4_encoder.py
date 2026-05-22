@@ -226,6 +226,12 @@ def reconstructed_chroma(u, v):
 
 def decoded_reconstruction(frames, data):
     # This is the reconstruction of the emitted VVC bitstream.
+    if rtl_chroma_format_idc() == 3:
+        y = sample_to_8bit(data[0])
+        u = sample_to_8bit(data[luma_samples()])
+        v = sample_to_8bit(data[v_sample_index()])
+        frame = bytes([y] * luma_samples() + [u] * luma_samples() + [v] * luma_samples())
+        return frame * frames
     if is_toy_16x16_generated_path():
         return cropped_toy_16x16_generated_recon() * frames
     if is_toy_32x32_generated_path():

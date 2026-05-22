@@ -6,9 +6,8 @@ module ff_vvc_toy4x4_encoder #(
   parameter int SAMPLE_BITS = 8,
   parameter int SOURCE_SAMPLE_BITS = SAMPLE_BITS,
   // VVC chroma_format_idc values: 1=4:2:0, 2=4:2:2, 3=4:4:4.
-  // The current generated bitstream remains the toy 4:2:0 validation stream,
-  // but the input drain and first-chroma sampling are parameterized so wider
-  // RTL input front-ends can be tested independently.
+  // 4:2:0 uses the current transform/residual path. 4:4:4 is routed through
+  // the toy palette path so the sampling path is independent of TU size.
   parameter int CHROMA_FORMAT_IDC = 1
 ) (
   input  logic       clk,
@@ -385,7 +384,9 @@ module ff_vvc_toy4x4_encoder #(
     logic [CABAC_PACKET_BITS - 1:0] cabac;
     logic [12:0]  bit_len;
     begin
-      if (uses_capacity_tu_grid()) begin
+      if (PALETTE_MODE) begin
+        bit_len = 13'd24 + palette_444_payload_bit_len() + 13'd1;
+      end else if (uses_capacity_tu_grid()) begin
         bit_len = 13'd24 + capacity_tu_grid_bit_len() + 13'd1;
       end else begin
         cabac = toy_cabac_bitstream(
@@ -741,7 +742,7 @@ module ff_vvc_toy4x4_encoder #(
       state = append_u(state, 0, 4);
       state = append_u(state, 0, 4);
       state = append_u(state, 0, 3);
-      state = append_u(state, 1, 2);
+      state = append_u(state, CHROMA_FORMAT_IDC[1:0], 2);
       state = append_u(state, 1, 2);
       state = append_flag(state, 1'b1);
       state = append_u(state, 1, 7);
@@ -759,9 +760,9 @@ module ff_vvc_toy4x4_encoder #(
       state = append_ue(state, coded_height());
       state = append_flag(state, 1'b1);
       state = append_ue(state, 0);
-      state = append_ue(state, (coded_width() - visible_width) >> 1);
+      state = append_ue(state, crop_right_offset());
       state = append_ue(state, 0);
-      state = append_ue(state, (coded_height() - visible_height) >> 1);
+      state = append_ue(state, crop_bottom_offset());
       state = append_flag(state, 1'b0);
       state = append_ue(state, 0);
       state = append_flag(state, 1'b0);
@@ -838,7 +839,7 @@ module ff_vvc_toy4x4_encoder #(
       state = append_flag(state, 1'b1);
       state = append_flag(state, 1'b1);
       state = append_flag(state, 1'b0);
-      state = append_flag(state, 1'b0);
+      state = append_flag(state, PALETTE_MODE);
       state = append_flag(state, 1'b0);
       state = append_flag(state, 1'b0);
       state = append_flag(state, 1'b0);
@@ -850,6 +851,18 @@ module ff_vvc_toy4x4_encoder #(
       state = append_flag(state, 1'b0);
       state = append_flag(state, 1'b0);
       sps_payload_state = append_trailing_bits(state);
+    end
+  endfunction
+
+  function automatic logic [15:0] crop_right_offset();
+    begin
+      crop_right_offset = (coded_width() - visible_width) / chroma_subsample_x();
+    end
+  endfunction
+
+  function automatic logic [15:0] crop_bottom_offset();
+    begin
+      crop_bottom_offset = (coded_height() - visible_height) / chroma_subsample_y();
     end
   endfunction
 
@@ -967,16 +980,30 @@ module ff_vvc_toy4x4_encoder #(
       end
 
       if (uses_capacity_tu_grid()) begin
+        if (PALETTE_MODE) begin
+          capacity_bits = palette_444_payload_bits();
+          payload_len = palette_444_payload_bit_len();
+          acc = (acc << payload_len) | capacity_bits;
+          bit_len = bit_len + payload_len;
+        end else begin
         capacity_bits = capacity_tu_grid_bits();
         payload_len = capacity_tu_grid_bit_len();
         acc = (acc << payload_len) | capacity_bits;
         bit_len = bit_len + payload_len;
+        end
       end else begin
-        cabac = toy_cabac_bitstream(rem, ac_tokens, rem_1, ac_tokens_1);
-        payload_len = cabac[CABAC_PACKET_BITS - 1 -: 13];
-        cabac_bits = cabac[MAX_SLICE_PAYLOAD_BITS - 1:0];
-        acc = (acc << payload_len) | cabac_bits;
-        bit_len = bit_len + payload_len;
+        if (PALETTE_MODE) begin
+          cabac_bits = palette_444_payload_bits();
+          payload_len = palette_444_payload_bit_len();
+          acc = (acc << payload_len) | cabac_bits;
+          bit_len = bit_len + payload_len;
+        end else begin
+          cabac = toy_cabac_bitstream(rem, ac_tokens, rem_1, ac_tokens_1);
+          payload_len = cabac[CABAC_PACKET_BITS - 1 -: 13];
+          cabac_bits = cabac[MAX_SLICE_PAYLOAD_BITS - 1:0];
+          acc = (acc << payload_len) | cabac_bits;
+          bit_len = bit_len + payload_len;
+        end
       end
 
       acc = (acc << 1) | 1'b1; // rbsp_stop_one_bit
@@ -989,6 +1016,50 @@ module ff_vvc_toy4x4_encoder #(
       payload_byte_len = slice_payload_len();
       payload_bits_len = payload_byte_len << 3;
       toy_slice_payload_bits = acc << (payload_bits_len - bit_len);
+    end
+  endfunction
+
+  function automatic logic [12:0] palette_444_payload_bit_len();
+    begin
+      palette_444_payload_bit_len = 13'd96;
+    end
+  endfunction
+
+  function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] palette_444_payload_bits();
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bits;
+    logic [15:0] sample_count;
+    begin
+      // Toy single-entry palette packet:
+      // each nibble is emitted as 1xxx_xxxx to avoid zero-byte runs before
+      // the RTL byte streamer grows a generic emulation-prevention inserter.
+      // Fields: visible sample count, Y, Cb, Cr, index_bits_minus1.
+      sample_count = luma_samples();
+      bits = palette_prefixed_u16(sample_count);
+      bits = (bits << 16) | palette_prefixed_u8(sample_to_8bit(sampled_y));
+      bits = (bits << 16) | palette_prefixed_u8(sample_to_8bit(sampled_u));
+      bits = (bits << 16) | palette_prefixed_u8(sample_to_8bit(sampled_v));
+      bits = (bits << 16) | palette_prefixed_u8(8'd0);
+      palette_444_payload_bits = bits;
+    end
+  endfunction
+
+  function automatic logic [31:0] palette_prefixed_u16(input logic [15:0] value);
+    begin
+      palette_prefixed_u16 = {
+        4'h8, value[15:12],
+        4'h8, value[11:8],
+        4'h8, value[7:4],
+        4'h8, value[3:0]
+      };
+    end
+  endfunction
+
+  function automatic logic [15:0] palette_prefixed_u8(input logic [7:0] value);
+    begin
+      palette_prefixed_u8 = {
+        4'h8, value[7:4],
+        4'h8, value[3:0]
+      };
     end
   endfunction
 

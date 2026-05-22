@@ -335,14 +335,6 @@ impl ToyVideoGeometry {
         }
     }
 
-    fn crop_right_420(self) -> u32 {
-        self.crop_right(ChromaSampling::Cs420)
-    }
-
-    fn crop_bottom_420(self) -> u32 {
-        self.crop_bottom(ChromaSampling::Cs420)
-    }
-
     fn crop_right(self, chroma_sampling: ChromaSampling) -> u32 {
         ((self.coded_width() - self.width) / chroma_subsample_x(chroma_sampling)) as u32
     }
@@ -733,6 +725,9 @@ pub fn toy_yuv_annex_b_from_input_with_limits(
 ) -> Result<Vec<u8>, String> {
     geometry.validate_against(limits)?;
     let source_frame = sample_toy_yuv_frame(input, params, geometry, format)?;
+    if source_frame.format.chroma_sampling == ChromaSampling::Cs444 {
+        return toy_palette_444_annex_b(params, source_frame);
+    }
     let compat_frame = source_frame.decoder_compat_frame();
     toy_4x4_annex_b(params, compat_frame)
 }
@@ -952,6 +947,23 @@ fn toy_4x4_annex_b(
     write_annex_b(&units)
 }
 
+fn toy_palette_444_annex_b(
+    params: Toy4x4EncodeParams,
+    frame: Toy4x4SampledFrame,
+) -> Result<Vec<u8>, String> {
+    debug_assert_eq!(frame.format.chroma_sampling, ChromaSampling::Cs444);
+    let mut units = Vec::with_capacity(params.frames + 3);
+    let geometry = frame.geometry;
+    let color = frame.sampled_color();
+    units.push(toy_palette_444_sps_unit(geometry));
+    units.push(toy_4x4_pps_unit(geometry));
+    units.push(toy_4x4_color_filler_unit(color));
+    for frame_idx in 0..params.frames {
+        units.push(toy_palette_444_slice_unit(frame_idx, geometry, color)?);
+    }
+    write_annex_b(&units)
+}
+
 fn toy_4x4_color_filler_unit(color: Toy4x4SampledColor) -> VvcNalUnit {
     VvcNalUnit {
         nal_unit_type: VvcNalUnitType::FillerData,
@@ -977,11 +989,29 @@ fn encode_toy_coeff_token(negative: bool, magnitude: u8) -> u8 {
 }
 
 fn toy_4x4_sps_unit(geometry: ToyVideoGeometry) -> VvcNalUnit {
+    toy_sps_unit(geometry, ToyCodingTreeConfig::yuv420(), false)
+}
+
+fn toy_palette_444_sps_unit(geometry: ToyVideoGeometry) -> VvcNalUnit {
+    toy_sps_unit(
+        geometry,
+        ToyCodingTreeConfig {
+            chroma_sampling: ChromaSampling::Cs444,
+        },
+        true,
+    )
+}
+
+fn toy_sps_unit(
+    geometry: ToyVideoGeometry,
+    config: ToyCodingTreeConfig,
+    palette_enabled: bool,
+) -> VvcNalUnit {
     VvcNalUnit {
         nal_unit_type: VvcNalUnitType::Sps,
         layer_id: 0,
         temporal_id: 0,
-        rbsp_payload: toy_4x4_sps_payload(geometry),
+        rbsp_payload: toy_sps_payload(geometry, config, palette_enabled),
     }
 }
 
@@ -1016,12 +1046,47 @@ fn toy_4x4_slice_unit(
     })
 }
 
+#[cfg(test)]
 fn toy_4x4_sps_payload(geometry: ToyVideoGeometry) -> Vec<u8> {
+    toy_sps_payload(geometry, ToyCodingTreeConfig::yuv420(), false)
+}
+
+fn toy_palette_444_slice_unit(
+    frame_idx: usize,
+    geometry: ToyVideoGeometry,
+    color: Toy4x4SampledColor,
+) -> Result<VvcNalUnit, String> {
+    let picture_kind = match frame_idx {
+        0 => Toy4x4PictureKind::Idr,
+        1 => Toy4x4PictureKind::Cra,
+        _ => return Err(format!("unsupported toy VVC frame index {frame_idx}")),
+    };
+
+    Ok(VvcNalUnit {
+        nal_unit_type: match picture_kind {
+            Toy4x4PictureKind::Idr => VvcNalUnitType::IdrNLp,
+            Toy4x4PictureKind::Cra => VvcNalUnitType::Cra,
+        },
+        layer_id: 0,
+        temporal_id: 0,
+        rbsp_payload: toy_palette_444_slice_payload(picture_kind, geometry, color),
+    })
+}
+
+fn toy_sps_payload(
+    geometry: ToyVideoGeometry,
+    config: ToyCodingTreeConfig,
+    palette_enabled: bool,
+) -> Vec<u8> {
     let mut writer = VvcSyntaxWriter::new();
     writer.write_u("sps_seq_parameter_set_id", 0, 4);
     writer.write_u("sps_video_parameter_set_id", 0, 4);
     writer.write_u("sps_max_sub_layers_minus1", 0, 3);
-    writer.write_u("sps_chroma_format_idc", 1, 2);
+    writer.write_u(
+        "sps_chroma_format_idc",
+        chroma_format_idc(config.chroma_sampling) as u64,
+        2,
+    );
     writer.write_u("sps_log2_ctu_size_minus5", 1, 2);
     writer.write_flag("sps_ptl_dpb_hrd_params_present_flag", true);
     writer.write_u("general_profile_idc", 1, 7);
@@ -1047,9 +1112,15 @@ fn toy_4x4_sps_payload(geometry: ToyVideoGeometry) -> Vec<u8> {
     );
     writer.write_flag("sps_conformance_window_flag", true);
     writer.write_ue("sps_conf_win_left_offset", 0);
-    writer.write_ue("sps_conf_win_right_offset", geometry.crop_right_420());
+    writer.write_ue(
+        "sps_conf_win_right_offset",
+        geometry.crop_right(config.chroma_sampling),
+    );
     writer.write_ue("sps_conf_win_top_offset", 0);
-    writer.write_ue("sps_conf_win_bottom_offset", geometry.crop_bottom_420());
+    writer.write_ue(
+        "sps_conf_win_bottom_offset",
+        geometry.crop_bottom(config.chroma_sampling),
+    );
     writer.write_flag("sps_subpic_info_present_flag", false);
     writer.write_ue("sps_bitdepth_minus8", 0);
     writer.write_flag("sps_entropy_coding_sync_enabled_flag", false);
@@ -1126,7 +1197,7 @@ fn toy_4x4_sps_payload(geometry: ToyVideoGeometry) -> Vec<u8> {
     writer.write_flag("sps_cclm_enabled_flag", true);
     writer.write_flag("sps_chroma_horizontal_collocated_flag", true);
     writer.write_flag("sps_chroma_vertical_collocated_flag", false);
-    writer.write_flag("sps_palette_enabled_flag", false);
+    writer.write_flag("sps_palette_enabled_flag", palette_enabled);
     writer.write_flag("sps_ibc_enabled_flag", false);
     writer.write_flag("sps_ladf_enabled_flag", false);
     writer.write_flag("sps_explicit_scaling_list_enabled_flag", false);
@@ -1140,6 +1211,15 @@ fn toy_4x4_sps_payload(geometry: ToyVideoGeometry) -> Vec<u8> {
     writer.rbsp_trailing_bits();
     debug_assert!(writer.is_byte_aligned());
     writer.into_bytes()
+}
+
+fn chroma_format_idc(chroma_sampling: ChromaSampling) -> u32 {
+    match chroma_sampling {
+        ChromaSampling::Monochrome => 0,
+        ChromaSampling::Cs420 => 1,
+        ChromaSampling::Cs422 => 2,
+        ChromaSampling::Cs444 => 3,
+    }
 }
 
 fn toy_4x4_pps_payload(geometry: ToyVideoGeometry) -> Vec<u8> {
@@ -1227,6 +1307,70 @@ fn toy_4x4_slice_payload(
     writer.rbsp_trailing_bits();
     debug_assert!(writer.is_byte_aligned());
     writer.into_bytes()
+}
+
+fn toy_palette_444_slice_payload(
+    picture_kind: Toy4x4PictureKind,
+    geometry: ToyVideoGeometry,
+    color: Toy4x4SampledColor,
+) -> Vec<u8> {
+    let mut writer = VvcSyntaxWriter::new();
+    writer.write_flag("sh_picture_header_in_slice_header_flag", true);
+    writer.write_flag("ph_gdr_or_irap_pic_flag", true);
+    writer.write_flag("ph_non_ref_pic_flag", false);
+    writer.write_flag("ph_gdr_pic_flag", false);
+    writer.write_flag("ph_inter_slice_allowed_flag", false);
+    writer.write_ue("ph_pic_parameter_set_id", 0);
+    match picture_kind {
+        Toy4x4PictureKind::Idr => writer.write_u("ph_pic_order_cnt_lsb", 0, 8),
+        Toy4x4PictureKind::Cra => writer.write_u("ph_pic_order_cnt_lsb", 1, 8),
+    }
+    writer.write_flag("ph_partition_constraints_override_flag", false);
+    writer.write_flag("ph_joint_cbcr_sign_flag", false);
+    writer.write_flag("sh_no_output_of_prior_pics_flag", false);
+    writer.write_se("sh_qp_delta", 0);
+    writer.write_flag("sh_dep_quant_used_flag", true);
+    writer.write_flag("cabac_alignment_one_bit", true);
+    if picture_kind == Toy4x4PictureKind::Cra {
+        writer.write_flag("cabac_alignment_one_bit", true);
+    }
+    writer.byte_align_zero("cabac_alignment_zero_bit");
+    write_toy_palette_444_entropy(&mut writer, geometry, color);
+    writer.rbsp_trailing_bits();
+    debug_assert!(writer.is_byte_aligned());
+    writer.into_bytes()
+}
+
+fn write_toy_palette_444_entropy(
+    writer: &mut VvcSyntaxWriter,
+    geometry: ToyVideoGeometry,
+    color: Toy4x4SampledColor,
+) {
+    writer.write_cabac_bits(
+        "cabac_toy_palette_444_single_entry_bits",
+        &toy_palette_444_bits(geometry, color),
+    );
+}
+
+fn toy_palette_444_bits(geometry: ToyVideoGeometry, color: Toy4x4SampledColor) -> Vec<bool> {
+    let mut bits = Vec::new();
+    append_palette_prefixed_u16(&mut bits, geometry.luma_samples() as u16);
+    append_palette_prefixed_u8(&mut bits, color.y);
+    append_palette_prefixed_u8(&mut bits, color.u);
+    append_palette_prefixed_u8(&mut bits, color.v);
+    append_palette_prefixed_u8(&mut bits, 0);
+    bits
+}
+
+fn append_palette_prefixed_u16(bits: &mut Vec<bool>, value: u16) {
+    for shift in [12, 8, 4, 0] {
+        append_fixed_bits(bits, 0x80 | (((value >> shift) & 0x0f) as u64), 8);
+    }
+}
+
+fn append_palette_prefixed_u8(bits: &mut Vec<bool>, value: u8) {
+    append_fixed_bits(bits, 0x80 | ((value >> 4) as u64), 8);
+    append_fixed_bits(bits, 0x80 | ((value & 0x0f) as u64), 8);
 }
 
 fn write_toy_coding_tree_entropy(
@@ -4020,7 +4164,7 @@ mod tests {
     }
 
     #[test]
-    fn toy_4x4_yuv444_input_emits_only_vtm_visible_nals() {
+    fn toy_4x4_yuv444_input_routes_to_palette_path() {
         let input = solid_yuv_planar_high(65, 128, 192, 8, 16, 1);
         let bytes = toy_4x4_yuv_annex_b_from_input(
             &input,
@@ -4028,9 +4172,17 @@ mod tests {
             PixelFormat::Yuv444p8,
         )
         .unwrap();
+        let transform_bytes = toy_4x4_yuv420p8_annex_b_from_input(
+            &solid_yuv420p8(65, 128, 192, 1),
+            Toy4x4EncodeParams { frames: 1 },
+        )
+        .unwrap();
         let infos = parse_annex_b_nal_units(&bytes).unwrap();
         let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
         assert_eq!(types, vec![15, 16, 25, 8]);
+        assert_ne!(bytes, transform_bytes);
+        assert!(bytes.windows(12).any(|window| window
+            == [0x80, 0x80, 0x81, 0x80, 0x84, 0x81, 0x88, 0x80, 0x8c, 0x80, 0x80, 0x80]));
         assert!(!bytes.windows(4).any(|window| window == b"FFPL"));
         assert!(!bytes.windows(4).any(|window| window == b"FFAC"));
     }

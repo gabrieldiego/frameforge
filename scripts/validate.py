@@ -229,7 +229,7 @@ def main() -> int:
     if has_vtm_recon:
         print("OK: software, RTL, and VTM reconstructions match")
     else:
-        print("SKIP: VTM decode is not wired for toy geometries above 32x32 yet")
+        print("SKIP: VTM decode is not wired for this toy path yet")
     if has_vtm_recon and input_has_nonzero_chroma(input_path, info):
         validate_decoded_non_monochrome(vtm_recon, info)
         print("OK: VTM reconstruction contains decoder-visible chroma")
@@ -316,6 +316,8 @@ def validate_supported_input(input_path: Path, info: InputInfo, max_width: int, 
 
 
 def vtm_decode_supported(input_path: Path, info: InputInfo) -> bool:
+    if format_chroma_sampling(info.fmt) == "444":
+        return False
     # The clean-room slice entropy body is currently mapped to VTM's
     # coding-tree syntax for the generic 8x8 path plus generated 16x16
     # and 32x32 paths. 64x64 is still generated internally by SW/RTL, but
@@ -353,6 +355,8 @@ def sha256(path: Path) -> str:
 
 
 def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes:
+    if format_chroma_sampling(info.fmt) == "444":
+        return palette_444_single_entry_reconstruction(input_path, info)
     if is_toy_16x16_generated_path(info):
         return cropped_toy_16x16_generated_recon(info) * info.frames
     if is_toy_32x32_generated_path(info):
@@ -382,6 +386,15 @@ def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes
     # original input. Keep this matched to VTM decode output after quantization.
     frame = bytes([y] * luma_len + [chroma] * chroma_len + [chroma] * chroma_len)
     return frame * info.frames
+
+
+def palette_444_single_entry_reconstruction(input_path: Path, info: InputInfo) -> bytes:
+    frame = input_path.read_bytes()[: frame_len(info)]
+    luma_len = info.width * info.height
+    y = read_normalized_sample(frame, 0, info)
+    u = read_normalized_sample(frame, luma_len, info)
+    v = read_normalized_sample(frame, luma_len * 2, info)
+    return bytes([y] * luma_len + [u] * luma_len + [v] * luma_len) * info.frames
 
 
 def uses_capacity_tu_grid(frame: bytes, info: InputInfo) -> bool:
