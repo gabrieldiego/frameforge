@@ -45,7 +45,8 @@ module ff_vvc_toy_cabac_body #(
       supports_generated_body =
         ((width == 16'd8) && (height == 16'd8)) ||
         ((width == 16'd16) && (height == 16'd16)) ||
-        ((width == 16'd32) && (height == 16'd32));
+        ((width == 16'd32) && (height == 16'd32)) ||
+        ((width == 16'd64) && (height == 16'd64));
     end
   endfunction
 
@@ -62,6 +63,8 @@ module ff_vvc_toy_cabac_body #(
         encode_generated_body = encode_16x16_body(rem, c_rem);
       end else if ((width == 16'd32) && (height == 16'd32)) begin
         encode_generated_body = encode_32x32_body(rem, c_rem);
+      end else if ((width == 16'd64) && (height == 16'd64)) begin
+        encode_generated_body = encode_64x64_body(rem, c_rem);
       end else begin
         encode_generated_body = '0;
       end
@@ -118,6 +121,45 @@ module ff_vvc_toy_cabac_body #(
         st[CABAC_LEN_LSB +: 13],
         st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
       };
+    end
+  endfunction
+
+  function automatic logic [12 + MAX_SLICE_PAYLOAD_BITS:0] encode_64x64_body(
+    input logic [4:0] rem,
+    input logic [4:0] c_rem
+  );
+    cabac_state_t st;
+    begin
+      st = cabac_start();
+      st = encode_64x64_partition_tree(st, rem, c_rem);
+      st = cabac_encode_bin_trm(st, 1'b1);
+      st = cabac_finish(st);
+      encode_64x64_body = {
+        st[CABAC_LEN_LSB +: 13],
+        st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
+      };
+    end
+  endfunction
+
+  function automatic cabac_state_t encode_64x64_partition_tree(
+    input cabac_state_t st_in,
+    input logic [4:0]   rem,
+    input logic [4:0]   c_rem
+  );
+    cabac_state_t st;
+    begin
+      st = st_in;
+      // TODO(vvc): Replace this provisional root split context with named
+      // context derivation from the coding-tree state. The leaves reuse the
+      // existing 32x32 generated leaf encoder until the 32x32 body itself is
+      // replaced with generated syntax.
+      st = encode_compact_cabac_word(st, 16'h035a);
+      st = encode_32x32_luma_tree(st, rem);
+      st = encode_32x32_luma_tree(st, rem);
+      st = encode_32x32_luma_tree(st, rem);
+      st = encode_32x32_luma_tree(st, rem);
+      st = encode_32x32_chroma_tree(st, c_rem);
+      encode_64x64_partition_tree = st;
     end
   endfunction
 

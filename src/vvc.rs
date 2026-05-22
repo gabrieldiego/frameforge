@@ -1549,10 +1549,7 @@ fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Ve
         } => {
             let params =
                 toy_64x64_partition_params(geometry, color).expect("64x64 partition parameters");
-            debug_assert_eq!(params.luma_leaf_count, 4);
-            // TODO(vvc): Replace this TU-grid payload with a compliant
-            // coding-tree entropy body driven by the partition plan above.
-            return toy_capacity_tu_grid_bits(color);
+            return toy_64x64_partition_cabac_bits(params);
         }
         _ => {
             return toy_capacity_tu_grid_bits(color);
@@ -1681,6 +1678,30 @@ fn toy_32x32_generated_cabac_bits(params: Toy32x32GeneratedParams) -> Vec<bool> 
     encode_32x32_chroma_body(&mut cabac);
     cabac.encode_bin_trm(true);
     cabac.finish()
+}
+
+fn toy_64x64_partition_cabac_bits(params: Toy64x64PartitionParams) -> Vec<bool> {
+    debug_assert_eq!(params.root_width, 64);
+    debug_assert_eq!(params.root_height, 64);
+    debug_assert_eq!(params.luma_leaf_count, 4);
+
+    let mut cabac = ToyCabacEncoder::new();
+    cabac.start();
+    encode_64x64_partition_body(&mut cabac);
+    cabac.encode_bin_trm(true);
+    cabac.finish()
+}
+
+fn encode_64x64_partition_body(cabac: &mut ToyCabacEncoder) {
+    // TODO(vvc): Replace these provisional root split contexts with named
+    // context derivation from the coding-tree state. The four leaves below
+    // deliberately reuse the existing 32x32 generated leaf encoder so the
+    // 64x64 path is structurally generated before it is VTM-compliant.
+    encode_compact_cabac_word(cabac, 0x035a);
+    for _ in 0..4 {
+        encode_32x32_luma_body(cabac);
+    }
+    encode_32x32_chroma_body(cabac);
 }
 
 fn encode_32x32_luma_body(cabac: &mut ToyCabacEncoder) {

@@ -29,7 +29,7 @@ module ff_vvc_toy_coding_tree_scheduler (
 
     body_kind = BODY_GENERATED;
 
-    uses_capacity_tu_grid = uses_generated_tu_grid(coded_width, coded_height);
+    uses_capacity_tu_grid = !supports_generated_body(coded_width, coded_height);
     luma_tu_count = ((visible_width + 16'd3) >> 2) * ((visible_height + 16'd3) >> 2);
     capacity_tu_grid_bit_len = 13'd16 + (luma_tu_count * 13'd13);
   end
@@ -61,12 +61,4 @@ module ff_vvc_toy_coding_tree_scheduler (
     end
   endfunction
 
-  function automatic logic uses_generated_tu_grid(
-    input logic [15:0] width,
-    input logic [15:0] height
-  );
-    begin
-      uses_generated_tu_grid = (width == 16'd64) && (height == 16'd64);
-    end
-  endfunction
 endmodule

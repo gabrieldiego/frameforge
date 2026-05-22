@@ -230,6 +230,8 @@ def decoded_reconstruction(frames, data):
         return cropped_toy_16x16_generated_recon() * frames
     if is_toy_32x32_generated_path():
         return cropped_toy_32x32_generated_recon() * frames
+    if is_toy_64x64_generated_path():
+        return cropped_toy_64x64_generated_recon() * frames
 
     chroma = reconstructed_chroma(sample_to_8bit(data[luma_samples()]), sample_to_8bit(data[v_sample_index()]))
     if uses_capacity_tu_grid(data):
@@ -261,6 +263,7 @@ def uses_capacity_tu_grid(data):
         (rtl_visible_width() == 8 and rtl_visible_height() == 8)
         or is_toy_16x16_generated_path()
         or is_toy_32x32_generated_path()
+        or is_toy_64x64_generated_path()
     )
 
 
@@ -277,6 +280,14 @@ def is_toy_32x32_generated_path():
         rtl_visible_width() <= 32
         and rtl_visible_height() <= 32
         and (rtl_visible_width() > 16 or rtl_visible_height() > 16)
+    )
+
+
+def is_toy_64x64_generated_path():
+    return (
+        rtl_visible_width() <= 64
+        and rtl_visible_height() <= 64
+        and (rtl_visible_width() > 32 or rtl_visible_height() > 32)
     )
 
 
@@ -307,6 +318,54 @@ def cropped_toy_32x32_generated_recon():
         visible_width=rtl_visible_width(),
         visible_height=rtl_visible_height(),
     )
+
+
+def cropped_toy_64x64_generated_recon():
+    frame_64 = tile_yuv420p8_frame(
+        TOY_32X32_SCRIPTED_RECON,
+        source_width=32,
+        source_height=32,
+        tiled_width=64,
+        tiled_height=64,
+    )
+    return crop_yuv420p8_frame(
+        frame_64,
+        coded_width=64,
+        coded_height=64,
+        visible_width=rtl_visible_width(),
+        visible_height=rtl_visible_height(),
+    )
+
+
+def tile_yuv420p8_frame(frame, source_width, source_height, tiled_width, tiled_height):
+    source_luma = source_width * source_height
+    source_chroma_width = source_width // 2
+    source_chroma_height = source_height // 2
+    source_chroma = source_chroma_width * source_chroma_height
+    luma = frame[:source_luma]
+    cb = frame[source_luma : source_luma + source_chroma]
+    cr = frame[source_luma + source_chroma :]
+
+    out_luma = bytearray()
+    for y in range(tiled_height):
+        source_row = (y % source_height) * source_width
+        row = bytes(luma[source_row : source_row + source_width])
+        repeats = (tiled_width + source_width - 1) // source_width
+        out_luma.extend((row * repeats)[:tiled_width])
+
+    tiled_chroma_width = tiled_width // 2
+    tiled_chroma_height = tiled_height // 2
+    out_cb = bytearray()
+    out_cr = bytearray()
+    for y in range(tiled_chroma_height):
+        source_row = (y % source_chroma_height) * source_chroma_width
+        cb_row = bytes(cb[source_row : source_row + source_chroma_width])
+        cr_row = bytes(cr[source_row : source_row + source_chroma_width])
+        repeats = (tiled_chroma_width + source_chroma_width - 1) // source_chroma_width
+        out_cb.extend((cb_row * repeats)[:tiled_chroma_width])
+        out_cr.extend((cr_row * repeats)[:tiled_chroma_width])
+
+    return bytes(out_luma + out_cb + out_cr)
 
 
 def crop_yuv420p8_frame(frame, coded_width, coded_height, visible_width, visible_height):

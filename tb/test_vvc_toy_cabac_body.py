@@ -57,3 +57,17 @@ async def cabac_body_generates_32x32_block_payload(dut):
     assert payload.hex() == (
         "00020410208104082041020810408204102081040820410208104082041020810408204102081040820410208104082041023e"
     )
+
+
+@cocotb.test()
+async def cabac_body_generates_64x64_partition_payload(dut):
+    dut.body_kind.value = BODY_GENERATED
+    dut.coded_width.value = 64
+    dut.coded_height.value = 64
+    dut.luma_rem.value = 16
+    dut.chroma_rem.value = 6
+    await Timer(1, unit="ns")
+
+    assert int(dut.supported.value) == 1
+    assert int(dut.cabac_bit_len.value) > 403
+    assert cabac_bytes(dut) != b""

@@ -357,6 +357,8 @@ def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes
         return cropped_toy_16x16_generated_recon(info) * info.frames
     if is_toy_32x32_generated_path(info):
         return cropped_toy_32x32_generated_recon(info) * info.frames
+    if is_toy_64x64_generated_path(info):
+        return cropped_toy_64x64_generated_recon(info) * info.frames
     frame = normalized_first_frame_to_yuv420p8(input_path, info)
     luma_len = info.width * info.height
     chroma_len = luma_len // 4
@@ -387,6 +389,7 @@ def uses_capacity_tu_grid(frame: bytes, info: InputInfo) -> bool:
         (info.width, info.height) == (8, 8)
         or is_toy_16x16_generated_path(info)
         or is_toy_32x32_generated_path(info)
+        or is_toy_64x64_generated_path(info)
     )
 
 
@@ -422,6 +425,59 @@ def cropped_toy_32x32_generated_recon(info: InputInfo) -> bytes:
         visible_width=info.width,
         visible_height=info.height,
     )
+
+
+def cropped_toy_64x64_generated_recon(info: InputInfo) -> bytes:
+    frame_64 = tile_yuv420p8_frame(
+        TOY_32X32_SCRIPTED_RECON,
+        source_width=32,
+        source_height=32,
+        tiled_width=64,
+        tiled_height=64,
+    )
+    return crop_yuv420p8_frame(
+        frame_64,
+        coded_width=64,
+        coded_height=64,
+        visible_width=info.width,
+        visible_height=info.height,
+    )
+
+
+def tile_yuv420p8_frame(
+    frame: bytes,
+    source_width: int,
+    source_height: int,
+    tiled_width: int,
+    tiled_height: int,
+) -> bytes:
+    source_luma = source_width * source_height
+    source_chroma_width = source_width // 2
+    source_chroma_height = source_height // 2
+    source_chroma = source_chroma_width * source_chroma_height
+    luma = frame[:source_luma]
+    cb = frame[source_luma : source_luma + source_chroma]
+    cr = frame[source_luma + source_chroma :]
+
+    out_luma = bytearray()
+    for y in range(tiled_height):
+        source_row = (y % source_height) * source_width
+        row = bytes(luma[source_row : source_row + source_width])
+        out_luma.extend((row * ((tiled_width + source_width - 1) // source_width))[:tiled_width])
+
+    tiled_chroma_width = tiled_width // 2
+    tiled_chroma_height = tiled_height // 2
+    out_cb = bytearray()
+    out_cr = bytearray()
+    for y in range(tiled_chroma_height):
+        source_row = (y % source_chroma_height) * source_chroma_width
+        cb_row = bytes(cb[source_row : source_row + source_chroma_width])
+        cr_row = bytes(cr[source_row : source_row + source_chroma_width])
+        repeats = (tiled_chroma_width + source_chroma_width - 1) // source_chroma_width
+        out_cb.extend((cb_row * repeats)[:tiled_chroma_width])
+        out_cr.extend((cr_row * repeats)[:tiled_chroma_width])
+
+    return bytes(out_luma + out_cb + out_cr)
 
 
 def crop_yuv420p8_frame(
@@ -525,10 +581,19 @@ def is_toy_32x32_generated_path(info: InputInfo) -> bool:
     )
 
 
+def is_toy_64x64_generated_path(info: InputInfo) -> bool:
+    return (
+        info.width <= 64
+        and info.height <= 64
+        and (info.width > 32 or info.height > 32)
+    )
+
+
 def expects_zero_reconstruction(input_path: Path, info: InputInfo) -> bool:
     return input_is_all_zero(input_path) and not (
         is_toy_16x16_generated_path(info)
         or is_toy_32x32_generated_path(info)
+        or is_toy_64x64_generated_path(info)
     )
 
 
