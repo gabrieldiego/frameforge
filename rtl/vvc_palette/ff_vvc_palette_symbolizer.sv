@@ -43,7 +43,10 @@ module ff_vvc_palette_symbolizer #(
   logic [SAMPLE_BITS - 1:0] input_sample;
   logic [7:0]  anchor_index;
   logic [7:0]  last_symbol_index;
-  logic        emit_symbol;
+  logic        start_drain;
+  logic        drain_active_q;
+  logic [7:0]  drain_index_q;
+  logic [7:0]  drain_symbol_index;
 
   assign symbol_count =
     enable ? (((visible_width + 16'd7) >> 3) * ((visible_height + 16'd7) >> 3)) : 8'd0;
@@ -53,8 +56,9 @@ module ff_vvc_palette_symbolizer #(
   assign input_sample = sample_valid ? sample : s_axis_sample;
   assign anchor_index = symbol_index_xy(sample_x, sample_y);
   assign last_symbol_index = symbol_count == 8'd0 ? 8'd0 : symbol_count - 8'd1;
-  assign emit_symbol = input_valid && is_symbol_anchor_xy(sample_x, sample_y) &&
-                       (input_plane == PLANE_CR) && (!m_axis_valid || m_axis_ready);
+  assign start_drain = input_valid && is_symbol_anchor_xy(sample_x, sample_y) &&
+                       (input_plane == PLANE_CR) && (anchor_index == last_symbol_index);
+  assign drain_symbol_index = coding_order_symbol_index(drain_index_q);
 
   always_comb begin
     if (sample_plane != tracked_plane_q) begin
@@ -74,6 +78,8 @@ module ff_vvc_palette_symbolizer #(
       m_axis_valid <= 1'b0;
       m_axis_data <= 32'd0;
       m_axis_last <= 1'b0;
+      drain_active_q <= 1'b0;
+      drain_index_q <= 8'd0;
       for (int i = 0; i < MAX_PALETTE_SYMBOLS; i = i + 1) begin
         symbol_y[i] <= 8'd0;
         symbol_cb[i] <= 8'd0;
@@ -86,6 +92,8 @@ module ff_vvc_palette_symbolizer #(
       m_axis_valid <= 1'b0;
       m_axis_data <= 32'd0;
       m_axis_last <= 1'b0;
+      drain_active_q <= 1'b0;
+      drain_index_q <= 8'd0;
       for (int i = 0; i < MAX_PALETTE_SYMBOLS; i = i + 1) begin
         symbol_y[i] <= 8'd0;
         symbol_cb[i] <= 8'd0;
@@ -97,40 +105,50 @@ module ff_vvc_palette_symbolizer #(
         m_axis_data <= 32'd0;
         m_axis_last <= 1'b0;
       end
-      if (input_valid) begin
-      if (is_symbol_anchor_xy(sample_x, sample_y)) begin
-        case (input_plane)
-          PLANE_Y: begin
-            symbol_y[anchor_index] <= sample_to_8bit(input_sample);
-          end
-          PLANE_CB: begin
-            symbol_cb[anchor_index] <= sample_to_8bit(input_sample);
-          end
-          PLANE_CR: begin
-            symbol_cr[anchor_index] <= sample_to_8bit(input_sample);
-          end
-          default: begin
-          end
-        endcase
-      end
-        if (emit_symbol) begin
-          m_axis_valid <= 1'b1;
-          m_axis_data <= {
-            8'd0,
-            symbol_y[anchor_index],
-            symbol_cb[anchor_index],
-            sample_to_8bit(input_sample)
-          };
-          m_axis_last <= anchor_index == last_symbol_index;
+      if (drain_active_q && (!m_axis_valid || m_axis_ready)) begin
+        m_axis_valid <= 1'b1;
+        m_axis_data <= {
+          8'd0,
+          symbol_y[drain_symbol_index],
+          symbol_cb[drain_symbol_index],
+          symbol_cr[drain_symbol_index]
+        };
+        m_axis_last <= drain_index_q == last_symbol_index;
+        if (drain_index_q == last_symbol_index) begin
+          drain_active_q <= 1'b0;
+          drain_index_q <= 8'd0;
+        end else begin
+          drain_index_q <= drain_index_q + 8'd1;
         end
-      tracked_plane_q <= input_plane;
-      if (sample_x + 16'd1 >= visible_width) begin
-        tracked_x_q <= 16'd0;
-        tracked_y_q <= sample_y + 16'd1;
-      end else begin
-        tracked_x_q <= sample_x + 16'd1;
-        tracked_y_q <= sample_y;
       end
+      if (input_valid) begin
+        if (is_symbol_anchor_xy(sample_x, sample_y)) begin
+          case (input_plane)
+            PLANE_Y: begin
+              symbol_y[anchor_index] <= sample_to_8bit(input_sample);
+            end
+            PLANE_CB: begin
+              symbol_cb[anchor_index] <= sample_to_8bit(input_sample);
+            end
+            PLANE_CR: begin
+              symbol_cr[anchor_index] <= sample_to_8bit(input_sample);
+            end
+            default: begin
+            end
+          endcase
+        end
+        if (start_drain) begin
+          drain_active_q <= 1'b1;
+          drain_index_q <= 8'd0;
+        end
+        tracked_plane_q <= input_plane;
+        if (sample_x + 16'd1 >= visible_width) begin
+          tracked_x_q <= 16'd0;
+          tracked_y_q <= sample_y + 16'd1;
+        end else begin
+          tracked_x_q <= sample_x + 16'd1;
+          tracked_y_q <= sample_y;
+        end
       end
     end
   end
@@ -154,6 +172,50 @@ module ff_vvc_palette_symbolizer #(
       tiles_x = (visible_width + 16'd7) >> 3;
       index = (y >> 3) * tiles_x + (x >> 3);
       symbol_index_xy = index[7:0];
+    end
+  endfunction
+
+  function automatic logic [31:0] coding_order_position(input logic [7:0] index);
+    logic [15:0] origin_x;
+    logic [15:0] origin_y;
+    logic [7:0]  index_in_32;
+    logic [7:0]  index_in_16;
+    begin
+      origin_x = 16'd0;
+      origin_y = 16'd0;
+      if (visible_width == 16'd64 && visible_height == 16'd64) begin
+        origin_x = index[4] ? 16'd32 : 16'd0;
+        origin_y = index[5] ? 16'd32 : 16'd0;
+        index_in_32 = {4'd0, index[3:0]};
+      end else begin
+        index_in_32 = index;
+      end
+
+      if (visible_width >= 16'd32 && visible_height >= 16'd32) begin
+        origin_x = origin_x + (index_in_32[2] ? 16'd16 : 16'd0);
+        origin_y = origin_y + (index_in_32[3] ? 16'd16 : 16'd0);
+        index_in_16 = {6'd0, index_in_32[1:0]};
+      end else begin
+        index_in_16 = index_in_32;
+      end
+
+      if (visible_width >= 16'd16 && visible_height >= 16'd16) begin
+        origin_x = origin_x + (index_in_16[0] ? 16'd8 : 16'd0);
+        origin_y = origin_y + (index_in_16[1] ? 16'd8 : 16'd0);
+      end else begin
+        origin_x = (index_in_16[2:0] << 3);
+        origin_y = (index_in_16[5:3] << 3);
+      end
+
+      coding_order_position = {origin_x, origin_y};
+    end
+  endfunction
+
+  function automatic logic [7:0] coding_order_symbol_index(input logic [7:0] index);
+    logic [31:0] pos;
+    begin
+      pos = coding_order_position(index);
+      coding_order_symbol_index = symbol_index_xy(pos[31:16], pos[15:0]);
     end
   endfunction
 

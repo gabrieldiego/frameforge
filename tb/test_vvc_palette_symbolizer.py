@@ -44,6 +44,7 @@ async def palette_symbolizer_streams_anchor_symbol(dut):
     await send_plane(dut, 0, 10)
     await send_plane(dut, 1, 20)
     await send_plane(dut, 2, 30, last=True)
+    await RisingEdge(dut.clk)
     await ReadOnly()
 
     assert int(dut.symbol_count.value) == 1

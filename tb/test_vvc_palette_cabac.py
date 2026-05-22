@@ -29,8 +29,7 @@ def pack_palette_symbols(y, cb, cr, width=64, height=64, max_symbols=64):
     count = tiles_x * tiles_y
     for index in range(max_symbols):
         if index < count:
-            tile_x = index % tiles_x
-            tile_y = index // tiles_x
+            tile_x, tile_y = coding_order_tile(index, width, height)
             sample_x = min(tile_x * 8, width - 1)
             sample_y = min(tile_y * 8, height - 1)
             sample_index = sample_y * width + sample_x
@@ -39,6 +38,28 @@ def pack_palette_symbols(y, cb, cr, width=64, height=64, max_symbols=64):
             symbol = 0
         symbols.append(symbol)
     return count, symbols
+
+
+def coding_order_tile(index, width, height):
+    origin_x = 0
+    origin_y = 0
+    index_in_32 = index
+    if width == 64 and height == 64:
+        origin_x += 32 if index & 0x10 else 0
+        origin_y += 32 if index & 0x20 else 0
+        index_in_32 = index & 0x0F
+    index_in_16 = index_in_32
+    if width >= 32 and height >= 32:
+        origin_x += 16 if index_in_32 & 0x04 else 0
+        origin_y += 16 if index_in_32 & 0x08 else 0
+        index_in_16 = index_in_32 & 0x03
+    if width >= 16 and height >= 16:
+        origin_x += 8 if index_in_16 & 0x01 else 0
+        origin_y += 8 if index_in_16 & 0x02 else 0
+    else:
+        origin_x += (index_in_16 & 0x07) * 8
+        origin_y += ((index_in_16 >> 3) & 0x07) * 8
+    return origin_x // 8, origin_y // 8
 
 
 def cabac_bytes(dut):
@@ -128,6 +149,8 @@ def ensure_reference_dump():
 async def palette_cabac_matches_software_boundary_dump(dut):
     if hasattr(dut, "clk"):
         cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
+        dut.rst_n.value = 1
+        await Timer(1, unit="ns")
         dut.rst_n.value = 0
         dut.enable.value = 1
         if hasattr(dut, "start"):
@@ -167,6 +190,7 @@ async def palette_cabac_matches_software_boundary_dump(dut):
     dut.coded_width.value = reference["width"]
     dut.coded_height.value = reference["height"]
     dut.symbol_count.value = symbol_count
+    await Timer(1, unit="ns")
     await feed_palette_symbols(dut, symbols, symbol_count)
     await Timer(1, unit="ns")
 
