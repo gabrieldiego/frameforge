@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -106,7 +107,21 @@ def main() -> int:
 
     completed = subprocess.run(cmd, check=False)
     if completed.returncode != 0:
-        return completed.returncode
+        if completed.returncode < 0:
+            signum = -completed.returncode
+            try:
+                signame = signal.Signals(signum).name
+            except ValueError:
+                signame = f"SIG{signum}"
+            print(
+                f"VTM encoder terminated by {signame}; "
+                "try setting FRAMEFORGE_VTM_ENCODER to another build if this persists.",
+                file=sys.stderr,
+            )
+            return 128 + signum
+        else:
+            print(f"VTM encoder exited with status {completed.returncode}", file=sys.stderr)
+            return completed.returncode
 
     print(f"wrote VVC bitstream: {output_path}")
     print(f"wrote reconstructed YUV: {recon_path}")

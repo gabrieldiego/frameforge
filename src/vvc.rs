@@ -569,6 +569,14 @@ struct Toy32x32GeneratedParams {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Toy64x64PartitionParams {
+    root_width: usize,
+    root_height: usize,
+    luma_leaf_count: usize,
+    chroma_tu_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToyCodingTreeStep {
     LumaTransformUnit {
         width: usize,
@@ -579,6 +587,22 @@ enum ToyCodingTreeStep {
         y: usize,
         cb_coded: bool,
         cr_coded: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToyLumaPartitionStep {
+    QuadSplit {
+        x: usize,
+        y: usize,
+        width: usize,
+        height: usize,
+    },
+    Leaf {
+        x: usize,
+        y: usize,
+        width: usize,
+        height: usize,
     },
 }
 
@@ -1290,6 +1314,62 @@ fn toy_coding_tree_plan_with_config(
     steps
 }
 
+fn toy_luma_partition_plan(geometry: ToyVideoGeometry) -> Vec<ToyLumaPartitionStep> {
+    let coded = geometry.coded();
+    let mut steps = Vec::new();
+    append_toy_luma_partition(
+        &mut steps,
+        0,
+        0,
+        coded.width,
+        coded.height,
+        ToyCodedGeometry {
+            width: 32,
+            height: 32,
+        },
+    );
+    steps
+}
+
+fn append_toy_luma_partition(
+    steps: &mut Vec<ToyLumaPartitionStep>,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    max_leaf: ToyCodedGeometry,
+) {
+    if width > max_leaf.width || height > max_leaf.height {
+        steps.push(ToyLumaPartitionStep::QuadSplit {
+            x,
+            y,
+            width,
+            height,
+        });
+        let child_width = width / 2;
+        let child_height = height / 2;
+        for child_y in [y, y + child_height] {
+            for child_x in [x, x + child_width] {
+                append_toy_luma_partition(
+                    steps,
+                    child_x,
+                    child_y,
+                    child_width,
+                    child_height,
+                    max_leaf,
+                );
+            }
+        }
+    } else {
+        steps.push(ToyLumaPartitionStep::Leaf {
+            x,
+            y,
+            width,
+            height,
+        });
+    }
+}
+
 fn toy_8x8_mapped_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<ToyEntropyToken> {
     let mut tokens = Vec::new();
     append_toy_8x8_luma_tree_tokens(&mut tokens, color);
@@ -1463,6 +1543,17 @@ fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Ve
                 toy_32x32_generated_params(geometry, color).expect("32x32 generated parameters"),
             );
         }
+        ToyCodedGeometry {
+            width: 64,
+            height: 64,
+        } => {
+            let params =
+                toy_64x64_partition_params(geometry, color).expect("64x64 partition parameters");
+            debug_assert_eq!(params.luma_leaf_count, 4);
+            // TODO(vvc): Replace this TU-grid payload with a compliant
+            // coding-tree entropy body driven by the partition plan above.
+            return toy_capacity_tu_grid_bits(color);
+        }
         _ => {
             return toy_capacity_tu_grid_bits(color);
         }
@@ -1532,6 +1623,31 @@ fn toy_32x32_generated_params(
         });
     }
     None
+}
+
+fn toy_64x64_partition_params(
+    geometry: ToyVideoGeometry,
+    _color: Toy4x4QuantizedColor,
+) -> Option<Toy64x64PartitionParams> {
+    let coded = geometry.coded();
+    if coded.width != 64 || coded.height != 64 {
+        return None;
+    }
+
+    let luma_leaf_count = toy_luma_partition_plan(geometry)
+        .iter()
+        .filter(|step| matches!(step, ToyLumaPartitionStep::Leaf { .. }))
+        .count();
+    let chroma_tu_count = toy_coding_tree_plan(geometry)
+        .iter()
+        .filter(|step| matches!(step, ToyCodingTreeStep::ChromaTransformUnit { .. }))
+        .count();
+    Some(Toy64x64PartitionParams {
+        root_width: coded.width,
+        root_height: coded.height,
+        luma_leaf_count,
+        chroma_tu_count,
+    })
 }
 
 fn first_luma_transform_unit(plan: &[ToyCodingTreeStep]) -> Option<(usize, usize)> {
@@ -3557,6 +3673,91 @@ mod tests {
             Some(params)
         );
         assert!(!toy_32x32_generated_cabac_bits(params).is_empty());
+    }
+
+    #[test]
+    fn toy_64x64_partition_params_are_geometry_derived() {
+        let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
+        assert_eq!(
+            toy_64x64_partition_params(
+                ToyVideoGeometry {
+                    width: 64,
+                    height: 64
+                },
+                black
+            ),
+            Some(Toy64x64PartitionParams {
+                root_width: 64,
+                root_height: 64,
+                luma_leaf_count: 4,
+                chroma_tu_count: 64
+            })
+        );
+        assert_eq!(
+            toy_64x64_partition_params(
+                ToyVideoGeometry {
+                    width: 32,
+                    height: 32
+                },
+                black
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn toy_luma_partition_plan_splits_64x64_into_32x32_leaves() {
+        let plan = toy_luma_partition_plan(ToyVideoGeometry {
+            width: 64,
+            height: 64,
+        });
+        assert_eq!(
+            plan,
+            vec![
+                ToyLumaPartitionStep::QuadSplit {
+                    x: 0,
+                    y: 0,
+                    width: 64,
+                    height: 64
+                },
+                ToyLumaPartitionStep::Leaf {
+                    x: 0,
+                    y: 0,
+                    width: 32,
+                    height: 32
+                },
+                ToyLumaPartitionStep::Leaf {
+                    x: 32,
+                    y: 0,
+                    width: 32,
+                    height: 32
+                },
+                ToyLumaPartitionStep::Leaf {
+                    x: 0,
+                    y: 32,
+                    width: 32,
+                    height: 32
+                },
+                ToyLumaPartitionStep::Leaf {
+                    x: 32,
+                    y: 32,
+                    width: 32,
+                    height: 32
+                },
+            ]
+        );
+        assert_eq!(
+            toy_luma_partition_plan(ToyVideoGeometry {
+                width: 32,
+                height: 16
+            }),
+            vec![ToyLumaPartitionStep::Leaf {
+                x: 0,
+                y: 0,
+                width: 32,
+                height: 32
+            }]
+        );
     }
 
     #[test]

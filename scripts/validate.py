@@ -317,10 +317,9 @@ def validate_supported_input(input_path: Path, info: InputInfo, max_width: int, 
 
 def vtm_decode_supported(input_path: Path, info: InputInfo) -> bool:
     # The clean-room slice entropy body is currently mapped to VTM's
-    # coding-tree syntax for the generic 8x8 path and the generated
-    # 16x16/32x32 paths. 64x64 streams are still drained by both software
-    # and RTL through the generated TU-grid body, but external decode is
-    # enabled only once that path emits compliant VVC coding-tree entropy.
+    # coding-tree syntax for the generic 8x8 path plus generated 16x16
+    # and 32x32 paths. 64x64 is still generated internally by SW/RTL, but
+    # its coding-tree syntax is not yet VTM-decodable.
     if coded_dimension(info.width) == 8 and coded_dimension(info.height) == 8:
         return True
     return is_toy_16x16_generated_path(info) or is_toy_32x32_generated_path(info)
@@ -358,7 +357,6 @@ def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes
         return cropped_toy_16x16_generated_recon(info) * info.frames
     if is_toy_32x32_generated_path(info):
         return cropped_toy_32x32_generated_recon(info) * info.frames
-
     frame = normalized_first_frame_to_yuv420p8(input_path, info)
     luma_len = info.width * info.height
     chroma_len = luma_len // 4
@@ -529,7 +527,8 @@ def is_toy_32x32_generated_path(info: InputInfo) -> bool:
 
 def expects_zero_reconstruction(input_path: Path, info: InputInfo) -> bool:
     return input_is_all_zero(input_path) and not (
-        is_toy_16x16_generated_path(info) or is_toy_32x32_generated_path(info)
+        is_toy_16x16_generated_path(info)
+        or is_toy_32x32_generated_path(info)
     )
 
 
