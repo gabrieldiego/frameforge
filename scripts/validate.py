@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import os
 import re
 import subprocess
 import sys
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,6 +39,12 @@ TOY_16X16_BLACK_TRACE_RECON = bytes(
     ]
     + [128] * 64
     + [119] * 64
+)
+TOY_32X32_BLACK_TRACE_RECON_ZLIB_B64 = (
+    "eNo1lOlz2gYWwP+wnZ1JN20d3wZs8AlufNvggI0xp4QAXUhCAt23QAgf2DXEjl2TJj5qp023s5N2nWzafOp/UmU6+768efN7b945b97zxT8e9Q/1PXrU75vbyOsX9zdne067c9K5ePP+0+//nRv71z+/eDLU/1XfSGA+DEqd73udlsufn17e//bx48OU58njx32DwyPeqdByFGSbJ5120z44OT1/efvzrw8Pk+Njg31f948FQktrm4kCozb3Wo2663B2cfnq7pd3M7Mz/uG+J57gWjSeBFFGNGynrqlmq3102D69fvvN0uqCf7Df9zSWBiCEYHjNbtVllpUNXRLrz1+HY4mtxYmxyZXdAoITFMPrzp7Fl1GiQsAw0+juZCBwe3EmuJHBqApFVjjdaRkMnIcgIJVGxCZQIqlSYn01CpAsx3zmdl3AgVRyNx6LA6SIkJzEoqlYPE9LMsdURd2UyPzudiy6GdlKlwhOMhqWgGbTxZpmKoKg6EolH4+sry4vr0a2U1nb2T9wNLoEYZxuabKi6wKeiizOB+dCT1fDz2LnZ92jls6RRIWXVVlSjM98LRgYH/dPzy8sLf/0Q++kqQocx3O1Wo2TdF2icuvTo4NDo17/1Gzw4T833YYsKppcLWNEVdJNtQZtBNx9DQyPeiam/nh4c2bLsmGpNFwqs6ppajVo3ff1476BgYEhT+DTh7cXLU2rNzQaRijJsAy5klsa/fLL/qGBJwNj/k8ffu4dWmajabAEybrlyTU0MT/yVd/w6FC/y39/eNtr182G01B5lhNEoUZCW/OewWGvb2x42Bt4/+7+fN/UzGbL1gSGIimqXIgvTfrGA5N+t8epX3581bFlQbZaLYvHi0V3S2h2c2Fudi4UCgWDodcvXxzqNYqWGo7JIkAepWuVUjKyvLi4sraxsb7WPmo3pTJUICVLZzGoWK5y1XJ+NxqOxBLpTDqlmM06V0wkIEbRBBrHiQpDE3BuN76TAmG8TBCsrlXS4XAS41VFqFIYgpUJrAhkcgWM5hU9Twg8HFtY2irVZE3lqRKYRwgCLRRKeIVT7YNEHkeTyzOhCEgJiiqQUBZEqQqB4WSVk8yDzrOdTHJjzj+zlkIYUeYIyD24WpUiKqwoytbhc7eL1ZDfN7kQBQhOZIlSiWB5lqY5Rde0xvGL+VBw2u/zTsys7KKsxJEIRgsCW2WVesOyWt3edMDn9Xi93olQDOYVnkRxxuWs6M7TttsXNwHfyMiYz+fxTG/CoiZQLuc5llPs/X3H+fb7N+UyjqEwDIsG657ycRdDEbhULBRIjqlJerNdLBagPAAACF3BKYbWISgP5rKZLEKTnzVRcDEI5HIIVdrdjm4Bf4dDBXcq4ZWV8BZFEp8zYGU0sTg793S5VmXoClEmSSIVGg9MzV49V1mOQCo1IjntC0xMv+rqnMiRZby0HZyanZr983/3vau7872DI5OEEQR5+PDT+cu3t+ff9U5butnav393d3z247/veuffnR53L287l0faXu/uuvvti9Pui96d45iqfXp7c/X6+urq+ubOUGRFO769+7+gIpECgK1YNLwTj0W+CcYxKAFhUCGzk0zEIqtPV7Kp7RJD0flUCkgnk5ubRSBeJBAsn8zAKIZnCyyeBPOJBJCGSLrKILhMpXPZ6LMMSPCSxDPZCrybL2UyWZBU65amrOey8SJVJrMAYbaatrW4mQJABC+CRdpqNZuNlc00mAOLMIzVjLpZt1BSUAVWNjXJ2Dvc39tXlfqho5t2XTedA/eTHtoH5x3bsBynYTsNTThpdy67Tc1oNnVdkwX64uLl1eWRZZqGqsiiwL66vr5+3TUNXXNtSRT/AhplPes="
+)
+TOY_32X32_BLACK_TRACE_RECON = zlib.decompress(
+    base64.b64decode(TOY_32X32_BLACK_TRACE_RECON_ZLIB_B64)
 )
 SUPPORTED_FORMATS = {
     "i420": "yuv420p8",
@@ -221,7 +229,7 @@ def main() -> int:
     if has_vtm_recon:
         print("OK: software, RTL, and VTM reconstructions match")
     else:
-        print("SKIP: VTM decode is not wired for toy geometries above 16x16 yet")
+        print("SKIP: VTM decode is not wired for toy geometries above 32x32 yet")
     if has_vtm_recon and input_has_nonzero_chroma(input_path, info):
         validate_decoded_non_monochrome(vtm_recon, info)
         print("OK: VTM reconstruction contains decoder-visible chroma")
@@ -310,13 +318,13 @@ def validate_supported_input(input_path: Path, info: InputInfo, max_width: int, 
 def vtm_decode_supported(input_path: Path, info: InputInfo) -> bool:
     # The encoder capacity is 64x64, but the clean-room slice entropy body is
     # still only mapped to VTM's coding-tree syntax for the generic 8x8 path
-    # and the trace-derived 16x16 path. Larger inputs are
+    # and the trace-derived 16x16/32x32 paths. Larger inputs are
     # drained by both software and RTL and must keep matching internally, but
     # external decode is enabled only once their geometry-dependent CABAC trees
     # are implemented instead of guessed.
     if coded_dimension(info.width) == 8 and coded_dimension(info.height) == 8:
         return True
-    return is_toy_16x16_trace_path(info)
+    return is_toy_16x16_trace_path(info) or is_toy_32x32_trace_path(info)
 
 
 def coded_dimension(value: int) -> int:
@@ -349,6 +357,8 @@ def sha256(path: Path) -> str:
 def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes:
     if is_toy_16x16_trace_path(info):
         return cropped_toy_16x16_trace_recon(info) * info.frames
+    if is_toy_32x32_trace_path(info):
+        return cropped_toy_32x32_trace_recon(info) * info.frames
 
     frame = normalized_first_frame_to_yuv420p8(input_path, info)
     luma_len = info.width * info.height
@@ -379,6 +389,7 @@ def uses_capacity_tu_grid(frame: bytes, info: InputInfo) -> bool:
     return not (
         (info.width, info.height) == (8, 8)
         or is_toy_16x16_trace_path(info)
+        or is_toy_32x32_trace_path(info)
     )
 
 
@@ -400,6 +411,48 @@ def cropped_toy_16x16_trace_recon(info: InputInfo) -> bytes:
     out_cr = bytearray()
     for y in range(chroma_height):
         row = y * 8
+        out_cb.extend(cb[row : row + chroma_width])
+        out_cr.extend(cr[row : row + chroma_width])
+
+    return bytes(out_luma + out_cb + out_cr)
+
+
+def cropped_toy_32x32_trace_recon(info: InputInfo) -> bytes:
+    return crop_yuv420p8_frame(
+        TOY_32X32_BLACK_TRACE_RECON,
+        coded_width=32,
+        coded_height=32,
+        visible_width=info.width,
+        visible_height=info.height,
+    )
+
+
+def crop_yuv420p8_frame(
+    frame: bytes,
+    coded_width: int,
+    coded_height: int,
+    visible_width: int,
+    visible_height: int,
+) -> bytes:
+    coded_luma = coded_width * coded_height
+    coded_chroma_width = coded_width // 2
+    coded_chroma_height = coded_height // 2
+    coded_chroma = coded_chroma_width * coded_chroma_height
+    luma = frame[:coded_luma]
+    cb = frame[coded_luma : coded_luma + coded_chroma]
+    cr = frame[coded_luma + coded_chroma :]
+
+    out_luma = bytearray()
+    for y in range(visible_height):
+        row = y * coded_width
+        out_luma.extend(luma[row : row + visible_width])
+
+    chroma_width = visible_width // 2
+    chroma_height = visible_height // 2
+    out_cb = bytearray()
+    out_cr = bytearray()
+    for y in range(chroma_height):
+        row = y * coded_chroma_width
         out_cb.extend(cb[row : row + chroma_width])
         out_cr.extend(cr[row : row + chroma_width])
 
@@ -467,8 +520,18 @@ def is_toy_16x16_trace_path(info: InputInfo) -> bool:
     )
 
 
+def is_toy_32x32_trace_path(info: InputInfo) -> bool:
+    return (
+        info.width <= 32
+        and info.height <= 32
+        and (info.width > 16 or info.height > 16)
+    )
+
+
 def expects_zero_reconstruction(input_path: Path, info: InputInfo) -> bool:
-    return input_is_all_zero(input_path) and not is_toy_16x16_trace_path(info)
+    return input_is_all_zero(input_path) and not (
+        is_toy_16x16_trace_path(info) or is_toy_32x32_trace_path(info)
+    )
 
 
 def validate_zero_reconstruction(path: Path, label: str) -> None:
