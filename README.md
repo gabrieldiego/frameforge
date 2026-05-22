@@ -179,6 +179,12 @@ Run the RTL generated VVC toy stream check:
 make rtl-test DUT=vvc-toy4x4
 ```
 
+Run the local coding-tree scheduler check without generating a complete stream:
+
+```sh
+make rtl-test DUT=vvc-coding-tree-scheduler
+```
+
 Run the same RTL toy encoder with wider input sample buses:
 
 ```sh

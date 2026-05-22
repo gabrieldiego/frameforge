@@ -128,8 +128,25 @@ module ff_vvc_toy4x4_encoder #(
   logic [119:0] residual_quant_luma_ac_tokens_1;
   logic [7:0] residual_recon_luma_sample;
   logic [7:0] residual_recon_luma_sample_1;
+  logic [15:0] coding_tree_coded_width;
+  logic [15:0] coding_tree_coded_height;
+  logic [1:0]  coding_tree_body_kind;
+  logic        coding_tree_uses_capacity_tu_grid;
+  logic [12:0] coding_tree_luma_tu_count;
+  logic [12:0] coding_tree_capacity_tu_grid_bit_len;
 
   assign busy = input_active_q || m_axis_valid || (index_q != 0);
+
+  ff_vvc_toy_coding_tree_scheduler coding_tree_scheduler (
+    .visible_width(visible_width),
+    .visible_height(visible_height),
+    .coded_width(coding_tree_coded_width),
+    .coded_height(coding_tree_coded_height),
+    .body_kind(coding_tree_body_kind),
+    .uses_capacity_tu_grid(coding_tree_uses_capacity_tu_grid),
+    .luma_tu_count(coding_tree_luma_tu_count),
+    .capacity_tu_grid_bit_len(coding_tree_capacity_tu_grid_bit_len)
+  );
 
   ff_residual_stub #(
     .SAMPLE_BITS(SAMPLE_BITS),
@@ -742,29 +759,13 @@ module ff_vvc_toy4x4_encoder #(
 
   function automatic logic [15:0] coded_width();
     begin
-      if ((visible_width <= 16'd32) && (visible_height <= 16'd32) &&
-          ((visible_width > 16'd16) || (visible_height > 16'd16))) begin
-        coded_width = 16'd32;
-      end else if ((visible_width <= 16'd16) && (visible_height <= 16'd16) &&
-          ((visible_width > 16'd8) || (visible_height > 16'd8))) begin
-        coded_width = 16'd16;
-      end else begin
-        coded_width = coded_dimension(visible_width);
-      end
+      coded_width = coding_tree_coded_width;
     end
   endfunction
 
   function automatic logic [15:0] coded_height();
     begin
-      if ((visible_width <= 16'd32) && (visible_height <= 16'd32) &&
-          ((visible_width > 16'd16) || (visible_height > 16'd16))) begin
-        coded_height = 16'd32;
-      end else if ((visible_width <= 16'd16) && (visible_height <= 16'd16) &&
-          ((visible_width > 16'd8) || (visible_height > 16'd8))) begin
-        coded_height = 16'd16;
-      end else begin
-        coded_height = coded_dimension(visible_height);
-      end
+      coded_height = coding_tree_coded_height;
     end
   endfunction
 
@@ -1029,21 +1030,19 @@ module ff_vvc_toy4x4_encoder #(
 
   function automatic logic uses_capacity_tu_grid();
     begin
-      uses_capacity_tu_grid = !toy_supports_8x8_mapped_tree() &&
-                              !toy_supports_32x32_trace() &&
-                              !toy_supports_16x16_trace(quant_luma_rem(), quant_chroma_rem());
+      uses_capacity_tu_grid = coding_tree_uses_capacity_tu_grid;
     end
   endfunction
 
   function automatic logic [12:0] luma_tu_count();
     begin
-      luma_tu_count = ((visible_width + 16'd3) >> 2) * ((visible_height + 16'd3) >> 2);
+      luma_tu_count = coding_tree_luma_tu_count;
     end
   endfunction
 
   function automatic logic [12:0] capacity_tu_grid_bit_len();
     begin
-      capacity_tu_grid_bit_len = 13'd16 + (luma_tu_count() * 13'd13);
+      capacity_tu_grid_bit_len = coding_tree_capacity_tu_grid_bit_len;
     end
   endfunction
 

@@ -25,6 +25,7 @@ help:
 	@printf '%s\n' '  make rtl-test  - run cocotb RTL tests'
 	@printf '%s\n' '  make rtl-test DUT=encoder - run minimum encoder RTL smoke test'
 	@printf '%s\n' '  make rtl-test DUT=vvc-skeleton - run RTL/Rust VVC skeleton smoke test'
+	@printf '%s\n' '  make rtl-test DUT=vvc-coding-tree-scheduler - run local coding-tree geometry/path selection test'
 	@printf '%s\n' '  make rtl-test DUT=vvc-toy4x4 [RTL_VISIBLE_WIDTH=<w> RTL_VISIBLE_HEIGHT=<h> RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_SAMPLE_BITS=8|10|12|16 RTL_SOURCE_SAMPLE_BITS=8|10|12|16 RTL_CHROMA_FORMAT_IDC=1|2|3] - run generated RTL/software VVC toy stream test'
 	@printf '%s\n' '  make reference-vvc BITSTREAM=out.vvc [BIT_DEPTH=8|10|12|16 CHROMA_FORMAT=420|422|444] - create real VVC using VTM'
 	@printf '%s\n' '  make clean     - remove local build outputs'
