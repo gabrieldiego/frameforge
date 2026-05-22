@@ -43,13 +43,21 @@ VERILOG_SOURCES := $(RTL_DIR)/ff_vvc_toy_luma_partition.sv
 TOPLEVEL := ff_vvc_toy_luma_partition
 COCOTB_TEST_MODULES := test_vvc_toy_luma_partition
 else ifeq ($(DUT),vvc-cabac-body)
-VERILOG_SOURCES := $(RTL_DIR)/ff_vvc_toy_cabac_body.sv
-TOPLEVEL := ff_vvc_toy_cabac_body
-COCOTB_TEST_MODULES := test_vvc_toy_cabac_body
-else ifeq ($(DUT),vvc-toy4x4)
-VERILOG_SOURCES := $(RTL_DIR)/ff_residual_stub.sv $(RTL_DIR)/ff_vvc_toy_coding_tree_scheduler.sv $(RTL_DIR)/ff_vvc_toy_cabac_body.sv $(RTL_DIR)/ff_vvc_toy4x4_encoder.sv
-TOPLEVEL := ff_vvc_toy4x4_encoder
-COCOTB_TEST_MODULES := test_vvc_toy4x4_encoder
+VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_generated_cabac_body.sv
+TOPLEVEL := ff_vvc_generated_cabac_body
+COCOTB_TEST_MODULES := test_vvc_generated_cabac_body
+else ifeq ($(DUT),vvc-palette-cabac)
+VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_palette_cabac.sv
+TOPLEVEL := ff_vvc_palette_cabac
+COCOTB_TEST_MODULES := test_vvc_palette_cabac
+else ifeq ($(DUT),vvc-cabac)
+VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_generated_cabac_body.sv $(RTL_DIR)/vvc_cabac/ff_vvc_palette_cabac.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac.sv
+TOPLEVEL := ff_vvc_cabac
+COCOTB_TEST_MODULES := test_vvc_palette_cabac
+else ifeq ($(DUT),vvc-encoder)
+VERILOG_SOURCES := $(RTL_DIR)/ff_residual_stub.sv $(RTL_DIR)/ff_vvc_toy_coding_tree_scheduler.sv $(RTL_DIR)/vvc_cabac/ff_vvc_generated_cabac_body.sv $(RTL_DIR)/vvc_cabac/ff_vvc_palette_cabac.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac.sv $(RTL_DIR)/ff_vvc_encoder.sv
+TOPLEVEL := ff_vvc_encoder
+COCOTB_TEST_MODULES := test_vvc_encoder
 else
 VERILOG_SOURCES := $(RTL_DIR)/ff_intra_pred_stub.sv
 TOPLEVEL := ff_intra_pred_stub
@@ -57,7 +65,7 @@ COCOTB_TEST_MODULES := test_intra_pred_stub
 endif
 
 COMPILE_ARGS += -g2012
-ifeq ($(DUT),vvc-toy4x4)
+ifeq ($(DUT),vvc-encoder)
 ifeq ($(SIM),icarus)
 COMPILE_ARGS += -P$(TOPLEVEL).SAMPLE_BITS=$(RTL_SAMPLE_BITS)
 COMPILE_ARGS += -P$(TOPLEVEL).SOURCE_SAMPLE_BITS=$(RTL_SOURCE_SAMPLE_BITS)

@@ -1,0 +1,131 @@
+import json
+import subprocess
+from pathlib import Path
+
+import cocotb
+from cocotb.triggers import Timer
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+VECTOR = REPO_ROOT / "verification/test_vectors/palette_tiles_64x64_1f_yuv444p8.yuv"
+DUMP = REPO_ROOT / "verification/generated/checksums/palette_tiles_64x64_1f_yuv444p8_palette_cabac.json"
+
+
+def pack_plane(data, width=64, height=64, max_width=64, max_height=64):
+    value = 0
+    max_samples = max_width * max_height
+    plane_samples = width * height
+    for index in range(max_samples):
+        sample = data[index] if index < plane_samples else 0
+        value = (value << 8) | sample
+    return value
+
+
+def pack_palette_symbols(y, cb, cr, width=64, height=64, max_symbols=64):
+    value = 0
+    tiles_x = (width + 7) // 8
+    tiles_y = (height + 7) // 8
+    count = tiles_x * tiles_y
+    for index in range(max_symbols):
+        if index < count:
+            tile_x = index % tiles_x
+            tile_y = index // tiles_x
+            sample_x = min(tile_x * 8, width - 1)
+            sample_y = min(tile_y * 8, height - 1)
+            sample_index = sample_y * width + sample_x
+            symbol = (y[sample_index] << 16) | (cb[sample_index] << 8) | cr[sample_index]
+        else:
+            symbol = 0
+        value = (value << 24) | symbol
+    return count, value
+
+
+def cabac_bytes(dut):
+    bit_len = int(dut.payload_bit_len.value)
+    if hasattr(dut, "compat_payload_bits"):
+        value = int(dut.compat_payload_bits.value)
+    else:
+        value = int(dut.payload_bits.value)
+    if bit_len == 0:
+        return b""
+    pad = ((bit_len + 7) // 8 * 8) - bit_len
+    return (value << pad).to_bytes((bit_len + 7) // 8, byteorder="big")
+
+
+async def stream_bytes(dut):
+    if not hasattr(dut, "m_axis_data"):
+        return None
+    byte_count = int(dut.stream_byte_count.value)
+    observed = bytearray()
+    dut.m_axis_ready.value = 1
+    for index in range(byte_count):
+        dut.stream_byte_index.value = index
+        await Timer(1, unit="ns")
+        assert int(dut.m_axis_valid.value) == 1
+        observed.append(int(dut.m_axis_data.value))
+        assert int(dut.m_axis_last.value) == (1 if index == byte_count - 1 else 0)
+    return bytes(observed)
+
+
+def ensure_reference_dump():
+    if not VECTOR.exists():
+        subprocess.run(
+            ["python3", "scripts/generate_palette_tile_vector.py"],
+            cwd=REPO_ROOT,
+            check=True,
+        )
+    DUMP.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "cargo",
+            "run",
+            "--quiet",
+            "--",
+            "vvc-palette-cabac-dump",
+            "--input",
+            str(VECTOR),
+            "--output",
+            str(DUMP),
+            "--width",
+            "64",
+            "--height",
+            "64",
+            "--format",
+            "yuv444p8",
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+    )
+    return json.loads(DUMP.read_text())
+
+
+@cocotb.test()
+async def palette_cabac_matches_software_boundary_dump(dut):
+    reference = ensure_reference_dump()
+    data = VECTOR.read_bytes()
+    luma_len = 64 * 64
+    y = data[:luma_len]
+    cb = data[luma_len : luma_len * 2]
+    cr = data[luma_len * 2 : luma_len * 3]
+    symbol_count, symbol_payload = pack_palette_symbols(y, cb, cr)
+
+    dut.enable.value = 1
+    if hasattr(dut, "mode_palette_444"):
+        dut.mode_palette_444.value = 1
+        dut.body_kind.value = 0
+        dut.luma_rem.value = 0
+        dut.chroma_rem.value = 0
+        dut.m_axis_ready.value = 1
+        dut.stream_byte_index.value = 0
+    dut.coded_width.value = reference["width"]
+    dut.coded_height.value = reference["height"]
+    dut.symbol_count.value = symbol_count
+    dut.symbol_payload.value = symbol_payload
+    await Timer(1, unit="ns")
+
+    assert int(dut.payload_bit_len.value) == reference["cabac_bit_len"]
+    observed_hex = cabac_bytes(dut).hex()
+    assert observed_hex == reference["cabac_hex"], (observed_hex, reference["cabac_hex"])
+    observed_stream = await stream_bytes(dut)
+    if observed_stream is not None:
+        assert observed_stream.hex() == reference["cabac_hex"]

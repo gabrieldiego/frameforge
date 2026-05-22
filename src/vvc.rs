@@ -580,6 +580,13 @@ struct ToyPalette444DecodedPicture {
     cr: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ToyPalette444TileEntry {
+    x: usize,
+    y: usize,
+    color: Toy4x4SampledColor,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ToyEntropySchedule {
     kind: ToyEntropyScheduleKind,
@@ -771,6 +778,46 @@ pub fn toy_yuv_annex_b_from_input_with_limits(
     }
     let compat_frame = source_frame.decoder_compat_frame();
     toy_4x4_annex_b(params, compat_frame)
+}
+
+pub fn toy_palette_444_cabac_dump_json(
+    input: &[u8],
+    geometry: ToyVideoGeometry,
+    format: PixelFormat,
+) -> Result<String, String> {
+    let params = Toy4x4EncodeParams { frames: 1 };
+    let frame = sample_toy_yuv_frame(input, params, geometry, format)?;
+    if frame.format.chroma_sampling != ChromaSampling::Cs444 {
+        return Err(format!(
+            "palette CABAC dump expects 4:4:4 input; got {format}"
+        ));
+    }
+
+    let cabac_bits = toy_palette_444_cabac_bits(&frame);
+    let cabac_bytes = bits_to_padded_bytes(&cabac_bits);
+    let mut json = String::new();
+    json.push_str("{\n");
+    json.push_str("  \"kind\": \"frameforge.palette444_cabac.v1\",\n");
+    json.push_str(&format!("  \"width\": {},\n", geometry.width));
+    json.push_str(&format!("  \"height\": {},\n", geometry.height));
+    json.push_str("  \"tile_size\": 8,\n");
+    json.push_str("  \"entries\": [\n");
+    let entries = toy_palette_444_tile_entries(&frame);
+    for (idx, entry) in entries.iter().enumerate() {
+        let comma = if idx + 1 == entries.len() { "" } else { "," };
+        json.push_str(&format!(
+            "    {{\"x\": {}, \"y\": {}, \"value_y\": {}, \"value_cb\": {}, \"value_cr\": {}}}{}\n",
+            entry.x, entry.y, entry.color.y, entry.color.u, entry.color.v, comma
+        ));
+    }
+    json.push_str("  ],\n");
+    json.push_str(&format!("  \"cabac_bit_len\": {},\n", cabac_bits.len()));
+    json.push_str(&format!(
+        "  \"cabac_hex\": \"{}\"\n",
+        bytes_to_lower_hex(&cabac_bytes)
+    ));
+    json.push_str("}\n");
+    Ok(json)
 }
 
 pub fn sample_toy_4x4_first_yuv420p8(
@@ -995,12 +1042,11 @@ fn toy_palette_444_annex_b(
     debug_assert_eq!(frame.format.chroma_sampling, ChromaSampling::Cs444);
     let mut units = Vec::with_capacity(params.frames + 3);
     let geometry = frame.geometry;
-    let color = frame.sampled_color();
     units.push(toy_palette_444_sps_unit(geometry));
     units.push(toy_4x4_pps_unit(geometry));
-    units.push(toy_4x4_color_filler_unit(color));
+    units.push(toy_4x4_color_filler_unit(frame.sampled_color()));
     for frame_idx in 0..params.frames {
-        units.push(toy_palette_444_slice_unit(frame_idx, geometry, color)?);
+        units.push(toy_palette_444_slice_unit(frame_idx, &frame)?);
     }
     write_annex_b(&units)
 }
@@ -1094,8 +1140,7 @@ fn toy_4x4_sps_payload(geometry: ToyVideoGeometry) -> Vec<u8> {
 
 fn toy_palette_444_slice_unit(
     frame_idx: usize,
-    geometry: ToyVideoGeometry,
-    color: Toy4x4SampledColor,
+    frame: &Toy4x4SampledFrame,
 ) -> Result<VvcNalUnit, String> {
     let picture_kind = match frame_idx {
         0 => Toy4x4PictureKind::Idr,
@@ -1110,7 +1155,7 @@ fn toy_palette_444_slice_unit(
         },
         layer_id: 0,
         temporal_id: 0,
-        rbsp_payload: toy_palette_444_slice_payload(picture_kind, geometry, color),
+        rbsp_payload: toy_palette_444_slice_payload(picture_kind, frame),
     })
 }
 
@@ -1375,8 +1420,7 @@ fn toy_4x4_slice_payload(
 
 fn toy_palette_444_slice_payload(
     picture_kind: Toy4x4PictureKind,
-    geometry: ToyVideoGeometry,
-    color: Toy4x4SampledColor,
+    frame: &Toy4x4SampledFrame,
 ) -> Vec<u8> {
     let mut writer = VvcSyntaxWriter::new();
     writer.write_flag("sh_picture_header_in_slice_header_flag", true);
@@ -1399,38 +1443,44 @@ fn toy_palette_444_slice_payload(
         writer.write_flag("cabac_alignment_one_bit", true);
     }
     writer.byte_align_zero("cabac_alignment_zero_bit");
-    write_toy_palette_444_entropy(&mut writer, geometry, color);
+    write_toy_palette_444_entropy(&mut writer, frame);
     writer.rbsp_trailing_bits();
     debug_assert!(writer.is_byte_aligned());
     writer.into_bytes()
 }
 
-fn write_toy_palette_444_entropy(
-    writer: &mut VvcSyntaxWriter,
-    geometry: ToyVideoGeometry,
-    color: Toy4x4SampledColor,
-) {
+fn write_toy_palette_444_entropy(writer: &mut VvcSyntaxWriter, frame: &Toy4x4SampledFrame) {
     writer.write_cabac_bits(
-        "cabac_toy_palette_444_single_entry_bits",
-        &toy_palette_444_cabac_bits(geometry, color),
+        "cabac_toy_palette_444_tile_entry_bits",
+        &toy_palette_444_cabac_bits(frame),
     );
 }
 
-fn toy_palette_444_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4SampledColor) -> Vec<bool> {
-    let syntax = toy_palette_444_single_entry_syntax(geometry, color);
+fn toy_palette_444_cabac_bits(frame: &Toy4x4SampledFrame) -> Vec<bool> {
+    let geometry = frame.geometry;
     let mut cabac = ToyCabacEncoder::new();
+    let mut ctx = ToyPaletteCabacContexts::new();
     cabac.start();
     if geometry.coded_width() == 64 && geometry.coded_height() == 64 {
         let mut predictor_mode = ToyPalettePredictorMode::SignalNewEntry;
-        append_toy_palette_444_64x64_tree(&mut cabac, syntax, &mut predictor_mode);
+        append_toy_palette_444_64x64_tree(&mut cabac, &mut ctx, frame, &mut predictor_mode);
     } else if geometry.coded_width() == 32 && geometry.coded_height() == 32 {
         let mut predictor_mode = ToyPalettePredictorMode::SignalNewEntry;
-        append_toy_palette_444_32x32_tree(&mut cabac, syntax, &mut predictor_mode);
+        append_toy_palette_444_32x32_tree(&mut cabac, &mut ctx, frame, &mut predictor_mode, 0, 0);
     } else if geometry.coded_width() == 16 && geometry.coded_height() == 16 {
         let mut predictor_mode = ToyPalettePredictorMode::SignalNewEntry;
-        append_toy_palette_444_16x16_tree(&mut cabac, syntax, &mut predictor_mode);
+        append_toy_palette_444_16x16_tree(
+            &mut cabac,
+            &mut ctx,
+            frame,
+            &mut predictor_mode,
+            0,
+            0,
+            ToyPaletteCtx::Split6,
+            ToyPaletteCtx::SplitQt12,
+        );
     } else {
-        append_toy_palette_444_8x8_cu(&mut cabac, syntax);
+        append_toy_palette_444_8x8_cu(&mut cabac, &mut ctx, frame, 0, 0);
     }
     cabac.encode_bin_trm(true);
     cabac.finish()
@@ -1438,144 +1488,139 @@ fn toy_palette_444_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4SampledCo
 
 fn append_toy_palette_444_64x64_tree(
     cabac: &mut ToyCabacEncoder,
-    syntax: ToyPalette444Syntax,
+    ctx: &mut ToyPaletteCabacContexts,
+    frame: &Toy4x4SampledFrame,
     predictor_mode: &mut ToyPalettePredictorMode,
 ) {
-    cabac.encode_bin(
-        true,
-        ToyCtxEvent {
-            // 64x64 split_cu_mode split=1.
-            lps: 214,
-            mps: false,
-        },
-    );
-    cabac.encode_bin(
-        true,
-        ToyCtxEvent {
-            // 64x64 split_cu_mode qt=1.
-            lps: 36,
-            mps: false,
-        },
-    );
-    for _ in 0..4 {
-        append_toy_palette_444_32x32_tree(cabac, syntax, predictor_mode);
+    ctx.encode(cabac, ToyPaletteCtx::Split0, true);
+    for child in 0..4 {
+        let origin_x = if child & 1 == 0 { 0 } else { 32 };
+        let origin_y = if child < 2 { 0 } else { 32 };
+        append_toy_palette_444_32x32_tree(cabac, ctx, frame, predictor_mode, origin_x, origin_y);
     }
 }
 
 fn append_toy_palette_444_32x32_tree(
     cabac: &mut ToyCabacEncoder,
-    syntax: ToyPalette444Syntax,
+    ctx: &mut ToyPaletteCabacContexts,
+    frame: &Toy4x4SampledFrame,
     predictor_mode: &mut ToyPalettePredictorMode,
+    origin_x: u16,
+    origin_y: u16,
 ) {
-    cabac.encode_bin(
+    ctx.encode(cabac, toy_palette_split_ctx(origin_x, origin_y, 32), true);
+    ctx.encode(
+        cabac,
+        toy_palette_split_qt_ctx(origin_x, origin_y, 32, ToyPaletteQtCtxBase::Large),
         true,
-        ToyCtxEvent {
-            // 32x32 split_cu_mode split=1.
-            lps: 214,
-            mps: false,
-        },
     );
-    cabac.encode_bin(
-        true,
-        ToyCtxEvent {
-            // 32x32 split_cu_mode qt=1.
-            lps: 36,
-            mps: false,
-        },
-    );
-    for _ in 0..4 {
-        append_toy_palette_444_16x16_tree(cabac, syntax, predictor_mode);
+    for child in 0..4 {
+        let x = origin_x + if child & 1 == 0 { 0 } else { 16 };
+        let y = origin_y + if child < 2 { 0 } else { 16 };
+        let split_ctx = toy_palette_split_ctx(x, y, 16);
+        let qt_ctx = toy_palette_split_qt_ctx(x, y, 16, ToyPaletteQtCtxBase::Small);
+        append_toy_palette_444_16x16_tree(
+            cabac,
+            ctx,
+            frame,
+            predictor_mode,
+            x,
+            y,
+            split_ctx,
+            qt_ctx,
+        );
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ToyPaletteQtCtxBase {
+    Large,
+    Small,
+}
+
+fn toy_palette_position_ctx_index(x: u16, y: u16, step: u16) -> u8 {
+    u8::from(x >= step) + u8::from(y >= step)
+}
+
+fn toy_palette_split_ctx(x: u16, y: u16, step: u16) -> ToyPaletteCtx {
+    match toy_palette_position_ctx_index(x, y, step) {
+        0 => ToyPaletteCtx::Split6,
+        1 => ToyPaletteCtx::Split7,
+        _ => ToyPaletteCtx::Split8,
+    }
+}
+
+fn toy_palette_split_qt_ctx(x: u16, y: u16, step: u16, base: ToyPaletteQtCtxBase) -> ToyPaletteCtx {
+    match (base, toy_palette_position_ctx_index(x, y, step)) {
+        (ToyPaletteQtCtxBase::Large, 0) => ToyPaletteCtx::SplitQt9,
+        (ToyPaletteQtCtxBase::Large, 1) => ToyPaletteCtx::SplitQt10,
+        (ToyPaletteQtCtxBase::Large, _) => ToyPaletteCtx::SplitQt11,
+        (ToyPaletteQtCtxBase::Small, 0) => ToyPaletteCtx::SplitQt12,
+        (ToyPaletteQtCtxBase::Small, 1) => ToyPaletteCtx::SplitQt13,
+        (ToyPaletteQtCtxBase::Small, _) => ToyPaletteCtx::SplitQt14,
     }
 }
 
 fn append_toy_palette_444_16x16_tree(
     cabac: &mut ToyCabacEncoder,
-    syntax: ToyPalette444Syntax,
+    ctx: &mut ToyPaletteCabacContexts,
+    frame: &Toy4x4SampledFrame,
     predictor_mode: &mut ToyPalettePredictorMode,
+    origin_x: u16,
+    origin_y: u16,
+    split_ctx: ToyPaletteCtx,
+    qt_ctx: ToyPaletteCtx,
 ) {
-    cabac.encode_bin(
-        true,
-        ToyCtxEvent {
-            // 16x16 split_cu_mode split=1.
-            lps: 214,
-            mps: false,
-        },
-    );
-    cabac.encode_bin(
-        true,
-        ToyCtxEvent {
-            // 16x16 split_cu_mode qt=1.
-            lps: 36,
-            mps: false,
-        },
-    );
+    ctx.encode(cabac, split_ctx, true);
+    ctx.encode(cabac, qt_ctx, true);
     append_toy_palette_444_8x8_cu_with_events(
         cabac,
-        syntax,
-        ToyCtxEvent {
-            lps: 89,
-            mps: false,
-        },
-        ToyCtxEvent {
-            lps: 34,
-            mps: false,
-        },
+        ctx,
+        frame,
+        origin_x,
+        origin_y,
         *predictor_mode,
     );
-    *predictor_mode = ToyPalettePredictorMode::ReusePreviousEntry;
+    *predictor_mode = ToyPalettePredictorMode::SignalNewEntryAfterPredictor;
     append_toy_palette_444_8x8_cu_with_events(
         cabac,
-        syntax,
-        ToyCtxEvent {
-            lps: 80,
-            mps: false,
-        },
-        ToyCtxEvent {
-            lps: 82,
-            mps: false,
-        },
-        ToyPalettePredictorMode::ReusePreviousEntry,
+        ctx,
+        frame,
+        origin_x + 8,
+        origin_y,
+        ToyPalettePredictorMode::SignalNewEntryAfterPredictor,
     );
     append_toy_palette_444_8x8_cu_with_events(
         cabac,
-        syntax,
-        ToyCtxEvent {
-            lps: 94,
-            mps: false,
-        },
-        ToyCtxEvent {
-            lps: 137,
-            mps: false,
-        },
-        ToyPalettePredictorMode::ReusePreviousEntry,
+        ctx,
+        frame,
+        origin_x,
+        origin_y + 8,
+        ToyPalettePredictorMode::SignalNewEntryAfterPredictor,
     );
     append_toy_palette_444_8x8_cu_with_events(
         cabac,
-        syntax,
-        ToyCtxEvent {
-            lps: 76,
-            mps: false,
-        },
-        ToyCtxEvent {
-            lps: 142,
-            mps: false,
-        },
-        ToyPalettePredictorMode::ReusePreviousEntry,
+        ctx,
+        frame,
+        origin_x + 8,
+        origin_y + 8,
+        ToyPalettePredictorMode::SignalNewEntryAfterPredictor,
     );
 }
 
-fn append_toy_palette_444_8x8_cu(cabac: &mut ToyCabacEncoder, syntax: ToyPalette444Syntax) {
+fn append_toy_palette_444_8x8_cu(
+    cabac: &mut ToyCabacEncoder,
+    ctx: &mut ToyPaletteCabacContexts,
+    frame: &Toy4x4SampledFrame,
+    origin_x: u16,
+    origin_y: u16,
+) {
     append_toy_palette_444_8x8_cu_with_events(
         cabac,
-        syntax,
-        ToyCtxEvent {
-            lps: 146,
-            mps: false,
-        },
-        ToyCtxEvent {
-            lps: 31,
-            mps: false,
-        },
+        ctx,
+        frame,
+        origin_x,
+        origin_y,
         ToyPalettePredictorMode::SignalNewEntry,
     );
 }
@@ -1583,20 +1628,159 @@ fn append_toy_palette_444_8x8_cu(cabac: &mut ToyCabacEncoder, syntax: ToyPalette
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToyPalettePredictorMode {
     SignalNewEntry,
-    ReusePreviousEntry,
+    SignalNewEntryAfterPredictor,
 }
 
 fn append_toy_palette_444_8x8_cu_with_events(
     cabac: &mut ToyCabacEncoder,
-    syntax: ToyPalette444Syntax,
-    split_event: ToyCtxEvent,
-    plt_event: ToyCtxEvent,
+    ctx: &mut ToyPaletteCabacContexts,
+    frame: &Toy4x4SampledFrame,
+    origin_x: u16,
+    origin_y: u16,
     predictor_mode: ToyPalettePredictorMode,
 ) {
-    cabac.encode_bin(false, split_event);
-    cabac.encode_bin(true, plt_event);
+    ctx.encode(cabac, ToyPaletteCtx::Split0, false);
+    ctx.encode(cabac, ToyPaletteCtx::PltFlag, true);
+    let syntax = toy_palette_444_single_entry_syntax(
+        frame.geometry,
+        toy_palette_444_sample_at(frame, origin_x as usize, origin_y as usize),
+    );
     for token in toy_palette_444_syntax_tokens(syntax, predictor_mode) {
         append_palette_syntax_token_cabac(cabac, token);
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ToyPaletteCtx {
+    Split0,
+    Split6,
+    Split7,
+    Split8,
+    SplitQt9,
+    SplitQt10,
+    SplitQt11,
+    SplitQt12,
+    SplitQt13,
+    SplitQt14,
+    PltFlag,
+}
+
+#[derive(Debug, Clone)]
+struct ToyPaletteCabacContexts {
+    split0: ToyCabacProbModel,
+    split6: ToyCabacProbModel,
+    split7: ToyCabacProbModel,
+    split8: ToyCabacProbModel,
+    split_qt9: ToyCabacProbModel,
+    split_qt10: ToyCabacProbModel,
+    split_qt11: ToyCabacProbModel,
+    split_qt12: ToyCabacProbModel,
+    split_qt13: ToyCabacProbModel,
+    split_qt14: ToyCabacProbModel,
+    plt_flag: ToyCabacProbModel,
+}
+
+impl ToyPaletteCabacContexts {
+    fn new() -> Self {
+        Self {
+            split0: ToyCabacProbModel::from_vtm_state(78, 12),
+            split6: ToyCabacProbModel::from_vtm_state(114, 5),
+            split7: ToyCabacProbModel::from_vtm_state(202, 9),
+            split8: ToyCabacProbModel::from_vtm_state(238, 9),
+            split_qt9: ToyCabacProbModel::from_vtm_state(94, 0),
+            split_qt10: ToyCabacProbModel::from_vtm_state(154, 8),
+            split_qt11: ToyCabacProbModel::from_vtm_state(206, 8),
+            split_qt12: ToyCabacProbModel::from_vtm_state(22, 12),
+            split_qt13: ToyCabacProbModel::from_vtm_state(78, 12),
+            split_qt14: ToyCabacProbModel::from_vtm_state(182, 8),
+            plt_flag: ToyCabacProbModel::from_vtm_state(22, 1),
+        }
+    }
+
+    fn encode(&mut self, cabac: &mut ToyCabacEncoder, ctx: ToyPaletteCtx, bin: bool) {
+        match ctx {
+            ToyPaletteCtx::Split0 => self.split0.encode(cabac, bin),
+            ToyPaletteCtx::Split6 => self.split6.encode(cabac, bin),
+            ToyPaletteCtx::Split7 => self.split7.encode(cabac, bin),
+            ToyPaletteCtx::Split8 => self.split8.encode(cabac, bin),
+            ToyPaletteCtx::SplitQt9 => self.split_qt9.encode(cabac, bin),
+            ToyPaletteCtx::SplitQt10 => self.split_qt10.encode(cabac, bin),
+            ToyPaletteCtx::SplitQt11 => self.split_qt11.encode(cabac, bin),
+            ToyPaletteCtx::SplitQt12 => self.split_qt12.encode(cabac, bin),
+            ToyPaletteCtx::SplitQt13 => self.split_qt13.encode(cabac, bin),
+            ToyPaletteCtx::SplitQt14 => self.split_qt14.encode(cabac, bin),
+            ToyPaletteCtx::PltFlag => self.plt_flag.encode(cabac, bin),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ToyCabacProbModel {
+    state0: u16,
+    state1: u16,
+    rate: u8,
+}
+
+impl ToyCabacProbModel {
+    const MASK_0: u16 = 0x7fe0;
+    const MASK_1: u16 = 0x7ffe;
+
+    fn from_vtm_state(state: u8, log2_window_size: u8) -> Self {
+        let mut model = Self {
+            state0: 0,
+            state1: 0,
+            rate: 0,
+        };
+        model.set_state((state as u16) << 8);
+        model.set_log2_window_size(log2_window_size);
+        model
+    }
+
+    fn set_log2_window_size(&mut self, log2_window_size: u8) {
+        let rate0 = 2 + ((log2_window_size >> 2) & 3);
+        let rate1 = 3 + rate0 + (log2_window_size & 3);
+        self.rate = (16 * rate0) + rate1;
+    }
+
+    fn set_state(&mut self, probability_state: u16) {
+        self.state0 = (probability_state >> 1) & Self::MASK_0;
+        self.state1 = (probability_state >> 1) & Self::MASK_1;
+    }
+
+    fn state(&self) -> u16 {
+        (self.state0 + self.state1) >> 8
+    }
+
+    fn mps(&self) -> bool {
+        self.state() >= 128
+    }
+
+    fn lps(&self, range: u32) -> u16 {
+        let mut q = self.state();
+        if (q & 0x80) != 0 {
+            q ^= 0xff;
+        }
+        (((q >> 2) as u32 * (range >> 5) >> 1) + 4) as u16
+    }
+
+    fn encode(&mut self, cabac: &mut ToyCabacEncoder, bin: bool) {
+        let event = ToyCtxEvent {
+            lps: self.lps(cabac.range),
+            mps: self.mps(),
+        };
+        cabac.encode_bin(bin, event);
+        self.update(bin);
+    }
+
+    fn update(&mut self, bin: bool) {
+        let rate0 = (self.rate >> 4) as u16;
+        let rate1 = (self.rate & 15) as u16;
+        self.state0 -= (self.state0 >> rate0) & Self::MASK_0;
+        self.state1 -= (self.state1 >> rate1) & Self::MASK_1;
+        if bin {
+            self.state0 += (0x7fff_u16 >> rate0) & Self::MASK_0;
+            self.state1 += (0x7fff_u16 >> rate1) & Self::MASK_1;
+        }
     }
 }
 
@@ -1624,6 +1808,55 @@ fn toy_palette_444_single_entry_syntax(
         palette_escape_val_present_flag: false,
         max_palette_index: 0,
     }
+}
+
+fn toy_palette_444_sample_at(frame: &Toy4x4SampledFrame, x: usize, y: usize) -> Toy4x4SampledColor {
+    debug_assert_eq!(frame.format.chroma_sampling, ChromaSampling::Cs444);
+    let sample_x = x.min(frame.geometry.width.saturating_sub(1));
+    let sample_y = y.min(frame.geometry.height.saturating_sub(1));
+    let index = sample_y * frame.geometry.width + sample_x;
+    Toy4x4SampledColor {
+        y: frame.luma[index],
+        u: frame.cb[index],
+        v: frame.cr[index],
+    }
+}
+
+fn toy_palette_444_tile_entries(frame: &Toy4x4SampledFrame) -> Vec<ToyPalette444TileEntry> {
+    let mut entries = Vec::new();
+    for y in (0..frame.geometry.height).step_by(8) {
+        for x in (0..frame.geometry.width).step_by(8) {
+            entries.push(ToyPalette444TileEntry {
+                x,
+                y,
+                color: toy_palette_444_sample_at(frame, x, y),
+            });
+        }
+    }
+    entries
+}
+
+fn bits_to_padded_bytes(bits: &[bool]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(bits.len().div_ceil(8));
+    for chunk in bits.chunks(8) {
+        let mut byte = 0u8;
+        for bit in chunk {
+            byte = (byte << 1) | u8::from(*bit);
+        }
+        byte <<= 8 - chunk.len();
+        bytes.push(byte);
+    }
+    bytes
+}
+
+fn bytes_to_lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1679,23 +1912,15 @@ fn toy_palette_444_syntax_tokens(
     debug_assert_eq!(syntax.max_palette_index, 0);
 
     let mut tokens = Vec::new();
-    if predictor_mode == ToyPalettePredictorMode::ReusePreviousEntry {
+    if predictor_mode == ToyPalettePredictorMode::SignalNewEntryAfterPredictor {
         tokens.push(ToyPaletteSyntaxToken {
             name: "palette_predictor_run",
-            kind: ToyPaletteSyntaxTokenKind::Eg0 { value: 0 },
+            // H.266 cu_palette_info/xDecodePLTPredIndicator: with a non-empty
+            // previous palette, symbol 1 terminates prediction without reusing
+            // entries. The following num_signalled_palette_entries then carries
+            // this CU's fresh single-entry palette.
+            kind: ToyPaletteSyntaxTokenKind::Eg0 { value: 1 },
         });
-        tokens.push(ToyPaletteSyntaxToken {
-            name: "num_signalled_palette_entries",
-            kind: ToyPaletteSyntaxTokenKind::Eg0 { value: 0 },
-        });
-        tokens.push(ToyPaletteSyntaxToken {
-            name: "palette_escape_val_present_flag",
-            kind: ToyPaletteSyntaxTokenKind::FixedLength {
-                value: u32::from(syntax.palette_escape_val_present_flag),
-                bit_count: 1,
-            },
-        });
-        return tokens;
     }
     tokens.push(ToyPaletteSyntaxToken {
         name: "num_signalled_palette_entries",

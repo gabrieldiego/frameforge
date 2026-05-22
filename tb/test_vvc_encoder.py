@@ -60,8 +60,8 @@ def varied_yuv420p8(y, u, v, frames):
 
 
 def input_data(frames):
-    specific = os.environ.get(f"FRAMEFORGE_RTL_TOY4X4_INPUT_{frames}F")
-    generic = os.environ.get("FRAMEFORGE_RTL_TOY4X4_INPUT")
+    specific = os.environ.get(f"FRAMEFORGE_RTL_VVC_ENCODER_INPUT_{frames}F")
+    generic = os.environ.get("FRAMEFORGE_RTL_VVC_ENCODER_INPUT")
     if path := specific or generic:
         return input_samples_from_bytes(Path(path).read_bytes(), frames)
     return list(solid_yuv_planar8(0, 0, 0, frames, chroma_plane_samples()))
@@ -227,10 +227,25 @@ def reconstructed_chroma(u, v):
 def decoded_reconstruction(frames, data):
     # This is the reconstruction of the emitted VVC bitstream.
     if rtl_chroma_format_idc() == 3:
-        y = sample_to_8bit(data[0])
-        u = sample_to_8bit(data[luma_samples()])
-        v = sample_to_8bit(data[v_sample_index()])
-        frame = bytes([y] * luma_samples() + [u] * luma_samples() + [v] * luma_samples())
+        width = rtl_visible_width()
+        height = rtl_visible_height()
+        luma_len = luma_samples()
+        y_plane = bytearray(luma_len)
+        u_plane = bytearray(luma_len)
+        v_plane = bytearray(luma_len)
+        for origin_y in range(0, height, 8):
+            for origin_x in range(0, width, 8):
+                sample_index = origin_y * width + origin_x
+                y = sample_to_8bit(data[sample_index])
+                u = sample_to_8bit(data[luma_len + sample_index])
+                v = sample_to_8bit(data[v_sample_index() + sample_index])
+                for y_off in range(min(8, height - origin_y)):
+                    row = (origin_y + y_off) * width + origin_x
+                    tile_width = min(8, width - origin_x)
+                    y_plane[row : row + tile_width] = bytes([y] * tile_width)
+                    u_plane[row : row + tile_width] = bytes([u] * tile_width)
+                    v_plane[row : row + tile_width] = bytes([v] * tile_width)
+        frame = bytes(y_plane + u_plane + v_plane)
         return frame * frames
     if is_toy_16x16_generated_path():
         return cropped_toy_16x16_generated_recon() * frames
@@ -410,7 +425,7 @@ def software_stream(frames, data):
     with tempfile.TemporaryDirectory() as tmpdir:
         fmt = software_format()
         input_yuv = Path(tmpdir) / f"input_{rtl_visible_width()}x{rtl_visible_height()}_{frames}f_{fmt}.yuv"
-        output = Path(tmpdir) / "toy.vvc"
+        output = Path(tmpdir) / "encoded.vvc"
         input_yuv.write_bytes(software_input_bytes(data))
         subprocess.run(
             [
@@ -418,7 +433,7 @@ def software_stream(frames, data):
                 "run",
                 "--quiet",
                 "--",
-                "vvc-toy-4x4-video",
+                "vvc-encode",
                 "--input",
                 str(input_yuv),
                 "--frames",
@@ -554,7 +569,7 @@ async def drain_sampled_color(dut, frames, y, u, v):
 
 
 @cocotb.test()
-async def vvc_toy4x4_encoder_matches_software_stream(dut):
+async def vvc_encoder_matches_software_stream(dut):
     cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
 
     one_frame, one_frame_input = await collect_stream(dut, frames=1)
@@ -563,21 +578,21 @@ async def vvc_toy4x4_encoder_matches_software_stream(dut):
         one_frame.hex(),
         expected_one_frame.hex(),
     )
-    if path := os.environ.get("FRAMEFORGE_RTL_TOY4X4_OUT_1F"):
+    if path := os.environ.get("FRAMEFORGE_RTL_VVC_ENCODER_OUT_1F"):
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(one_frame)
-    if path := os.environ.get("FRAMEFORGE_RTL_TOY4X4_RECON_OUT_1F"):
+    if path := os.environ.get("FRAMEFORGE_RTL_VVC_ENCODER_RECON_OUT_1F"):
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(decoded_reconstruction(frames=1, data=one_frame_input))
 
     two_frames, two_frame_input = await collect_stream(dut, frames=2)
-    if path := os.environ.get("FRAMEFORGE_RTL_TOY4X4_OUT"):
+    if path := os.environ.get("FRAMEFORGE_RTL_VVC_ENCODER_OUT"):
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(two_frames)
-    if path := os.environ.get("FRAMEFORGE_RTL_TOY4X4_RECON_OUT"):
+    if path := os.environ.get("FRAMEFORGE_RTL_VVC_ENCODER_RECON_OUT"):
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(decoded_reconstruction(frames=2, data=two_frame_input))
@@ -589,6 +604,6 @@ async def vvc_toy4x4_encoder_matches_software_stream(dut):
 
 
 @cocotb.test()
-async def vvc_toy4x4_encoder_samples_first_yuv_values(dut):
+async def vvc_encoder_samples_first_yuv_values(dut):
     cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
     await drain_sampled_color(dut, frames=2, y=64, u=128, v=192)

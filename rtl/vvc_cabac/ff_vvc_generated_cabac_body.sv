@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 
-module ff_vvc_toy_cabac_body #(
+module ff_vvc_generated_cabac_body #(
   parameter int MAX_SLICE_PAYLOAD_BITS = 4096
 ) (
   input  logic [1:0]   body_kind,
@@ -9,8 +9,8 @@ module ff_vvc_toy_cabac_body #(
   input  logic [4:0]   luma_rem,
   input  logic [4:0]   chroma_rem,
   output logic         supported,
-  output logic [12:0]  cabac_bit_len,
-  output logic [MAX_SLICE_PAYLOAD_BITS - 1:0] cabac_bits
+  output logic [12:0]  payload_bit_len,
+  output logic [MAX_SLICE_PAYLOAD_BITS - 1:0] payload_bits
 );
   localparam logic [1:0] BODY_GENERATED = 2'd0;
 
@@ -30,10 +30,10 @@ module ff_vvc_toy_cabac_body #(
       (body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height);
 
     if ((body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height)) begin
-      {cabac_bit_len, cabac_bits} = encode_generated_body(coded_width, coded_height, luma_rem, chroma_rem);
+      {payload_bit_len, payload_bits} = encode_generated_body(coded_width, coded_height, luma_rem, chroma_rem);
     end else begin
-      cabac_bit_len = 13'd0;
-      cabac_bits = '0;
+      payload_bit_len = 13'd0;
+      payload_bits = '0;
     end
   end
 
@@ -888,8 +888,8 @@ module ff_vvc_toy_cabac_body #(
         st = cabac_encode_bin(
           st,
           bin_pattern[num_bins - 1 - i],
-          toy_ctx_lps(ctx_offset + i[4:0]),
-          toy_ctx_mps(ctx_offset + i[4:0])
+          vvc_ctx_lps(ctx_offset + i[4:0]),
+          vvc_ctx_mps(ctx_offset + i[4:0])
         );
       end
       cabac_encode_ctx_bins = st;
@@ -1225,38 +1225,38 @@ module ff_vvc_toy_cabac_body #(
     end
   endfunction
 
-  function automatic logic [8:0] toy_ctx_lps(input logic [4:0] index);
+  function automatic logic [8:0] vvc_ctx_lps(input logic [4:0] index);
     begin
       case (index)
-        5'd0: toy_ctx_lps = 9'd146;
-        5'd1: toy_ctx_lps = 9'd81;
-        5'd2: toy_ctx_lps = 9'd128;
-        5'd3: toy_ctx_lps = 9'd52;
-        5'd4: toy_ctx_lps = 9'd160;
-        5'd5: toy_ctx_lps = 9'd129;
-        5'd6: toy_ctx_lps = 9'd24;
-        5'd7: toy_ctx_lps = 9'd58;
-        5'd8: toy_ctx_lps = 9'd29;
-        5'd9: toy_ctx_lps = 9'd172;
-        5'd10: toy_ctx_lps = 9'd107;
-        5'd11: toy_ctx_lps = 9'd136;
-        5'd12: toy_ctx_lps = 9'd128;
-        5'd13: toy_ctx_lps = 9'd125;
-        5'd14: toy_ctx_lps = 9'd184;
-        5'd15: toy_ctx_lps = 9'd112;
-        5'd16: toy_ctx_lps = 9'd28;
-        5'd17: toy_ctx_lps = 9'd67;
-        default: toy_ctx_lps = 9'd26;
+        5'd0: vvc_ctx_lps = 9'd146;
+        5'd1: vvc_ctx_lps = 9'd81;
+        5'd2: vvc_ctx_lps = 9'd128;
+        5'd3: vvc_ctx_lps = 9'd52;
+        5'd4: vvc_ctx_lps = 9'd160;
+        5'd5: vvc_ctx_lps = 9'd129;
+        5'd6: vvc_ctx_lps = 9'd24;
+        5'd7: vvc_ctx_lps = 9'd58;
+        5'd8: vvc_ctx_lps = 9'd29;
+        5'd9: vvc_ctx_lps = 9'd172;
+        5'd10: vvc_ctx_lps = 9'd107;
+        5'd11: vvc_ctx_lps = 9'd136;
+        5'd12: vvc_ctx_lps = 9'd128;
+        5'd13: vvc_ctx_lps = 9'd125;
+        5'd14: vvc_ctx_lps = 9'd184;
+        5'd15: vvc_ctx_lps = 9'd112;
+        5'd16: vvc_ctx_lps = 9'd28;
+        5'd17: vvc_ctx_lps = 9'd67;
+        default: vvc_ctx_lps = 9'd26;
       endcase
     end
   endfunction
 
-  function automatic logic toy_ctx_mps(input logic [4:0] index);
+  function automatic logic vvc_ctx_mps(input logic [4:0] index);
     begin
       case (index)
-        5'd0: toy_ctx_mps = 1'b0;
-        5'd1, 5'd2, 5'd3, 5'd4, 5'd5, 5'd9, 5'd12: toy_ctx_mps = 1'b1;
-        default: toy_ctx_mps = 1'b0;
+        5'd0: vvc_ctx_mps = 1'b0;
+        5'd1, 5'd2, 5'd3, 5'd4, 5'd5, 5'd9, 5'd12: vvc_ctx_mps = 1'b1;
+        default: vvc_ctx_mps = 1'b0;
       endcase
     end
   endfunction

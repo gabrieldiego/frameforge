@@ -6,8 +6,8 @@ BODY_GENERATED = 0
 
 
 def cabac_bytes(dut):
-    bit_len = int(dut.cabac_bit_len.value)
-    value = int(dut.cabac_bits.value)
+    bit_len = int(dut.payload_bit_len.value)
+    value = int(dut.payload_bits.value)
     if bit_len == 0:
         return b""
     return value.to_bytes((bit_len + 7) // 8, byteorder="big")
@@ -23,7 +23,7 @@ async def cabac_body_generates_8x8_black_payload(dut):
     await Timer(1, unit="ns")
 
     assert int(dut.supported.value) == 1
-    assert int(dut.cabac_bit_len.value) == 56
+    assert int(dut.payload_bit_len.value) == 56
     assert cabac_bytes(dut).hex() == "8062f5b7ebcb1f"
 
 
@@ -37,7 +37,7 @@ async def cabac_body_generates_16x16_generated_payload(dut):
     await Timer(1, unit="ns")
 
     assert int(dut.supported.value) == 1
-    assert int(dut.cabac_bit_len.value) > 56
+    assert int(dut.payload_bit_len.value) > 56
     assert cabac_bytes(dut) != b""
 
 
@@ -51,7 +51,7 @@ async def cabac_body_generates_32x32_block_payload(dut):
     await Timer(1, unit="ns")
 
     assert int(dut.supported.value) == 1
-    bit_len = int(dut.cabac_bit_len.value)
+    bit_len = int(dut.payload_bit_len.value)
     payload = cabac_bytes(dut)
     assert bit_len == 403
     assert payload.hex() == (
@@ -69,5 +69,5 @@ async def cabac_body_generates_64x64_partition_payload(dut):
     await Timer(1, unit="ns")
 
     assert int(dut.supported.value) == 1
-    assert int(dut.cabac_bit_len.value) > 403
+    assert int(dut.payload_bit_len.value) > 403
     assert cabac_bytes(dut) != b""

@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 
-module ff_vvc_toy4x4_encoder #(
+module ff_vvc_encoder #(
   parameter int MAX_VISIBLE_WIDTH = 64,
   parameter int MAX_VISIBLE_HEIGHT = 64,
   parameter int SAMPLE_BITS = 8,
@@ -60,6 +60,8 @@ module ff_vvc_toy4x4_encoder #(
   logic [INPUT_COUNT_BITS - 1:0] input_len_q;
   logic       input_active_q;
   logic [(SAMPLE_BITS * MAX_LUMA_SAMPLES) - 1:0] luma_frame_q;
+  logic [(SAMPLE_BITS * MAX_CHROMA_PLANE_SAMPLES) - 1:0] cb_frame_q;
+  logic [(SAMPLE_BITS * MAX_CHROMA_PLANE_SAMPLES) - 1:0] cr_frame_q;
   logic [(SAMPLE_BITS * TOY_RESIDUAL_LUMA_SAMPLES) - 1:0] luma_samples_q;
   logic [(SAMPLE_BITS * TOY_RESIDUAL_LUMA_SAMPLES) - 1:0] luma_samples_1_q;
   logic [(SAMPLE_BITS * 16) - 1:0] cb_samples_q;
@@ -81,11 +83,23 @@ module ff_vvc_toy4x4_encoder #(
   logic        coding_tree_uses_capacity_tu_grid;
   logic [12:0] coding_tree_luma_tu_count;
   logic [12:0] coding_tree_capacity_tu_grid_bit_len;
-  logic        generated_cabac_body_supported;
-  logic [12:0] generated_cabac_body_len;
-  logic [MAX_SLICE_PAYLOAD_BITS - 1:0] generated_cabac_body_bits;
+  logic        cabac_supported;
+  logic [12:0] cabac_payload_bit_len;
+  logic [MAX_SLICE_PAYLOAD_BITS - 1:0] cabac_compat_payload_bits;
+  logic        cabac_enable;
+  logic [7:0]  palette_symbol_count;
+  logic [(24 * 64) - 1:0] palette_symbol_payload;
+  logic        cabac_stream_valid;
+  logic [7:0]  cabac_stream_data;
+  logic        cabac_stream_last;
+  logic [12:0] cabac_stream_byte_count;
+  logic [12:0] slice_payload_ebsp_len_q;
+  logic [12:0] slice_payload_ebsp_cra_len_q;
+  logic [MAX_SLICE_PAYLOAD_BITS - 1:0] slice_payload_ebsp_bits_q;
+  logic [MAX_SLICE_PAYLOAD_BITS - 1:0] slice_payload_ebsp_cra_bits_q;
 
   assign busy = input_active_q || m_axis_valid || (index_q != 0);
+  assign cabac_enable = 1'b1;
 
   ff_vvc_toy_coding_tree_scheduler coding_tree_scheduler (
     .visible_width(visible_width),
@@ -98,17 +112,35 @@ module ff_vvc_toy4x4_encoder #(
     .capacity_tu_grid_bit_len(coding_tree_capacity_tu_grid_bit_len)
   );
 
-  ff_vvc_toy_cabac_body #(
+  assign palette_symbol_count =
+    (((visible_width + 16'd7) >> 3) * ((visible_height + 16'd7) >> 3));
+
+  ff_vvc_cabac #(
+    .MAX_VISIBLE_WIDTH(MAX_VISIBLE_WIDTH),
+    .MAX_VISIBLE_HEIGHT(MAX_VISIBLE_HEIGHT),
+    .MAX_PALETTE_SYMBOLS(64),
     .MAX_SLICE_PAYLOAD_BITS(MAX_SLICE_PAYLOAD_BITS)
-  ) generated_cabac_body (
+  ) cabac_writer (
+    .enable(cabac_enable),
+    .mode_palette_444(PALETTE_MODE),
     .body_kind(coding_tree_body_kind),
+    .visible_width(visible_width),
+    .visible_height(visible_height),
     .coded_width(coding_tree_coded_width),
     .coded_height(coding_tree_coded_height),
     .luma_rem(quant_luma_rem_q),
     .chroma_rem(quant_chroma_rem_q),
-    .supported(generated_cabac_body_supported),
-    .cabac_bit_len(generated_cabac_body_len),
-    .cabac_bits(generated_cabac_body_bits)
+    .symbol_count(palette_symbol_count),
+    .symbol_payload(palette_symbol_payload),
+    .supported(cabac_supported),
+    .payload_bit_len(cabac_payload_bit_len),
+    .m_axis_ready(1'b1),
+    .m_axis_valid(cabac_stream_valid),
+    .m_axis_data(cabac_stream_data),
+    .m_axis_last(cabac_stream_last),
+    .stream_byte_index(13'd0),
+    .stream_byte_count(cabac_stream_byte_count),
+    .compat_payload_bits(cabac_compat_payload_bits)
   );
 
   ff_residual_stub #(
@@ -145,6 +177,8 @@ module ff_vvc_toy4x4_encoder #(
       sampled_u <= '0;
       sampled_v <= '0;
       luma_frame_q <= '0;
+      cb_frame_q <= '0;
+      cr_frame_q <= '0;
       luma_samples_q <= '0;
       luma_samples_1_q <= '0;
       cb_samples_q <= '0;
@@ -157,6 +191,11 @@ module ff_vvc_toy4x4_encoder #(
       m_axis_valid <= 1'b0;
       m_axis_data  <= '0;
       m_axis_last  <= 1'b0;
+      slice_payload_ebsp_len_q <= '0;
+      slice_payload_ebsp_cra_len_q <= '0;
+      slice_payload_ebsp_bits_q <= '0;
+      slice_payload_ebsp_cra_bits_q <= '0;
+      palette_symbol_payload <= '0;
     end else begin
       if (start && !busy) begin
         input_active_q <= 1'b1;
@@ -167,6 +206,8 @@ module ff_vvc_toy4x4_encoder #(
         input_error    <= 1'b0;
         sampled_color_valid <= 1'b0;
         luma_frame_q <= '0;
+        cb_frame_q <= '0;
+        cr_frame_q <= '0;
         luma_samples_q <= '0;
         luma_samples_1_q <= '0;
         cb_samples_q <= '0;
@@ -179,6 +220,11 @@ module ff_vvc_toy4x4_encoder #(
         m_axis_valid   <= 1'b0;
         m_axis_last    <= 1'b0;
         index_q        <= '0;
+        slice_payload_ebsp_len_q <= '0;
+        slice_payload_ebsp_cra_len_q <= '0;
+        slice_payload_ebsp_bits_q <= '0;
+        slice_payload_ebsp_cra_bits_q <= '0;
+        palette_symbol_payload <= '0;
       end else if (input_active_q && s_axis_valid && s_axis_ready) begin
         if (s_axis_last != (input_count_q == input_len_q - 1'b1)) begin
           input_error <= 1'b1;
@@ -188,6 +234,32 @@ module ff_vvc_toy4x4_encoder #(
         end
         if (input_count_q < luma_samples()) begin
           luma_frame_q[(MAX_LUMA_SAMPLES - 1 - input_count_q) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
+          if (PALETTE_MODE && is_palette_symbol_sample(input_count_q)) begin
+            palette_symbol_payload <= palette_symbol_payload |
+              palette_symbol_component_bits(palette_symbol_index(input_count_q), 2'd2, sample_to_8bit(s_axis_data));
+          end
+        end
+        if (PALETTE_MODE && input_count_q >= luma_samples() && input_count_q < luma_samples() + chroma_plane_samples()) begin
+          cb_frame_q[(MAX_CHROMA_PLANE_SAMPLES - 1 - (input_count_q - luma_samples())) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
+          if (is_palette_symbol_sample(input_count_q - luma_samples())) begin
+            palette_symbol_payload <= palette_symbol_payload |
+              palette_symbol_component_bits(
+                palette_symbol_index(input_count_q - luma_samples()),
+                2'd1,
+                sample_to_8bit(s_axis_data)
+              );
+          end
+        end
+        if (PALETTE_MODE && input_count_q >= v_sample_index() && input_count_q < v_sample_index() + chroma_plane_samples()) begin
+          cr_frame_q[(MAX_CHROMA_PLANE_SAMPLES - 1 - (input_count_q - v_sample_index())) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
+          if (is_palette_symbol_sample(input_count_q - v_sample_index())) begin
+            palette_symbol_payload <= palette_symbol_payload |
+              palette_symbol_component_bits(
+                palette_symbol_index(input_count_q - v_sample_index()),
+                2'd0,
+                sample_to_8bit(s_axis_data)
+              );
+          end
         end
         if (is_residual_luma_sample(input_count_q)) begin
           luma_samples_q[(15 - residual_luma_sample_index(input_count_q)) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
@@ -219,7 +291,11 @@ module ff_vvc_toy4x4_encoder #(
           input_active_q <= 1'b0;
           s_axis_ready   <= 1'b0;
           sampled_color_valid <= !input_error && s_axis_last;
-          stream_len_q   <= stream_len(frame_count);
+          slice_payload_ebsp_len_q <= slice_payload_escaped_len_calc(1'b0);
+          slice_payload_ebsp_bits_q <= slice_payload_escaped_bits_calc(1'b0);
+          slice_payload_ebsp_cra_len_q <= slice_payload_escaped_len_calc(1'b1);
+          slice_payload_ebsp_cra_bits_q <= slice_payload_escaped_bits_calc(1'b1);
+          stream_len_q   <= stream_len_from_slice_payloads(frame_count);
           m_axis_valid   <= 1'b1;
           m_axis_data    <= stream_byte(13'd0);
           m_axis_last    <= 1'b0;
@@ -282,6 +358,44 @@ module ff_vvc_toy4x4_encoder #(
   function automatic logic [INPUT_COUNT_BITS - 1:0] frame_samples();
     begin
       frame_samples = luma_samples() + (chroma_plane_samples() << 1);
+    end
+  endfunction
+
+  function automatic logic is_palette_symbol_sample(input logic [INPUT_COUNT_BITS - 1:0] plane_index);
+    logic [INPUT_COUNT_BITS - 1:0] x;
+    logic [INPUT_COUNT_BITS - 1:0] y;
+    begin
+      x = plane_index % visible_width;
+      y = plane_index / visible_width;
+      is_palette_symbol_sample = (x[2:0] == 3'd0) && (y[2:0] == 3'd0);
+    end
+  endfunction
+
+  function automatic logic [7:0] palette_symbol_index(input logic [INPUT_COUNT_BITS - 1:0] plane_index);
+    logic [INPUT_COUNT_BITS - 1:0] x;
+    logic [INPUT_COUNT_BITS - 1:0] y;
+    logic [15:0] tiles_x;
+    logic [15:0] index;
+    begin
+      x = plane_index % visible_width;
+      y = plane_index / visible_width;
+      tiles_x = (visible_width + 16'd7) >> 3;
+      index = (y >> 3) * tiles_x + (x >> 3);
+      palette_symbol_index = index[7:0];
+    end
+  endfunction
+
+  function automatic logic [(24 * 64) - 1:0] palette_symbol_component_bits(
+    input logic [7:0] symbol_index,
+    input logic [1:0] component,
+    input logic [7:0] sample
+  );
+    logic [(24 * 64) - 1:0] bits;
+    logic [15:0] shift_bits;
+    begin
+      bits = '0;
+      shift_bits = ((16'd63 - {8'd0, symbol_index}) * 16'd24) + ({14'd0, component} * 16'd8);
+      palette_symbol_component_bits = bits | ({{((24 * 64) - 8){1'b0}}, sample} << shift_bits);
     end
   endfunction
 
@@ -357,9 +471,27 @@ module ff_vvc_toy4x4_encoder #(
 
   function automatic logic [12:0] stream_len(input logic [1:0] frames);
     case (frames)
-      2'd2: stream_len = parameter_set_len() + color_filler_nal_len() + (slice_nal_len() * 2);
+      2'd2: stream_len = parameter_set_len() + color_filler_nal_len() + slice_nal_len() + slice_cra_nal_len();
       default: stream_len = parameter_set_len() + color_filler_nal_len() + slice_nal_len();
     endcase
+  endfunction
+
+  function automatic logic [12:0] stream_len_from_slice_payloads(input logic [1:0] frames);
+    logic [CABAC_PACKET_BITS - 1:0] first_slice;
+    logic [CABAC_PACKET_BITS - 1:0] second_slice;
+    begin
+      first_slice = slice_payload_escaped_packet(1'b0);
+      second_slice = slice_payload_escaped_packet(1'b1);
+      case (frames)
+        2'd2: stream_len_from_slice_payloads =
+          parameter_set_len() + color_filler_nal_len()
+          + NAL_OVERHEAD_LEN + first_slice[CABAC_PACKET_BITS - 1 -: 13]
+          + NAL_OVERHEAD_LEN + second_slice[CABAC_PACKET_BITS - 1 -: 13];
+        default: stream_len_from_slice_payloads =
+          parameter_set_len() + color_filler_nal_len()
+          + NAL_OVERHEAD_LEN + first_slice[CABAC_PACKET_BITS - 1 -: 13];
+      endcase
+    end
   endfunction
 
   function automatic logic [12:0] sps_nal_len();
@@ -389,7 +521,7 @@ module ff_vvc_toy4x4_encoder #(
       end else if (uses_capacity_tu_grid()) begin
         bit_len = 13'd24 + capacity_tu_grid_bit_len() + 13'd1;
       end else begin
-        cabac = toy_cabac_bitstream(
+        cabac = generated_cabac_bitstream(
           quant_luma_rem(),
           quant_luma_ac_tokens(),
           quant_luma_rem_1(),
@@ -403,7 +535,13 @@ module ff_vvc_toy4x4_encoder #(
 
   function automatic logic [12:0] slice_nal_len();
     begin
-      slice_nal_len = NAL_OVERHEAD_LEN + slice_payload_len();
+      slice_nal_len = NAL_OVERHEAD_LEN + slice_payload_ebsp_len_q;
+    end
+  endfunction
+
+  function automatic logic [12:0] slice_cra_nal_len();
+    begin
+      slice_cra_nal_len = NAL_OVERHEAD_LEN + slice_payload_ebsp_cra_len_q;
     end
   endfunction
 
@@ -507,6 +645,8 @@ module ff_vvc_toy4x4_encoder #(
         nal_byte = start_code_byte(nal_index[1:0]);
       end else if (nal_index < 7'd6) begin
         nal_byte = nal_header_byte(nal_kind, nal_index[0], cra_picture);
+      end else if (nal_kind != 3'd0 && nal_kind != 3'd1 && nal_kind != 3'd3) begin
+        nal_byte = slice_payload_escaped_cached_byte(nal_index - 7'd6, cra_picture);
       end else begin
         nal_byte = payload_byte(nal_kind, nal_index - 7'd6, cra_picture);
       end
@@ -575,6 +715,221 @@ module ff_vvc_toy4x4_encoder #(
         3'd3: payload_byte = color_filler_payload_byte(payload_index);
         default: payload_byte = slice_payload_byte(payload_index, cra_picture);
       endcase
+    end
+  endfunction
+
+  function automatic logic [12:0] slice_payload_escaped_len(input logic cra_picture);
+    begin
+      slice_payload_escaped_len = slice_payload_len() + slice_payload_epb_count(cra_picture);
+    end
+  endfunction
+
+  function automatic logic [12:0] slice_payload_epb_count(input logic cra_picture);
+    logic [12:0] i;
+    logic [12:0] count;
+    logic [1:0] zero_count;
+    logic [7:0] raw_byte;
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] payload;
+    begin
+      payload = current_slice_payload_bits(cra_picture);
+      count = 13'd0;
+      zero_count = 2'd0;
+      for (i = 13'd0; i < slice_payload_len(); i = i + 13'd1) begin
+        raw_byte = slice_payload_byte_from_bits(payload, i);
+        if (zero_count >= 2'd2 && raw_byte <= 8'h03) begin
+          count = count + 13'd1;
+          zero_count = 2'd0;
+        end
+        if (raw_byte == 8'h00) begin
+          if (zero_count < 2'd2) begin
+            zero_count = zero_count + 2'd1;
+          end
+        end else begin
+          zero_count = 2'd0;
+        end
+      end
+      slice_payload_epb_count = count;
+    end
+  endfunction
+
+  function automatic logic [7:0] slice_payload_escaped_byte(
+    input logic [12:0] escaped_index,
+    input logic        cra_picture
+  );
+    logic [12:0] raw_index;
+    logic [12:0] out_index;
+    logic [1:0] zero_count;
+    logic [7:0] raw_byte;
+    logic found;
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] payload;
+    begin
+      payload = current_slice_payload_bits(cra_picture);
+      out_index = 13'd0;
+      zero_count = 2'd0;
+      found = 1'b0;
+      slice_payload_escaped_byte = 8'h00;
+
+      for (raw_index = 13'd0; raw_index < slice_payload_len(); raw_index = raw_index + 13'd1) begin
+        raw_byte = slice_payload_byte_from_bits(payload, raw_index);
+        if (!found && zero_count >= 2'd2 && raw_byte <= 8'h03) begin
+          if (out_index == escaped_index) begin
+            slice_payload_escaped_byte = 8'h03;
+            found = 1'b1;
+          end
+          out_index = out_index + 13'd1;
+          zero_count = 2'd0;
+        end
+
+        if (!found && out_index == escaped_index) begin
+          slice_payload_escaped_byte = raw_byte;
+          found = 1'b1;
+        end
+        out_index = out_index + 13'd1;
+
+        if (raw_byte == 8'h00) begin
+          if (zero_count < 2'd2) begin
+            zero_count = zero_count + 2'd1;
+          end
+        end else begin
+          zero_count = 2'd0;
+        end
+      end
+    end
+  endfunction
+
+  function automatic logic [CABAC_PACKET_BITS - 1:0] slice_payload_escaped_packet(
+    input logic cra_picture
+  );
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] raw_payload;
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] escaped_payload;
+    logic [12:0] raw_index;
+    logic [12:0] raw_len;
+    logic [12:0] escaped_len;
+    logic [1:0] zero_count;
+    logic [7:0] raw_byte;
+    begin
+      raw_payload = current_slice_payload_bits(cra_picture);
+      raw_len = slice_payload_len();
+      escaped_payload = '0;
+      escaped_len = 13'd0;
+      zero_count = 2'd0;
+
+      for (raw_index = 13'd0; raw_index < raw_len; raw_index = raw_index + 13'd1) begin
+        raw_byte = slice_payload_byte_from_bits(raw_payload, raw_index);
+        if (zero_count >= 2'd2 && raw_byte <= 8'h03) begin
+          escaped_payload = (escaped_payload << 8) | 8'h03;
+          escaped_len = escaped_len + 13'd1;
+          zero_count = 2'd0;
+        end
+
+        escaped_payload = (escaped_payload << 8) | raw_byte;
+        escaped_len = escaped_len + 13'd1;
+
+        if (raw_byte == 8'h00) begin
+          if (zero_count < 2'd2) begin
+            zero_count = zero_count + 2'd1;
+          end
+        end else begin
+          zero_count = 2'd0;
+        end
+      end
+
+      slice_payload_escaped_packet = {
+        escaped_len,
+        escaped_payload << (((MAX_SLICE_PAYLOAD_BITS >> 3) - escaped_len) * 8)
+      };
+    end
+  endfunction
+
+  function automatic logic [12:0] slice_payload_escaped_len_calc(input logic cra_picture);
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] raw_payload;
+    logic [12:0] raw_index;
+    logic [12:0] raw_len;
+    logic [12:0] escaped_len;
+    logic [1:0] zero_count;
+    logic [7:0] raw_byte;
+    begin
+      raw_payload = current_slice_payload_bits(cra_picture);
+      raw_len = slice_payload_len();
+      escaped_len = 13'd0;
+      zero_count = 2'd0;
+      for (raw_index = 13'd0; raw_index < raw_len; raw_index = raw_index + 13'd1) begin
+        raw_byte = slice_payload_byte_from_bits(raw_payload, raw_index);
+        if (zero_count >= 2'd2 && raw_byte <= 8'h03) begin
+          escaped_len = escaped_len + 13'd1;
+          zero_count = 2'd0;
+        end
+        escaped_len = escaped_len + 13'd1;
+        if (raw_byte == 8'h00) begin
+          if (zero_count < 2'd2) begin
+            zero_count = zero_count + 2'd1;
+          end
+        end else begin
+          zero_count = 2'd0;
+        end
+      end
+      slice_payload_escaped_len_calc = escaped_len;
+    end
+  endfunction
+
+  function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] slice_payload_escaped_bits_calc(
+    input logic cra_picture
+  );
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] raw_payload;
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] escaped_payload;
+    logic [12:0] raw_index;
+    logic [12:0] raw_len;
+    logic [12:0] escaped_len;
+    logic [1:0] zero_count;
+    logic [7:0] raw_byte;
+    begin
+      raw_payload = current_slice_payload_bits(cra_picture);
+      raw_len = slice_payload_len();
+      escaped_payload = '0;
+      escaped_len = 13'd0;
+      zero_count = 2'd0;
+
+      for (raw_index = 13'd0; raw_index < raw_len; raw_index = raw_index + 13'd1) begin
+        raw_byte = slice_payload_byte_from_bits(raw_payload, raw_index);
+        if (zero_count >= 2'd2 && raw_byte <= 8'h03) begin
+          escaped_payload = (escaped_payload << 8) | 8'h03;
+          escaped_len = escaped_len + 13'd1;
+          zero_count = 2'd0;
+        end
+
+        escaped_payload = (escaped_payload << 8) | raw_byte;
+        escaped_len = escaped_len + 13'd1;
+
+        if (raw_byte == 8'h00) begin
+          if (zero_count < 2'd2) begin
+            zero_count = zero_count + 2'd1;
+          end
+        end else begin
+          zero_count = 2'd0;
+        end
+      end
+
+      slice_payload_escaped_bits_calc =
+        escaped_payload << (((MAX_SLICE_PAYLOAD_BITS >> 3) - escaped_len) * 8);
+    end
+  endfunction
+
+  function automatic logic [7:0] slice_payload_escaped_cached_byte(
+    input logic [12:0] escaped_index,
+    input logic        cra_picture
+  );
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] payload;
+    logic [12:0] len;
+    begin
+      if (cra_picture) begin
+        payload = slice_payload_ebsp_cra_bits_q;
+        len = slice_payload_ebsp_cra_len_q;
+      end else begin
+        payload = slice_payload_ebsp_bits_q;
+        len = slice_payload_ebsp_len_q;
+      end
+      slice_payload_escaped_cached_byte =
+        payload >> ((((MAX_SLICE_PAYLOAD_BITS >> 3) - 1) - escaped_index) * 8);
     end
   endfunction
 
@@ -947,12 +1302,35 @@ module ff_vvc_toy4x4_encoder #(
     logic [MAX_SLICE_PAYLOAD_BITS - 1:0] payload;
 
     begin
-      payload = toy_slice_payload_bits(rem, ac_tokens, rem_1, ac_tokens_1, cra_picture);
-      quant_luma_payload_byte = payload >> (((slice_payload_len() - 13'd1) - index) * 8);
+      payload = generated_slice_payload_bits(rem, ac_tokens, rem_1, ac_tokens_1, cra_picture);
+      quant_luma_payload_byte = slice_payload_byte_from_bits(payload, index);
     end
   endfunction
 
-  function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] toy_slice_payload_bits(
+  function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] current_slice_payload_bits(
+    input logic cra_picture
+  );
+    begin
+      current_slice_payload_bits = generated_slice_payload_bits(
+        quant_luma_rem(),
+        quant_luma_ac_tokens(),
+        quant_luma_rem_1(),
+        quant_luma_ac_tokens_1(),
+        cra_picture
+      );
+    end
+  endfunction
+
+  function automatic logic [7:0] slice_payload_byte_from_bits(
+    input logic [MAX_SLICE_PAYLOAD_BITS - 1:0] payload,
+    input logic [12:0] index
+  );
+    begin
+      slice_payload_byte_from_bits = payload >> (((slice_payload_len() - 13'd1) - index) * 8);
+    end
+  endfunction
+
+  function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] generated_slice_payload_bits(
     input logic [4:0] rem,
     input logic [119:0] ac_tokens,
     input logic [4:0] rem_1,
@@ -962,9 +1340,8 @@ module ff_vvc_toy4x4_encoder #(
     logic [MAX_SLICE_PAYLOAD_BITS - 1:0] acc;
     logic [12:0]  bit_len;
     logic [CABAC_PACKET_BITS - 1:0] cabac;
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] cabac_bits;
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] selected_cabac_payload_bits;
     logic [MAX_SLICE_PAYLOAD_BITS - 1:0] capacity_bits;
-    logic [CABAC_PACKET_BITS - 1:0] palette_cabac;
     logic [12:0]  payload_len;
     logic [12:0]  payload_bits_len;
     logic [12:0]  payload_byte_len;
@@ -989,10 +1366,9 @@ module ff_vvc_toy4x4_encoder #(
 
       if (uses_capacity_tu_grid()) begin
         if (PALETTE_MODE) begin
-          palette_cabac = palette_444_cabac_bitstream();
-          payload_len = palette_cabac[CABAC_PACKET_BITS - 1 -: 13];
-          cabac_bits = palette_cabac[MAX_SLICE_PAYLOAD_BITS - 1:0];
-          acc = (acc << payload_len) | cabac_bits;
+          payload_len = cabac_payload_bit_len;
+          selected_cabac_payload_bits = cabac_compat_payload_bits;
+          acc = (acc << payload_len) | selected_cabac_payload_bits;
           bit_len = bit_len + payload_len;
         end else begin
         capacity_bits = capacity_tu_grid_bits();
@@ -1002,16 +1378,15 @@ module ff_vvc_toy4x4_encoder #(
         end
       end else begin
         if (PALETTE_MODE) begin
-          palette_cabac = palette_444_cabac_bitstream();
-          payload_len = palette_cabac[CABAC_PACKET_BITS - 1 -: 13];
-          cabac_bits = palette_cabac[MAX_SLICE_PAYLOAD_BITS - 1:0];
-          acc = (acc << payload_len) | cabac_bits;
+          payload_len = cabac_payload_bit_len;
+          selected_cabac_payload_bits = cabac_compat_payload_bits;
+          acc = (acc << payload_len) | selected_cabac_payload_bits;
           bit_len = bit_len + payload_len;
         end else begin
-          cabac = toy_cabac_bitstream(rem, ac_tokens, rem_1, ac_tokens_1);
+          cabac = generated_cabac_bitstream(rem, ac_tokens, rem_1, ac_tokens_1);
           payload_len = cabac[CABAC_PACKET_BITS - 1 -: 13];
-          cabac_bits = cabac[MAX_SLICE_PAYLOAD_BITS - 1:0];
-          acc = (acc << payload_len) | cabac_bits;
+          selected_cabac_payload_bits = cabac[MAX_SLICE_PAYLOAD_BITS - 1:0];
+          acc = (acc << payload_len) | selected_cabac_payload_bits;
           bit_len = bit_len + payload_len;
         end
       end
@@ -1023,122 +1398,21 @@ module ff_vvc_toy4x4_encoder #(
         bit_len = bit_len + 13'd1;
       end
 
-      payload_byte_len = slice_payload_len();
+      payload_byte_len = (bit_len + 13'd7) >> 3;
       payload_bits_len = payload_byte_len << 3;
-      toy_slice_payload_bits = acc << (payload_bits_len - bit_len);
+      generated_slice_payload_bits = acc << (payload_bits_len - bit_len);
     end
   endfunction
 
   function automatic logic [12:0] palette_444_payload_bit_len();
-    logic [CABAC_PACKET_BITS - 1:0] cabac;
     begin
-      cabac = palette_444_cabac_bitstream();
-      palette_444_payload_bit_len = cabac[CABAC_PACKET_BITS - 1 -: 13];
+      palette_444_payload_bit_len = cabac_payload_bit_len;
     end
   endfunction
 
   function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] palette_444_payload_bits();
-    logic [CABAC_PACKET_BITS - 1:0] cabac;
     begin
-      cabac = palette_444_cabac_bitstream();
-      palette_444_payload_bits = cabac[MAX_SLICE_PAYLOAD_BITS - 1:0];
-    end
-  endfunction
-
-  function automatic logic [CABAC_PACKET_BITS - 1:0] palette_444_cabac_bitstream();
-    cabac_state_t st;
-    begin
-      st = cabac_start();
-      if (coding_tree_coded_width == 16'd64 && coding_tree_coded_height == 16'd64) begin
-        st = palette_444_encode_64x64_tree(st);
-      end else if (coding_tree_coded_width == 16'd32 && coding_tree_coded_height == 16'd32) begin
-        st = palette_444_encode_32x32_tree(st, 1'b1);
-      end else if (coding_tree_coded_width == 16'd16 && coding_tree_coded_height == 16'd16) begin
-        st = palette_444_encode_16x16_tree(st, 1'b1);
-      end else begin
-        st = palette_444_encode_8x8_cu(st, 9'd146, 1'b0, 9'd31, 1'b0, 1'b1);
-      end
-      st = cabac_encode_bin_trm(st, 1'b1);
-      st = cabac_finish(st);
-      palette_444_cabac_bitstream = {
-        st[CABAC_LEN_LSB +: 13],
-        st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
-      };
-    end
-  endfunction
-
-  function automatic cabac_state_t palette_444_encode_64x64_tree(input cabac_state_t st_in);
-    cabac_state_t st;
-    begin
-      st = st_in;
-      st = cabac_encode_bin(st, 1'b1, 9'd214, 1'b0); // 64x64 split_cu_mode split=1
-      st = cabac_encode_bin(st, 1'b1, 9'd36, 1'b0);  // 64x64 split_cu_mode qt=1
-      st = palette_444_encode_32x32_tree(st, 1'b1);
-      st = palette_444_encode_32x32_tree(st, 1'b0);
-      st = palette_444_encode_32x32_tree(st, 1'b0);
-      st = palette_444_encode_32x32_tree(st, 1'b0);
-      palette_444_encode_64x64_tree = st;
-    end
-  endfunction
-
-  function automatic cabac_state_t palette_444_encode_32x32_tree(
-    input cabac_state_t st_in,
-    input logic signal_new_entry
-  );
-    cabac_state_t st;
-    begin
-      st = st_in;
-      st = cabac_encode_bin(st, 1'b1, 9'd214, 1'b0); // 32x32 split_cu_mode split=1
-      st = cabac_encode_bin(st, 1'b1, 9'd36, 1'b0);  // 32x32 split_cu_mode qt=1
-      st = palette_444_encode_16x16_tree(st, signal_new_entry);
-      st = palette_444_encode_16x16_tree(st, 1'b0);
-      st = palette_444_encode_16x16_tree(st, 1'b0);
-      st = palette_444_encode_16x16_tree(st, 1'b0);
-      palette_444_encode_32x32_tree = st;
-    end
-  endfunction
-
-  function automatic cabac_state_t palette_444_encode_16x16_tree(
-    input cabac_state_t st_in,
-    input logic signal_new_entry
-  );
-    cabac_state_t st;
-    begin
-      st = st_in;
-      st = cabac_encode_bin(st, 1'b1, 9'd214, 1'b0); // 16x16 split_cu_mode split=1
-      st = cabac_encode_bin(st, 1'b1, 9'd36, 1'b0);  // 16x16 split_cu_mode qt=1
-      st = palette_444_encode_8x8_cu(st, 9'd89, 1'b0, 9'd34, 1'b0, signal_new_entry);
-      st = palette_444_encode_8x8_cu(st, 9'd80, 1'b0, 9'd82, 1'b0, 1'b0);
-      st = palette_444_encode_8x8_cu(st, 9'd94, 1'b0, 9'd137, 1'b0, 1'b0);
-      st = palette_444_encode_8x8_cu(st, 9'd76, 1'b0, 9'd142, 1'b0, 1'b0);
-      palette_444_encode_16x16_tree = st;
-    end
-  endfunction
-
-  function automatic cabac_state_t palette_444_encode_8x8_cu(
-    input cabac_state_t st_in,
-    input logic [8:0] split_lps,
-    input logic split_mps,
-    input logic [8:0] plt_lps,
-    input logic plt_mps,
-    input logic signal_new_entry
-  );
-    cabac_state_t st;
-    begin
-      st = st_in;
-      st = cabac_encode_bin(st, 1'b0, split_lps, split_mps); // split_cu_mode split=0 for an 8x8 palette CU
-      st = cabac_encode_bin(st, 1'b1, plt_lps, plt_mps);     // pred_mode PLTFlag=1
-      if (signal_new_entry) begin
-        st = cabac_encode_exp_golomb_ep(st, 6'd1, 6'd0); // num_signalled_palette_entries=1
-        st = cabac_encode_bins_ep(st, {24'd0, sample_to_8bit(sampled_y)}, 6'd8);
-        st = cabac_encode_bins_ep(st, {24'd0, sample_to_8bit(sampled_u)}, 6'd8);
-        st = cabac_encode_bins_ep(st, {24'd0, sample_to_8bit(sampled_v)}, 6'd8);
-      end else begin
-        st = cabac_encode_exp_golomb_ep(st, 6'd0, 6'd0); // palette_predictor_run=0
-        st = cabac_encode_exp_golomb_ep(st, 6'd0, 6'd0); // num_signalled_palette_entries=0
-      end
-      st = cabac_encode_bin_ep(st, 1'b0); // palette_escape_val_present_flag=0
-      palette_444_encode_8x8_cu = st;
+      palette_444_payload_bits = cabac_compat_payload_bits;
     end
   endfunction
 
@@ -1265,7 +1539,7 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [CABAC_PACKET_BITS - 1:0] toy_cabac_bitstream(
+  function automatic logic [CABAC_PACKET_BITS - 1:0] generated_cabac_bitstream(
     input logic [4:0]   rem,
     input logic [119:0] ac_tokens,
     input logic [4:0]   rem_1,
@@ -1277,13 +1551,13 @@ module ff_vvc_toy4x4_encoder #(
     begin
       chroma_rem = quant_chroma_rem();
       st = cabac_start();
-      if (generated_cabac_body_supported) begin
-        toy_cabac_bitstream = {generated_cabac_body_len, generated_cabac_body_bits};
+      if (cabac_supported) begin
+        generated_cabac_bitstream = {cabac_payload_bit_len, cabac_compat_payload_bits};
       end else begin
         st = toy_encode_capacity_placeholder_tree(st, rem, chroma_rem, ac_tokens, rem_1, ac_tokens_1);
         st = cabac_encode_bin_trm(st, 1'b1);
         st = cabac_finish(st);
-        toy_cabac_bitstream = {
+        generated_cabac_bitstream = {
           st[CABAC_LEN_LSB +: 13],
           st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
         };
@@ -1388,8 +1662,8 @@ module ff_vvc_toy4x4_encoder #(
         st = cabac_encode_bin(
           st,
           bin_pattern[num_bins - 1 - i],
-          toy_ctx_lps(ctx_offset + i[4:0]),
-          toy_ctx_mps(ctx_offset + i[4:0])
+          vvc_ctx_lps(ctx_offset + i[4:0]),
+          vvc_ctx_mps(ctx_offset + i[4:0])
         );
       end
       cabac_encode_ctx_bins = st;
@@ -1765,38 +2039,38 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [8:0] toy_ctx_lps(input logic [4:0] index);
+  function automatic logic [8:0] vvc_ctx_lps(input logic [4:0] index);
     begin
       case (index)
-        5'd0: toy_ctx_lps = 9'd146;
-        5'd1: toy_ctx_lps = 9'd81;
-        5'd2: toy_ctx_lps = 9'd128;
-        5'd3: toy_ctx_lps = 9'd52;
-        5'd4: toy_ctx_lps = 9'd160;
-        5'd5: toy_ctx_lps = 9'd129;
-        5'd6: toy_ctx_lps = 9'd24;
-        5'd7: toy_ctx_lps = 9'd58;
-        5'd8: toy_ctx_lps = 9'd29;
-        5'd9: toy_ctx_lps = 9'd172;
-        5'd10: toy_ctx_lps = 9'd107;
-        5'd11: toy_ctx_lps = 9'd136;
-        5'd12: toy_ctx_lps = 9'd128;
-        5'd13: toy_ctx_lps = 9'd125;
-        5'd14: toy_ctx_lps = 9'd184;
-        5'd15: toy_ctx_lps = 9'd112;
-        5'd16: toy_ctx_lps = 9'd28;
-        5'd17: toy_ctx_lps = 9'd67;
-        default: toy_ctx_lps = 9'd26;
+        5'd0: vvc_ctx_lps = 9'd146;
+        5'd1: vvc_ctx_lps = 9'd81;
+        5'd2: vvc_ctx_lps = 9'd128;
+        5'd3: vvc_ctx_lps = 9'd52;
+        5'd4: vvc_ctx_lps = 9'd160;
+        5'd5: vvc_ctx_lps = 9'd129;
+        5'd6: vvc_ctx_lps = 9'd24;
+        5'd7: vvc_ctx_lps = 9'd58;
+        5'd8: vvc_ctx_lps = 9'd29;
+        5'd9: vvc_ctx_lps = 9'd172;
+        5'd10: vvc_ctx_lps = 9'd107;
+        5'd11: vvc_ctx_lps = 9'd136;
+        5'd12: vvc_ctx_lps = 9'd128;
+        5'd13: vvc_ctx_lps = 9'd125;
+        5'd14: vvc_ctx_lps = 9'd184;
+        5'd15: vvc_ctx_lps = 9'd112;
+        5'd16: vvc_ctx_lps = 9'd28;
+        5'd17: vvc_ctx_lps = 9'd67;
+        default: vvc_ctx_lps = 9'd26;
       endcase
     end
   endfunction
 
-  function automatic logic toy_ctx_mps(input logic [4:0] index);
+  function automatic logic vvc_ctx_mps(input logic [4:0] index);
     begin
       case (index)
-        5'd0: toy_ctx_mps = 1'b0;
-        5'd1, 5'd2, 5'd3, 5'd4, 5'd5, 5'd9, 5'd12: toy_ctx_mps = 1'b1;
-        default: toy_ctx_mps = 1'b0;
+        5'd0: vvc_ctx_mps = 1'b0;
+        5'd1, 5'd2, 5'd3, 5'd4, 5'd5, 5'd9, 5'd12: vvc_ctx_mps = 1'b1;
+        default: vvc_ctx_mps = 1'b0;
       endcase
     end
   endfunction

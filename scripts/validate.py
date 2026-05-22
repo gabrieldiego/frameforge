@@ -134,7 +134,7 @@ def main() -> int:
             "run",
             "--quiet",
             "--",
-            "vvc-toy-4x4-video",
+            "vvc-encode",
             "--input",
             str(input_path),
             "--frames",
@@ -156,18 +156,18 @@ def main() -> int:
     env["RTL_SOURCE_SAMPLE_BITS"] = str(format_bit_depth(info.fmt))
     env["RTL_CHROMA_FORMAT_IDC"] = str(rtl_chroma_format_idc(info))
     if info.frames == 1:
-        env["FRAMEFORGE_RTL_TOY4X4_INPUT_1F"] = str(rtl_input_path)
-        env["FRAMEFORGE_RTL_TOY4X4_OUT_1F"] = str(rtl_bitstream)
-        env["FRAMEFORGE_RTL_TOY4X4_RECON_OUT_1F"] = str(rtl_internal_recon)
+        env["FRAMEFORGE_RTL_VVC_ENCODER_INPUT_1F"] = str(rtl_input_path)
+        env["FRAMEFORGE_RTL_VVC_ENCODER_OUT_1F"] = str(rtl_bitstream)
+        env["FRAMEFORGE_RTL_VVC_ENCODER_RECON_OUT_1F"] = str(rtl_internal_recon)
     else:
-        env["FRAMEFORGE_RTL_TOY4X4_INPUT"] = str(rtl_input_path)
-        env["FRAMEFORGE_RTL_TOY4X4_OUT"] = str(rtl_bitstream)
-        env["FRAMEFORGE_RTL_TOY4X4_RECON_OUT"] = str(rtl_internal_recon)
+        env["FRAMEFORGE_RTL_VVC_ENCODER_INPUT"] = str(rtl_input_path)
+        env["FRAMEFORGE_RTL_VVC_ENCODER_OUT"] = str(rtl_bitstream)
+        env["FRAMEFORGE_RTL_VVC_ENCODER_RECON_OUT"] = str(rtl_internal_recon)
     run(
         [
             "make",
             "rtl-test",
-            "DUT=vvc-toy4x4",
+            "DUT=vvc-encoder",
             f"RTL_VISIBLE_WIDTH={info.width}",
             f"RTL_VISIBLE_HEIGHT={info.height}",
         ],
@@ -319,8 +319,8 @@ def vtm_decode_supported(input_path: Path, info: InputInfo) -> bool:
     if format_chroma_sampling(info.fmt) == "444":
         return (
             info.fmt == "yuv444p8"
-            and coded_dimension(info.width) <= 16
-            and coded_dimension(info.height) <= 16
+            and coded_dimension(info.width) <= 64
+            and coded_dimension(info.height) <= 64
         )
     # The clean-room slice entropy body is currently mapped to VTM's
     # coding-tree syntax for the generic 8x8 path plus generated 16x16
@@ -360,7 +360,7 @@ def sha256(path: Path) -> str:
 
 def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes:
     if format_chroma_sampling(info.fmt) == "444":
-        return palette_444_single_entry_reconstruction(input_path, info)
+        return palette_444_tile_reconstruction(input_path, info)
     if is_toy_16x16_generated_path(info):
         return cropped_toy_16x16_generated_recon(info) * info.frames
     if is_toy_32x32_generated_path(info):
@@ -392,16 +392,28 @@ def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes
     return frame * info.frames
 
 
-def palette_444_single_entry_reconstruction(input_path: Path, info: InputInfo) -> bytes:
+def palette_444_tile_reconstruction(input_path: Path, info: InputInfo) -> bytes:
     # Mirrors the current H.266 palette decoding subset:
-    # CurrentPaletteEntries is the single signalled Y/Cb/Cr entry, MaxPaletteIndex
-    # is 0, palette_idx_idc is inferred as 0 for every sample, and residuals are zero.
+    # each 8x8 CU signals one Y/Cb/Cr palette entry, MaxPaletteIndex is 0,
+    # palette_idx_idc is inferred as 0 for every sample, and residuals are zero.
     frame = input_path.read_bytes()[: frame_len(info)]
     luma_len = info.width * info.height
-    y = read_normalized_sample(frame, 0, info)
-    u = read_normalized_sample(frame, luma_len, info)
-    v = read_normalized_sample(frame, luma_len * 2, info)
-    return bytes([y] * luma_len + [u] * luma_len + [v] * luma_len) * info.frames
+    y_plane = bytearray(luma_len)
+    u_plane = bytearray(luma_len)
+    v_plane = bytearray(luma_len)
+    for origin_y in range(0, info.height, 8):
+        for origin_x in range(0, info.width, 8):
+            sample_index = origin_y * info.width + origin_x
+            y = read_normalized_sample(frame, sample_index, info)
+            u = read_normalized_sample(frame, luma_len + sample_index, info)
+            v = read_normalized_sample(frame, (luma_len * 2) + sample_index, info)
+            for y_off in range(min(8, info.height - origin_y)):
+                row = (origin_y + y_off) * info.width + origin_x
+                width = min(8, info.width - origin_x)
+                y_plane[row : row + width] = bytes([y] * width)
+                u_plane[row : row + width] = bytes([u] * width)
+                v_plane[row : row + width] = bytes([v] * width)
+    return bytes(y_plane + u_plane + v_plane) * info.frames
 
 
 def uses_capacity_tu_grid(frame: bytes, info: InputInfo) -> bool:
