@@ -560,6 +560,18 @@ struct ToyPalette444Syntax {
     max_palette_index: u8,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToyPaletteSyntaxTokenKind {
+    Eg0 { value: u32 },
+    FixedLength { value: u32, bit_count: u8 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ToyPaletteSyntaxToken {
+    name: &'static str,
+    kind: ToyPaletteSyntaxTokenKind,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ToyEntropySchedule {
     kind: ToyEntropyScheduleKind,
@@ -1405,6 +1417,14 @@ fn toy_palette_444_single_entry_syntax(
 }
 
 fn toy_palette_444_binarized_syntax_bits(syntax: ToyPalette444Syntax) -> Vec<bool> {
+    let mut bits = Vec::new();
+    for token in toy_palette_444_syntax_tokens(syntax) {
+        append_palette_syntax_token_bits(&mut bits, token);
+    }
+    bits
+}
+
+fn toy_palette_444_syntax_tokens(syntax: ToyPalette444Syntax) -> Vec<ToyPaletteSyntaxToken> {
     debug_assert_eq!(syntax.tree_type, ToyPaletteTreeType::SingleTree);
     debug_assert_eq!(syntax.start_comp, 0);
     debug_assert_eq!(syntax.num_comps, 3);
@@ -1416,19 +1436,53 @@ fn toy_palette_444_binarized_syntax_bits(syntax: ToyPalette444Syntax) -> Vec<boo
     );
     debug_assert_eq!(syntax.max_palette_index, 0);
 
-    let mut bits = Vec::new();
-    append_eg0_bits(&mut bits, syntax.num_signalled_palette_entries as u32);
+    let mut tokens = Vec::new();
+    tokens.push(ToyPaletteSyntaxToken {
+        name: "num_signalled_palette_entries",
+        kind: ToyPaletteSyntaxTokenKind::Eg0 {
+            value: syntax.num_signalled_palette_entries as u32,
+        },
+    });
     for entry in syntax.new_palette_entries {
-        append_fixed_bits(&mut bits, entry.y as u64, 8);
-        append_fixed_bits(&mut bits, entry.u as u64, 8);
-        append_fixed_bits(&mut bits, entry.v as u64, 8);
+        tokens.push(ToyPaletteSyntaxToken {
+            name: "new_palette_entries[0][i]",
+            kind: ToyPaletteSyntaxTokenKind::FixedLength {
+                value: entry.y as u32,
+                bit_count: 8,
+            },
+        });
+        tokens.push(ToyPaletteSyntaxToken {
+            name: "new_palette_entries[1][i]",
+            kind: ToyPaletteSyntaxTokenKind::FixedLength {
+                value: entry.u as u32,
+                bit_count: 8,
+            },
+        });
+        tokens.push(ToyPaletteSyntaxToken {
+            name: "new_palette_entries[2][i]",
+            kind: ToyPaletteSyntaxTokenKind::FixedLength {
+                value: entry.v as u32,
+                bit_count: 8,
+            },
+        });
     }
-    append_fixed_bits(
-        &mut bits,
-        u64::from(syntax.palette_escape_val_present_flag),
-        1,
-    );
-    bits
+    tokens.push(ToyPaletteSyntaxToken {
+        name: "palette_escape_val_present_flag",
+        kind: ToyPaletteSyntaxTokenKind::FixedLength {
+            value: u32::from(syntax.palette_escape_val_present_flag),
+            bit_count: 1,
+        },
+    });
+    tokens
+}
+
+fn append_palette_syntax_token_bits(bits: &mut Vec<bool>, token: ToyPaletteSyntaxToken) {
+    match token.kind {
+        ToyPaletteSyntaxTokenKind::Eg0 { value } => append_eg0_bits(bits, value),
+        ToyPaletteSyntaxTokenKind::FixedLength { value, bit_count } => {
+            append_fixed_bits(bits, value as u64, bit_count);
+        }
+    }
 }
 
 fn append_eg0_bits(bits: &mut Vec<bool>, value: u32) {
@@ -4285,6 +4339,19 @@ mod tests {
         let bits = toy_palette_444_binarized_syntax_bits(syntax);
         assert_eq!(bits.len(), 28);
         assert_eq!(&bits[0..3], &[false, true, false]); // EG0 for value 1.
+
+        let tokens = toy_palette_444_syntax_tokens(syntax);
+        let names: Vec<&str> = tokens.iter().map(|token| token.name).collect();
+        assert_eq!(
+            names,
+            vec![
+                "num_signalled_palette_entries",
+                "new_palette_entries[0][i]",
+                "new_palette_entries[1][i]",
+                "new_palette_entries[2][i]",
+                "palette_escape_val_present_flag",
+            ]
+        );
     }
 
     #[test]
