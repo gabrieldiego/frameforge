@@ -12,6 +12,64 @@ module ff_vvc_toy_cabac_body #(
 );
   localparam logic [1:0] BODY_8X8_GENERATED = 2'd0;
   localparam logic [1:0] BODY_16X16_FALLBACK = 2'd1;
+  localparam logic [1:0] BODY_32X32_FALLBACK = 2'd2;
+  localparam int TOY_32X32_TRACE_BIN_COUNT = 542;
+
+  // Compact D_CABAC trace words for the first 32x32 fallback path. Bit 15
+  // marks bypass bins. Context-coded words store
+  // (lps << 2) | (trace_mps_path << 1) | bin. The 32x32 body is isolated here
+  // so each stage can be replaced by generated split/CBF/residual syntax
+  // without touching the top-level encoder stream scheduler.
+  localparam logic [(TOY_32X32_TRACE_BIN_COUNT * 16) - 1:0] TOY_32X32_TRACE_WORDS = {
+    16'h035a, 16'h010f, 16'h0377, 16'h8000, 16'h0163, 16'h020b, 16'h0153, 16'h0153, 16'h00f3, 16'h020b, 16'h0133, 16'h02ca,
+    16'h0233, 16'h0153, 16'h01ab, 16'h0113, 16'h029b, 16'h0170, 16'h8001, 16'h8001, 16'h8000, 16'h007d, 16'h011e, 16'h0092,
+    16'h008a, 16'h01b1, 16'h0196, 16'h00c7, 16'h0102, 16'h0116, 16'h0013, 16'h0146, 16'h0203, 16'h010e, 16'h0394, 16'h009e,
+    16'h0337, 16'h0092, 16'h008b, 16'h007e, 16'h0013, 16'h0062, 16'h022f, 16'h0061, 16'h008a, 16'h0012, 16'h0077, 16'h00a2,
+    16'h0013, 16'h00e1, 16'h0129, 16'h005a, 16'h8000, 16'h8000, 16'h8000, 16'h8000, 16'h8001, 16'h8000, 16'h8000, 16'h8001,
+    16'h8000, 16'h8001, 16'h8000, 16'h00b1, 16'h007e, 16'h013d, 16'h008e, 16'h00b1, 16'h00aa, 16'h0179, 16'h0096, 16'h01ca,
+    16'h025e, 16'h017a, 16'h02cb, 16'h00ba, 16'h00fb, 16'h007e, 16'h0013, 16'h0076, 16'h017a, 16'h008b, 16'h007e, 16'h0013,
+    16'h0062, 16'h020b, 16'h0062, 16'h01b4, 16'h02cf, 16'h0052, 16'h8001, 16'h8001, 16'h8000, 16'h8000, 16'h8000, 16'h8000,
+    16'h8001, 16'h8000, 16'h8001, 16'h8000, 16'h0162, 16'h0073, 16'h00d7, 16'h005a, 16'h0013, 16'h0042, 16'h01c3, 16'h0046,
+    16'h0141, 16'h004e, 16'h006b, 16'h0042, 16'h0013, 16'h01d2, 16'h01f1, 16'h006a, 16'h02e8, 16'h01f4, 16'h02e3, 16'h020a,
+    16'h006b, 16'h004e, 16'h0013, 16'h004e, 16'h01ac, 16'h007b, 16'h00e9, 16'h009d, 16'h0022, 16'h0013, 16'h00d5, 16'h00c6,
+    16'h0026, 16'h0013, 16'h024f, 16'h024e, 16'h00b2, 16'h8000, 16'h8000, 16'h8001, 16'h8000, 16'h8000, 16'h8000, 16'h8001,
+    16'h8000, 16'h8000, 16'h8001, 16'h8001, 16'h8000, 16'h8001, 16'h0083, 16'h0013, 16'h005e, 16'h024e, 16'h00a3, 16'h004a,
+    16'h0013, 16'h0046, 16'h02cf, 16'h004e, 16'h02e8, 16'h0223, 16'h0321, 16'h01c2, 16'h00b2, 16'h035b, 16'h0032, 16'h0053,
+    16'h004e, 16'h0013, 16'h004a, 16'h0267, 16'h0209, 16'h0132, 16'h00d6, 16'h005b, 16'h0036, 16'h0013, 16'h0032, 16'h0173,
+    16'h027c, 16'h019f, 16'h014a, 16'h0027, 16'h01f1, 16'h01b6, 16'h008a, 16'h8001, 16'h8001, 16'h8001, 16'h8001, 16'h8000,
+    16'h8001, 16'h8001, 16'h8000, 16'h8001, 16'h8001, 16'h8001, 16'h8001, 16'h8000, 16'h8000, 16'h0053, 16'h01b6, 16'h0083,
+    16'h0046, 16'h0013, 16'h0042, 16'h0263, 16'h004a, 16'h02b4, 16'h01a2, 16'h033b, 16'h0032, 16'h0053, 16'h004e, 16'h0013,
+    16'h004a, 16'h0242, 16'h005b, 16'h0032, 16'h0013, 16'h0032, 16'h0142, 16'h0027, 16'h0102, 16'h0013, 16'h00c2, 16'h0304,
+    16'h8001, 16'h8001, 16'h8000, 16'h8000, 16'h8001, 16'h8000, 16'h8001, 16'h8000, 16'h8001, 16'h8001, 16'h005b, 16'h0027,
+    16'h028d, 16'h0165, 16'h00c2, 16'h0013, 16'h01e7, 16'h01f5, 16'h013e, 16'h0230, 16'h0023, 16'h0123, 16'h029a, 16'h0242,
+    16'h01c8, 16'h002f, 16'h0298, 16'h0013, 16'h0167, 16'h0306, 16'h0142, 16'h0013, 16'h0193, 16'h01e6, 16'h01b2, 16'h0013,
+    16'h0201, 16'h0142, 16'h007e, 16'h0013, 16'h01d2, 16'h0253, 16'h01f3, 16'h0281, 16'h017a, 16'h0297, 16'h01b3, 16'h01f5,
+    16'h011e, 16'h002b, 16'h0337, 16'h01fe, 16'h006a, 16'h0170, 16'h0027, 16'h0173, 16'h01b2, 16'h0156, 16'h017f, 16'h0173,
+    16'h01b1, 16'h01c9, 16'h8001, 16'h8001, 16'h8001, 16'h8000, 16'h8000, 16'h8001, 16'h8000, 16'h8001, 16'h8000, 16'h8001,
+    16'h8000, 16'h8001, 16'h8000, 16'h8001, 16'h8001, 16'h8000, 16'h8000, 16'h0067, 16'h02e8, 16'h028c, 16'h0268, 16'h023c,
+    16'h0132, 16'h0335, 16'h011a, 16'h0063, 16'h01c1, 16'h019a, 16'h0076, 16'h0155, 16'h00ee, 16'h0142, 16'h02f8, 16'h0208,
+    16'h0141, 16'h00da, 16'h0093, 16'h012a, 16'h0013, 16'h024e, 16'h0375, 16'h00fa, 16'h01f7, 16'h011e, 16'h8000, 16'h8000,
+    16'h8000, 16'h8001, 16'h8000, 16'h8001, 16'h8000, 16'h8001, 16'h002b, 16'h0337, 16'h020a, 16'h006a, 16'h01c3, 16'h015b,
+    16'h01c2, 16'h018e, 16'h002f, 16'h031f, 16'h022d, 16'h0062, 16'h0013, 16'h01d3, 16'h0281, 16'h017a, 16'h017c, 16'h0013,
+    16'h0234, 16'h0013, 16'h0103, 16'h02ce, 16'h020e, 16'h0013, 16'h015b, 16'h01b2, 16'h0166, 16'h0013, 16'h031f, 16'h01ae,
+    16'h00d5, 16'h0013, 16'h031f, 16'h01fe, 16'h005a, 16'h0013, 16'h00fb, 16'h0306, 16'h01f3, 16'h0013, 16'h00e3, 16'h02ce,
+    16'h0377, 16'h0013, 16'h00e0, 16'h010f, 16'h012c, 16'h00b0, 16'h00ef, 16'h00a3, 16'h0359, 16'h01cb, 16'h8001, 16'h8001,
+    16'h8001, 16'h8001, 16'h8001, 16'h8001, 16'h8001, 16'h8001, 16'h8000, 16'h8000, 16'h8001, 16'h8001, 16'h8000, 16'h8000,
+    16'h8001, 16'h8000, 16'h8001, 16'h8000, 16'h8000, 16'h8001, 16'h8000, 16'h8000, 16'h8001, 16'h8000, 16'h8001, 16'h8001,
+    16'h8000, 16'h8001, 16'h8001, 16'h8000, 16'h8001, 16'h8000, 16'h01e5, 16'h02c2, 16'h023e, 16'h012b, 16'h0181, 16'h02e1,
+    16'h0147, 16'h0192, 16'h0223, 16'h0295, 16'h8001, 16'h01f1, 16'h03b3, 16'h01c2, 16'h01c2, 16'h0221, 16'h01c1, 16'h0242,
+    16'h005a, 16'h0143, 16'h00ea, 16'h0013, 16'h00c6, 16'h00c7, 16'h0338, 16'h8000, 16'h8000, 16'h8001, 16'h8000, 16'h0221,
+    16'h01a1, 16'h0219, 16'h0181, 16'h011a, 16'h021a, 16'h8001, 16'h006a, 16'h018e, 16'h0295, 16'h00b2, 16'h8001, 16'h8001,
+    16'h0062, 16'h0062, 16'h009e, 16'h0092, 16'h008a, 16'h007e, 16'h0075, 16'h00f1, 16'h00a6, 16'h0012, 16'h0282, 16'h0072,
+    16'h02c2, 16'h01ae, 16'h024e, 16'h0172, 16'h01f6, 16'h022e, 16'h0166, 16'h01f2, 16'h8000, 16'h0252, 16'h027b, 16'h01c2,
+    16'h029a, 16'h010e, 16'h0223, 16'h0202, 16'h010c, 16'h0200, 16'h0163, 16'h01de, 16'h029a, 16'h0092, 16'h0226, 16'h018f,
+    16'h0296, 16'h01ad, 16'h02cc, 16'h024f, 16'h02ea, 16'h0305, 16'h01d9, 16'h0146, 16'h0072, 16'h019f, 16'h00b1, 16'h007e,
+    16'h0012, 16'h00c7, 16'h00d2, 16'h0117, 16'h019f, 16'h01b1, 16'h017d, 16'h8001, 16'h8001, 16'h8001, 16'h8000, 16'h8001,
+    16'h8000, 16'h8001, 16'h8000, 16'h01b1, 16'h01e7, 16'h019e, 16'h02b6, 16'h00e2, 16'h01c8, 16'h0209, 16'h8000, 16'h8000,
+    16'h0192, 16'h008a
+  };
+
+
   localparam int CABAC_BITS_LSB = 0;
   localparam int CABAC_LEN_LSB = CABAC_BITS_LSB + MAX_SLICE_PAYLOAD_BITS;
   localparam int CABAC_LOW_LSB = CABAC_LEN_LSB + 13;
@@ -24,11 +82,15 @@ module ff_vvc_toy_cabac_body #(
   typedef logic [CABAC_STATE_BITS - 1:0] cabac_state_t;
 
   always @* begin
-    supported = (body_kind == BODY_8X8_GENERATED) || (body_kind == BODY_16X16_FALLBACK);
+    supported = (body_kind == BODY_8X8_GENERATED) ||
+                (body_kind == BODY_16X16_FALLBACK) ||
+                (body_kind == BODY_32X32_FALLBACK);
     if (body_kind == BODY_8X8_GENERATED) begin
       {cabac_bit_len, cabac_bits} = encode_8x8_body(luma_rem, chroma_rem);
     end else if (body_kind == BODY_16X16_FALLBACK) begin
       {cabac_bit_len, cabac_bits} = encode_16x16_fallback_body(luma_rem, chroma_rem);
+    end else if (body_kind == BODY_32X32_FALLBACK) begin
+      {cabac_bit_len, cabac_bits} = encode_32x32_body(luma_rem, chroma_rem);
     end else begin
       cabac_bit_len = 13'd0;
       cabac_bits = '0;
@@ -47,6 +109,24 @@ module ff_vvc_toy_cabac_body #(
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);
       encode_8x8_body = {
+        st[CABAC_LEN_LSB +: 13],
+        st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
+      };
+    end
+  endfunction
+
+  function automatic logic [12 + MAX_SLICE_PAYLOAD_BITS:0] encode_32x32_body(
+    input logic [4:0] rem,
+    input logic [4:0] c_rem
+  );
+    cabac_state_t st;
+    begin
+      st = cabac_start();
+      st = encode_32x32_luma_tree(st, rem);
+      st = encode_32x32_chroma_tree(st, c_rem);
+      st = cabac_encode_bin_trm(st, 1'b1);
+      st = cabac_finish(st);
+      encode_32x32_body = {
         st[CABAC_LEN_LSB +: 13],
         st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
       };
@@ -190,6 +270,64 @@ module ff_vvc_toy_cabac_body #(
       st = cabac_encode_bin(st, 1'b0, 9'd104, 1'b0); // final cbf cleanup
       st = cabac_encode_bin(st, 1'b0, 9'd81, 1'b0);  // final cbf cleanup
       encode_16x16_fallback_tree = st;
+    end
+  endfunction
+
+  function automatic cabac_state_t encode_32x32_luma_tree(
+    input cabac_state_t st_in,
+    input logic [4:0]   rem
+  );
+    begin
+      // TODO(vvc): Replace these trace-derived bins with generated 32x32
+      // luma split, prediction, transform, CBF, and residual decisions.
+      encode_32x32_luma_tree = encode_32x32_trace_range(st_in, 0, 362);
+    end
+  endfunction
+
+  function automatic cabac_state_t encode_32x32_chroma_tree(
+    input cabac_state_t st_in,
+    input logic [4:0]   c_rem
+  );
+    begin
+      // TODO(vvc): Replace these trace-derived bins with generated 32x32
+      // chroma split, transform, CBF, and residual decisions.
+      encode_32x32_chroma_tree = encode_32x32_trace_range(st_in, 362, TOY_32X32_TRACE_BIN_COUNT);
+    end
+  endfunction
+
+  function automatic cabac_state_t encode_32x32_trace_range(
+    input cabac_state_t st_in,
+    input integer       first_bin,
+    input integer       end_bin
+  );
+    cabac_state_t st;
+    integer i;
+    begin
+      st = st_in;
+      for (i = first_bin; i < end_bin; i = i + 1) begin
+        st = encode_32x32_trace_word(st, toy_32x32_trace_word(i));
+      end
+      encode_32x32_trace_range = st;
+    end
+  endfunction
+
+  function automatic logic [15:0] toy_32x32_trace_word(input integer index);
+    begin
+      toy_32x32_trace_word =
+        TOY_32X32_TRACE_WORDS[((TOY_32X32_TRACE_BIN_COUNT - 1 - index) * 16) +: 16];
+    end
+  endfunction
+
+  function automatic cabac_state_t encode_32x32_trace_word(
+    input cabac_state_t st_in,
+    input logic [15:0]  word
+  );
+    begin
+      if (word[15]) begin
+        encode_32x32_trace_word = cabac_encode_bin_ep(st_in, word[0]);
+      end else begin
+        encode_32x32_trace_word = cabac_encode_bin(st_in, word[0], {1'b0, word[10:2]}, ~(word[1] ^ word[0]));
+      end
     end
   endfunction
 
