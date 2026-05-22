@@ -158,11 +158,15 @@ def default_black_yuv(
     out_dir.mkdir(parents=True, exist_ok=True)
     suffix = f"yuv{chroma_format}p8" if bit_depth == 8 else f"yuv{chroma_format}p{bit_depth}le"
     path = out_dir / f"black_{width}x{height}_{frames}f_{suffix}.yuv"
-    frame_len = frame_samples(width, height, chroma_format)
+    luma_samples = width * height
+    chroma_samples = frame_samples(width, height, chroma_format) - luma_samples
     if bit_depth == 8:
-        path.write_bytes(bytes(frame_len * frames))
+        frame = bytes(luma_samples) + bytes([128]) * chroma_samples
+        path.write_bytes(frame * frames)
     else:
-        path.write_bytes(bytes(frame_len * frames * 2))
+        neutral = (1 << (bit_depth - 1)).to_bytes(2, "little")
+        frame = bytes(luma_samples * 2) + neutral * chroma_samples
+        path.write_bytes(frame * frames)
     return path
 
 
