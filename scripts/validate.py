@@ -316,12 +316,11 @@ def validate_supported_input(input_path: Path, info: InputInfo, max_width: int, 
 
 
 def vtm_decode_supported(input_path: Path, info: InputInfo) -> bool:
-    # The encoder capacity is 64x64, but the clean-room slice entropy body is
-    # still only mapped to VTM's coding-tree syntax for the generic 8x8 path
-    # and the generated 16x16/32x32 paths. Larger inputs are
-    # drained by both software and RTL and must keep matching internally, but
-    # external decode is enabled only once their geometry-dependent CABAC trees
-    # are implemented instead of guessed.
+    # The clean-room slice entropy body is currently mapped to VTM's
+    # coding-tree syntax for the generic 8x8 path and the generated
+    # 16x16/32x32 paths. 64x64 streams are still drained by both software
+    # and RTL through the generated TU-grid body, but external decode is
+    # enabled only once that path emits compliant VVC coding-tree entropy.
     if coded_dimension(info.width) == 8 and coded_dimension(info.height) == 8:
         return True
     return is_toy_16x16_generated_path(info) or is_toy_32x32_generated_path(info)

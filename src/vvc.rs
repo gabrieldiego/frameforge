@@ -533,13 +533,12 @@ struct ToyEntropyToken {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToyEntropyScheduleKind {
     VtmMapped8x8,
-    CapacityPlaceholder,
+    GeneratedTuGrid,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToyCodingTreeBodyKind {
     Generated,
-    CapacityPlaceholder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1212,7 +1211,6 @@ fn write_toy_coding_tree_entropy(
     color: Toy4x4QuantizedColor,
 ) {
     let bits = match toy_coding_tree_body(geometry, color).kind {
-        ToyCodingTreeBodyKind::CapacityPlaceholder => toy_capacity_tu_grid_bits(color),
         ToyCodingTreeBodyKind::Generated => toy_cabac_bits(geometry, color),
     };
     writer.write_cabac_bits("cabac_toy_quantized_residual_bits", &bits);
@@ -1249,16 +1247,14 @@ fn toy_entropy_schedule(
     let kind = if toy_entropy_tokens_mapped_to_vtm_geometry(geometry) {
         ToyEntropyScheduleKind::VtmMapped8x8
     } else {
-        ToyEntropyScheduleKind::CapacityPlaceholder
+        ToyEntropyScheduleKind::GeneratedTuGrid
     };
 
     ToyEntropySchedule {
         kind,
         tokens: match kind {
             ToyEntropyScheduleKind::VtmMapped8x8 => toy_8x8_mapped_entropy_tokens(color),
-            ToyEntropyScheduleKind::CapacityPlaceholder => {
-                toy_capacity_placeholder_entropy_tokens(color)
-            }
+            ToyEntropyScheduleKind::GeneratedTuGrid => toy_generated_tu_grid_entropy_tokens(color),
         },
     }
 }
@@ -1305,7 +1301,7 @@ fn toy_8x8_mapped_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<ToyEntropyT
     tokens
 }
 
-fn toy_capacity_placeholder_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<ToyEntropyToken> {
+fn toy_generated_tu_grid_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<ToyEntropyToken> {
     let mut tokens = toy_8x8_mapped_entropy_tokens(color);
     tokens.insert(
         tokens.len() - 1,
@@ -1438,55 +1434,36 @@ fn toy_entropy_tokens_mapped_to_vtm_geometry(geometry: ToyVideoGeometry) -> bool
 
 fn toy_coding_tree_body(
     geometry: ToyVideoGeometry,
-    color: Toy4x4QuantizedColor,
+    _color: Toy4x4QuantizedColor,
 ) -> ToyCodingTreeBody {
     let coded = geometry.coded();
-    let kind = if supports_generated_coding_tree_body(geometry, color) {
-        ToyCodingTreeBodyKind::Generated
-    } else {
-        ToyCodingTreeBodyKind::CapacityPlaceholder
-    };
+    let kind = ToyCodingTreeBodyKind::Generated;
     ToyCodingTreeBody { kind, coded }
 }
 
-fn supports_generated_coding_tree_body(
-    geometry: ToyVideoGeometry,
-    color: Toy4x4QuantizedColor,
-) -> bool {
-    toy_entropy_tokens_mapped_to_vtm_geometry(geometry)
-        || toy_16x16_generated_params(geometry, color).is_some()
-        || toy_32x32_generated_params(geometry, color).is_some()
-}
-
 fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Vec<bool> {
-    let body = toy_coding_tree_body(geometry, color);
-    match body.kind {
-        ToyCodingTreeBodyKind::Generated => match body.coded {
-            ToyCodedGeometry {
-                width: 8,
-                height: 8,
-            } => {}
-            ToyCodedGeometry {
-                width: 16,
-                height: 16,
-            } => {
-                return toy_16x16_generated_cabac_bits(
-                    toy_16x16_generated_params(geometry, color)
-                        .expect("16x16 generated parameters"),
-                );
-            }
-            ToyCodedGeometry {
-                width: 32,
-                height: 32,
-            } => {
-                return toy_32x32_generated_cabac_bits(
-                    toy_32x32_generated_params(geometry, color)
-                        .expect("32x32 generated parameters"),
-                );
-            }
-            _ => return toy_capacity_tu_grid_bits(color),
-        },
-        ToyCodingTreeBodyKind::CapacityPlaceholder => {
+    match geometry.coded() {
+        ToyCodedGeometry {
+            width: 8,
+            height: 8,
+        } => {}
+        ToyCodedGeometry {
+            width: 16,
+            height: 16,
+        } => {
+            return toy_16x16_generated_cabac_bits(
+                toy_16x16_generated_params(geometry, color).expect("16x16 generated parameters"),
+            );
+        }
+        ToyCodedGeometry {
+            width: 32,
+            height: 32,
+        } => {
+            return toy_32x32_generated_cabac_bits(
+                toy_32x32_generated_params(geometry, color).expect("32x32 generated parameters"),
+            );
+        }
+        _ => {
             return toy_capacity_tu_grid_bits(color);
         }
     }
@@ -3345,7 +3322,7 @@ mod tests {
     }
 
     #[test]
-    fn toy_entropy_schedule_marks_vtm_mapped_and_capacity_paths() {
+    fn toy_entropy_schedule_marks_vtm_mapped_and_generated_tu_grid_paths() {
         let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
         let mapped = toy_entropy_schedule(
             ToyVideoGeometry {
@@ -3357,17 +3334,17 @@ mod tests {
         assert_eq!(mapped.kind, ToyEntropyScheduleKind::VtmMapped8x8);
         assert_eq!(mapped.tokens.len(), 11);
 
-        let capacity = toy_entropy_schedule(
+        let generated = toy_entropy_schedule(
             ToyVideoGeometry {
                 width: 64,
                 height: 64,
             },
             black,
         );
-        assert_eq!(capacity.kind, ToyEntropyScheduleKind::CapacityPlaceholder);
-        assert_eq!(capacity.tokens.len(), mapped.tokens.len() + 1);
+        assert_eq!(generated.kind, ToyEntropyScheduleKind::GeneratedTuGrid);
+        assert_eq!(generated.tokens.len(), mapped.tokens.len() + 1);
         assert_eq!(
-            capacity.tokens[capacity.tokens.len() - 2].kind,
+            generated.tokens[generated.tokens.len() - 2].kind,
             ToyEntropyTokenKind::AcTokenEp {
                 component: ToyResidualComponent::Luma,
                 token: 0x40
@@ -3435,7 +3412,7 @@ mod tests {
                 black
             ),
             ToyCodingTreeBody {
-                kind: ToyCodingTreeBodyKind::CapacityPlaceholder,
+                kind: ToyCodingTreeBodyKind::Generated,
                 coded: ToyCodedGeometry {
                     width: 64,
                     height: 64
@@ -3635,11 +3612,11 @@ mod tests {
             }
         );
 
-        let capacity_64x64 = toy_coding_tree_plan(ToyVideoGeometry {
+        let grid_64x64 = toy_coding_tree_plan(ToyVideoGeometry {
             width: 64,
             height: 64,
         });
-        assert_eq!(capacity_64x64.len(), 65);
+        assert_eq!(grid_64x64.len(), 65);
     }
 
     #[test]
