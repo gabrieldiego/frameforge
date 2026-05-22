@@ -38,8 +38,12 @@ else ifeq ($(DUT),vvc-coding-tree-scheduler)
 VERILOG_SOURCES := $(RTL_DIR)/ff_vvc_toy_coding_tree_scheduler.sv
 TOPLEVEL := ff_vvc_toy_coding_tree_scheduler
 COCOTB_TEST_MODULES := test_vvc_toy_coding_tree_scheduler
+else ifeq ($(DUT),vvc-cabac-body)
+VERILOG_SOURCES := $(RTL_DIR)/ff_vvc_toy_cabac_body.sv
+TOPLEVEL := ff_vvc_toy_cabac_body
+COCOTB_TEST_MODULES := test_vvc_toy_cabac_body
 else ifeq ($(DUT),vvc-toy4x4)
-VERILOG_SOURCES := $(RTL_DIR)/ff_residual_stub.sv $(RTL_DIR)/ff_vvc_toy_coding_tree_scheduler.sv $(RTL_DIR)/ff_vvc_toy4x4_encoder.sv
+VERILOG_SOURCES := $(RTL_DIR)/ff_residual_stub.sv $(RTL_DIR)/ff_vvc_toy_coding_tree_scheduler.sv $(RTL_DIR)/ff_vvc_toy_cabac_body.sv $(RTL_DIR)/ff_vvc_toy4x4_encoder.sv
 TOPLEVEL := ff_vvc_toy4x4_encoder
 COCOTB_TEST_MODULES := test_vvc_toy4x4_encoder
 else

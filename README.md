@@ -185,6 +185,12 @@ Run the local coding-tree scheduler check without generating a complete stream:
 make rtl-test DUT=vvc-coding-tree-scheduler
 ```
 
+Run the local generated CABAC body check:
+
+```sh
+make rtl-test DUT=vvc-cabac-body
+```
+
 Run the same RTL toy encoder with wider input sample buses:
 
 ```sh

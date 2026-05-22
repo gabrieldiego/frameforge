@@ -134,6 +134,9 @@ module ff_vvc_toy4x4_encoder #(
   logic        coding_tree_uses_capacity_tu_grid;
   logic [12:0] coding_tree_luma_tu_count;
   logic [12:0] coding_tree_capacity_tu_grid_bit_len;
+  logic        generated_cabac_body_supported;
+  logic [12:0] generated_cabac_body_len;
+  logic [MAX_SLICE_PAYLOAD_BITS - 1:0] generated_cabac_body_bits;
 
   assign busy = input_active_q || m_axis_valid || (index_q != 0);
 
@@ -146,6 +149,17 @@ module ff_vvc_toy4x4_encoder #(
     .uses_capacity_tu_grid(coding_tree_uses_capacity_tu_grid),
     .luma_tu_count(coding_tree_luma_tu_count),
     .capacity_tu_grid_bit_len(coding_tree_capacity_tu_grid_bit_len)
+  );
+
+  ff_vvc_toy_cabac_body #(
+    .MAX_SLICE_PAYLOAD_BITS(MAX_SLICE_PAYLOAD_BITS)
+  ) generated_cabac_body (
+    .body_kind(coding_tree_body_kind),
+    .luma_rem(quant_luma_rem_q),
+    .chroma_rem(quant_chroma_rem_q),
+    .supported(generated_cabac_body_supported),
+    .cabac_bit_len(generated_cabac_body_len),
+    .cabac_bits(generated_cabac_body_bits)
   );
 
   ff_residual_stub #(
@@ -1163,22 +1177,26 @@ module ff_vvc_toy4x4_encoder #(
     begin
       chroma_rem = quant_chroma_rem();
       st = cabac_start();
-      if (toy_supports_32x32_trace()) begin
+      if (generated_cabac_body_supported) begin
+        toy_cabac_bitstream = {generated_cabac_body_len, generated_cabac_body_bits};
+      end else if (toy_supports_32x32_trace()) begin
         st = toy_encode_32x32_trace(st);
-      end else if (toy_supports_16x16_trace(rem, chroma_rem)) begin
-        st = toy_encode_16x16_trace(st, rem, chroma_rem);
-      end else if (toy_supports_8x8_mapped_tree()) begin
-        st = toy_encode_8x8_luma_tree(st, rem);
-        st = toy_encode_4x4_chroma_tree(st, chroma_rem);
       end else begin
-        st = toy_encode_capacity_placeholder_tree(st, rem, chroma_rem, ac_tokens, rem_1, ac_tokens_1);
+        if (toy_supports_16x16_trace(rem, chroma_rem)) begin
+          st = toy_encode_16x16_trace(st, rem, chroma_rem);
+        end else if (toy_supports_8x8_mapped_tree()) begin
+          st = toy_encode_8x8_luma_tree(st, rem);
+          st = toy_encode_4x4_chroma_tree(st, chroma_rem);
+        end else begin
+          st = toy_encode_capacity_placeholder_tree(st, rem, chroma_rem, ac_tokens, rem_1, ac_tokens_1);
+        end
+        st = cabac_encode_bin_trm(st, 1'b1);
+        st = cabac_finish(st);
+        toy_cabac_bitstream = {
+          st[CABAC_LEN_LSB +: 13],
+          st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
+        };
       end
-      st = cabac_encode_bin_trm(st, 1'b1);
-      st = cabac_finish(st);
-      toy_cabac_bitstream = {
-        st[CABAC_LEN_LSB +: 13],
-        st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
-      };
     end
   endfunction
 
