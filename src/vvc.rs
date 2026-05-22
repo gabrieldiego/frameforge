@@ -539,7 +539,6 @@ enum ToyEntropyScheduleKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToyCodingTreeBodyKind {
     Generated,
-    Scripted,
     CapacityPlaceholder,
 }
 
@@ -556,7 +555,7 @@ struct ToyEntropySchedule {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Toy16x16ScriptedParams {
+struct Toy16x16GeneratedParams {
     luma_cb_width: usize,
     luma_cb_height: usize,
     chroma_tu_count: usize,
@@ -565,7 +564,7 @@ struct Toy16x16ScriptedParams {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Toy32x32ScriptedParams {
+struct Toy32x32GeneratedParams {
     luma_cb_width: usize,
     luma_cb_height: usize,
 }
@@ -1214,9 +1213,7 @@ fn write_toy_coding_tree_entropy(
 ) {
     let bits = match toy_coding_tree_body(geometry, color).kind {
         ToyCodingTreeBodyKind::CapacityPlaceholder => toy_capacity_tu_grid_bits(color),
-        ToyCodingTreeBodyKind::Generated | ToyCodingTreeBodyKind::Scripted => {
-            toy_cabac_bits(geometry, color)
-        }
+        ToyCodingTreeBodyKind::Generated => toy_cabac_bits(geometry, color),
     };
     writer.write_cabac_bits("cabac_toy_quantized_residual_bits", &bits);
 }
@@ -1444,28 +1441,38 @@ fn toy_coding_tree_body(
     color: Toy4x4QuantizedColor,
 ) -> ToyCodingTreeBody {
     let coded = geometry.coded();
-    let kind = if toy_entropy_tokens_mapped_to_vtm_geometry(geometry) {
+    let kind = if supports_generated_coding_tree_body(geometry, color) {
         ToyCodingTreeBodyKind::Generated
-    } else if toy_16x16_scripted_params(geometry, color).is_some() {
-        ToyCodingTreeBodyKind::Scripted
-    } else if toy_32x32_scripted_params(geometry, color).is_some() {
-        ToyCodingTreeBodyKind::Scripted
     } else {
         ToyCodingTreeBodyKind::CapacityPlaceholder
     };
     ToyCodingTreeBody { kind, coded }
 }
 
+fn supports_generated_coding_tree_body(
+    geometry: ToyVideoGeometry,
+    color: Toy4x4QuantizedColor,
+) -> bool {
+    toy_entropy_tokens_mapped_to_vtm_geometry(geometry)
+        || toy_16x16_generated_params(geometry, color).is_some()
+        || toy_32x32_generated_params(geometry, color).is_some()
+}
+
 fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Vec<bool> {
     let body = toy_coding_tree_body(geometry, color);
     match body.kind {
-        ToyCodingTreeBodyKind::Scripted => match body.coded {
+        ToyCodingTreeBodyKind::Generated => match body.coded {
+            ToyCodedGeometry {
+                width: 8,
+                height: 8,
+            } => {}
             ToyCodedGeometry {
                 width: 16,
                 height: 16,
             } => {
                 return toy_16x16_generated_cabac_bits(
-                    toy_16x16_scripted_params(geometry, color).expect("16x16 scripted parameters"),
+                    toy_16x16_generated_params(geometry, color)
+                        .expect("16x16 generated parameters"),
                 );
             }
             ToyCodedGeometry {
@@ -1473,12 +1480,12 @@ fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Ve
                 height: 32,
             } => {
                 return toy_32x32_generated_cabac_bits(
-                    toy_32x32_scripted_params(geometry, color).expect("32x32 scripted parameters"),
+                    toy_32x32_generated_params(geometry, color)
+                        .expect("32x32 generated parameters"),
                 );
             }
             _ => return toy_capacity_tu_grid_bits(color),
         },
-        ToyCodingTreeBodyKind::Generated => {}
         ToyCodingTreeBodyKind::CapacityPlaceholder => {
             return toy_capacity_tu_grid_bits(color);
         }
@@ -1510,10 +1517,10 @@ fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Ve
     cabac.finish()
 }
 
-fn toy_16x16_scripted_params(
+fn toy_16x16_generated_params(
     geometry: ToyVideoGeometry,
     _color: Toy4x4QuantizedColor,
-) -> Option<Toy16x16ScriptedParams> {
+) -> Option<Toy16x16GeneratedParams> {
     let plan = toy_coding_tree_plan(geometry);
     let luma_cb = first_luma_transform_unit(&plan)?;
     let chroma_tu_count = plan
@@ -1521,14 +1528,14 @@ fn toy_16x16_scripted_params(
         .filter(|step| matches!(step, ToyCodingTreeStep::ChromaTransformUnit { .. }))
         .count();
     if luma_cb == (16, 16) && chroma_tu_count == 4 {
-        return Some(Toy16x16ScriptedParams {
+        return Some(Toy16x16GeneratedParams {
             luma_cb_width: luma_cb.0,
             luma_cb_height: luma_cb.1,
             chroma_tu_count,
-            // TODO(vvc): Replace the context-scripted body with generated
+            // TODO(vvc): Replace the generated body with generated
             // geometry syntax plus residual coding. Until then, this path is
             // a compliant 16x16 coding-tree body whose reconstruction is
-            // defined by the current context script, not by the input residual tokens.
+            // defined by the current generated body, not by the input residual tokens.
             luma_rem: 16,
             chroma_rem: 6,
         });
@@ -1536,13 +1543,13 @@ fn toy_16x16_scripted_params(
     None
 }
 
-fn toy_32x32_scripted_params(
+fn toy_32x32_generated_params(
     geometry: ToyVideoGeometry,
     _color: Toy4x4QuantizedColor,
-) -> Option<Toy32x32ScriptedParams> {
+) -> Option<Toy32x32GeneratedParams> {
     let coded = geometry.coded();
     if coded.width == 32 && coded.height == 32 {
-        return Some(Toy32x32ScriptedParams {
+        return Some(Toy32x32GeneratedParams {
             luma_cb_width: coded.width,
             luma_cb_height: coded.height,
         });
@@ -1557,7 +1564,7 @@ fn first_luma_transform_unit(plan: &[ToyCodingTreeStep]) -> Option<(usize, usize
     })
 }
 
-fn toy_16x16_generated_cabac_bits(params: Toy16x16ScriptedParams) -> Vec<bool> {
+fn toy_16x16_generated_cabac_bits(params: Toy16x16GeneratedParams) -> Vec<bool> {
     debug_assert_eq!(params.luma_cb_width, 16);
     debug_assert_eq!(params.luma_cb_height, 16);
     debug_assert_eq!(params.chroma_tu_count, 4);
@@ -1572,7 +1579,7 @@ fn toy_16x16_generated_cabac_bits(params: Toy16x16ScriptedParams) -> Vec<bool> {
     cabac.finish()
 }
 
-fn toy_32x32_generated_cabac_bits(params: Toy32x32ScriptedParams) -> Vec<bool> {
+fn toy_32x32_generated_cabac_bits(params: Toy32x32GeneratedParams) -> Vec<bool> {
     debug_assert_eq!(params.luma_cb_width, 32);
     debug_assert_eq!(params.luma_cb_height, 32);
     let mut cabac = ToyCabacEncoder::new();
@@ -3396,7 +3403,7 @@ mod tests {
                 black
             ),
             ToyCodingTreeBody {
-                kind: ToyCodingTreeBodyKind::Scripted,
+                kind: ToyCodingTreeBodyKind::Generated,
                 coded: ToyCodedGeometry {
                     width: 16,
                     height: 16
@@ -3412,7 +3419,7 @@ mod tests {
                 black
             ),
             ToyCodingTreeBody {
-                kind: ToyCodingTreeBodyKind::Scripted,
+                kind: ToyCodingTreeBodyKind::Generated,
                 coded: ToyCodedGeometry {
                     width: 32,
                     height: 32
@@ -3477,10 +3484,10 @@ mod tests {
             width: 16,
             height: 16,
         };
-        let params = toy_16x16_scripted_params(geometry, black).expect("16x16 is supported");
+        let params = toy_16x16_generated_params(geometry, black).expect("16x16 is supported");
         assert_eq!(
             params,
-            Toy16x16ScriptedParams {
+            Toy16x16GeneratedParams {
                 luma_cb_width: 16,
                 luma_cb_height: 16,
                 chroma_tu_count: 4,
@@ -3495,11 +3502,11 @@ mod tests {
             u: 128,
             v: 192,
         });
-        assert_eq!(toy_16x16_scripted_params(geometry, nonzero), Some(params));
+        assert_eq!(toy_16x16_generated_params(geometry, nonzero), Some(params));
     }
 
     #[test]
-    fn toy_16x16_scripted_selection_uses_coding_tree_geometry() {
+    fn toy_16x16_generated_selection_uses_coding_tree_geometry() {
         let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
         assert_eq!(
             first_luma_transform_unit(&toy_coding_tree_plan(ToyVideoGeometry {
@@ -3508,7 +3515,7 @@ mod tests {
             })),
             Some((16, 16))
         );
-        assert!(toy_16x16_scripted_params(
+        assert!(toy_16x16_generated_params(
             ToyVideoGeometry {
                 width: 16,
                 height: 16
@@ -3524,7 +3531,7 @@ mod tests {
             Some((8, 8))
         );
         assert_eq!(
-            toy_16x16_scripted_params(
+            toy_16x16_generated_params(
                 ToyVideoGeometry {
                     width: 8,
                     height: 8
@@ -3536,14 +3543,14 @@ mod tests {
     }
 
     #[test]
-    fn toy_32x32_scripted_selection_uses_coded_geometry() {
+    fn toy_32x32_generated_selection_uses_coded_geometry() {
         let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
-        let params = Toy32x32ScriptedParams {
+        let params = Toy32x32GeneratedParams {
             luma_cb_width: 32,
             luma_cb_height: 32,
         };
         assert_eq!(
-            toy_32x32_scripted_params(
+            toy_32x32_generated_params(
                 ToyVideoGeometry {
                     width: 32,
                     height: 32
@@ -3553,7 +3560,7 @@ mod tests {
             Some(params)
         );
         assert_eq!(
-            toy_32x32_scripted_params(
+            toy_32x32_generated_params(
                 ToyVideoGeometry {
                     width: 32,
                     height: 16
@@ -3563,7 +3570,7 @@ mod tests {
             Some(params)
         );
         assert_eq!(
-            toy_32x32_scripted_params(
+            toy_32x32_generated_params(
                 ToyVideoGeometry {
                     width: 16,
                     height: 32

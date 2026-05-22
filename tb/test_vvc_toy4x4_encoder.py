@@ -226,10 +226,10 @@ def reconstructed_chroma(u, v):
 
 def decoded_reconstruction(frames, data):
     # This is the reconstruction of the emitted VVC bitstream.
-    if is_toy_16x16_scripted_path():
-        return cropped_toy_16x16_scripted_recon() * frames
-    if is_toy_32x32_scripted_path():
-        return cropped_toy_32x32_scripted_recon() * frames
+    if is_toy_16x16_generated_path():
+        return cropped_toy_16x16_generated_recon() * frames
+    if is_toy_32x32_generated_path():
+        return cropped_toy_32x32_generated_recon() * frames
 
     chroma = reconstructed_chroma(sample_to_8bit(data[luma_samples()]), sample_to_8bit(data[v_sample_index()]))
     if uses_capacity_tu_grid(data):
@@ -259,12 +259,12 @@ def decoded_reconstruction(frames, data):
 def uses_capacity_tu_grid(data):
     return not (
         (rtl_visible_width() == 8 and rtl_visible_height() == 8)
-        or is_toy_16x16_scripted_path()
-        or is_toy_32x32_scripted_path()
+        or is_toy_16x16_generated_path()
+        or is_toy_32x32_generated_path()
     )
 
 
-def is_toy_16x16_scripted_path():
+def is_toy_16x16_generated_path():
     return (
         rtl_visible_width() <= 16
         and rtl_visible_height() <= 16
@@ -272,7 +272,7 @@ def is_toy_16x16_scripted_path():
     )
 
 
-def is_toy_32x32_scripted_path():
+def is_toy_32x32_generated_path():
     return (
         rtl_visible_width() <= 32
         and rtl_visible_height() <= 32
@@ -280,7 +280,7 @@ def is_toy_32x32_scripted_path():
     )
 
 
-def cropped_toy_16x16_scripted_recon():
+def cropped_toy_16x16_generated_recon():
     luma = TOY_16X16_SCRIPTED_RECON[: 16 * 16]
     cb = TOY_16X16_SCRIPTED_RECON[16 * 16 : 16 * 16 + 8 * 8]
     cr = TOY_16X16_SCRIPTED_RECON[16 * 16 + 8 * 8 :]
@@ -299,7 +299,7 @@ def cropped_toy_16x16_scripted_recon():
     return bytes(out_luma + out_cb + out_cr)
 
 
-def cropped_toy_32x32_scripted_recon():
+def cropped_toy_32x32_generated_recon():
     return crop_yuv420p8_frame(
         TOY_32X32_SCRIPTED_RECON,
         coded_width=32,

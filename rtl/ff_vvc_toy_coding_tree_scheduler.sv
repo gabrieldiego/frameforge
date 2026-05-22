@@ -12,8 +12,7 @@ module ff_vvc_toy_coding_tree_scheduler (
   output logic [12:0] capacity_tu_grid_bit_len
 );
   localparam logic [1:0] BODY_GENERATED       = 2'd0;
-  localparam logic [1:0] BODY_SCRIPTED  = 2'd1;
-  localparam logic [1:0] BODY_CAPACITY_GRID   = 2'd2;
+  localparam logic [1:0] BODY_CAPACITY_GRID   = 2'd1;
 
   always_comb begin
     coded_width = coded_dimension(visible_width);
@@ -31,8 +30,6 @@ module ff_vvc_toy_coding_tree_scheduler (
 
     if (supports_generated_body(coded_width, coded_height)) begin
       body_kind = BODY_GENERATED;
-    end else if (supports_scripted_body(coded_width, coded_height)) begin
-      body_kind = BODY_SCRIPTED;
     end else begin
       body_kind = BODY_CAPACITY_GRID;
     end
@@ -61,16 +58,8 @@ module ff_vvc_toy_coding_tree_scheduler (
     input logic [15:0] height
   );
     begin
-      supports_generated_body = (width == 16'd8) && (height == 16'd8);
-    end
-  endfunction
-
-  function automatic logic supports_scripted_body(
-    input logic [15:0] width,
-    input logic [15:0] height
-  );
-    begin
-      supports_scripted_body =
+      supports_generated_body =
+        ((width == 16'd8) && (height == 16'd8)) ||
         ((width == 16'd16) && (height == 16'd16)) ||
         ((width == 16'd32) && (height == 16'd32));
     end

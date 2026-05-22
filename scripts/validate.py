@@ -318,13 +318,13 @@ def validate_supported_input(input_path: Path, info: InputInfo, max_width: int, 
 def vtm_decode_supported(input_path: Path, info: InputInfo) -> bool:
     # The encoder capacity is 64x64, but the clean-room slice entropy body is
     # still only mapped to VTM's coding-tree syntax for the generic 8x8 path
-    # and the context-scripted 16x16/32x32 paths. Larger inputs are
+    # and the generated 16x16/32x32 paths. Larger inputs are
     # drained by both software and RTL and must keep matching internally, but
     # external decode is enabled only once their geometry-dependent CABAC trees
     # are implemented instead of guessed.
     if coded_dimension(info.width) == 8 and coded_dimension(info.height) == 8:
         return True
-    return is_toy_16x16_scripted_path(info) or is_toy_32x32_scripted_path(info)
+    return is_toy_16x16_generated_path(info) or is_toy_32x32_generated_path(info)
 
 
 def coded_dimension(value: int) -> int:
@@ -355,10 +355,10 @@ def sha256(path: Path) -> str:
 
 
 def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes:
-    if is_toy_16x16_scripted_path(info):
-        return cropped_toy_16x16_scripted_recon(info) * info.frames
-    if is_toy_32x32_scripted_path(info):
-        return cropped_toy_32x32_scripted_recon(info) * info.frames
+    if is_toy_16x16_generated_path(info):
+        return cropped_toy_16x16_generated_recon(info) * info.frames
+    if is_toy_32x32_generated_path(info):
+        return cropped_toy_32x32_generated_recon(info) * info.frames
 
     frame = normalized_first_frame_to_yuv420p8(input_path, info)
     luma_len = info.width * info.height
@@ -388,12 +388,12 @@ def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes
 def uses_capacity_tu_grid(frame: bytes, info: InputInfo) -> bool:
     return not (
         (info.width, info.height) == (8, 8)
-        or is_toy_16x16_scripted_path(info)
-        or is_toy_32x32_scripted_path(info)
+        or is_toy_16x16_generated_path(info)
+        or is_toy_32x32_generated_path(info)
     )
 
 
-def cropped_toy_16x16_scripted_recon(info: InputInfo) -> bytes:
+def cropped_toy_16x16_generated_recon(info: InputInfo) -> bytes:
     coded_luma = 16 * 16
     coded_chroma = 8 * 8
     luma = TOY_16X16_SCRIPTED_RECON[:coded_luma]
@@ -417,7 +417,7 @@ def cropped_toy_16x16_scripted_recon(info: InputInfo) -> bytes:
     return bytes(out_luma + out_cb + out_cr)
 
 
-def cropped_toy_32x32_scripted_recon(info: InputInfo) -> bytes:
+def cropped_toy_32x32_generated_recon(info: InputInfo) -> bytes:
     return crop_yuv420p8_frame(
         TOY_32X32_SCRIPTED_RECON,
         coded_width=32,
@@ -512,7 +512,7 @@ def input_is_all_zero(path: Path) -> bool:
     return True
 
 
-def is_toy_16x16_scripted_path(info: InputInfo) -> bool:
+def is_toy_16x16_generated_path(info: InputInfo) -> bool:
     return (
         info.width <= 16
         and info.height <= 16
@@ -520,7 +520,7 @@ def is_toy_16x16_scripted_path(info: InputInfo) -> bool:
     )
 
 
-def is_toy_32x32_scripted_path(info: InputInfo) -> bool:
+def is_toy_32x32_generated_path(info: InputInfo) -> bool:
     return (
         info.width <= 32
         and info.height <= 32
@@ -530,7 +530,7 @@ def is_toy_32x32_scripted_path(info: InputInfo) -> bool:
 
 def expects_zero_reconstruction(input_path: Path, info: InputInfo) -> bool:
     return input_is_all_zero(input_path) and not (
-        is_toy_16x16_scripted_path(info) or is_toy_32x32_scripted_path(info)
+        is_toy_16x16_generated_path(info) or is_toy_32x32_generated_path(info)
     )
 
 

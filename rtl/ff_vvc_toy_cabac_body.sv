@@ -13,7 +13,6 @@ module ff_vvc_toy_cabac_body #(
   output logic [MAX_SLICE_PAYLOAD_BITS - 1:0] cabac_bits
 );
   localparam logic [1:0] BODY_GENERATED = 2'd0;
-  localparam logic [1:0] BODY_SCRIPTED = 2'd1;
 
   localparam int CABAC_BITS_LSB = 0;
   localparam int CABAC_LEN_LSB = CABAC_BITS_LSB + MAX_SLICE_PAYLOAD_BITS;
@@ -28,15 +27,10 @@ module ff_vvc_toy_cabac_body #(
 
   always @* begin
     supported =
-      ((body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height)) ||
-      ((body_kind == BODY_SCRIPTED) && supports_scripted_body(coded_width, coded_height));
+      (body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height);
 
     if ((body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height)) begin
-      {cabac_bit_len, cabac_bits} = encode_8x8_body(luma_rem, chroma_rem);
-    end else if ((body_kind == BODY_SCRIPTED) && (coded_width == 16'd16) && (coded_height == 16'd16)) begin
-      {cabac_bit_len, cabac_bits} = encode_16x16_body(luma_rem, chroma_rem);
-    end else if ((body_kind == BODY_SCRIPTED) && (coded_width == 16'd32) && (coded_height == 16'd32)) begin
-      {cabac_bit_len, cabac_bits} = encode_32x32_body(luma_rem, chroma_rem);
+      {cabac_bit_len, cabac_bits} = encode_generated_body(coded_width, coded_height, luma_rem, chroma_rem);
     end else begin
       cabac_bit_len = 13'd0;
       cabac_bits = '0;
@@ -48,18 +42,29 @@ module ff_vvc_toy_cabac_body #(
     input logic [15:0] height
   );
     begin
-      supports_generated_body = (width == 16'd8) && (height == 16'd8);
+      supports_generated_body =
+        ((width == 16'd8) && (height == 16'd8)) ||
+        ((width == 16'd16) && (height == 16'd16)) ||
+        ((width == 16'd32) && (height == 16'd32));
     end
   endfunction
 
-  function automatic logic supports_scripted_body(
+  function automatic logic [12 + MAX_SLICE_PAYLOAD_BITS:0] encode_generated_body(
     input logic [15:0] width,
-    input logic [15:0] height
+    input logic [15:0] height,
+    input logic [4:0]  rem,
+    input logic [4:0]  c_rem
   );
     begin
-      supports_scripted_body =
-        ((width == 16'd16) && (height == 16'd16)) ||
-        ((width == 16'd32) && (height == 16'd32));
+      if ((width == 16'd8) && (height == 16'd8)) begin
+        encode_generated_body = encode_8x8_body(rem, c_rem);
+      end else if ((width == 16'd16) && (height == 16'd16)) begin
+        encode_generated_body = encode_16x16_body(rem, c_rem);
+      end else if ((width == 16'd32) && (height == 16'd32)) begin
+        encode_generated_body = encode_32x32_body(rem, c_rem);
+      end else begin
+        encode_generated_body = '0;
+      end
     end
   endfunction
 
@@ -81,6 +86,23 @@ module ff_vvc_toy_cabac_body #(
     end
   endfunction
 
+  function automatic logic [12 + MAX_SLICE_PAYLOAD_BITS:0] encode_16x16_body(
+    input logic [4:0] rem,
+    input logic [4:0] c_rem
+  );
+    cabac_state_t st;
+    begin
+      st = cabac_start();
+      st = encode_16x16_tree(st, rem, c_rem);
+      st = cabac_encode_bin_trm(st, 1'b1);
+      st = cabac_finish(st);
+      encode_16x16_body = {
+        st[CABAC_LEN_LSB +: 13],
+        st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
+      };
+    end
+  endfunction
+
   function automatic logic [12 + MAX_SLICE_PAYLOAD_BITS:0] encode_32x32_body(
     input logic [4:0] rem,
     input logic [4:0] c_rem
@@ -93,23 +115,6 @@ module ff_vvc_toy_cabac_body #(
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);
       encode_32x32_body = {
-        st[CABAC_LEN_LSB +: 13],
-        st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
-      };
-    end
-  endfunction
-
-  function automatic logic [12 + MAX_SLICE_PAYLOAD_BITS:0] encode_16x16_body(
-    input logic [4:0] rem,
-    input logic [4:0] c_rem
-  );
-    cabac_state_t st;
-    begin
-      st = cabac_start();
-      st = encode_16x16_tree(st, rem, c_rem);
-      st = cabac_encode_bin_trm(st, 1'b1);
-      st = cabac_finish(st);
-      encode_16x16_body = {
         st[CABAC_LEN_LSB +: 13],
         st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
       };
@@ -156,7 +161,7 @@ module ff_vvc_toy_cabac_body #(
     cabac_state_t st;
     begin
       st = st_in;
-      // TODO(vvc): Replace these context-scripted decisions with
+      // TODO(vvc): Replace these generated decisions with
       // generated 16x16 split, prediction, CBF, and residual syntax.
       st = cabac_encode_bin(st, 1'b0, 9'd214, 1'b0); // split_cu_mode split=1
       st = cabac_encode_bin(st, 1'b0, 9'd67, 1'b1);  // split_cu_mode qt=1
