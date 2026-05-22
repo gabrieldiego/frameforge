@@ -42,7 +42,18 @@ module ff_vvc_toy4x4_encoder #(
   localparam int TOY_RESIDUAL_CB_SIZE = 4;
   localparam int TOY_RESIDUAL_LUMA_SAMPLES = TOY_RESIDUAL_CB_SIZE * TOY_RESIDUAL_CB_SIZE;
   localparam int MAX_SLICE_PAYLOAD_BITS = 4096;
+  localparam int CABAC_BITS_LSB = 0;
+  localparam int CABAC_LEN_LSB = CABAC_BITS_LSB + MAX_SLICE_PAYLOAD_BITS;
+  localparam int CABAC_LOW_LSB = CABAC_LEN_LSB + 13;
+  localparam int CABAC_RANGE_LSB = CABAC_LOW_LSB + 32;
+  localparam int CABAC_BUFFERED_BYTE_LSB = CABAC_RANGE_LSB + 16;
+  localparam int CABAC_NUM_BUFFERED_BYTES_LSB = CABAC_BUFFERED_BYTE_LSB + 9;
+  localparam int CABAC_BITS_LEFT_LSB = CABAC_NUM_BUFFERED_BYTES_LSB + 8;
+  localparam int CABAC_STATE_BITS = CABAC_BITS_LEFT_LSB + 8;
+  localparam int CABAC_PACKET_BITS = 13 + MAX_SLICE_PAYLOAD_BITS;
   localparam bit PALETTE_MODE = (CHROMA_FORMAT_IDC == 3);
+
+  typedef logic [CABAC_STATE_BITS - 1:0] cabac_state_t;
 
   logic [12:0] index_q;
   logic [12:0] stream_len_q;
@@ -338,7 +349,7 @@ module ff_vvc_toy4x4_encoder #(
   endfunction
 
   function automatic logic [12:0] slice_payload_len();
-    logic [135:0] cabac;
+    logic [CABAC_PACKET_BITS - 1:0] cabac;
     logic [12:0]  bit_len;
     begin
       if (uses_capacity_tu_grid()) begin
@@ -350,7 +361,7 @@ module ff_vvc_toy4x4_encoder #(
           quant_luma_rem_1(),
           quant_luma_ac_tokens_1()
         );
-        bit_len = 13'd24 + {5'd0, cabac[135:128]} + 13'd1;
+        bit_len = 13'd24 + cabac[CABAC_PACKET_BITS - 1 -: 13] + 13'd1;
       end
       slice_payload_len = (bit_len + 13'd7) >> 3;
     end
@@ -907,8 +918,8 @@ module ff_vvc_toy4x4_encoder #(
   );
     logic [MAX_SLICE_PAYLOAD_BITS - 1:0] acc;
     logic [12:0]  bit_len;
-    logic [135:0] cabac;
-    logic [95:0]  cabac_bits;
+    logic [CABAC_PACKET_BITS - 1:0] cabac;
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] cabac_bits;
     logic [MAX_SLICE_PAYLOAD_BITS - 1:0] capacity_bits;
     logic [12:0]  payload_len;
     logic [12:0]  payload_bits_len;
@@ -939,8 +950,8 @@ module ff_vvc_toy4x4_encoder #(
         bit_len = bit_len + payload_len;
       end else begin
         cabac = toy_cabac_bitstream(rem, ac_tokens, rem_1, ac_tokens_1);
-        payload_len = {5'd0, cabac[135:128]};
-        cabac_bits = cabac[95:0];
+        payload_len = cabac[CABAC_PACKET_BITS - 1 -: 13];
+        cabac_bits = cabac[MAX_SLICE_PAYLOAD_BITS - 1:0];
         acc = (acc << payload_len) | cabac_bits;
         bit_len = bit_len + payload_len;
       end
@@ -1082,13 +1093,13 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [135:0] toy_cabac_bitstream(
+  function automatic logic [CABAC_PACKET_BITS - 1:0] toy_cabac_bitstream(
     input logic [4:0]   rem,
     input logic [119:0] ac_tokens,
     input logic [4:0]   rem_1,
     input logic [119:0] ac_tokens_1
   );
-    logic [255:0] st;
+    cabac_state_t st;
     logic [4:0]   chroma_rem;
 
     begin
@@ -1104,7 +1115,10 @@ module ff_vvc_toy4x4_encoder #(
       end
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);
-      toy_cabac_bitstream = { st[103:96], 32'd0, st[95:0] };
+      toy_cabac_bitstream = {
+        st[CABAC_LEN_LSB +: 13],
+        st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
+      };
     end
   endfunction
 
@@ -1132,11 +1146,11 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [255:0] toy_encode_8x8_luma_tree(
-    input logic [255:0] st_in,
+  function automatic cabac_state_t toy_encode_8x8_luma_tree(
+    input cabac_state_t st_in,
     input logic [4:0]   rem
   );
-    logic [255:0] st;
+    cabac_state_t st;
 
     begin
       st = st_in;
@@ -1151,11 +1165,11 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [255:0] toy_encode_4x4_chroma_tree(
-    input logic [255:0] st_in,
+  function automatic cabac_state_t toy_encode_4x4_chroma_tree(
+    input cabac_state_t st_in,
     input logic [4:0]   chroma_rem
   );
-    logic [255:0] st;
+    cabac_state_t st;
 
     begin
       st = st_in;
@@ -1166,15 +1180,15 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [255:0] toy_encode_capacity_placeholder_tree(
-    input logic [255:0] st_in,
+  function automatic cabac_state_t toy_encode_capacity_placeholder_tree(
+    input cabac_state_t st_in,
     input logic [4:0]   rem,
     input logic [4:0]   chroma_rem,
     input logic [119:0] ac_tokens,
     input logic [4:0]   rem_1,
     input logic [119:0] ac_tokens_1
   );
-    logic [255:0] st;
+    cabac_state_t st;
 
     begin
       // TODO(vvc): Replace this with geometry-specific coding-tree generation.
@@ -1191,12 +1205,12 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [255:0] toy_encode_16x16_trace(
-    input logic [255:0] st_in,
+  function automatic cabac_state_t toy_encode_16x16_trace(
+    input cabac_state_t st_in,
     input logic [4:0]   rem,
     input logic [4:0]   chroma_rem
   );
-    logic [255:0] st;
+    cabac_state_t st;
 
     begin
       st = st_in;
@@ -1286,24 +1300,24 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [255:0] cabac_start();
+  function automatic cabac_state_t cabac_start();
     begin
       cabac_start = '0;
-      cabac_start[135:104] = 32'd0;   // low
-      cabac_start[151:136] = 16'd510; // range
-      cabac_start[160:152] = 9'h0ff;  // buffered_byte
-      cabac_start[168:161] = 8'd0;    // num_buffered_bytes
-      cabac_start[176:169] = 8'd23;   // bits_left
+      cabac_start[CABAC_LOW_LSB +: 32] = 32'd0;
+      cabac_start[CABAC_RANGE_LSB +: 16] = 16'd510;
+      cabac_start[CABAC_BUFFERED_BYTE_LSB +: 9] = 9'h0ff;
+      cabac_start[CABAC_NUM_BUFFERED_BYTES_LSB +: 8] = 8'd0;
+      cabac_start[CABAC_BITS_LEFT_LSB +: 8] = 8'd23;
     end
   endfunction
 
-  function automatic logic [255:0] cabac_encode_ctx_bins(
-    input logic [255:0] st_in,
+  function automatic cabac_state_t cabac_encode_ctx_bins(
+    input cabac_state_t st_in,
     input logic [4:0]   ctx_offset,
     input logic [7:0]   bin_pattern,
     input logic [3:0]   num_bins
   );
-    logic [255:0] st;
+    cabac_state_t st;
     integer i;
 
     begin
@@ -1320,13 +1334,13 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [255:0] cabac_encode_bin(
-    input logic [255:0] st_in,
+  function automatic cabac_state_t cabac_encode_bin(
+    input cabac_state_t st_in,
     input logic         bin,
     input logic [8:0]   lps_in,
     input logic         mps
   );
-    logic [255:0] st;
+    cabac_state_t st;
     logic [31:0] low;
     logic [15:0] range;
     logic [8:0]  lps;
@@ -1335,9 +1349,9 @@ module ff_vvc_toy4x4_encoder #(
 
     begin
       st = st_in;
-      low = st[135:104];
-      range = st[151:136];
-      bits_left = st[176:169];
+      low = st[CABAC_LOW_LSB +: 32];
+      range = st[CABAC_RANGE_LSB +: 16];
+      bits_left = st[CABAC_BITS_LEFT_LSB +: 8];
       lps = lps_in;
 
       range = range - lps;
@@ -1347,9 +1361,9 @@ module ff_vvc_toy4x4_encoder #(
         low = low + range;
         low = low << num_bits;
         range = lps << num_bits;
-        st[135:104] = low;
-        st[151:136] = range;
-        st[176:169] = bits_left[7:0];
+        st[CABAC_LOW_LSB +: 32] = low;
+        st[CABAC_RANGE_LSB +: 16] = range;
+        st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
         if (bits_left < 12) begin
           st = cabac_write_out(st);
         end
@@ -1358,38 +1372,38 @@ module ff_vvc_toy4x4_encoder #(
         bits_left = bits_left - num_bits;
         low = low << num_bits;
         range = range << num_bits;
-        st[135:104] = low;
-        st[151:136] = range;
-        st[176:169] = bits_left[7:0];
+        st[CABAC_LOW_LSB +: 32] = low;
+        st[CABAC_RANGE_LSB +: 16] = range;
+        st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
         if (bits_left < 12) begin
           st = cabac_write_out(st);
         end
       end else begin
-        st[151:136] = range;
+        st[CABAC_RANGE_LSB +: 16] = range;
       end
       cabac_encode_bin = st;
     end
   endfunction
 
-  function automatic logic [255:0] cabac_encode_bin_ep(
-    input logic [255:0] st_in,
+  function automatic cabac_state_t cabac_encode_bin_ep(
+    input cabac_state_t st_in,
     input logic         bin
   );
-    logic [255:0] st;
+    cabac_state_t st;
     logic [31:0] low;
     logic [15:0] range;
     integer bits_left;
 
     begin
       st = st_in;
-      low = st[135:104] << 1;
-      range = st[151:136];
-      bits_left = st[176:169] - 1;
+      low = st[CABAC_LOW_LSB +: 32] << 1;
+      range = st[CABAC_RANGE_LSB +: 16];
+      bits_left = st[CABAC_BITS_LEFT_LSB +: 8] - 1;
       if (bin) begin
         low = low + range;
       end
-      st[135:104] = low;
-      st[176:169] = bits_left[7:0];
+      st[CABAC_LOW_LSB +: 32] = low;
+      st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
       if (bits_left < 12) begin
         st = cabac_write_out(st);
       end
@@ -1397,12 +1411,12 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [255:0] cabac_encode_bins_ep(
-    input logic [255:0] st_in,
+  function automatic cabac_state_t cabac_encode_bins_ep(
+    input cabac_state_t st_in,
     input logic [31:0]  bin_pattern_in,
     input logic [5:0]   num_bins_in
   );
-    logic [255:0] st;
+    cabac_state_t st;
     logic [31:0] low;
     logic [31:0] bin_pattern;
     logic [15:0] range;
@@ -1414,9 +1428,9 @@ module ff_vvc_toy4x4_encoder #(
       st = st_in;
       bin_pattern = bin_pattern_in;
       num_bins = num_bins_in;
-      low = st[135:104];
-      range = st[151:136];
-      bits_left = st[176:169];
+      low = st[CABAC_LOW_LSB +: 32];
+      range = st[CABAC_RANGE_LSB +: 16];
+      bits_left = st[CABAC_BITS_LEFT_LSB +: 8];
 
       while (num_bins > 8) begin
         num_bins = num_bins - 8;
@@ -1425,20 +1439,20 @@ module ff_vvc_toy4x4_encoder #(
         low = low + (range * pattern);
         bin_pattern = bin_pattern - (pattern << num_bins);
         bits_left = bits_left - 8;
-        st[135:104] = low;
-        st[176:169] = bits_left[7:0];
+        st[CABAC_LOW_LSB +: 32] = low;
+        st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
         if (bits_left < 12) begin
           st = cabac_write_out(st);
-          low = st[135:104];
-          bits_left = st[176:169];
+          low = st[CABAC_LOW_LSB +: 32];
+          bits_left = st[CABAC_BITS_LEFT_LSB +: 8];
         end
       end
 
       low = low << num_bins;
       low = low + (range * bin_pattern);
       bits_left = bits_left - num_bins;
-      st[135:104] = low;
-      st[176:169] = bits_left[7:0];
+      st[CABAC_LOW_LSB +: 32] = low;
+      st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
       if (bits_left < 12) begin
         st = cabac_write_out(st);
       end
@@ -1446,12 +1460,12 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [255:0] cabac_encode_rem_abs_ep(
-    input logic [255:0] st_in,
+  function automatic cabac_state_t cabac_encode_rem_abs_ep(
+    input cabac_state_t st_in,
     input logic [4:0]   value,
     input logic [2:0]   rice_param
   );
-    logic [255:0] st;
+    cabac_state_t st;
     logic [5:0] threshold;
     logic [5:0] length;
     logic [5:0] code_value;
@@ -1486,20 +1500,20 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [255:0] cabac_encode_bin_trm(
-    input logic [255:0] st_in,
+  function automatic cabac_state_t cabac_encode_bin_trm(
+    input cabac_state_t st_in,
     input logic         bin
   );
-    logic [255:0] st;
+    cabac_state_t st;
     logic [31:0] low;
     logic [15:0] range;
     integer bits_left;
 
     begin
       st = st_in;
-      low = st[135:104];
-      range = st[151:136] - 16'd2;
-      bits_left = st[176:169];
+      low = st[CABAC_LOW_LSB +: 32];
+      range = st[CABAC_RANGE_LSB +: 16] - 16'd2;
+      bits_left = st[CABAC_BITS_LEFT_LSB +: 8];
       if (bin) begin
         low = low + range;
         low = low << 7;
@@ -1510,9 +1524,9 @@ module ff_vvc_toy4x4_encoder #(
         range = range << 1;
         bits_left = bits_left - 1;
       end
-      st[135:104] = low;
-      st[151:136] = range;
-      st[176:169] = bits_left[7:0];
+      st[CABAC_LOW_LSB +: 32] = low;
+      st[CABAC_RANGE_LSB +: 16] = range;
+      st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
       if (bits_left < 12) begin
         st = cabac_write_out(st);
       end
@@ -1520,8 +1534,8 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [255:0] cabac_finish(input logic [255:0] st_in);
-    logic [255:0] st;
+  function automatic cabac_state_t cabac_finish(input cabac_state_t st_in);
+    cabac_state_t st;
     logic [31:0] low;
     logic [8:0] buffered_byte;
     logic [7:0] num_buffered_bytes;
@@ -1530,30 +1544,30 @@ module ff_vvc_toy4x4_encoder #(
 
     begin
       st = st_in;
-      low = st[135:104];
-      buffered_byte = st[160:152];
-      num_buffered_bytes = st[168:161];
-      bits_left = st[176:169];
+      low = st[CABAC_LOW_LSB +: 32];
+      buffered_byte = st[CABAC_BUFFERED_BYTE_LSB +: 9];
+      num_buffered_bytes = st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8];
+      bits_left = st[CABAC_BITS_LEFT_LSB +: 8];
 
       if ((low >> (32 - bits_left)) != 0) begin
         st = cabac_write_bits(st, buffered_byte + 9'd1, 6'd8);
-        num_buffered_bytes = st[168:161];
+        num_buffered_bytes = st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8];
         while (num_buffered_bytes > 8'd1) begin
           st = cabac_write_bits(st, 9'd0, 6'd8);
           num_buffered_bytes = num_buffered_bytes - 8'd1;
-          st[168:161] = num_buffered_bytes;
+          st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8] = num_buffered_bytes;
         end
         low = low - (32'd1 << (32 - bits_left));
-        st[135:104] = low;
+        st[CABAC_LOW_LSB +: 32] = low;
       end else begin
         if (num_buffered_bytes > 8'd0) begin
           st = cabac_write_bits(st, buffered_byte, 6'd8);
         end
-        num_buffered_bytes = st[168:161];
+        num_buffered_bytes = st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8];
         while (num_buffered_bytes > 8'd1) begin
           st = cabac_write_bits(st, 9'h0ff, 6'd8);
           num_buffered_bytes = num_buffered_bytes - 8'd1;
-          st[168:161] = num_buffered_bytes;
+          st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8] = num_buffered_bytes;
         end
       end
 
@@ -1565,8 +1579,8 @@ module ff_vvc_toy4x4_encoder #(
     end
   endfunction
 
-  function automatic logic [255:0] cabac_write_out(input logic [255:0] st_in);
-    logic [255:0] st;
+  function automatic cabac_state_t cabac_write_out(input cabac_state_t st_in);
+    cabac_state_t st;
     logic [31:0] low;
     logic [31:0] lead_byte;
     logic [31:0] mask;
@@ -1579,10 +1593,10 @@ module ff_vvc_toy4x4_encoder #(
 
     begin
       st = st_in;
-      low = st[135:104];
-      bits_left = st[176:169];
-      buffered_byte = st[160:152];
-      num_buffered_bytes = st[168:161];
+      low = st[CABAC_LOW_LSB +: 32];
+      bits_left = st[CABAC_BITS_LEFT_LSB +: 8];
+      buffered_byte = st[CABAC_BUFFERED_BYTE_LSB +: 9];
+      num_buffered_bytes = st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8];
       lead_byte = low >> (24 - bits_left);
       bits_left = bits_left + 8;
       mask = 32'hffff_ffff >> bits_left;
@@ -1594,51 +1608,51 @@ module ff_vvc_toy4x4_encoder #(
         carry = lead_byte >> 8;
         byte_value = buffered_byte + carry;
         buffered_byte = lead_byte[7:0];
-        st[135:104] = low;
-        st[160:152] = buffered_byte;
-        st[168:161] = num_buffered_bytes;
-        st[176:169] = bits_left[7:0];
+        st[CABAC_LOW_LSB +: 32] = low;
+        st[CABAC_BUFFERED_BYTE_LSB +: 9] = buffered_byte;
+        st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8] = num_buffered_bytes;
+        st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
         st = cabac_write_bits(st, byte_value, 6'd8);
         repeated_byte = (9'h0ff + carry) & 9'h0ff;
-        num_buffered_bytes = st[168:161];
+        num_buffered_bytes = st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8];
         while (num_buffered_bytes > 8'd1) begin
           st = cabac_write_bits(st, repeated_byte, 6'd8);
           num_buffered_bytes = num_buffered_bytes - 8'd1;
-          st[168:161] = num_buffered_bytes;
+          st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8] = num_buffered_bytes;
         end
       end else begin
         num_buffered_bytes = 8'd1;
         buffered_byte = lead_byte[7:0];
       end
 
-      st[135:104] = low;
-      st[160:152] = buffered_byte;
-      st[168:161] = num_buffered_bytes;
-      st[176:169] = bits_left[7:0];
+      st[CABAC_LOW_LSB +: 32] = low;
+      st[CABAC_BUFFERED_BYTE_LSB +: 9] = buffered_byte;
+      st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8] = num_buffered_bytes;
+      st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
       cabac_write_out = st;
     end
   endfunction
 
-  function automatic logic [255:0] cabac_write_bits(
-    input logic [255:0] st_in,
+  function automatic cabac_state_t cabac_write_bits(
+    input cabac_state_t st_in,
     input logic [31:0]  value,
     input logic [5:0]   bit_count
   );
-    logic [255:0] st;
-    logic [95:0] bits;
-    logic [7:0] len;
+    cabac_state_t st;
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bits;
+    logic [12:0] len;
     integer i;
 
     begin
       st = st_in;
-      bits = st[95:0];
-      len = st[103:96];
+      bits = st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS];
+      len = st[CABAC_LEN_LSB +: 13];
       for (i = bit_count - 1; i >= 0; i = i - 1) begin
         bits = (bits << 1) | value[i];
-        len = len + 8'd1;
+        len = len + 13'd1;
       end
-      st[95:0] = bits;
-      st[103:96] = len;
+      st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS] = bits;
+      st[CABAC_LEN_LSB +: 13] = len;
       cabac_write_bits = st;
     end
   endfunction
