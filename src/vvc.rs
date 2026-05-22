@@ -536,6 +536,14 @@ enum ToyEntropyScheduleKind {
     CapacityPlaceholder,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToyCodingTreeBodyKind {
+    Generated8x8,
+    TraceFallback16x16,
+    TraceFallback32x32,
+    CapacityPlaceholder,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ToyEntropySchedule {
     kind: ToyEntropyScheduleKind,
@@ -1218,13 +1226,11 @@ fn write_toy_coding_tree_entropy(
     geometry: ToyVideoGeometry,
     color: Toy4x4QuantizedColor,
 ) {
-    let bits = if toy_16x16_trace_params(geometry, color).is_none()
-        && toy_32x32_trace_params(geometry, color).is_none()
-        && !toy_entropy_tokens_mapped_to_vtm_geometry(geometry)
-    {
-        toy_capacity_tu_grid_bits(color)
-    } else {
-        toy_cabac_bits(geometry, color)
+    let bits = match toy_coding_tree_body_kind(geometry, color) {
+        ToyCodingTreeBodyKind::CapacityPlaceholder => toy_capacity_tu_grid_bits(color),
+        ToyCodingTreeBodyKind::Generated8x8
+        | ToyCodingTreeBodyKind::TraceFallback16x16
+        | ToyCodingTreeBodyKind::TraceFallback32x32 => toy_cabac_bits(geometry, color),
     };
     writer.write_cabac_bits("cabac_toy_quantized_residual_bits", &bits);
 }
@@ -1447,12 +1453,37 @@ fn toy_entropy_tokens_mapped_to_vtm_geometry(geometry: ToyVideoGeometry) -> bool
         })
 }
 
-fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Vec<bool> {
-    if let Some(params) = toy_16x16_trace_params(geometry, color) {
-        return toy_16x16_trace_cabac_bits(params);
+fn toy_coding_tree_body_kind(
+    geometry: ToyVideoGeometry,
+    color: Toy4x4QuantizedColor,
+) -> ToyCodingTreeBodyKind {
+    if toy_entropy_tokens_mapped_to_vtm_geometry(geometry) {
+        ToyCodingTreeBodyKind::Generated8x8
+    } else if toy_16x16_trace_params(geometry, color).is_some() {
+        ToyCodingTreeBodyKind::TraceFallback16x16
+    } else if toy_32x32_trace_params(geometry, color).is_some() {
+        ToyCodingTreeBodyKind::TraceFallback32x32
+    } else {
+        ToyCodingTreeBodyKind::CapacityPlaceholder
     }
-    if let Some(params) = toy_32x32_trace_params(geometry, color) {
-        return toy_32x32_trace_cabac_bits(params);
+}
+
+fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Vec<bool> {
+    match toy_coding_tree_body_kind(geometry, color) {
+        ToyCodingTreeBodyKind::TraceFallback16x16 => {
+            return toy_16x16_trace_cabac_bits(
+                toy_16x16_trace_params(geometry, color).expect("16x16 trace parameters"),
+            );
+        }
+        ToyCodingTreeBodyKind::TraceFallback32x32 => {
+            return toy_32x32_trace_cabac_bits(
+                toy_32x32_trace_params(geometry, color).expect("32x32 trace parameters"),
+            );
+        }
+        ToyCodingTreeBodyKind::Generated8x8 => {}
+        ToyCodingTreeBodyKind::CapacityPlaceholder => {
+            return toy_capacity_tu_grid_bits(color);
+        }
     }
 
     let mut cabac = ToyCabacEncoder::new();
@@ -2906,6 +2937,51 @@ mod tests {
                 component: ToyResidualComponent::Luma,
                 token: 0x40
             }
+        );
+    }
+
+    #[test]
+    fn toy_coding_tree_body_kind_matches_rtl_scheduler_paths() {
+        let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
+        assert_eq!(
+            toy_coding_tree_body_kind(
+                ToyVideoGeometry {
+                    width: 8,
+                    height: 8
+                },
+                black
+            ),
+            ToyCodingTreeBodyKind::Generated8x8
+        );
+        assert_eq!(
+            toy_coding_tree_body_kind(
+                ToyVideoGeometry {
+                    width: 16,
+                    height: 16
+                },
+                black
+            ),
+            ToyCodingTreeBodyKind::TraceFallback16x16
+        );
+        assert_eq!(
+            toy_coding_tree_body_kind(
+                ToyVideoGeometry {
+                    width: 32,
+                    height: 16
+                },
+                black
+            ),
+            ToyCodingTreeBodyKind::TraceFallback32x32
+        );
+        assert_eq!(
+            toy_coding_tree_body_kind(
+                ToyVideoGeometry {
+                    width: 64,
+                    height: 64
+                },
+                black
+            ),
+            ToyCodingTreeBodyKind::CapacityPlaceholder
         );
     }
 
