@@ -15,6 +15,15 @@ module ff_vvc_palette_symbolizer #(
   input  logic        sample_valid,
   input  logic [1:0]  sample_plane,
   input  logic [SAMPLE_BITS - 1:0] sample,
+  input  logic        s_axis_valid,
+  output logic        s_axis_ready,
+  input  logic [1:0]  s_axis_plane,
+  input  logic [SAMPLE_BITS - 1:0] s_axis_sample,
+  input  logic        s_axis_last,
+  output logic        m_axis_valid,
+  input  logic        m_axis_ready,
+  output logic [31:0] m_axis_data,
+  output logic        m_axis_last,
   output logic [7:0]  symbol_count,
   output logic [(24 * MAX_PALETTE_SYMBOLS) - 1:0] symbol_payload
 );
@@ -30,9 +39,23 @@ module ff_vvc_palette_symbolizer #(
   logic [15:0] tracked_y_q;
   logic [15:0] sample_x;
   logic [15:0] sample_y;
+  logic        input_valid;
+  logic [1:0]  input_plane;
+  logic [SAMPLE_BITS - 1:0] input_sample;
+  logic [7:0]  anchor_index;
+  logic [7:0]  last_symbol_index;
+  logic        emit_symbol;
 
   assign symbol_count =
     enable ? (((visible_width + 16'd7) >> 3) * ((visible_height + 16'd7) >> 3)) : 8'd0;
+  assign s_axis_ready = enable && (!m_axis_valid || m_axis_ready);
+  assign input_valid = sample_valid || (s_axis_valid && s_axis_ready);
+  assign input_plane = sample_valid ? sample_plane : s_axis_plane;
+  assign input_sample = sample_valid ? sample : s_axis_sample;
+  assign anchor_index = symbol_index_xy(sample_x, sample_y);
+  assign last_symbol_index = symbol_count == 8'd0 ? 8'd0 : symbol_count - 8'd1;
+  assign emit_symbol = input_valid && is_symbol_anchor_xy(sample_x, sample_y) &&
+                       (input_plane == PLANE_CR) && (!m_axis_valid || m_axis_ready);
 
   always_comb begin
     for (int i = 0; i < MAX_PALETTE_SYMBOLS; i = i + 1) begin
@@ -57,6 +80,9 @@ module ff_vvc_palette_symbolizer #(
       tracked_plane_q <= PLANE_Y;
       tracked_x_q <= 16'd0;
       tracked_y_q <= 16'd0;
+      m_axis_valid <= 1'b0;
+      m_axis_data <= 32'd0;
+      m_axis_last <= 1'b0;
       for (int i = 0; i < MAX_PALETTE_SYMBOLS; i = i + 1) begin
         symbol_y[i] <= 8'd0;
         symbol_cb[i] <= 8'd0;
@@ -66,34 +92,54 @@ module ff_vvc_palette_symbolizer #(
       tracked_plane_q <= PLANE_Y;
       tracked_x_q <= 16'd0;
       tracked_y_q <= 16'd0;
+      m_axis_valid <= 1'b0;
+      m_axis_data <= 32'd0;
+      m_axis_last <= 1'b0;
       for (int i = 0; i < MAX_PALETTE_SYMBOLS; i = i + 1) begin
         symbol_y[i] <= 8'd0;
         symbol_cb[i] <= 8'd0;
         symbol_cr[i] <= 8'd0;
       end
-    end else if (sample_valid) begin
+    end else begin
+      if (m_axis_valid && m_axis_ready) begin
+        m_axis_valid <= 1'b0;
+        m_axis_data <= 32'd0;
+        m_axis_last <= 1'b0;
+      end
+      if (input_valid) begin
       if (is_symbol_anchor_xy(sample_x, sample_y)) begin
-        case (sample_plane)
+        case (input_plane)
           PLANE_Y: begin
-            symbol_y[symbol_index_xy(sample_x, sample_y)] <= sample_to_8bit(sample);
+            symbol_y[anchor_index] <= sample_to_8bit(input_sample);
           end
           PLANE_CB: begin
-            symbol_cb[symbol_index_xy(sample_x, sample_y)] <= sample_to_8bit(sample);
+            symbol_cb[anchor_index] <= sample_to_8bit(input_sample);
           end
           PLANE_CR: begin
-            symbol_cr[symbol_index_xy(sample_x, sample_y)] <= sample_to_8bit(sample);
+            symbol_cr[anchor_index] <= sample_to_8bit(input_sample);
           end
           default: begin
           end
         endcase
       end
-      tracked_plane_q <= sample_plane;
+        if (emit_symbol) begin
+          m_axis_valid <= 1'b1;
+          m_axis_data <= {
+            8'd0,
+            symbol_y[anchor_index],
+            symbol_cb[anchor_index],
+            sample_to_8bit(input_sample)
+          };
+          m_axis_last <= anchor_index == last_symbol_index;
+        end
+      tracked_plane_q <= input_plane;
       if (sample_x + 16'd1 >= visible_width) begin
         tracked_x_q <= 16'd0;
         tracked_y_q <= sample_y + 16'd1;
       end else begin
         tracked_x_q <= sample_x + 16'd1;
         tracked_y_q <= sample_y;
+      end
       end
     end
   end

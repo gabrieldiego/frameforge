@@ -50,6 +50,14 @@ else ifeq ($(DUT),vvc-palette-cabac)
 VERILOG_SOURCES := $(RTL_DIR)/vvc_palette/ff_vvc_palette_cabac.sv
 TOPLEVEL := ff_vvc_palette_cabac
 COCOTB_TEST_MODULES := test_vvc_palette_cabac
+else ifeq ($(DUT),vvc-palette-symbolizer)
+VERILOG_SOURCES := $(RTL_DIR)/vvc_palette/ff_vvc_palette_symbolizer.sv
+TOPLEVEL := ff_vvc_palette_symbolizer
+COCOTB_TEST_MODULES := test_vvc_palette_symbolizer
+else ifeq ($(DUT),residual)
+VERILOG_SOURCES := $(RTL_DIR)/ff_residual_stub.sv
+TOPLEVEL := ff_residual_stub
+COCOTB_TEST_MODULES := test_residual_stub
 else ifeq ($(DUT),vvc-cabac)
 VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_generated_cabac_body.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_cabac.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac.sv
 TOPLEVEL := ff_vvc_cabac

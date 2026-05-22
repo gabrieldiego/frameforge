@@ -4,6 +4,19 @@ module ff_residual_stub #(
   parameter int SAMPLE_BITS = 8,
   parameter int LUMA_CB_SIZE = 4
 ) (
+  input  logic clk,
+  input  logic rst_n,
+  input  logic clear,
+  input  logic enable,
+  input  logic s_axis_valid,
+  output logic s_axis_ready,
+  input  logic [SAMPLE_BITS - 1:0] s_axis_sample,
+  input  logic s_axis_last,
+  output logic m_axis_valid,
+  input  logic m_axis_ready,
+  output logic [7:0] m_axis_kind,
+  output logic [31:0] m_axis_data,
+  output logic m_axis_last,
   input  logic [(SAMPLE_BITS * LUMA_CB_SIZE * LUMA_CB_SIZE) - 1:0] luma_samples,
   output logic [4:0]   quant_luma_rem,
   output logic [119:0] quant_luma_ac_tokens,
@@ -14,6 +27,13 @@ module ff_residual_stub #(
   logic signed [9:0] dc_coeff;
   logic signed [9:0] quantized_dc_coeff;
   logic [7:0] dc_sample;
+  logic [(SAMPLE_BITS * LUMA_SAMPLE_COUNT) - 1:0] stream_samples_q;
+  logic [4:0] stream_sample_count_q;
+  logic stream_result_valid_q;
+  logic [2:0] stream_packet_index_q;
+  logic [4:0] stream_quant_luma_rem;
+  logic [119:0] stream_quant_luma_ac_tokens;
+  logic [7:0] stream_recon_luma_sample;
 
   assign dc_sample = forward_luma_dc_sample(luma_samples);
   assign dc_coeff = $signed({ 2'b00, dc_sample }) - 10'sd114;
@@ -21,6 +41,75 @@ module ff_residual_stub #(
   assign quant_luma_ac_tokens = quant_ac_tokens(luma_samples, dc_sample);
   assign quantized_dc_coeff = reconstructed_dc_coeff_from_rem(quant_luma_rem);
   assign recon_luma_sample = inverse_luma_dc_coeff(quantized_dc_coeff);
+  assign s_axis_ready = enable && (!stream_result_valid_q || (m_axis_valid && m_axis_ready && m_axis_last));
+  assign stream_quant_luma_rem =
+    quant_luma_rem_from_dc_coeff($signed({2'b00, forward_luma_dc_sample(stream_samples_q)}) - 10'sd114);
+  assign stream_quant_luma_ac_tokens = quant_ac_tokens(stream_samples_q, forward_luma_dc_sample(stream_samples_q));
+  assign stream_recon_luma_sample =
+    inverse_luma_dc_coeff(reconstructed_dc_coeff_from_rem(stream_quant_luma_rem));
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      stream_samples_q <= '0;
+      stream_sample_count_q <= 5'd0;
+      stream_result_valid_q <= 1'b0;
+      stream_packet_index_q <= 3'd0;
+      m_axis_valid <= 1'b0;
+      m_axis_kind <= 8'd0;
+      m_axis_data <= 32'd0;
+      m_axis_last <= 1'b0;
+    end else if (clear || !enable) begin
+      stream_samples_q <= '0;
+      stream_sample_count_q <= 5'd0;
+      stream_result_valid_q <= 1'b0;
+      stream_packet_index_q <= 3'd0;
+      m_axis_valid <= 1'b0;
+      m_axis_kind <= 8'd0;
+      m_axis_data <= 32'd0;
+      m_axis_last <= 1'b0;
+    end else begin
+      if (s_axis_valid && s_axis_ready) begin
+        stream_samples_q[((LUMA_SAMPLE_COUNT - 1) - stream_sample_count_q) * SAMPLE_BITS +: SAMPLE_BITS] <=
+          s_axis_sample;
+        if (s_axis_last || stream_sample_count_q == LUMA_SAMPLE_COUNT - 1) begin
+          stream_result_valid_q <= 1'b1;
+          stream_packet_index_q <= 3'd0;
+          stream_sample_count_q <= 5'd0;
+        end else begin
+          stream_sample_count_q <= stream_sample_count_q + 5'd1;
+        end
+      end
+
+      if (stream_result_valid_q && (!m_axis_valid || m_axis_ready)) begin
+        m_axis_valid <= 1'b1;
+        {m_axis_kind, m_axis_data, m_axis_last} <= residual_packet(stream_packet_index_q);
+        if (stream_packet_index_q == 3'd5) begin
+          stream_result_valid_q <= 1'b0;
+          stream_packet_index_q <= 3'd0;
+        end else begin
+          stream_packet_index_q <= stream_packet_index_q + 3'd1;
+        end
+      end else if (m_axis_valid && m_axis_ready) begin
+        m_axis_valid <= 1'b0;
+        m_axis_kind <= 8'd0;
+        m_axis_data <= 32'd0;
+        m_axis_last <= 1'b0;
+      end
+    end
+  end
+
+  function automatic logic [40:0] residual_packet(input logic [2:0] index);
+    begin
+      case (index)
+        3'd0: residual_packet = {8'd1, 27'd0, stream_quant_luma_rem, 1'b0};
+        3'd1: residual_packet = {8'd2, stream_quant_luma_ac_tokens[119:88], 1'b0};
+        3'd2: residual_packet = {8'd3, stream_quant_luma_ac_tokens[87:56], 1'b0};
+        3'd3: residual_packet = {8'd4, stream_quant_luma_ac_tokens[55:24], 1'b0};
+        3'd4: residual_packet = {8'd5, stream_quant_luma_ac_tokens[23:0], 8'd0, 1'b0};
+        default: residual_packet = {8'd6, 24'd0, stream_recon_luma_sample, 1'b1};
+      endcase
+    end
+  endfunction
 
   function automatic logic [7:0] forward_luma_dc_sample(
     input logic [(SAMPLE_BITS * LUMA_SAMPLE_COUNT) - 1:0] samples
