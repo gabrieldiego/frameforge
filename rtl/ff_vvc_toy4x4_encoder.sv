@@ -103,6 +103,8 @@ module ff_vvc_toy4x4_encoder #(
     .MAX_SLICE_PAYLOAD_BITS(MAX_SLICE_PAYLOAD_BITS)
   ) generated_cabac_body (
     .body_kind(coding_tree_body_kind),
+    .coded_width(coding_tree_coded_width),
+    .coded_height(coding_tree_coded_height),
     .luma_rem(quant_luma_rem_q),
     .chroma_rem(quant_chroma_rem_q),
     .supported(generated_cabac_body_supported),

@@ -11,10 +11,9 @@ module ff_vvc_toy_coding_tree_scheduler (
   output logic [12:0] luma_tu_count,
   output logic [12:0] capacity_tu_grid_bit_len
 );
-  localparam logic [1:0] BODY_8X8_GENERATED  = 2'd0;
-  localparam logic [1:0] BODY_16X16_FALLBACK = 2'd1;
-  localparam logic [1:0] BODY_32X32_FALLBACK = 2'd2;
-  localparam logic [1:0] BODY_CAPACITY_GRID   = 2'd3;
+  localparam logic [1:0] BODY_GENERATED       = 2'd0;
+  localparam logic [1:0] BODY_TRACE_FALLBACK  = 2'd1;
+  localparam logic [1:0] BODY_CAPACITY_GRID   = 2'd2;
 
   always_comb begin
     coded_width = coded_dimension(visible_width);
@@ -30,12 +29,10 @@ module ff_vvc_toy_coding_tree_scheduler (
       coded_height = 16'd16;
     end
 
-    if ((coded_width == 16'd8) && (coded_height == 16'd8)) begin
-      body_kind = BODY_8X8_GENERATED;
-    end else if ((coded_width == 16'd16) && (coded_height == 16'd16)) begin
-      body_kind = BODY_16X16_FALLBACK;
-    end else if ((coded_width == 16'd32) && (coded_height == 16'd32)) begin
-      body_kind = BODY_32X32_FALLBACK;
+    if (supports_generated_body(coded_width, coded_height)) begin
+      body_kind = BODY_GENERATED;
+    end else if (supports_trace_fallback_body(coded_width, coded_height)) begin
+      body_kind = BODY_TRACE_FALLBACK;
     end else begin
       body_kind = BODY_CAPACITY_GRID;
     end
@@ -56,6 +53,26 @@ module ff_vvc_toy_coding_tree_scheduler (
       end else begin
         coded_dimension = 16'd64;
       end
+    end
+  endfunction
+
+  function automatic logic supports_generated_body(
+    input logic [15:0] width,
+    input logic [15:0] height
+  );
+    begin
+      supports_generated_body = (width == 16'd8) && (height == 16'd8);
+    end
+  endfunction
+
+  function automatic logic supports_trace_fallback_body(
+    input logic [15:0] width,
+    input logic [15:0] height
+  );
+    begin
+      supports_trace_fallback_body =
+        ((width == 16'd16) && (height == 16'd16)) ||
+        ((width == 16'd32) && (height == 16'd32));
     end
   endfunction
 endmodule

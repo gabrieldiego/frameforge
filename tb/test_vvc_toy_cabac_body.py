@@ -2,9 +2,8 @@ from cocotb.triggers import Timer
 import cocotb
 
 
-BODY_8X8_GENERATED = 0
-BODY_16X16_FALLBACK = 1
-BODY_32X32_FALLBACK = 2
+BODY_GENERATED = 0
+BODY_TRACE_FALLBACK = 1
 
 
 def cabac_bytes(dut):
@@ -17,7 +16,9 @@ def cabac_bytes(dut):
 
 @cocotb.test()
 async def cabac_body_generates_8x8_black_payload(dut):
-    dut.body_kind.value = BODY_8X8_GENERATED
+    dut.body_kind.value = BODY_GENERATED
+    dut.coded_width.value = 8
+    dut.coded_height.value = 8
     dut.luma_rem.value = 16
     dut.chroma_rem.value = 6
     await Timer(1, unit="ns")
@@ -29,7 +30,9 @@ async def cabac_body_generates_8x8_black_payload(dut):
 
 @cocotb.test()
 async def cabac_body_generates_16x16_fallback_payload(dut):
-    dut.body_kind.value = BODY_16X16_FALLBACK
+    dut.body_kind.value = BODY_TRACE_FALLBACK
+    dut.coded_width.value = 16
+    dut.coded_height.value = 16
     dut.luma_rem.value = 16
     dut.chroma_rem.value = 6
     await Timer(1, unit="ns")
@@ -41,7 +44,9 @@ async def cabac_body_generates_16x16_fallback_payload(dut):
 
 @cocotb.test()
 async def cabac_body_generates_32x32_block_payload(dut):
-    dut.body_kind.value = BODY_32X32_FALLBACK
+    dut.body_kind.value = BODY_TRACE_FALLBACK
+    dut.coded_width.value = 32
+    dut.coded_height.value = 32
     dut.luma_rem.value = 16
     dut.chroma_rem.value = 6
     await Timer(1, unit="ns")

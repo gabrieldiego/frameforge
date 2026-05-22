@@ -4,15 +4,16 @@ module ff_vvc_toy_cabac_body #(
   parameter int MAX_SLICE_PAYLOAD_BITS = 4096
 ) (
   input  logic [1:0]   body_kind,
+  input  logic [15:0]  coded_width,
+  input  logic [15:0]  coded_height,
   input  logic [4:0]   luma_rem,
   input  logic [4:0]   chroma_rem,
   output logic         supported,
   output logic [12:0]  cabac_bit_len,
   output logic [MAX_SLICE_PAYLOAD_BITS - 1:0] cabac_bits
 );
-  localparam logic [1:0] BODY_8X8_GENERATED = 2'd0;
-  localparam logic [1:0] BODY_16X16_FALLBACK = 2'd1;
-  localparam logic [1:0] BODY_32X32_FALLBACK = 2'd2;
+  localparam logic [1:0] BODY_GENERATED = 2'd0;
+  localparam logic [1:0] BODY_TRACE_FALLBACK = 2'd1;
   localparam int TOY_32X32_TRACE_BIN_COUNT = 542;
 
   // Compact D_CABAC trace words for the first 32x32 fallback path. Bit 15
@@ -82,20 +83,41 @@ module ff_vvc_toy_cabac_body #(
   typedef logic [CABAC_STATE_BITS - 1:0] cabac_state_t;
 
   always @* begin
-    supported = (body_kind == BODY_8X8_GENERATED) ||
-                (body_kind == BODY_16X16_FALLBACK) ||
-                (body_kind == BODY_32X32_FALLBACK);
-    if (body_kind == BODY_8X8_GENERATED) begin
+    supported =
+      ((body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height)) ||
+      ((body_kind == BODY_TRACE_FALLBACK) && supports_trace_fallback_body(coded_width, coded_height));
+
+    if ((body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height)) begin
       {cabac_bit_len, cabac_bits} = encode_8x8_body(luma_rem, chroma_rem);
-    end else if (body_kind == BODY_16X16_FALLBACK) begin
+    end else if ((body_kind == BODY_TRACE_FALLBACK) && (coded_width == 16'd16) && (coded_height == 16'd16)) begin
       {cabac_bit_len, cabac_bits} = encode_16x16_fallback_body(luma_rem, chroma_rem);
-    end else if (body_kind == BODY_32X32_FALLBACK) begin
+    end else if ((body_kind == BODY_TRACE_FALLBACK) && (coded_width == 16'd32) && (coded_height == 16'd32)) begin
       {cabac_bit_len, cabac_bits} = encode_32x32_body(luma_rem, chroma_rem);
     end else begin
       cabac_bit_len = 13'd0;
       cabac_bits = '0;
     end
   end
+
+  function automatic logic supports_generated_body(
+    input logic [15:0] width,
+    input logic [15:0] height
+  );
+    begin
+      supports_generated_body = (width == 16'd8) && (height == 16'd8);
+    end
+  endfunction
+
+  function automatic logic supports_trace_fallback_body(
+    input logic [15:0] width,
+    input logic [15:0] height
+  );
+    begin
+      supports_trace_fallback_body =
+        ((width == 16'd16) && (height == 16'd16)) ||
+        ((width == 16'd32) && (height == 16'd32));
+    end
+  endfunction
 
   function automatic logic [12 + MAX_SLICE_PAYLOAD_BITS:0] encode_8x8_body(
     input logic [4:0] rem,
