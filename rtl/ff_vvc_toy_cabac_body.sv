@@ -11,6 +11,7 @@ module ff_vvc_toy_cabac_body #(
   output logic [MAX_SLICE_PAYLOAD_BITS - 1:0] cabac_bits
 );
   localparam logic [1:0] BODY_8X8_GENERATED = 2'd0;
+  localparam logic [1:0] BODY_16X16_FALLBACK = 2'd1;
   localparam int CABAC_BITS_LSB = 0;
   localparam int CABAC_LEN_LSB = CABAC_BITS_LSB + MAX_SLICE_PAYLOAD_BITS;
   localparam int CABAC_LOW_LSB = CABAC_LEN_LSB + 13;
@@ -23,9 +24,11 @@ module ff_vvc_toy_cabac_body #(
   typedef logic [CABAC_STATE_BITS - 1:0] cabac_state_t;
 
   always @* begin
-    supported = body_kind == BODY_8X8_GENERATED;
-    if (supported) begin
+    supported = (body_kind == BODY_8X8_GENERATED) || (body_kind == BODY_16X16_FALLBACK);
+    if (body_kind == BODY_8X8_GENERATED) begin
       {cabac_bit_len, cabac_bits} = encode_8x8_body(luma_rem, chroma_rem);
+    end else if (body_kind == BODY_16X16_FALLBACK) begin
+      {cabac_bit_len, cabac_bits} = encode_16x16_fallback_body(luma_rem, chroma_rem);
     end else begin
       cabac_bit_len = 13'd0;
       cabac_bits = '0;
@@ -44,6 +47,23 @@ module ff_vvc_toy_cabac_body #(
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);
       encode_8x8_body = {
+        st[CABAC_LEN_LSB +: 13],
+        st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
+      };
+    end
+  endfunction
+
+  function automatic logic [12 + MAX_SLICE_PAYLOAD_BITS:0] encode_16x16_fallback_body(
+    input logic [4:0] rem,
+    input logic [4:0] c_rem
+  );
+    cabac_state_t st;
+    begin
+      st = cabac_start();
+      st = encode_16x16_fallback_tree(st, rem, c_rem);
+      st = cabac_encode_bin_trm(st, 1'b1);
+      st = cabac_finish(st);
+      encode_16x16_fallback_body = {
         st[CABAC_LEN_LSB +: 13],
         st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
       };
@@ -79,6 +99,97 @@ module ff_vvc_toy_cabac_body #(
       st = cabac_encode_rem_abs_ep(st, c_rem, 3'd0);
       st = cabac_encode_bin_ep(st, 1'b1);
       encode_4x4_chroma_tree = st;
+    end
+  endfunction
+
+  function automatic cabac_state_t encode_16x16_fallback_tree(
+    input cabac_state_t st_in,
+    input logic [4:0]   rem,
+    input logic [4:0]   c_rem
+  );
+    cabac_state_t st;
+    begin
+      st = st_in;
+      // TODO(vvc): Replace these trace-derived context decisions with
+      // generated 16x16 split, prediction, CBF, and residual syntax.
+      st = cabac_encode_bin(st, 1'b0, 9'd214, 1'b0); // split_cu_mode split=1
+      st = cabac_encode_bin(st, 1'b0, 9'd67, 1'b1);  // split_cu_mode qt=1
+      st = cabac_encode_bin_ep(st, 1'b0);            // intra_luma_pred_mode[5]
+      st = cabac_encode_bin_ep(st, 1'b1);            // intra_luma_pred_mode[4]
+      st = cabac_encode_bin_ep(st, 1'b1);            // intra_luma_pred_mode[3]
+      st = cabac_encode_bin_ep(st, 1'b0);            // intra_luma_pred_mode[2]
+      st = cabac_encode_bin_ep(st, 1'b1);            // intra_luma_pred_mode[1]
+      st = cabac_encode_bin_ep(st, 1'b0);            // intra_luma_pred_mode[0]
+      st = cabac_encode_bin(st, 1'b1, 9'd52, 1'b1);  // split_cu_mode split=1
+      st = cabac_encode_bin(st, 1'b0, 9'd166, 1'b1); // split_cu_mode qt=1
+      st = cabac_encode_bin(st, 1'b1, 9'd109, 1'b1); // split_cu_mode split=0
+      st = cabac_encode_bin(st, 1'b1, 9'd134, 1'b1); // cbf_comp luma=1
+      st = cabac_encode_bin(st, 1'b1, 9'd116, 1'b1); // sig_coeff_group_flag
+      st = cabac_encode_bin(st, 1'b1, 9'd142, 1'b1); // sig_coeff_group_flag
+      st = cabac_encode_bin(st, 1'b1, 9'd221, 1'b0); // last_sig_coeff_x_prefix
+      st = cabac_encode_bin(st, 1'b0, 9'd205, 1'b0); // last_sig_coeff_y_prefix
+      st = cabac_encode_bin_ep(st, 1'b0);            // last_sig_coeff_suffix
+      st = cabac_encode_bin(st, 1'b0, 9'd39, 1'b0);  // sig_coeff_flag
+      st = cabac_encode_bin(st, 1'b0, 9'd101, 1'b0); // sig_coeff_flag
+      st = cabac_encode_bin(st, 1'b0, 9'd99, 1'b0);  // sig_coeff_flag
+      st = cabac_encode_bin(st, 1'b1, 9'd4, 1'b1);   // sig_coeff_flag
+      st = cabac_encode_bin(st, 1'b0, 9'd67, 1'b0);  // abs_level_gtx_flag
+      st = cabac_encode_bin_ep(st, 1'b0);            // remainder_prefix
+      st = cabac_encode_bin_ep(st, 1'b1);            // coeff_sign_flag
+      st = cabac_encode_bin(st, 1'b0, 9'd64, 1'b0);  // ts_flag=0
+      st = cabac_encode_bin(st, 1'b0, 9'd54, 1'b0);  // mts_idx=0
+
+      st = cabac_encode_bin(st, 1'b0, 9'd40, 1'b0);  // split_cu_mode split=1
+      st = cabac_encode_bin(st, 1'b0, 9'd176, 1'b0); // split_cu_mode qt=1
+      st = cabac_encode_bin(st, 1'b0, 9'd103, 1'b0); // split_cu_mode split=1
+      st = cabac_encode_bin(st, 1'b0, 9'd130, 1'b0); // split_cu_mode qt=1
+      st = cabac_encode_bin(st, 1'b0, 9'd88, 1'b0);  // split_cu_mode split=1
+      st = cabac_encode_bin(st, 1'b0, 9'd114, 1'b0); // split_cu_mode qt=1
+      st = cabac_encode_bin(st, 1'b0, 9'd80, 1'b0);  // split_cu_mode split=0
+      st = cabac_encode_bin(st, 1'b1, 9'd4, 1'b1);   // cbf_comp Cb=0
+      st = cabac_encode_bin(st, 1'b0, 9'd53, 1'b0);  // cbf_comp Cr=1
+      st = cabac_encode_bin(st, 1'b0, 9'd26, 1'b0);  // sig_coeff_group_flag
+      st = cabac_encode_bin(st, 1'b1, 9'd96, 1'b0);  // last_sig_coeff_x_prefix
+      st = cabac_encode_bin(st, 1'b0, 9'd112, 1'b0); // last_sig_coeff_y_prefix
+      st = cabac_encode_bin(st, 1'b1, 9'd4, 1'b1);   // sig_coeff_flag
+      st = cabac_encode_bin(st, 1'b0, 9'd72, 1'b0);  // abs_level_gtx_flag
+      st = cabac_encode_bin(st, 1'b1, 9'd112, 1'b1); // sig_coeff_flag
+      st = cabac_encode_bin(st, 1'b0, 9'd72, 1'b0);  // abs_level_gtx_flag
+      st = cabac_encode_bin(st, 1'b1, 9'd88, 1'b1);  // sig_coeff_flag
+      st = cabac_encode_bin(st, 1'b0, 9'd84, 1'b0);  // abs_level_gtx_flag
+      st = cabac_encode_bin(st, 1'b1, 9'd4, 1'b1);   // sig_coeff_flag
+      st = cabac_encode_bin(st, 1'b0, 9'd206, 1'b1); // abs_level_gtx_flag
+      st = cabac_encode_bin_ep(st, 1'b1);            // remainder_prefix
+      st = cabac_encode_bin_ep(st, 1'b1);            // remainder_prefix
+      st = cabac_encode_bin_ep(st, 1'b1);            // remainder_prefix
+      st = cabac_encode_bin_ep(st, 1'b1);            // remainder_prefix
+      st = cabac_encode_bin_ep(st, 1'b0);            // remainder_suffix
+      st = cabac_encode_bin_ep(st, 1'b1);            // coeff_sign_flag
+      st = cabac_encode_bin(st, 1'b1, 9'd160, 1'b0); // ts_flag=0
+      st = cabac_encode_bin(st, 1'b1, 9'd29, 1'b0);  // mts_idx=0
+
+      st = cabac_encode_bin(st, 1'b1, 9'd172, 1'b1); // split_cu_mode split=0 at (4,0)
+      st = cabac_encode_bin(st, 1'b0, 9'd107, 1'b0); // cbf_comp Cb(4,0)=0
+      st = cabac_encode_bin(st, 1'b0, 9'd136, 1'b0); // cbf_comp Cr(4,0)=0
+      st = cabac_encode_bin(st, 1'b1, 9'd67, 1'b0);  // mts_idx=0 at (4,0)
+      st = cabac_encode_bin(st, 1'b0, 9'd100, 1'b0); // split_cu_mode split=0 at (0,4)
+      st = cabac_encode_bin(st, 1'b0, 9'd124, 1'b0); // cbf_comp Cb(0,4)=0
+      st = cabac_encode_bin(st, 1'b0, 9'd160, 1'b0); // cbf_comp Cr(0,4)=0
+      st = cabac_encode_bin(st, 1'b0, 9'd20, 1'b0);  // mts_idx=0 at (0,4)
+      st = cabac_encode_bin_ep(st, 1'b1);            // trace EP before final block
+      st = cabac_encode_bin(st, 1'b1, 9'd169, 1'b1); // split_cu_mode split=0 at (4,4)
+      st = cabac_encode_bin(st, 1'b0, 9'd103, 1'b0); // cbf_comp Cb(4,4)=0
+      st = cabac_encode_bin(st, 1'b0, 9'd147, 1'b0); // cbf_comp Cr(4,4)=0
+      st = cabac_encode_bin(st, 1'b0, 9'd68, 1'b0);  // mts_idx=0 at (4,4)
+      st = cabac_encode_bin(st, 1'b1, 9'd140, 1'b1); // final empty-tu context
+      st = cabac_encode_bin(st, 1'b0, 9'd103, 1'b0); // final empty-tu context
+      st = cabac_encode_bin(st, 1'b0, 9'd119, 1'b0); // final empty-tu context
+      st = cabac_encode_bin(st, 1'b0, 9'd56, 1'b0);  // final empty-tu context
+      st = cabac_encode_bin(st, 1'b0, 9'd118, 1'b1); // final empty-tu context
+      st = cabac_encode_bin(st, 1'b0, 9'd130, 1'b0); // final empty-tu context
+      st = cabac_encode_bin(st, 1'b0, 9'd104, 1'b0); // final cbf cleanup
+      st = cabac_encode_bin(st, 1'b0, 9'd81, 1'b0);  // final cbf cleanup
+      encode_16x16_fallback_tree = st;
     end
   endfunction
 
