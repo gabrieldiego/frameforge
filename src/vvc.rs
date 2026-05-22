@@ -1130,7 +1130,11 @@ fn toy_sps_payload(
     );
     writer.write_u("sps_log2_ctu_size_minus5", 1, 2);
     writer.write_flag("sps_ptl_dpb_hrd_params_present_flag", true);
-    writer.write_u("general_profile_idc", 1, 7);
+    writer.write_u(
+        "general_profile_idc",
+        toy_general_profile_idc(config, palette_enabled) as u64,
+        7,
+    );
     writer.write_flag("general_tier_flag", false);
     writer.write_u("general_level_idc", 0, 8);
     writer.write_flag("ptl_frame_only_constraint_flag", true);
@@ -1179,11 +1183,14 @@ fn toy_sps_payload(
     writer.write_ue("sps_max_mtt_hierarchy_depth_intra_slice_luma", 3);
     writer.write_ue("sps_log2_diff_max_bt_min_qt_intra_slice_luma", 2);
     writer.write_ue("sps_log2_diff_max_tt_min_qt_intra_slice_luma", 2);
-    writer.write_flag("sps_qtbtt_dual_tree_intra_flag", true);
-    writer.write_ue("sps_log2_diff_min_qt_min_cb_intra_slice_chroma", 1);
-    writer.write_ue("sps_max_mtt_hierarchy_depth_intra_slice_chroma", 3);
-    writer.write_ue("sps_log2_diff_max_bt_min_qt_intra_slice_chroma", 3);
-    writer.write_ue("sps_log2_diff_max_tt_min_qt_intra_slice_chroma", 2);
+    let dual_tree_intra = config.chroma_sampling != ChromaSampling::Cs444 || !palette_enabled;
+    writer.write_flag("sps_qtbtt_dual_tree_intra_flag", dual_tree_intra);
+    if dual_tree_intra {
+        writer.write_ue("sps_log2_diff_min_qt_min_cb_intra_slice_chroma", 1);
+        writer.write_ue("sps_max_mtt_hierarchy_depth_intra_slice_chroma", 3);
+        writer.write_ue("sps_log2_diff_max_bt_min_qt_intra_slice_chroma", 3);
+        writer.write_ue("sps_log2_diff_max_tt_min_qt_intra_slice_chroma", 2);
+    }
     writer.write_ue("sps_log2_diff_min_qt_min_cb_inter_slice", 1);
     writer.write_ue("sps_max_mtt_hierarchy_depth_inter_slice", 3);
     writer.write_ue("sps_log2_diff_max_bt_min_qt_inter_slice", 3);
@@ -1236,9 +1243,14 @@ fn toy_sps_payload(
     writer.write_flag("sps_mrl_enabled_flag", true);
     writer.write_flag("sps_mip_enabled_flag", false);
     writer.write_flag("sps_cclm_enabled_flag", true);
-    writer.write_flag("sps_chroma_horizontal_collocated_flag", true);
-    writer.write_flag("sps_chroma_vertical_collocated_flag", false);
+    if config.chroma_sampling == ChromaSampling::Cs420 {
+        writer.write_flag("sps_chroma_horizontal_collocated_flag", true);
+        writer.write_flag("sps_chroma_vertical_collocated_flag", false);
+    }
     writer.write_flag("sps_palette_enabled_flag", palette_enabled);
+    if palette_enabled {
+        writer.write_ue("sps_internal_bit_depth_minus_input_bit_depth", 0);
+    }
     writer.write_flag("sps_ibc_enabled_flag", false);
     writer.write_flag("sps_ladf_enabled_flag", false);
     writer.write_flag("sps_explicit_scaling_list_enabled_flag", false);
@@ -1260,6 +1272,17 @@ fn chroma_format_idc(chroma_sampling: ChromaSampling) -> u32 {
         ChromaSampling::Cs420 => 1,
         ChromaSampling::Cs422 => 2,
         ChromaSampling::Cs444 => 3,
+    }
+}
+
+fn toy_general_profile_idc(config: ToyCodingTreeConfig, palette_enabled: bool) -> u32 {
+    if config.chroma_sampling == ChromaSampling::Cs444 || palette_enabled {
+        // TODO(vvc): Signal a concrete 4:4:4-capable profile once the full
+        // PTL/GCI constraint set is generated. Profile NONE avoids the Main 10
+        // palette-off constraint while this clean-room subset is still forming.
+        0
+    } else {
+        1
     }
 }
 
@@ -1389,13 +1412,34 @@ fn write_toy_palette_444_entropy(
 ) {
     writer.write_cabac_bits(
         "cabac_toy_palette_444_single_entry_bits",
-        &toy_palette_444_bits(geometry, color),
+        &toy_palette_444_cabac_bits(geometry, color),
     );
 }
 
-fn toy_palette_444_bits(geometry: ToyVideoGeometry, color: Toy4x4SampledColor) -> Vec<bool> {
+fn toy_palette_444_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4SampledColor) -> Vec<bool> {
+    // TODO(vvc): Generalize the palette coding-tree prefix beyond the current
+    // 8x8 bring-up shape. Larger 4:4:4 inputs still use this experimental path
+    // until the single-tree palette partitioner is implemented.
+    let _coded = geometry.coded();
     let syntax = toy_palette_444_single_entry_syntax(geometry, color);
-    toy_palette_444_binarized_syntax_bits(syntax)
+    let mut cabac = ToyCabacEncoder::new();
+    cabac.start();
+    cabac.encode_ctx_bins(&TOY_CTX_EVENTS[0..4], &[false, true, false, true]);
+    cabac.encode_bin(
+        true,
+        ToyCtxEvent {
+            // First PLT flag in this slice maps to VTM CABAC ctx 299 after
+            // the generated split prefix. Keep this as a named trace-derived
+            // event until the global VVC context table is implemented.
+            lps: 31,
+            mps: false,
+        },
+    );
+    for token in toy_palette_444_syntax_tokens(syntax) {
+        append_palette_syntax_token_cabac(&mut cabac, token);
+    }
+    cabac.encode_bin_trm(true);
+    cabac.finish()
 }
 
 fn toy_palette_444_single_entry_syntax(
@@ -1424,6 +1468,7 @@ fn toy_palette_444_single_entry_syntax(
     }
 }
 
+#[cfg(test)]
 fn toy_palette_444_binarized_syntax_bits(syntax: ToyPalette444Syntax) -> Vec<bool> {
     let mut bits = Vec::new();
     for token in toy_palette_444_syntax_tokens(syntax) {
@@ -1512,6 +1557,7 @@ fn toy_palette_444_syntax_tokens(syntax: ToyPalette444Syntax) -> Vec<ToyPaletteS
     tokens
 }
 
+#[cfg(test)]
 fn append_palette_syntax_token_bits(bits: &mut Vec<bool>, token: ToyPaletteSyntaxToken) {
     match token.kind {
         ToyPaletteSyntaxTokenKind::Eg0 { value } => append_eg0_bits(bits, value),
@@ -1521,6 +1567,32 @@ fn append_palette_syntax_token_bits(bits: &mut Vec<bool>, token: ToyPaletteSynta
     }
 }
 
+fn append_palette_syntax_token_cabac(cabac: &mut ToyCabacEncoder, token: ToyPaletteSyntaxToken) {
+    match token.kind {
+        ToyPaletteSyntaxTokenKind::Eg0 { value } => encode_vtm_exp_golomb_ep(cabac, value, 0),
+        ToyPaletteSyntaxTokenKind::FixedLength { value, bit_count } => {
+            cabac.encode_bins_ep(value, bit_count as u32);
+        }
+    }
+}
+
+fn encode_vtm_exp_golomb_ep(cabac: &mut ToyCabacEncoder, mut symbol: u32, mut count: u32) {
+    let mut bins = 0;
+    let mut num_bins = 0;
+    while symbol >= (1 << count) {
+        bins <<= 1;
+        bins += 1;
+        num_bins += 1;
+        symbol -= 1 << count;
+        count += 1;
+    }
+    bins <<= 1;
+    num_bins += 1;
+    cabac.encode_bins_ep(bins, num_bins);
+    cabac.encode_bins_ep(symbol, count);
+}
+
+#[cfg(test)]
 fn append_eg0_bits(bits: &mut Vec<bool>, value: u32) {
     let code_num = value + 1;
     let bit_count = 32 - code_num.leading_zeros();
@@ -4227,7 +4299,7 @@ mod tests {
         let infos = parse_annex_b_nal_units(&bytes).unwrap();
         let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
         assert_eq!(types, vec![15, 16, 25, 8]);
-        assert_eq!(infos[0].payload_len, 31);
+        assert_eq!(infos[0].payload_len, 29);
         assert_eq!(infos[1].payload_len, 14);
     }
 
@@ -4340,9 +4412,6 @@ mod tests {
         let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
         assert_eq!(types, vec![15, 16, 25, 8]);
         assert_ne!(bytes, transform_bytes);
-        assert!(bytes
-            .windows(4)
-            .any(|window| window == [0x48, 0x30, 0x18, 0x08]));
         assert!(!bytes.windows(4).any(|window| window == b"FFPL"));
         assert!(!bytes.windows(4).any(|window| window == b"FFAC"));
     }
