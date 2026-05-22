@@ -1,4 +1,3 @@
-use crate::ffbs;
 use crate::picture::{Picture, PixelFormat, ReconstructionBuffer};
 use crate::trace::TraceEvent;
 
@@ -94,7 +93,7 @@ impl Encoder for MinimalEncoder {
 
         let mut trace_events = vec![TraceEvent::new(
             "encode",
-            "FrameForge experimental ffbs raw-gray8 intra encode",
+            "FrameForge experimental software encode skeleton",
         )];
 
         for block in traverse_blocks(
@@ -108,7 +107,7 @@ impl Encoder for MinimalEncoder {
             );
         }
 
-        let bytes = ffbs::encode_raw_gray8(picture)?;
+        let bytes = Vec::new();
         let _ = self.recon.as_slice();
 
         Ok(EncodeResult {
@@ -117,8 +116,6 @@ impl Encoder for MinimalEncoder {
         })
     }
 }
-
-pub type PlaceholderEncoder = MinimalEncoder;
 
 #[cfg(test)]
 mod tests {

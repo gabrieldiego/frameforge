@@ -52,7 +52,6 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 ## Planned Next
 
 - Replace placeholder output with clean-room VVC parameter set and slice scaffolding where syntax details are confirmed.
-- Replace the remaining non-VVC placeholder encode/decode path with the VVC toy encoder as it becomes more capable.
 - Replace toy CABAC packets with a minimal arithmetic CABAC writer fed by the same coding-tree events.
 - Expand sampled-color residual syntax beyond the current luma ladder and add independent decoded chroma support.
 - Keep software, RTL, and external-decoder reconstructions identical as more color and residual cases are added.
