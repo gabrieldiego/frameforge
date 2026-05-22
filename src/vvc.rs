@@ -1375,8 +1375,7 @@ fn write_toy_palette_444_entropy(
 
 fn toy_palette_444_bits(geometry: ToyVideoGeometry, color: Toy4x4SampledColor) -> Vec<bool> {
     let syntax = toy_palette_444_single_entry_syntax(geometry, color);
-    debug_assert_eq!(toy_palette_444_binarized_syntax_bits(syntax).len(), 28);
-    toy_palette_444_transport_bits(syntax)
+    toy_palette_444_binarized_syntax_bits(syntax)
 }
 
 fn toy_palette_444_single_entry_syntax(
@@ -1432,19 +1431,6 @@ fn toy_palette_444_binarized_syntax_bits(syntax: ToyPalette444Syntax) -> Vec<boo
     bits
 }
 
-fn toy_palette_444_transport_bits(syntax: ToyPalette444Syntax) -> Vec<bool> {
-    let mut bits = Vec::new();
-    append_palette_prefixed_u8(&mut bits, syntax.num_signalled_palette_entries);
-    for entry in syntax.new_palette_entries {
-        append_palette_prefixed_u8(&mut bits, entry.y);
-        append_palette_prefixed_u8(&mut bits, entry.u);
-        append_palette_prefixed_u8(&mut bits, entry.v);
-    }
-    append_palette_prefixed_u8(&mut bits, u8::from(syntax.palette_escape_val_present_flag));
-    append_palette_prefixed_u8(&mut bits, syntax.max_palette_index);
-    bits
-}
-
 fn append_eg0_bits(bits: &mut Vec<bool>, value: u32) {
     let code_num = value + 1;
     let bit_count = 32 - code_num.leading_zeros();
@@ -1454,11 +1440,6 @@ fn append_eg0_bits(bits: &mut Vec<bool>, value: u32) {
     for bit in (0..bit_count).rev() {
         bits.push(((code_num >> bit) & 1) != 0);
     }
-}
-
-fn append_palette_prefixed_u8(bits: &mut Vec<bool>, value: u8) {
-    append_fixed_bits(bits, 0x80 | ((value >> 4) as u64), 8);
-    append_fixed_bits(bits, 0x80 | ((value & 0x0f) as u64), 8);
 }
 
 fn write_toy_coding_tree_entropy(
@@ -4269,8 +4250,9 @@ mod tests {
         let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
         assert_eq!(types, vec![15, 16, 25, 8]);
         assert_ne!(bytes, transform_bytes);
-        assert!(bytes.windows(12).any(|window| window
-            == [0x80, 0x81, 0x84, 0x81, 0x88, 0x80, 0x8c, 0x80, 0x80, 0x80, 0x80, 0x80]));
+        assert!(bytes
+            .windows(4)
+            .any(|window| window == [0x48, 0x30, 0x18, 0x08]));
         assert!(!bytes.windows(4).any(|window| window == b"FFPL"));
         assert!(!bytes.windows(4).any(|window| window == b"FFAC"));
     }

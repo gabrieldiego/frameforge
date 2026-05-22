@@ -1021,46 +1021,22 @@ module ff_vvc_toy4x4_encoder #(
 
   function automatic logic [12:0] palette_444_payload_bit_len();
     begin
-      palette_444_payload_bit_len = 13'd96;
+      palette_444_payload_bit_len = 13'd28;
     end
   endfunction
 
   function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] palette_444_payload_bits();
     logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bits;
     begin
-      // Toy single-entry palette packet:
-      // each nibble is emitted as 1xxx_xxxx to avoid zero-byte runs before
-      // the RTL byte streamer grows a generic emulation-prevention inserter.
-      // Fields are derived from H.266 palette_coding syntax for the current
-      // single-entry subset: num_signalled_palette_entries, Y, Cb, Cr,
-      // palette_escape_val_present_flag, MaxPaletteIndex.
-      bits = palette_prefixed_u8(8'd1);
-      bits = (bits << 16) | palette_prefixed_u8(sample_to_8bit(sampled_y));
-      bits = (bits << 16) | palette_prefixed_u8(sample_to_8bit(sampled_u));
-      bits = (bits << 16) | palette_prefixed_u8(sample_to_8bit(sampled_v));
-      bits = (bits << 16) | palette_prefixed_u8(8'd0);
-      bits = (bits << 16) | palette_prefixed_u8(8'd0);
+      // H.266 palette_coding() bins for the current single-entry subset:
+      // EG0 num_signalled_palette_entries=1, FL new_palette_entries for
+      // Y/Cb/Cr at 8 bits each, and FL palette_escape_val_present_flag=0.
+      bits = 3'b010;
+      bits = (bits << 8) | sample_to_8bit(sampled_y);
+      bits = (bits << 8) | sample_to_8bit(sampled_u);
+      bits = (bits << 8) | sample_to_8bit(sampled_v);
+      bits = bits << 1;
       palette_444_payload_bits = bits;
-    end
-  endfunction
-
-  function automatic logic [31:0] palette_prefixed_u16(input logic [15:0] value);
-    begin
-      palette_prefixed_u16 = {
-        4'h8, value[15:12],
-        4'h8, value[11:8],
-        4'h8, value[7:4],
-        4'h8, value[3:0]
-      };
-    end
-  endfunction
-
-  function automatic logic [15:0] palette_prefixed_u8(input logic [7:0] value);
-    begin
-      palette_prefixed_u8 = {
-        4'h8, value[7:4],
-        4'h8, value[3:0]
-      };
     end
   endfunction
 
