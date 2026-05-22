@@ -91,6 +91,10 @@ module ff_vvc_encoder #(
   logic [(24 * 64) - 1:0] palette_symbol_payload;
   logic        palette_sample_valid;
   logic [1:0]  palette_sample_plane;
+  logic        residual_sample_valid;
+  logic        residual_sample_last;
+  logic        residual_sample_1_valid;
+  logic        residual_sample_1_last;
   logic        cabac_stream_valid;
   logic [7:0]  cabac_stream_data;
   logic        cabac_stream_last;
@@ -114,14 +118,19 @@ module ff_vvc_encoder #(
     .capacity_tu_grid_bit_len(coding_tree_capacity_tu_grid_bit_len)
   );
 
+  assign palette_sample_valid = PALETTE_MODE && input_active_q && s_axis_valid &&
+                                (input_count_q < frame_samples());
+  assign palette_sample_plane = palette_sample_valid ? palette_plane_for_input(input_count_q) : 2'd0;
+
   always @* begin
-    palette_sample_valid = 1'b0;
-    palette_sample_plane = 2'd0;
-    if (PALETTE_MODE && input_active_q && s_axis_valid &&
-        (input_count_q < frame_samples())) begin
-      palette_sample_valid = 1'b1;
-      palette_sample_plane = palette_plane_for_input(input_count_q);
-    end
+    residual_sample_valid = input_active_q && s_axis_valid && s_axis_ready &&
+                            is_residual_luma_sample(input_count_q);
+    residual_sample_last = residual_sample_valid &&
+                           (residual_luma_sample_index(input_count_q) == 4'd15);
+    residual_sample_1_valid = input_active_q && s_axis_valid && s_axis_ready &&
+                              is_second_residual_luma_sample(input_count_q);
+    residual_sample_1_last = residual_sample_1_valid &&
+                             (second_residual_luma_sample_index(input_count_q) == 4'd15);
   end
 
   ff_vvc_palette_symbolizer #(
@@ -139,11 +148,11 @@ module ff_vvc_encoder #(
     .sample_valid(palette_sample_valid),
     .sample_plane(palette_sample_plane),
     .sample(s_axis_data),
-    .s_axis_valid(1'b0),
+    .s_axis_valid(palette_sample_valid),
     .s_axis_ready(),
-    .s_axis_plane(2'd0),
-    .s_axis_sample('0),
-    .s_axis_last(1'b0),
+    .s_axis_plane(palette_sample_plane),
+    .s_axis_sample(s_axis_data),
+    .s_axis_last(s_axis_last),
     .m_axis_valid(),
     .m_axis_ready(1'b1),
     .m_axis_data(),
@@ -195,10 +204,10 @@ module ff_vvc_encoder #(
     .rst_n(rst_n),
     .clear(start && !busy),
     .enable(1'b1),
-    .s_axis_valid(1'b0),
+    .s_axis_valid(residual_sample_valid),
     .s_axis_ready(),
-    .s_axis_sample('0),
-    .s_axis_last(1'b0),
+    .s_axis_sample(s_axis_data),
+    .s_axis_last(residual_sample_last),
     .m_axis_valid(),
     .m_axis_ready(1'b1),
     .m_axis_kind(),
@@ -218,10 +227,10 @@ module ff_vvc_encoder #(
     .rst_n(rst_n),
     .clear(start && !busy),
     .enable(1'b1),
-    .s_axis_valid(1'b0),
+    .s_axis_valid(residual_sample_1_valid),
     .s_axis_ready(),
-    .s_axis_sample('0),
-    .s_axis_last(1'b0),
+    .s_axis_sample(s_axis_data),
+    .s_axis_last(residual_sample_1_last),
     .m_axis_valid(),
     .m_axis_ready(1'b1),
     .m_axis_kind(),
