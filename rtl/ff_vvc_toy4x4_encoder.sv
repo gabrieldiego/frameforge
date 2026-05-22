@@ -745,7 +745,7 @@ module ff_vvc_toy4x4_encoder #(
       state = append_u(state, CHROMA_FORMAT_IDC[1:0], 2);
       state = append_u(state, 1, 2);
       state = append_flag(state, 1'b1);
-      state = append_u(state, 1, 7);
+      state = append_u(state, (PALETTE_MODE || (CHROMA_FORMAT_IDC == 3)) ? 0 : 1, 7);
       state = append_flag(state, 1'b0);
       state = append_u(state, 0, 8);
       state = append_flag(state, 1'b1);
@@ -780,11 +780,13 @@ module ff_vvc_toy4x4_encoder #(
       state = append_ue(state, 3);
       state = append_ue(state, 2);
       state = append_ue(state, 2);
-      state = append_flag(state, 1'b1);
-      state = append_ue(state, 1);
-      state = append_ue(state, 3);
-      state = append_ue(state, 3);
-      state = append_ue(state, 2);
+      state = append_flag(state, !((CHROMA_FORMAT_IDC == 3) && PALETTE_MODE));
+      if (!((CHROMA_FORMAT_IDC == 3) && PALETTE_MODE)) begin
+        state = append_ue(state, 1);
+        state = append_ue(state, 3);
+        state = append_ue(state, 3);
+        state = append_ue(state, 2);
+      end
       state = append_ue(state, 1);
       state = append_ue(state, 3);
       state = append_ue(state, 3);
@@ -837,9 +839,14 @@ module ff_vvc_toy4x4_encoder #(
       state = append_flag(state, 1'b1);
       state = append_flag(state, 1'b0);
       state = append_flag(state, 1'b1);
-      state = append_flag(state, 1'b1);
-      state = append_flag(state, 1'b0);
+      if (CHROMA_FORMAT_IDC == 1) begin
+        state = append_flag(state, 1'b1);
+        state = append_flag(state, 1'b0);
+      end
       state = append_flag(state, PALETTE_MODE);
+      if (PALETTE_MODE) begin
+        state = append_ue(state, 0);
+      end
       state = append_flag(state, 1'b0);
       state = append_flag(state, 1'b0);
       state = append_flag(state, 1'b0);
@@ -957,6 +964,7 @@ module ff_vvc_toy4x4_encoder #(
     logic [CABAC_PACKET_BITS - 1:0] cabac;
     logic [MAX_SLICE_PAYLOAD_BITS - 1:0] cabac_bits;
     logic [MAX_SLICE_PAYLOAD_BITS - 1:0] capacity_bits;
+    logic [CABAC_PACKET_BITS - 1:0] palette_cabac;
     logic [12:0]  payload_len;
     logic [12:0]  payload_bits_len;
     logic [12:0]  payload_byte_len;
@@ -981,9 +989,10 @@ module ff_vvc_toy4x4_encoder #(
 
       if (uses_capacity_tu_grid()) begin
         if (PALETTE_MODE) begin
-          capacity_bits = palette_444_payload_bits();
-          payload_len = palette_444_payload_bit_len();
-          acc = (acc << payload_len) | capacity_bits;
+          palette_cabac = palette_444_cabac_bitstream();
+          payload_len = palette_cabac[CABAC_PACKET_BITS - 1 -: 13];
+          cabac_bits = palette_cabac[MAX_SLICE_PAYLOAD_BITS - 1:0];
+          acc = (acc << payload_len) | cabac_bits;
           bit_len = bit_len + payload_len;
         end else begin
         capacity_bits = capacity_tu_grid_bits();
@@ -993,8 +1002,9 @@ module ff_vvc_toy4x4_encoder #(
         end
       end else begin
         if (PALETTE_MODE) begin
-          cabac_bits = palette_444_payload_bits();
-          payload_len = palette_444_payload_bit_len();
+          palette_cabac = palette_444_cabac_bitstream();
+          payload_len = palette_cabac[CABAC_PACKET_BITS - 1 -: 13];
+          cabac_bits = palette_cabac[MAX_SLICE_PAYLOAD_BITS - 1:0];
           acc = (acc << payload_len) | cabac_bits;
           bit_len = bit_len + payload_len;
         end else begin
@@ -1020,23 +1030,38 @@ module ff_vvc_toy4x4_encoder #(
   endfunction
 
   function automatic logic [12:0] palette_444_payload_bit_len();
+    logic [CABAC_PACKET_BITS - 1:0] cabac;
     begin
-      palette_444_payload_bit_len = 13'd28;
+      cabac = palette_444_cabac_bitstream();
+      palette_444_payload_bit_len = cabac[CABAC_PACKET_BITS - 1 -: 13];
     end
   endfunction
 
   function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] palette_444_payload_bits();
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bits;
+    logic [CABAC_PACKET_BITS - 1:0] cabac;
     begin
-      // H.266 palette_coding() bins for the current single-entry subset:
-      // EG0 num_signalled_palette_entries=1, FL new_palette_entries for
-      // Y/Cb/Cr at 8 bits each, and FL palette_escape_val_present_flag=0.
-      bits = 3'b010;
-      bits = (bits << 8) | sample_to_8bit(sampled_y);
-      bits = (bits << 8) | sample_to_8bit(sampled_u);
-      bits = (bits << 8) | sample_to_8bit(sampled_v);
-      bits = bits << 1;
-      palette_444_payload_bits = bits;
+      cabac = palette_444_cabac_bitstream();
+      palette_444_payload_bits = cabac[MAX_SLICE_PAYLOAD_BITS - 1:0];
+    end
+  endfunction
+
+  function automatic logic [CABAC_PACKET_BITS - 1:0] palette_444_cabac_bitstream();
+    cabac_state_t st;
+    begin
+      st = cabac_start();
+      st = cabac_encode_bin(st, 1'b0, 9'd146, 1'b0); // split_cu_mode split=0 for the 8x8 palette CU
+      st = cabac_encode_bin(st, 1'b1, 9'd31, 1'b0);  // pred_mode PLTFlag=1
+      st = cabac_encode_exp_golomb_ep(st, 6'd1, 6'd0); // num_signalled_palette_entries=1
+      st = cabac_encode_bins_ep(st, {24'd0, sample_to_8bit(sampled_y)}, 6'd8);
+      st = cabac_encode_bins_ep(st, {24'd0, sample_to_8bit(sampled_u)}, 6'd8);
+      st = cabac_encode_bins_ep(st, {24'd0, sample_to_8bit(sampled_v)}, 6'd8);
+      st = cabac_encode_bin_ep(st, 1'b0); // palette_escape_val_present_flag=0
+      st = cabac_encode_bin_trm(st, 1'b1);
+      st = cabac_finish(st);
+      palette_444_cabac_bitstream = {
+        st[CABAC_LEN_LSB +: 13],
+        st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
+      };
     end
   endfunction
 
@@ -1457,6 +1482,37 @@ module ff_vvc_toy4x4_encoder #(
         st = cabac_encode_bins_ep(st, suffix, suffix_length);
       end
       cabac_encode_rem_abs_ep = st;
+    end
+  endfunction
+
+  function automatic cabac_state_t cabac_encode_exp_golomb_ep(
+    input cabac_state_t st_in,
+    input logic [5:0]   symbol_in,
+    input logic [5:0]   count_in
+  );
+    cabac_state_t st;
+    logic [31:0] eg_bins;
+    logic [5:0] eg_symbol;
+    logic [5:0] eg_count;
+    logic [5:0] num_bins;
+    begin
+      st = st_in;
+      eg_symbol = symbol_in;
+      eg_count = count_in;
+      eg_bins = 32'd0;
+      num_bins = 6'd0;
+      while (eg_symbol >= (6'd1 << eg_count)) begin
+        eg_bins = eg_bins << 1;
+        eg_bins = eg_bins + 32'd1;
+        num_bins = num_bins + 6'd1;
+        eg_symbol = eg_symbol - (6'd1 << eg_count);
+        eg_count = eg_count + 6'd1;
+      end
+      eg_bins = eg_bins << 1;
+      num_bins = num_bins + 6'd1;
+      st = cabac_encode_bins_ep(st, eg_bins, num_bins);
+      st = cabac_encode_bins_ep(st, {26'd0, eg_symbol}, eg_count);
+      cabac_encode_exp_golomb_ep = st;
     end
   endfunction
 

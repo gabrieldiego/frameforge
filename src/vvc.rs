@@ -1424,7 +1424,17 @@ fn toy_palette_444_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4SampledCo
     let syntax = toy_palette_444_single_entry_syntax(geometry, color);
     let mut cabac = ToyCabacEncoder::new();
     cabac.start();
-    cabac.encode_ctx_bins(&TOY_CTX_EVENTS[0..4], &[false, true, false, true]);
+    cabac.encode_bin(
+        false,
+        ToyCtxEvent {
+            // Final 8x8 split_cu_mode split flag for the current experimental
+            // single-tree palette CU. The preceding CTU-to-8x8 split bins are
+            // currently supplied by the slice bring-up prefix; this event is
+            // the first one visible in VTM's CABAC trace for the CU body.
+            lps: 146,
+            mps: false,
+        },
+    );
     cabac.encode_bin(
         true,
         ToyCtxEvent {
