@@ -24,8 +24,7 @@ module ff_vvc_palette_symbolizer #(
   input  logic        m_axis_ready,
   output logic [31:0] m_axis_data,
   output logic        m_axis_last,
-  output logic [7:0]  symbol_count,
-  output logic [(24 * MAX_PALETTE_SYMBOLS) - 1:0] symbol_payload
+  output logic [7:0]  symbol_count
 );
   localparam logic [1:0] PLANE_Y  = 2'd0;
   localparam logic [1:0] PLANE_CB = 2'd1;
@@ -56,14 +55,6 @@ module ff_vvc_palette_symbolizer #(
   assign last_symbol_index = symbol_count == 8'd0 ? 8'd0 : symbol_count - 8'd1;
   assign emit_symbol = input_valid && is_symbol_anchor_xy(sample_x, sample_y) &&
                        (input_plane == PLANE_CR) && (!m_axis_valid || m_axis_ready);
-
-  always_comb begin
-    for (int i = 0; i < MAX_PALETTE_SYMBOLS; i = i + 1) begin
-      symbol_payload[((MAX_PALETTE_SYMBOLS - 1 - i) * 24) + 16 +: 8] = symbol_y[i];
-      symbol_payload[((MAX_PALETTE_SYMBOLS - 1 - i) * 24) + 8 +: 8] = symbol_cb[i];
-      symbol_payload[((MAX_PALETTE_SYMBOLS - 1 - i) * 24) +: 8] = symbol_cr[i];
-    end
-  end
 
   always_comb begin
     if (sample_plane != tracked_plane_q) begin

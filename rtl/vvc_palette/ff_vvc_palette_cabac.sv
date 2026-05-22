@@ -4,11 +4,17 @@ module ff_vvc_palette_cabac #(
   parameter int MAX_PALETTE_SYMBOLS = 64,
   parameter int MAX_SLICE_PAYLOAD_BITS = 4096
 ) (
+  input  logic clk,
+  input  logic rst_n,
+  input  logic clear,
   input  logic enable,
   input  logic [15:0] coded_width,
   input  logic [15:0] coded_height,
   input  logic [7:0]  symbol_count,
-  input  logic [(24 * MAX_PALETTE_SYMBOLS) - 1:0] symbol_payload,
+  input  logic        s_axis_valid,
+  output logic        s_axis_ready,
+  input  logic [31:0] s_axis_data,
+  input  logic        s_axis_last,
   output logic [12:0] payload_bit_len,
   output logic [MAX_SLICE_PAYLOAD_BITS - 1:0] payload_bits
 );
@@ -41,7 +47,45 @@ module ff_vvc_palette_cabac #(
   typedef logic [CABAC_STATE_BITS - 1:0] cabac_state_t;
   typedef logic [PALETTE_STATE_BITS - 1:0] palette_state_t;
 
-  always @(enable or coded_width or coded_height or symbol_count or symbol_payload) begin
+  logic [7:0] symbol_y [0:MAX_PALETTE_SYMBOLS - 1];
+  logic [7:0] symbol_cb [0:MAX_PALETTE_SYMBOLS - 1];
+  logic [7:0] symbol_cr [0:MAX_PALETTE_SYMBOLS - 1];
+  logic [7:0] write_symbol_index_q;
+  logic symbol_update_q;
+
+  assign s_axis_ready = enable;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      write_symbol_index_q <= 8'd0;
+      symbol_update_q <= 1'b0;
+      for (int i = 0; i < MAX_PALETTE_SYMBOLS; i = i + 1) begin
+        symbol_y[i] <= 8'd0;
+        symbol_cb[i] <= 8'd0;
+        symbol_cr[i] <= 8'd0;
+      end
+    end else if (clear || !enable) begin
+      write_symbol_index_q <= 8'd0;
+      symbol_update_q <= 1'b0;
+      for (int i = 0; i < MAX_PALETTE_SYMBOLS; i = i + 1) begin
+        symbol_y[i] <= 8'd0;
+        symbol_cb[i] <= 8'd0;
+        symbol_cr[i] <= 8'd0;
+      end
+    end else if (s_axis_valid && s_axis_ready) begin
+      symbol_y[write_symbol_index_q] <= s_axis_data[23:16];
+      symbol_cb[write_symbol_index_q] <= s_axis_data[15:8];
+      symbol_cr[write_symbol_index_q] <= s_axis_data[7:0];
+      symbol_update_q <= !symbol_update_q;
+      if (s_axis_last) begin
+        write_symbol_index_q <= 8'd0;
+      end else begin
+        write_symbol_index_q <= write_symbol_index_q + 8'd1;
+      end
+    end
+  end
+
+  always @(enable or coded_width or coded_height or symbol_count or symbol_update_q) begin
     if (enable) begin
       {payload_bit_len, payload_bits} = palette_444_payload_bitstream();
     end else begin
@@ -399,8 +443,7 @@ module ff_vvc_palette_cabac #(
     logic [7:0] clamped_index;
     begin
       clamped_index = (index < symbol_count) ? index : 8'd0;
-      palette_symbol =
-        symbol_payload[(MAX_PALETTE_SYMBOLS - 1 - clamped_index) * 24 +: 24];
+      palette_symbol = {symbol_y[clamped_index], symbol_cb[clamped_index], symbol_cr[clamped_index]};
     end
   endfunction
 

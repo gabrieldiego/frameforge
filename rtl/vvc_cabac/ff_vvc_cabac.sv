@@ -19,7 +19,6 @@ module ff_vvc_cabac #(
   input  logic [4:0]  luma_rem,
   input  logic [4:0]  chroma_rem,
   input  logic [7:0]  symbol_count,
-  input  logic [(24 * MAX_PALETTE_SYMBOLS) - 1:0] symbol_payload,
 
   output logic        supported,
   output logic [12:0] payload_bit_len,
@@ -61,8 +60,9 @@ module ff_vvc_cabac #(
   logic [7:0] symbol_kind_q;
   logic [31:0] symbol_data_q;
   logic symbol_last_q;
+  logic palette_s_axis_ready;
 
-  assign s_axis_ready = enable;
+  assign s_axis_ready = mode_palette_444 ? palette_s_axis_ready : enable;
   assign stream_byte_count = stream_active_q ? stream_byte_count_q : ((payload_bit_len + 13'd7) >> 3);
 
   ff_vvc_generated_cabac_body #(
@@ -82,11 +82,17 @@ module ff_vvc_cabac #(
     .MAX_PALETTE_SYMBOLS(MAX_PALETTE_SYMBOLS),
     .MAX_SLICE_PAYLOAD_BITS(MAX_SLICE_PAYLOAD_BITS)
   ) palette_444 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .clear(1'b0),
     .enable(enable && mode_palette_444),
     .coded_width(coded_width),
     .coded_height(coded_height),
     .symbol_count(symbol_count),
-    .symbol_payload(symbol_payload),
+    .s_axis_valid(s_axis_valid && mode_palette_444),
+    .s_axis_ready(palette_s_axis_ready),
+    .s_axis_data(s_axis_data),
+    .s_axis_last(s_axis_last),
     .payload_bit_len(palette_bit_len),
     .payload_bits(palette_bits)
   );

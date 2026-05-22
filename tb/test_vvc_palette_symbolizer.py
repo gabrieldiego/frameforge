@@ -50,6 +50,5 @@ async def palette_symbolizer_streams_anchor_symbol(dut):
     assert int(dut.m_axis_valid.value) == 1
     assert int(dut.m_axis_data.value) == 0x000A141E
     assert int(dut.m_axis_last.value) == 1
-    assert int(dut.symbol_payload.value) >> ((64 - 1) * 24) == 0x0A141E
     await RisingEdge(dut.clk)
     await Timer(1, unit="ns")

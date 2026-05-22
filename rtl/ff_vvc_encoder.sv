@@ -88,9 +88,12 @@ module ff_vvc_encoder #(
   logic [MAX_SLICE_PAYLOAD_BITS - 1:0] cabac_compat_payload_bits;
   logic        cabac_enable;
   logic [7:0]  palette_symbol_count;
-  logic [(24 * 64) - 1:0] palette_symbol_payload;
   logic        palette_sample_valid;
   logic [1:0]  palette_sample_plane;
+  logic        palette_stream_valid;
+  logic        palette_stream_ready;
+  logic [31:0] palette_stream_data;
+  logic        palette_stream_last;
   logic        residual_sample_valid;
   logic        residual_sample_last;
   logic        residual_sample_1_valid;
@@ -118,9 +121,21 @@ module ff_vvc_encoder #(
     .capacity_tu_grid_bit_len(coding_tree_capacity_tu_grid_bit_len)
   );
 
-  assign palette_sample_valid = PALETTE_MODE && input_active_q && s_axis_valid &&
-                                (input_count_q < frame_samples());
-  assign palette_sample_plane = palette_sample_valid ? palette_plane_for_input(input_count_q) : 2'd0;
+  generate
+    if (PALETTE_MODE) begin : gen_palette_sample_route
+      always @* begin
+        palette_sample_valid = 1'b0;
+        palette_sample_plane = 2'd0;
+        if (input_active_q && s_axis_valid && (input_count_q < frame_samples())) begin
+          palette_sample_valid = 1'b1;
+          palette_sample_plane = palette_plane_for_input(input_count_q);
+        end
+      end
+    end else begin : gen_no_palette_sample_route
+      assign palette_sample_valid = 1'b0;
+      assign palette_sample_plane = 2'd0;
+    end
+  endgenerate
 
   always @* begin
     residual_sample_valid = input_active_q && s_axis_valid && s_axis_ready &&
@@ -153,12 +168,11 @@ module ff_vvc_encoder #(
     .s_axis_plane(palette_sample_plane),
     .s_axis_sample(s_axis_data),
     .s_axis_last(s_axis_last),
-    .m_axis_valid(),
-    .m_axis_ready(1'b1),
-    .m_axis_data(),
-    .m_axis_last(),
-    .symbol_count(palette_symbol_count),
-    .symbol_payload(palette_symbol_payload)
+    .m_axis_valid(palette_stream_valid),
+    .m_axis_ready(palette_stream_ready),
+    .m_axis_data(palette_stream_data),
+    .m_axis_last(palette_stream_last),
+    .symbol_count(palette_symbol_count)
   );
 
   ff_vvc_cabac #(
@@ -180,14 +194,13 @@ module ff_vvc_encoder #(
     .luma_rem(quant_luma_rem_q),
     .chroma_rem(quant_chroma_rem_q),
     .symbol_count(palette_symbol_count),
-    .symbol_payload(palette_symbol_payload),
     .supported(cabac_supported),
     .payload_bit_len(cabac_payload_bit_len),
-    .s_axis_valid(1'b0),
-    .s_axis_ready(),
-    .s_axis_kind(8'd0),
-    .s_axis_data(32'd0),
-    .s_axis_last(1'b0),
+    .s_axis_valid(palette_stream_valid),
+    .s_axis_ready(palette_stream_ready),
+    .s_axis_kind(8'd1),
+    .s_axis_data(palette_stream_data),
+    .s_axis_last(palette_stream_last),
     .m_axis_ready(1'b1),
     .m_axis_valid(cabac_stream_valid),
     .m_axis_data(cabac_stream_data),

@@ -23,7 +23,7 @@ def pack_plane(data, width=64, height=64, max_width=64, max_height=64):
 
 
 def pack_palette_symbols(y, cb, cr, width=64, height=64, max_symbols=64):
-    value = 0
+    symbols = []
     tiles_x = (width + 7) // 8
     tiles_y = (height + 7) // 8
     count = tiles_x * tiles_y
@@ -37,8 +37,8 @@ def pack_palette_symbols(y, cb, cr, width=64, height=64, max_symbols=64):
             symbol = (y[sample_index] << 16) | (cb[sample_index] << 8) | cr[sample_index]
         else:
             symbol = 0
-        value = (value << 24) | symbol
-    return count, value
+        symbols.append(symbol)
+    return count, symbols
 
 
 def cabac_bytes(dut):
@@ -73,6 +73,23 @@ async def stream_bytes(dut):
         await RisingEdge(dut.clk)
     assert len(observed) == byte_count
     return bytes(observed)
+
+
+async def feed_palette_symbols(dut, symbols, count):
+    if not hasattr(dut, "s_axis_valid"):
+        return
+    for index in range(count):
+        while int(dut.s_axis_ready.value) != 1:
+            await RisingEdge(dut.clk)
+        dut.s_axis_valid.value = 1
+        if hasattr(dut, "s_axis_kind"):
+            dut.s_axis_kind.value = 1
+        dut.s_axis_data.value = symbols[index]
+        dut.s_axis_last.value = index == count - 1
+        await RisingEdge(dut.clk)
+    dut.s_axis_valid.value = 0
+    dut.s_axis_last.value = 0
+    await RisingEdge(dut.clk)
 
 
 def ensure_reference_dump():
@@ -112,12 +129,21 @@ async def palette_cabac_matches_software_boundary_dump(dut):
     if hasattr(dut, "clk"):
         cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
         dut.rst_n.value = 0
-        dut.start.value = 0
+        dut.enable.value = 1
+        if hasattr(dut, "start"):
+            dut.start.value = 0
+        if hasattr(dut, "mode_palette_444"):
+            dut.mode_palette_444.value = 1
+            dut.body_kind.value = 0
+            dut.luma_rem.value = 0
+            dut.chroma_rem.value = 0
         dut.s_axis_valid.value = 0
-        dut.s_axis_kind.value = 0
+        if hasattr(dut, "s_axis_kind"):
+            dut.s_axis_kind.value = 0
         dut.s_axis_data.value = 0
         dut.s_axis_last.value = 0
-        dut.m_axis_ready.value = 1
+        if hasattr(dut, "m_axis_ready"):
+            dut.m_axis_ready.value = 1
         for _ in range(2):
             await RisingEdge(dut.clk)
         dut.rst_n.value = 1
@@ -129,7 +155,7 @@ async def palette_cabac_matches_software_boundary_dump(dut):
     y = data[:luma_len]
     cb = data[luma_len : luma_len * 2]
     cr = data[luma_len * 2 : luma_len * 3]
-    symbol_count, symbol_payload = pack_palette_symbols(y, cb, cr)
+    symbol_count, symbols = pack_palette_symbols(y, cb, cr)
 
     dut.enable.value = 1
     if hasattr(dut, "mode_palette_444"):
@@ -141,7 +167,7 @@ async def palette_cabac_matches_software_boundary_dump(dut):
     dut.coded_width.value = reference["width"]
     dut.coded_height.value = reference["height"]
     dut.symbol_count.value = symbol_count
-    dut.symbol_payload.value = symbol_payload
+    await feed_palette_symbols(dut, symbols, symbol_count)
     await Timer(1, unit="ns")
 
     assert int(dut.payload_bit_len.value) == reference["cabac_bit_len"]
