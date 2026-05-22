@@ -149,6 +149,9 @@ module ff_vvc_encoder #(
     .MAX_PALETTE_SYMBOLS(64),
     .MAX_SLICE_PAYLOAD_BITS(MAX_SLICE_PAYLOAD_BITS)
   ) cabac_writer (
+    .clk(clk),
+    .rst_n(rst_n),
+    .start(1'b0),
     .enable(cabac_enable),
     .mode_palette_444(PALETTE_MODE),
     .body_kind(coding_tree_body_kind),
@@ -162,11 +165,15 @@ module ff_vvc_encoder #(
     .symbol_payload(palette_symbol_payload),
     .supported(cabac_supported),
     .payload_bit_len(cabac_payload_bit_len),
+    .s_axis_valid(1'b0),
+    .s_axis_ready(),
+    .s_axis_kind(8'd0),
+    .s_axis_data(32'd0),
+    .s_axis_last(1'b0),
     .m_axis_ready(1'b1),
     .m_axis_valid(cabac_stream_valid),
     .m_axis_data(cabac_stream_data),
     .m_axis_last(cabac_stream_last),
-    .stream_byte_index(13'd0),
     .stream_byte_count(cabac_stream_byte_count),
     .compat_payload_bits(cabac_compat_payload_bits)
   );

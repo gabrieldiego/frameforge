@@ -6,6 +6,9 @@ module ff_vvc_cabac #(
   parameter int MAX_PALETTE_SYMBOLS = 64,
   parameter int MAX_SLICE_PAYLOAD_BITS = 4096
 ) (
+  input  logic        clk,
+  input  logic        rst_n,
+  input  logic        start,
   input  logic        enable,
   input  logic        mode_palette_444,
   input  logic [1:0]  body_kind,
@@ -21,14 +24,20 @@ module ff_vvc_cabac #(
   output logic        supported,
   output logic [12:0] payload_bit_len,
 
-  // Streaming view of the completed CABAC payload. The selected sub-blocks are
-  // still combinational models; this interface is the stable boundary for
-  // replacing them with sequential symbol consumers.
+  // Symbol stream boundary for future sequential CABAC. The current clean-room
+  // body generators still use the parameter inputs above, but upstream blocks
+  // should converge on this symbol-in/byte-out contract.
+  input  logic        s_axis_valid,
+  output logic        s_axis_ready,
+  input  logic [7:0]  s_axis_kind,
+  input  logic [31:0] s_axis_data,
+  input  logic        s_axis_last,
+
+  // Registered byte stream for the completed CABAC payload.
   input  logic        m_axis_ready,
   output logic        m_axis_valid,
   output logic [7:0]  m_axis_data,
   output logic        m_axis_last,
-  input  logic [12:0] stream_byte_index,
   output logic [12:0] stream_byte_count,
 
   // Temporary bridge for the surrounding combinational slice payload packer.
@@ -45,6 +54,16 @@ module ff_vvc_cabac #(
   logic [MAX_SLICE_PAYLOAD_BITS - 1:0] palette_bits;
   logic [MAX_SLICE_PAYLOAD_BITS - 1:0] selected_bits;
   logic [12:0] selected_pad_bits;
+  logic [MAX_SLICE_PAYLOAD_BITS - 1:0] stream_bits_q;
+  logic [12:0] stream_byte_count_q;
+  logic [12:0] stream_byte_index_q;
+  logic stream_active_q;
+  logic [7:0] symbol_kind_q;
+  logic [31:0] symbol_data_q;
+  logic symbol_last_q;
+
+  assign s_axis_ready = enable;
+  assign stream_byte_count = stream_active_q ? stream_byte_count_q : ((payload_bit_len + 13'd7) >> 3);
 
   ff_vvc_generated_cabac_body #(
     .MAX_SLICE_PAYLOAD_BITS(MAX_SLICE_PAYLOAD_BITS)
@@ -89,15 +108,72 @@ module ff_vvc_cabac #(
   end
 
   always @* begin
-    stream_byte_count = (payload_bit_len + 13'd7) >> 3;
-    selected_pad_bits = (stream_byte_count << 3) - payload_bit_len;
+    selected_pad_bits = ((((payload_bit_len + 13'd7) >> 3) << 3) - payload_bit_len);
     selected_bits = compat_payload_bits << selected_pad_bits;
-    m_axis_valid = enable && supported && (stream_byte_index < stream_byte_count);
-    m_axis_last = m_axis_valid && (stream_byte_index == stream_byte_count - 13'd1);
-    if (m_axis_valid && m_axis_ready) begin
-      m_axis_data = selected_bits >> (((stream_byte_count - 13'd1) - stream_byte_index) * 8);
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      stream_bits_q <= '0;
+      stream_byte_count_q <= 13'd0;
+      stream_byte_index_q <= 13'd0;
+      stream_active_q <= 1'b0;
+      m_axis_valid <= 1'b0;
+      m_axis_data <= 8'd0;
+      m_axis_last <= 1'b0;
     end else begin
-      m_axis_data = 8'h00;
+      if (start && enable && supported) begin
+        stream_bits_q <= selected_bits;
+        stream_byte_count_q <= (payload_bit_len + 13'd7) >> 3;
+        stream_byte_index_q <= 13'd0;
+        stream_active_q <= ((payload_bit_len + 13'd7) >> 3) != 13'd0;
+        m_axis_valid <= ((payload_bit_len + 13'd7) >> 3) != 13'd0;
+        m_axis_data <= stream_byte(selected_bits, (payload_bit_len + 13'd7) >> 3, 13'd0);
+        m_axis_last <= ((payload_bit_len + 13'd7) >> 3) == 13'd1;
+      end else if (m_axis_valid && m_axis_ready) begin
+        if (m_axis_last) begin
+          stream_active_q <= 1'b0;
+          m_axis_valid <= 1'b0;
+          m_axis_data <= 8'd0;
+          m_axis_last <= 1'b0;
+        end else begin
+          stream_byte_index_q <= stream_byte_index_q + 13'd1;
+          m_axis_data <= stream_byte(stream_bits_q, stream_byte_count_q, stream_byte_index_q + 13'd1);
+          m_axis_last <= (stream_byte_index_q + 13'd1) == (stream_byte_count_q - 13'd1);
+        end
+      end else if (!stream_active_q) begin
+        m_axis_valid <= 1'b0;
+        m_axis_last <= 1'b0;
+        m_axis_data <= 8'd0;
+      end
+    end
+  end
+
+  function automatic logic [7:0] stream_byte(
+    input logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bits,
+    input logic [12:0] byte_count,
+    input logic [12:0] byte_index
+  );
+    begin
+      if (byte_index < byte_count) begin
+        stream_byte = bits >> (((byte_count - 13'd1) - byte_index) * 8);
+      end else begin
+        stream_byte = 8'd0;
+      end
+    end
+  endfunction
+
+  // Keep the symbol stream visible to lint/simulation until the current
+  // parameter-driven generators are replaced by real symbol consumers.
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      symbol_kind_q <= 8'd0;
+      symbol_data_q <= 32'd0;
+      symbol_last_q <= 1'b0;
+    end else if (s_axis_valid && s_axis_ready) begin
+      symbol_kind_q <= s_axis_kind;
+      symbol_data_q <= s_axis_data;
+      symbol_last_q <= s_axis_last;
     end
   end
 

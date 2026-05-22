@@ -3,7 +3,8 @@ import subprocess
 from pathlib import Path
 
 import cocotb
-from cocotb.triggers import Timer
+from cocotb.clock import Clock
+from cocotb.triggers import ReadOnly, RisingEdge, Timer
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -53,17 +54,24 @@ def cabac_bytes(dut):
 
 
 async def stream_bytes(dut):
-    if not hasattr(dut, "m_axis_data"):
+    if not hasattr(dut, "m_axis_data") or not hasattr(dut, "clk"):
         return None
     byte_count = int(dut.stream_byte_count.value)
     observed = bytearray()
     dut.m_axis_ready.value = 1
-    for index in range(byte_count):
-        dut.stream_byte_index.value = index
-        await Timer(1, unit="ns")
+    dut.start.value = 1
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
+    for index in range(byte_count + 4):
+        await ReadOnly()
         assert int(dut.m_axis_valid.value) == 1
         observed.append(int(dut.m_axis_data.value))
-        assert int(dut.m_axis_last.value) == (1 if index == byte_count - 1 else 0)
+        if int(dut.m_axis_last.value) == 1:
+            assert len(observed) == byte_count
+            await RisingEdge(dut.clk)
+            break
+        await RisingEdge(dut.clk)
+    assert len(observed) == byte_count
     return bytes(observed)
 
 
@@ -101,6 +109,20 @@ def ensure_reference_dump():
 
 @cocotb.test()
 async def palette_cabac_matches_software_boundary_dump(dut):
+    if hasattr(dut, "clk"):
+        cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
+        dut.rst_n.value = 0
+        dut.start.value = 0
+        dut.s_axis_valid.value = 0
+        dut.s_axis_kind.value = 0
+        dut.s_axis_data.value = 0
+        dut.s_axis_last.value = 0
+        dut.m_axis_ready.value = 1
+        for _ in range(2):
+            await RisingEdge(dut.clk)
+        dut.rst_n.value = 1
+        await RisingEdge(dut.clk)
+
     reference = ensure_reference_dump()
     data = VECTOR.read_bytes()
     luma_len = 64 * 64
@@ -116,7 +138,6 @@ async def palette_cabac_matches_software_boundary_dump(dut):
         dut.luma_rem.value = 0
         dut.chroma_rem.value = 0
         dut.m_axis_ready.value = 1
-        dut.stream_byte_index.value = 0
     dut.coded_width.value = reference["width"]
     dut.coded_height.value = reference["height"]
     dut.symbol_count.value = symbol_count
