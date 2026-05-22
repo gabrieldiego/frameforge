@@ -1049,13 +1049,12 @@ module ff_vvc_toy4x4_encoder #(
     cabac_state_t st;
     begin
       st = cabac_start();
-      if (coding_tree_coded_width == 16'd16 && coding_tree_coded_height == 16'd16) begin
-        st = cabac_encode_bin(st, 1'b1, 9'd214, 1'b0); // 16x16 root split_cu_mode split=1
-        st = cabac_encode_bin(st, 1'b1, 9'd36, 1'b0);  // 16x16 root split_cu_mode qt=1
-        st = palette_444_encode_8x8_cu(st, 9'd89, 1'b0, 9'd34, 1'b0, 1'b1);
-        st = palette_444_encode_8x8_cu(st, 9'd80, 1'b0, 9'd82, 1'b0, 1'b0);
-        st = palette_444_encode_8x8_cu(st, 9'd94, 1'b0, 9'd137, 1'b0, 1'b0);
-        st = palette_444_encode_8x8_cu(st, 9'd76, 1'b0, 9'd142, 1'b0, 1'b0);
+      if (coding_tree_coded_width == 16'd64 && coding_tree_coded_height == 16'd64) begin
+        st = palette_444_encode_64x64_tree(st);
+      end else if (coding_tree_coded_width == 16'd32 && coding_tree_coded_height == 16'd32) begin
+        st = palette_444_encode_32x32_tree(st, 1'b1);
+      end else if (coding_tree_coded_width == 16'd16 && coding_tree_coded_height == 16'd16) begin
+        st = palette_444_encode_16x16_tree(st, 1'b1);
       end else begin
         st = palette_444_encode_8x8_cu(st, 9'd146, 1'b0, 9'd31, 1'b0, 1'b1);
       end
@@ -1065,6 +1064,54 @@ module ff_vvc_toy4x4_encoder #(
         st[CABAC_LEN_LSB +: 13],
         st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
       };
+    end
+  endfunction
+
+  function automatic cabac_state_t palette_444_encode_64x64_tree(input cabac_state_t st_in);
+    cabac_state_t st;
+    begin
+      st = st_in;
+      st = cabac_encode_bin(st, 1'b1, 9'd214, 1'b0); // 64x64 split_cu_mode split=1
+      st = cabac_encode_bin(st, 1'b1, 9'd36, 1'b0);  // 64x64 split_cu_mode qt=1
+      st = palette_444_encode_32x32_tree(st, 1'b1);
+      st = palette_444_encode_32x32_tree(st, 1'b0);
+      st = palette_444_encode_32x32_tree(st, 1'b0);
+      st = palette_444_encode_32x32_tree(st, 1'b0);
+      palette_444_encode_64x64_tree = st;
+    end
+  endfunction
+
+  function automatic cabac_state_t palette_444_encode_32x32_tree(
+    input cabac_state_t st_in,
+    input logic signal_new_entry
+  );
+    cabac_state_t st;
+    begin
+      st = st_in;
+      st = cabac_encode_bin(st, 1'b1, 9'd214, 1'b0); // 32x32 split_cu_mode split=1
+      st = cabac_encode_bin(st, 1'b1, 9'd36, 1'b0);  // 32x32 split_cu_mode qt=1
+      st = palette_444_encode_16x16_tree(st, signal_new_entry);
+      st = palette_444_encode_16x16_tree(st, 1'b0);
+      st = palette_444_encode_16x16_tree(st, 1'b0);
+      st = palette_444_encode_16x16_tree(st, 1'b0);
+      palette_444_encode_32x32_tree = st;
+    end
+  endfunction
+
+  function automatic cabac_state_t palette_444_encode_16x16_tree(
+    input cabac_state_t st_in,
+    input logic signal_new_entry
+  );
+    cabac_state_t st;
+    begin
+      st = st_in;
+      st = cabac_encode_bin(st, 1'b1, 9'd214, 1'b0); // 16x16 split_cu_mode split=1
+      st = cabac_encode_bin(st, 1'b1, 9'd36, 1'b0);  // 16x16 split_cu_mode qt=1
+      st = palette_444_encode_8x8_cu(st, 9'd89, 1'b0, 9'd34, 1'b0, signal_new_entry);
+      st = palette_444_encode_8x8_cu(st, 9'd80, 1'b0, 9'd82, 1'b0, 1'b0);
+      st = palette_444_encode_8x8_cu(st, 9'd94, 1'b0, 9'd137, 1'b0, 1'b0);
+      st = palette_444_encode_8x8_cu(st, 9'd76, 1'b0, 9'd142, 1'b0, 1'b0);
+      palette_444_encode_16x16_tree = st;
     end
   endfunction
 

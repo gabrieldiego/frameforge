@@ -1420,80 +1420,148 @@ fn toy_palette_444_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4SampledCo
     let syntax = toy_palette_444_single_entry_syntax(geometry, color);
     let mut cabac = ToyCabacEncoder::new();
     cabac.start();
-    if geometry.coded_width() == 16 && geometry.coded_height() == 16 {
-        cabac.encode_bin(
-            true,
-            ToyCtxEvent {
-                // 16x16 root split_cu_mode split=1.
-                lps: 214,
-                mps: false,
-            },
-        );
-        cabac.encode_bin(
-            true,
-            ToyCtxEvent {
-                // 16x16 root split_cu_mode qt=1.
-                lps: 36,
-                mps: false,
-            },
-        );
-        append_toy_palette_444_8x8_cu_with_events(
-            &mut cabac,
-            syntax,
-            ToyCtxEvent {
-                lps: 89,
-                mps: false,
-            },
-            ToyCtxEvent {
-                lps: 34,
-                mps: false,
-            },
-            ToyPalettePredictorMode::SignalNewEntry,
-        );
-        append_toy_palette_444_8x8_cu_with_events(
-            &mut cabac,
-            syntax,
-            ToyCtxEvent {
-                lps: 80,
-                mps: false,
-            },
-            ToyCtxEvent {
-                lps: 82,
-                mps: false,
-            },
-            ToyPalettePredictorMode::ReusePreviousEntry,
-        );
-        append_toy_palette_444_8x8_cu_with_events(
-            &mut cabac,
-            syntax,
-            ToyCtxEvent {
-                lps: 94,
-                mps: false,
-            },
-            ToyCtxEvent {
-                lps: 137,
-                mps: false,
-            },
-            ToyPalettePredictorMode::ReusePreviousEntry,
-        );
-        append_toy_palette_444_8x8_cu_with_events(
-            &mut cabac,
-            syntax,
-            ToyCtxEvent {
-                lps: 76,
-                mps: false,
-            },
-            ToyCtxEvent {
-                lps: 142,
-                mps: false,
-            },
-            ToyPalettePredictorMode::ReusePreviousEntry,
-        );
+    if geometry.coded_width() == 64 && geometry.coded_height() == 64 {
+        let mut predictor_mode = ToyPalettePredictorMode::SignalNewEntry;
+        append_toy_palette_444_64x64_tree(&mut cabac, syntax, &mut predictor_mode);
+    } else if geometry.coded_width() == 32 && geometry.coded_height() == 32 {
+        let mut predictor_mode = ToyPalettePredictorMode::SignalNewEntry;
+        append_toy_palette_444_32x32_tree(&mut cabac, syntax, &mut predictor_mode);
+    } else if geometry.coded_width() == 16 && geometry.coded_height() == 16 {
+        let mut predictor_mode = ToyPalettePredictorMode::SignalNewEntry;
+        append_toy_palette_444_16x16_tree(&mut cabac, syntax, &mut predictor_mode);
     } else {
         append_toy_palette_444_8x8_cu(&mut cabac, syntax);
     }
     cabac.encode_bin_trm(true);
     cabac.finish()
+}
+
+fn append_toy_palette_444_64x64_tree(
+    cabac: &mut ToyCabacEncoder,
+    syntax: ToyPalette444Syntax,
+    predictor_mode: &mut ToyPalettePredictorMode,
+) {
+    cabac.encode_bin(
+        true,
+        ToyCtxEvent {
+            // 64x64 split_cu_mode split=1.
+            lps: 214,
+            mps: false,
+        },
+    );
+    cabac.encode_bin(
+        true,
+        ToyCtxEvent {
+            // 64x64 split_cu_mode qt=1.
+            lps: 36,
+            mps: false,
+        },
+    );
+    for _ in 0..4 {
+        append_toy_palette_444_32x32_tree(cabac, syntax, predictor_mode);
+    }
+}
+
+fn append_toy_palette_444_32x32_tree(
+    cabac: &mut ToyCabacEncoder,
+    syntax: ToyPalette444Syntax,
+    predictor_mode: &mut ToyPalettePredictorMode,
+) {
+    cabac.encode_bin(
+        true,
+        ToyCtxEvent {
+            // 32x32 split_cu_mode split=1.
+            lps: 214,
+            mps: false,
+        },
+    );
+    cabac.encode_bin(
+        true,
+        ToyCtxEvent {
+            // 32x32 split_cu_mode qt=1.
+            lps: 36,
+            mps: false,
+        },
+    );
+    for _ in 0..4 {
+        append_toy_palette_444_16x16_tree(cabac, syntax, predictor_mode);
+    }
+}
+
+fn append_toy_palette_444_16x16_tree(
+    cabac: &mut ToyCabacEncoder,
+    syntax: ToyPalette444Syntax,
+    predictor_mode: &mut ToyPalettePredictorMode,
+) {
+    cabac.encode_bin(
+        true,
+        ToyCtxEvent {
+            // 16x16 split_cu_mode split=1.
+            lps: 214,
+            mps: false,
+        },
+    );
+    cabac.encode_bin(
+        true,
+        ToyCtxEvent {
+            // 16x16 split_cu_mode qt=1.
+            lps: 36,
+            mps: false,
+        },
+    );
+    append_toy_palette_444_8x8_cu_with_events(
+        cabac,
+        syntax,
+        ToyCtxEvent {
+            lps: 89,
+            mps: false,
+        },
+        ToyCtxEvent {
+            lps: 34,
+            mps: false,
+        },
+        *predictor_mode,
+    );
+    *predictor_mode = ToyPalettePredictorMode::ReusePreviousEntry;
+    append_toy_palette_444_8x8_cu_with_events(
+        cabac,
+        syntax,
+        ToyCtxEvent {
+            lps: 80,
+            mps: false,
+        },
+        ToyCtxEvent {
+            lps: 82,
+            mps: false,
+        },
+        ToyPalettePredictorMode::ReusePreviousEntry,
+    );
+    append_toy_palette_444_8x8_cu_with_events(
+        cabac,
+        syntax,
+        ToyCtxEvent {
+            lps: 94,
+            mps: false,
+        },
+        ToyCtxEvent {
+            lps: 137,
+            mps: false,
+        },
+        ToyPalettePredictorMode::ReusePreviousEntry,
+    );
+    append_toy_palette_444_8x8_cu_with_events(
+        cabac,
+        syntax,
+        ToyCtxEvent {
+            lps: 76,
+            mps: false,
+        },
+        ToyCtxEvent {
+            lps: 142,
+            mps: false,
+        },
+        ToyPalettePredictorMode::ReusePreviousEntry,
+    );
 }
 
 fn append_toy_palette_444_8x8_cu(cabac: &mut ToyCabacEncoder, syntax: ToyPalette444Syntax) {
