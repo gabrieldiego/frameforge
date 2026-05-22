@@ -1049,19 +1049,49 @@ module ff_vvc_toy4x4_encoder #(
     cabac_state_t st;
     begin
       st = cabac_start();
-      st = cabac_encode_bin(st, 1'b0, 9'd146, 1'b0); // split_cu_mode split=0 for the 8x8 palette CU
-      st = cabac_encode_bin(st, 1'b1, 9'd31, 1'b0);  // pred_mode PLTFlag=1
-      st = cabac_encode_exp_golomb_ep(st, 6'd1, 6'd0); // num_signalled_palette_entries=1
-      st = cabac_encode_bins_ep(st, {24'd0, sample_to_8bit(sampled_y)}, 6'd8);
-      st = cabac_encode_bins_ep(st, {24'd0, sample_to_8bit(sampled_u)}, 6'd8);
-      st = cabac_encode_bins_ep(st, {24'd0, sample_to_8bit(sampled_v)}, 6'd8);
-      st = cabac_encode_bin_ep(st, 1'b0); // palette_escape_val_present_flag=0
+      if (coding_tree_coded_width == 16'd16 && coding_tree_coded_height == 16'd16) begin
+        st = cabac_encode_bin(st, 1'b1, 9'd214, 1'b0); // 16x16 root split_cu_mode split=1
+        st = cabac_encode_bin(st, 1'b1, 9'd36, 1'b0);  // 16x16 root split_cu_mode qt=1
+        st = palette_444_encode_8x8_cu(st, 9'd89, 1'b0, 9'd34, 1'b0, 1'b1);
+        st = palette_444_encode_8x8_cu(st, 9'd80, 1'b0, 9'd82, 1'b0, 1'b0);
+        st = palette_444_encode_8x8_cu(st, 9'd94, 1'b0, 9'd137, 1'b0, 1'b0);
+        st = palette_444_encode_8x8_cu(st, 9'd76, 1'b0, 9'd142, 1'b0, 1'b0);
+      end else begin
+        st = palette_444_encode_8x8_cu(st, 9'd146, 1'b0, 9'd31, 1'b0, 1'b1);
+      end
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);
       palette_444_cabac_bitstream = {
         st[CABAC_LEN_LSB +: 13],
         st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
       };
+    end
+  endfunction
+
+  function automatic cabac_state_t palette_444_encode_8x8_cu(
+    input cabac_state_t st_in,
+    input logic [8:0] split_lps,
+    input logic split_mps,
+    input logic [8:0] plt_lps,
+    input logic plt_mps,
+    input logic signal_new_entry
+  );
+    cabac_state_t st;
+    begin
+      st = st_in;
+      st = cabac_encode_bin(st, 1'b0, split_lps, split_mps); // split_cu_mode split=0 for an 8x8 palette CU
+      st = cabac_encode_bin(st, 1'b1, plt_lps, plt_mps);     // pred_mode PLTFlag=1
+      if (signal_new_entry) begin
+        st = cabac_encode_exp_golomb_ep(st, 6'd1, 6'd0); // num_signalled_palette_entries=1
+        st = cabac_encode_bins_ep(st, {24'd0, sample_to_8bit(sampled_y)}, 6'd8);
+        st = cabac_encode_bins_ep(st, {24'd0, sample_to_8bit(sampled_u)}, 6'd8);
+        st = cabac_encode_bins_ep(st, {24'd0, sample_to_8bit(sampled_v)}, 6'd8);
+      end else begin
+        st = cabac_encode_exp_golomb_ep(st, 6'd0, 6'd0); // palette_predictor_run=0
+        st = cabac_encode_exp_golomb_ep(st, 6'd0, 6'd0); // num_signalled_palette_entries=0
+      end
+      st = cabac_encode_bin_ep(st, 1'b0); // palette_escape_val_present_flag=0
+      palette_444_encode_8x8_cu = st;
     end
   endfunction
 

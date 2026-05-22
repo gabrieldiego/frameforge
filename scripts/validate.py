@@ -319,8 +319,8 @@ def vtm_decode_supported(input_path: Path, info: InputInfo) -> bool:
     if format_chroma_sampling(info.fmt) == "444":
         return (
             info.fmt == "yuv444p8"
-            and coded_dimension(info.width) == 8
-            and coded_dimension(info.height) == 8
+            and coded_dimension(info.width) <= 16
+            and coded_dimension(info.height) <= 16
         )
     # The clean-room slice entropy body is currently mapped to VTM's
     # coding-tree syntax for the generic 8x8 path plus generated 16x16
