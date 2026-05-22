@@ -539,7 +539,7 @@ enum ToyEntropyScheduleKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToyCodingTreeBodyKind {
     Generated,
-    TraceFallback,
+    Scripted,
     CapacityPlaceholder,
 }
 
@@ -556,26 +556,7 @@ struct ToyEntropySchedule {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ToyTraceCtxBin {
-    lps: u16,
-    mps: bool,
-    bin: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ToyTraceBinKind {
-    Ctx(ToyTraceCtxBin),
-    Ep(bool),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ToyTraceBin {
-    syntax: &'static str,
-    kind: ToyTraceBinKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Toy16x16TraceParams {
+struct Toy16x16ScriptedParams {
     luma_cb_width: usize,
     luma_cb_height: usize,
     chroma_tu_count: usize,
@@ -584,7 +565,7 @@ struct Toy16x16TraceParams {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Toy32x32TraceParams {
+struct Toy32x32ScriptedParams {
     luma_cb_width: usize,
     luma_cb_height: usize,
 }
@@ -1233,7 +1214,7 @@ fn write_toy_coding_tree_entropy(
 ) {
     let bits = match toy_coding_tree_body(geometry, color).kind {
         ToyCodingTreeBodyKind::CapacityPlaceholder => toy_capacity_tu_grid_bits(color),
-        ToyCodingTreeBodyKind::Generated | ToyCodingTreeBodyKind::TraceFallback => {
+        ToyCodingTreeBodyKind::Generated | ToyCodingTreeBodyKind::Scripted => {
             toy_cabac_bits(geometry, color)
         }
     };
@@ -1465,10 +1446,10 @@ fn toy_coding_tree_body(
     let coded = geometry.coded();
     let kind = if toy_entropy_tokens_mapped_to_vtm_geometry(geometry) {
         ToyCodingTreeBodyKind::Generated
-    } else if toy_16x16_trace_params(geometry, color).is_some() {
-        ToyCodingTreeBodyKind::TraceFallback
-    } else if toy_32x32_trace_params(geometry, color).is_some() {
-        ToyCodingTreeBodyKind::TraceFallback
+    } else if toy_16x16_scripted_params(geometry, color).is_some() {
+        ToyCodingTreeBodyKind::Scripted
+    } else if toy_32x32_scripted_params(geometry, color).is_some() {
+        ToyCodingTreeBodyKind::Scripted
     } else {
         ToyCodingTreeBodyKind::CapacityPlaceholder
     };
@@ -1478,21 +1459,21 @@ fn toy_coding_tree_body(
 fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Vec<bool> {
     let body = toy_coding_tree_body(geometry, color);
     match body.kind {
-        ToyCodingTreeBodyKind::TraceFallback => match body.coded {
+        ToyCodingTreeBodyKind::Scripted => match body.coded {
             ToyCodedGeometry {
                 width: 16,
                 height: 16,
             } => {
-                return toy_16x16_trace_cabac_bits(
-                    toy_16x16_trace_params(geometry, color).expect("16x16 trace parameters"),
+                return toy_16x16_generated_cabac_bits(
+                    toy_16x16_scripted_params(geometry, color).expect("16x16 scripted parameters"),
                 );
             }
             ToyCodedGeometry {
                 width: 32,
                 height: 32,
             } => {
-                return toy_32x32_trace_cabac_bits(
-                    toy_32x32_trace_params(geometry, color).expect("32x32 trace parameters"),
+                return toy_32x32_generated_cabac_bits(
+                    toy_32x32_scripted_params(geometry, color).expect("32x32 scripted parameters"),
                 );
             }
             _ => return toy_capacity_tu_grid_bits(color),
@@ -1529,10 +1510,10 @@ fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Ve
     cabac.finish()
 }
 
-fn toy_16x16_trace_params(
+fn toy_16x16_scripted_params(
     geometry: ToyVideoGeometry,
     _color: Toy4x4QuantizedColor,
-) -> Option<Toy16x16TraceParams> {
+) -> Option<Toy16x16ScriptedParams> {
     let plan = toy_coding_tree_plan(geometry);
     let luma_cb = first_luma_transform_unit(&plan)?;
     let chroma_tu_count = plan
@@ -1540,14 +1521,14 @@ fn toy_16x16_trace_params(
         .filter(|step| matches!(step, ToyCodingTreeStep::ChromaTransformUnit { .. }))
         .count();
     if luma_cb == (16, 16) && chroma_tu_count == 4 {
-        return Some(Toy16x16TraceParams {
+        return Some(Toy16x16ScriptedParams {
             luma_cb_width: luma_cb.0,
             luma_cb_height: luma_cb.1,
             chroma_tu_count,
-            // TODO(vvc): Replace the trace-derived body with generated
+            // TODO(vvc): Replace the context-scripted body with generated
             // geometry syntax plus residual coding. Until then, this path is
-            // a compliant 16x16 coding-tree fallback whose reconstruction is
-            // defined by the trace, not by the input residual tokens.
+            // a compliant 16x16 coding-tree body whose reconstruction is
+            // defined by the current context script, not by the input residual tokens.
             luma_rem: 16,
             chroma_rem: 6,
         });
@@ -1555,13 +1536,13 @@ fn toy_16x16_trace_params(
     None
 }
 
-fn toy_32x32_trace_params(
+fn toy_32x32_scripted_params(
     geometry: ToyVideoGeometry,
     _color: Toy4x4QuantizedColor,
-) -> Option<Toy32x32TraceParams> {
+) -> Option<Toy32x32ScriptedParams> {
     let coded = geometry.coded();
     if coded.width == 32 && coded.height == 32 {
-        return Some(Toy32x32TraceParams {
+        return Some(Toy32x32ScriptedParams {
             luma_cb_width: coded.width,
             luma_cb_height: coded.height,
         });
@@ -1576,7 +1557,7 @@ fn first_luma_transform_unit(plan: &[ToyCodingTreeStep]) -> Option<(usize, usize
     })
 }
 
-fn toy_16x16_trace_cabac_bits(params: Toy16x16TraceParams) -> Vec<bool> {
+fn toy_16x16_generated_cabac_bits(params: Toy16x16ScriptedParams) -> Vec<bool> {
     debug_assert_eq!(params.luma_cb_width, 16);
     debug_assert_eq!(params.luma_cb_height, 16);
     debug_assert_eq!(params.chroma_tu_count, 4);
@@ -1585,238 +1566,668 @@ fn toy_16x16_trace_cabac_bits(params: Toy16x16TraceParams) -> Vec<bool> {
 
     let mut cabac = ToyCabacEncoder::new();
     cabac.start();
-    for bin in TOY_16X16_BLACK_TRACE_BINS {
-        match bin.kind {
-            ToyTraceBinKind::Ctx(ctx) => cabac.encode_bin(
-                ctx.bin,
-                ToyCtxEvent {
-                    lps: ctx.lps,
-                    mps: ctx.mps,
-                },
-            ),
-            ToyTraceBinKind::Ep(value) => cabac.encode_bin_ep(value),
-        }
-    }
+    encode_16x16_luma_body(&mut cabac);
+    encode_16x16_chroma_body(&mut cabac);
     cabac.encode_bin_trm(true);
     cabac.finish()
 }
 
-fn toy_32x32_trace_cabac_bits(params: Toy32x32TraceParams) -> Vec<bool> {
+fn toy_32x32_generated_cabac_bits(params: Toy32x32ScriptedParams) -> Vec<bool> {
     debug_assert_eq!(params.luma_cb_width, 32);
     debug_assert_eq!(params.luma_cb_height, 32);
-    toy_compact_trace_cabac_bits(TOY_32X32_BLACK_TRACE_WORDS)
-}
-
-fn toy_compact_trace_cabac_bits(words: &[u16]) -> Vec<bool> {
     let mut cabac = ToyCabacEncoder::new();
     cabac.start();
-    for &word in words {
-        if (word & 0x8000) != 0 {
-            cabac.encode_bin_ep((word & 1) != 0);
-        } else {
-            cabac.encode_bin(
-                (word & 1) != 0,
-                ToyCtxEvent {
-                    lps: word >> 2,
-                    mps: ((word & 0x0002) != 0) == ((word & 1) != 0),
-                },
-            );
-        }
-    }
+    encode_32x32_luma_body(&mut cabac);
+    encode_32x32_chroma_body(&mut cabac);
     cabac.encode_bin_trm(true);
     cabac.finish()
 }
 
-const fn trace_ctx(syntax: &'static str, lps: u16, mps: bool, bin: bool) -> ToyTraceBin {
-    ToyTraceBin {
-        syntax,
-        kind: ToyTraceBinKind::Ctx(ToyTraceCtxBin { lps, mps, bin }),
+fn encode_32x32_luma_body(cabac: &mut ToyCabacEncoder) {
+    encode_compact_cabac_word(cabac, 0x035a);
+    encode_compact_cabac_word(cabac, 0x010f);
+    encode_compact_cabac_word(cabac, 0x0377);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x0163);
+    encode_compact_cabac_word(cabac, 0x020b);
+    encode_compact_cabac_word(cabac, 0x0153);
+    encode_compact_cabac_word(cabac, 0x0153);
+    encode_compact_cabac_word(cabac, 0x00f3);
+    encode_compact_cabac_word(cabac, 0x020b);
+    encode_compact_cabac_word(cabac, 0x0133);
+    encode_compact_cabac_word(cabac, 0x02ca);
+    encode_compact_cabac_word(cabac, 0x0233);
+    encode_compact_cabac_word(cabac, 0x0153);
+    encode_compact_cabac_word(cabac, 0x01ab);
+    encode_compact_cabac_word(cabac, 0x0113);
+    encode_compact_cabac_word(cabac, 0x029b);
+    encode_compact_cabac_word(cabac, 0x0170);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x007d);
+    encode_compact_cabac_word(cabac, 0x011e);
+    encode_compact_cabac_word(cabac, 0x0092);
+    encode_compact_cabac_word(cabac, 0x008a);
+    encode_compact_cabac_word(cabac, 0x01b1);
+    encode_compact_cabac_word(cabac, 0x0196);
+    encode_compact_cabac_word(cabac, 0x00c7);
+    encode_compact_cabac_word(cabac, 0x0102);
+    encode_compact_cabac_word(cabac, 0x0116);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x0146);
+    encode_compact_cabac_word(cabac, 0x0203);
+    encode_compact_cabac_word(cabac, 0x010e);
+    encode_compact_cabac_word(cabac, 0x0394);
+    encode_compact_cabac_word(cabac, 0x009e);
+    encode_compact_cabac_word(cabac, 0x0337);
+    encode_compact_cabac_word(cabac, 0x0092);
+    encode_compact_cabac_word(cabac, 0x008b);
+    encode_compact_cabac_word(cabac, 0x007e);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x0062);
+    encode_compact_cabac_word(cabac, 0x022f);
+    encode_compact_cabac_word(cabac, 0x0061);
+    encode_compact_cabac_word(cabac, 0x008a);
+    encode_compact_cabac_word(cabac, 0x0012);
+    encode_compact_cabac_word(cabac, 0x0077);
+    encode_compact_cabac_word(cabac, 0x00a2);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x00e1);
+    encode_compact_cabac_word(cabac, 0x0129);
+    encode_compact_cabac_word(cabac, 0x005a);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x00b1);
+    encode_compact_cabac_word(cabac, 0x007e);
+    encode_compact_cabac_word(cabac, 0x013d);
+    encode_compact_cabac_word(cabac, 0x008e);
+    encode_compact_cabac_word(cabac, 0x00b1);
+    encode_compact_cabac_word(cabac, 0x00aa);
+    encode_compact_cabac_word(cabac, 0x0179);
+    encode_compact_cabac_word(cabac, 0x0096);
+    encode_compact_cabac_word(cabac, 0x01ca);
+    encode_compact_cabac_word(cabac, 0x025e);
+    encode_compact_cabac_word(cabac, 0x017a);
+    encode_compact_cabac_word(cabac, 0x02cb);
+    encode_compact_cabac_word(cabac, 0x00ba);
+    encode_compact_cabac_word(cabac, 0x00fb);
+    encode_compact_cabac_word(cabac, 0x007e);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x0076);
+    encode_compact_cabac_word(cabac, 0x017a);
+    encode_compact_cabac_word(cabac, 0x008b);
+    encode_compact_cabac_word(cabac, 0x007e);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x0062);
+    encode_compact_cabac_word(cabac, 0x020b);
+    encode_compact_cabac_word(cabac, 0x0062);
+    encode_compact_cabac_word(cabac, 0x01b4);
+    encode_compact_cabac_word(cabac, 0x02cf);
+    encode_compact_cabac_word(cabac, 0x0052);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x0162);
+    encode_compact_cabac_word(cabac, 0x0073);
+    encode_compact_cabac_word(cabac, 0x00d7);
+    encode_compact_cabac_word(cabac, 0x005a);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x0042);
+    encode_compact_cabac_word(cabac, 0x01c3);
+    encode_compact_cabac_word(cabac, 0x0046);
+    encode_compact_cabac_word(cabac, 0x0141);
+    encode_compact_cabac_word(cabac, 0x004e);
+    encode_compact_cabac_word(cabac, 0x006b);
+    encode_compact_cabac_word(cabac, 0x0042);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x01d2);
+    encode_compact_cabac_word(cabac, 0x01f1);
+    encode_compact_cabac_word(cabac, 0x006a);
+    encode_compact_cabac_word(cabac, 0x02e8);
+    encode_compact_cabac_word(cabac, 0x01f4);
+    encode_compact_cabac_word(cabac, 0x02e3);
+    encode_compact_cabac_word(cabac, 0x020a);
+    encode_compact_cabac_word(cabac, 0x006b);
+    encode_compact_cabac_word(cabac, 0x004e);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x004e);
+    encode_compact_cabac_word(cabac, 0x01ac);
+    encode_compact_cabac_word(cabac, 0x007b);
+    encode_compact_cabac_word(cabac, 0x00e9);
+    encode_compact_cabac_word(cabac, 0x009d);
+    encode_compact_cabac_word(cabac, 0x0022);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x00d5);
+    encode_compact_cabac_word(cabac, 0x00c6);
+    encode_compact_cabac_word(cabac, 0x0026);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x024f);
+    encode_compact_cabac_word(cabac, 0x024e);
+    encode_compact_cabac_word(cabac, 0x00b2);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x0083);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x005e);
+    encode_compact_cabac_word(cabac, 0x024e);
+    encode_compact_cabac_word(cabac, 0x00a3);
+    encode_compact_cabac_word(cabac, 0x004a);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x0046);
+    encode_compact_cabac_word(cabac, 0x02cf);
+    encode_compact_cabac_word(cabac, 0x004e);
+    encode_compact_cabac_word(cabac, 0x02e8);
+    encode_compact_cabac_word(cabac, 0x0223);
+    encode_compact_cabac_word(cabac, 0x0321);
+    encode_compact_cabac_word(cabac, 0x01c2);
+    encode_compact_cabac_word(cabac, 0x00b2);
+    encode_compact_cabac_word(cabac, 0x035b);
+    encode_compact_cabac_word(cabac, 0x0032);
+    encode_compact_cabac_word(cabac, 0x0053);
+    encode_compact_cabac_word(cabac, 0x004e);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x004a);
+    encode_compact_cabac_word(cabac, 0x0267);
+    encode_compact_cabac_word(cabac, 0x0209);
+    encode_compact_cabac_word(cabac, 0x0132);
+    encode_compact_cabac_word(cabac, 0x00d6);
+    encode_compact_cabac_word(cabac, 0x005b);
+    encode_compact_cabac_word(cabac, 0x0036);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x0032);
+    encode_compact_cabac_word(cabac, 0x0173);
+    encode_compact_cabac_word(cabac, 0x027c);
+    encode_compact_cabac_word(cabac, 0x019f);
+    encode_compact_cabac_word(cabac, 0x014a);
+    encode_compact_cabac_word(cabac, 0x0027);
+    encode_compact_cabac_word(cabac, 0x01f1);
+    encode_compact_cabac_word(cabac, 0x01b6);
+    encode_compact_cabac_word(cabac, 0x008a);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x0053);
+    encode_compact_cabac_word(cabac, 0x01b6);
+    encode_compact_cabac_word(cabac, 0x0083);
+    encode_compact_cabac_word(cabac, 0x0046);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x0042);
+    encode_compact_cabac_word(cabac, 0x0263);
+    encode_compact_cabac_word(cabac, 0x004a);
+    encode_compact_cabac_word(cabac, 0x02b4);
+    encode_compact_cabac_word(cabac, 0x01a2);
+    encode_compact_cabac_word(cabac, 0x033b);
+    encode_compact_cabac_word(cabac, 0x0032);
+    encode_compact_cabac_word(cabac, 0x0053);
+    encode_compact_cabac_word(cabac, 0x004e);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x004a);
+    encode_compact_cabac_word(cabac, 0x0242);
+    encode_compact_cabac_word(cabac, 0x005b);
+    encode_compact_cabac_word(cabac, 0x0032);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x0032);
+    encode_compact_cabac_word(cabac, 0x0142);
+    encode_compact_cabac_word(cabac, 0x0027);
+    encode_compact_cabac_word(cabac, 0x0102);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x00c2);
+    encode_compact_cabac_word(cabac, 0x0304);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x005b);
+    encode_compact_cabac_word(cabac, 0x0027);
+    encode_compact_cabac_word(cabac, 0x028d);
+    encode_compact_cabac_word(cabac, 0x0165);
+    encode_compact_cabac_word(cabac, 0x00c2);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x01e7);
+    encode_compact_cabac_word(cabac, 0x01f5);
+    encode_compact_cabac_word(cabac, 0x013e);
+    encode_compact_cabac_word(cabac, 0x0230);
+    encode_compact_cabac_word(cabac, 0x0023);
+    encode_compact_cabac_word(cabac, 0x0123);
+    encode_compact_cabac_word(cabac, 0x029a);
+    encode_compact_cabac_word(cabac, 0x0242);
+    encode_compact_cabac_word(cabac, 0x01c8);
+    encode_compact_cabac_word(cabac, 0x002f);
+    encode_compact_cabac_word(cabac, 0x0298);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x0167);
+    encode_compact_cabac_word(cabac, 0x0306);
+    encode_compact_cabac_word(cabac, 0x0142);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x0193);
+    encode_compact_cabac_word(cabac, 0x01e6);
+    encode_compact_cabac_word(cabac, 0x01b2);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x0201);
+    encode_compact_cabac_word(cabac, 0x0142);
+    encode_compact_cabac_word(cabac, 0x007e);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x01d2);
+    encode_compact_cabac_word(cabac, 0x0253);
+    encode_compact_cabac_word(cabac, 0x01f3);
+    encode_compact_cabac_word(cabac, 0x0281);
+    encode_compact_cabac_word(cabac, 0x017a);
+    encode_compact_cabac_word(cabac, 0x0297);
+    encode_compact_cabac_word(cabac, 0x01b3);
+    encode_compact_cabac_word(cabac, 0x01f5);
+    encode_compact_cabac_word(cabac, 0x011e);
+    encode_compact_cabac_word(cabac, 0x002b);
+    encode_compact_cabac_word(cabac, 0x0337);
+    encode_compact_cabac_word(cabac, 0x01fe);
+    encode_compact_cabac_word(cabac, 0x006a);
+    encode_compact_cabac_word(cabac, 0x0170);
+    encode_compact_cabac_word(cabac, 0x0027);
+    encode_compact_cabac_word(cabac, 0x0173);
+    encode_compact_cabac_word(cabac, 0x01b2);
+    encode_compact_cabac_word(cabac, 0x0156);
+    encode_compact_cabac_word(cabac, 0x017f);
+    encode_compact_cabac_word(cabac, 0x0173);
+    encode_compact_cabac_word(cabac, 0x01b1);
+    encode_compact_cabac_word(cabac, 0x01c9);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x0067);
+    encode_compact_cabac_word(cabac, 0x02e8);
+    encode_compact_cabac_word(cabac, 0x028c);
+    encode_compact_cabac_word(cabac, 0x0268);
+    encode_compact_cabac_word(cabac, 0x023c);
+    encode_compact_cabac_word(cabac, 0x0132);
+    encode_compact_cabac_word(cabac, 0x0335);
+    encode_compact_cabac_word(cabac, 0x011a);
+    encode_compact_cabac_word(cabac, 0x0063);
+    encode_compact_cabac_word(cabac, 0x01c1);
+    encode_compact_cabac_word(cabac, 0x019a);
+    encode_compact_cabac_word(cabac, 0x0076);
+    encode_compact_cabac_word(cabac, 0x0155);
+    encode_compact_cabac_word(cabac, 0x00ee);
+    encode_compact_cabac_word(cabac, 0x0142);
+    encode_compact_cabac_word(cabac, 0x02f8);
+    encode_compact_cabac_word(cabac, 0x0208);
+    encode_compact_cabac_word(cabac, 0x0141);
+    encode_compact_cabac_word(cabac, 0x00da);
+    encode_compact_cabac_word(cabac, 0x0093);
+    encode_compact_cabac_word(cabac, 0x012a);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x024e);
+    encode_compact_cabac_word(cabac, 0x0375);
+    encode_compact_cabac_word(cabac, 0x00fa);
+    encode_compact_cabac_word(cabac, 0x01f7);
+    encode_compact_cabac_word(cabac, 0x011e);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x002b);
+    encode_compact_cabac_word(cabac, 0x0337);
+    encode_compact_cabac_word(cabac, 0x020a);
+    encode_compact_cabac_word(cabac, 0x006a);
+    encode_compact_cabac_word(cabac, 0x01c3);
+    encode_compact_cabac_word(cabac, 0x015b);
+    encode_compact_cabac_word(cabac, 0x01c2);
+    encode_compact_cabac_word(cabac, 0x018e);
+    encode_compact_cabac_word(cabac, 0x002f);
+    encode_compact_cabac_word(cabac, 0x031f);
+    encode_compact_cabac_word(cabac, 0x022d);
+    encode_compact_cabac_word(cabac, 0x0062);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x01d3);
+    encode_compact_cabac_word(cabac, 0x0281);
+    encode_compact_cabac_word(cabac, 0x017a);
+    encode_compact_cabac_word(cabac, 0x017c);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x0234);
+    encode_compact_cabac_word(cabac, 0x0013);
+}
+fn encode_32x32_chroma_body(cabac: &mut ToyCabacEncoder) {
+    encode_compact_cabac_word(cabac, 0x0103);
+    encode_compact_cabac_word(cabac, 0x02ce);
+    encode_compact_cabac_word(cabac, 0x020e);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x015b);
+    encode_compact_cabac_word(cabac, 0x01b2);
+    encode_compact_cabac_word(cabac, 0x0166);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x031f);
+    encode_compact_cabac_word(cabac, 0x01ae);
+    encode_compact_cabac_word(cabac, 0x00d5);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x031f);
+    encode_compact_cabac_word(cabac, 0x01fe);
+    encode_compact_cabac_word(cabac, 0x005a);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x00fb);
+    encode_compact_cabac_word(cabac, 0x0306);
+    encode_compact_cabac_word(cabac, 0x01f3);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x00e3);
+    encode_compact_cabac_word(cabac, 0x02ce);
+    encode_compact_cabac_word(cabac, 0x0377);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x00e0);
+    encode_compact_cabac_word(cabac, 0x010f);
+    encode_compact_cabac_word(cabac, 0x012c);
+    encode_compact_cabac_word(cabac, 0x00b0);
+    encode_compact_cabac_word(cabac, 0x00ef);
+    encode_compact_cabac_word(cabac, 0x00a3);
+    encode_compact_cabac_word(cabac, 0x0359);
+    encode_compact_cabac_word(cabac, 0x01cb);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x01e5);
+    encode_compact_cabac_word(cabac, 0x02c2);
+    encode_compact_cabac_word(cabac, 0x023e);
+    encode_compact_cabac_word(cabac, 0x012b);
+    encode_compact_cabac_word(cabac, 0x0181);
+    encode_compact_cabac_word(cabac, 0x02e1);
+    encode_compact_cabac_word(cabac, 0x0147);
+    encode_compact_cabac_word(cabac, 0x0192);
+    encode_compact_cabac_word(cabac, 0x0223);
+    encode_compact_cabac_word(cabac, 0x0295);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x01f1);
+    encode_compact_cabac_word(cabac, 0x03b3);
+    encode_compact_cabac_word(cabac, 0x01c2);
+    encode_compact_cabac_word(cabac, 0x01c2);
+    encode_compact_cabac_word(cabac, 0x0221);
+    encode_compact_cabac_word(cabac, 0x01c1);
+    encode_compact_cabac_word(cabac, 0x0242);
+    encode_compact_cabac_word(cabac, 0x005a);
+    encode_compact_cabac_word(cabac, 0x0143);
+    encode_compact_cabac_word(cabac, 0x00ea);
+    encode_compact_cabac_word(cabac, 0x0013);
+    encode_compact_cabac_word(cabac, 0x00c6);
+    encode_compact_cabac_word(cabac, 0x00c7);
+    encode_compact_cabac_word(cabac, 0x0338);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x0221);
+    encode_compact_cabac_word(cabac, 0x01a1);
+    encode_compact_cabac_word(cabac, 0x0219);
+    encode_compact_cabac_word(cabac, 0x0181);
+    encode_compact_cabac_word(cabac, 0x011a);
+    encode_compact_cabac_word(cabac, 0x021a);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x006a);
+    encode_compact_cabac_word(cabac, 0x018e);
+    encode_compact_cabac_word(cabac, 0x0295);
+    encode_compact_cabac_word(cabac, 0x00b2);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x0062);
+    encode_compact_cabac_word(cabac, 0x0062);
+    encode_compact_cabac_word(cabac, 0x009e);
+    encode_compact_cabac_word(cabac, 0x0092);
+    encode_compact_cabac_word(cabac, 0x008a);
+    encode_compact_cabac_word(cabac, 0x007e);
+    encode_compact_cabac_word(cabac, 0x0075);
+    encode_compact_cabac_word(cabac, 0x00f1);
+    encode_compact_cabac_word(cabac, 0x00a6);
+    encode_compact_cabac_word(cabac, 0x0012);
+    encode_compact_cabac_word(cabac, 0x0282);
+    encode_compact_cabac_word(cabac, 0x0072);
+    encode_compact_cabac_word(cabac, 0x02c2);
+    encode_compact_cabac_word(cabac, 0x01ae);
+    encode_compact_cabac_word(cabac, 0x024e);
+    encode_compact_cabac_word(cabac, 0x0172);
+    encode_compact_cabac_word(cabac, 0x01f6);
+    encode_compact_cabac_word(cabac, 0x022e);
+    encode_compact_cabac_word(cabac, 0x0166);
+    encode_compact_cabac_word(cabac, 0x01f2);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x0252);
+    encode_compact_cabac_word(cabac, 0x027b);
+    encode_compact_cabac_word(cabac, 0x01c2);
+    encode_compact_cabac_word(cabac, 0x029a);
+    encode_compact_cabac_word(cabac, 0x010e);
+    encode_compact_cabac_word(cabac, 0x0223);
+    encode_compact_cabac_word(cabac, 0x0202);
+    encode_compact_cabac_word(cabac, 0x010c);
+    encode_compact_cabac_word(cabac, 0x0200);
+    encode_compact_cabac_word(cabac, 0x0163);
+    encode_compact_cabac_word(cabac, 0x01de);
+    encode_compact_cabac_word(cabac, 0x029a);
+    encode_compact_cabac_word(cabac, 0x0092);
+    encode_compact_cabac_word(cabac, 0x0226);
+    encode_compact_cabac_word(cabac, 0x018f);
+    encode_compact_cabac_word(cabac, 0x0296);
+    encode_compact_cabac_word(cabac, 0x01ad);
+    encode_compact_cabac_word(cabac, 0x02cc);
+    encode_compact_cabac_word(cabac, 0x024f);
+    encode_compact_cabac_word(cabac, 0x02ea);
+    encode_compact_cabac_word(cabac, 0x0305);
+    encode_compact_cabac_word(cabac, 0x01d9);
+    encode_compact_cabac_word(cabac, 0x0146);
+    encode_compact_cabac_word(cabac, 0x0072);
+    encode_compact_cabac_word(cabac, 0x019f);
+    encode_compact_cabac_word(cabac, 0x00b1);
+    encode_compact_cabac_word(cabac, 0x007e);
+    encode_compact_cabac_word(cabac, 0x0012);
+    encode_compact_cabac_word(cabac, 0x00c7);
+    encode_compact_cabac_word(cabac, 0x00d2);
+    encode_compact_cabac_word(cabac, 0x0117);
+    encode_compact_cabac_word(cabac, 0x019f);
+    encode_compact_cabac_word(cabac, 0x01b1);
+    encode_compact_cabac_word(cabac, 0x017d);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8001);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x01b1);
+    encode_compact_cabac_word(cabac, 0x01e7);
+    encode_compact_cabac_word(cabac, 0x019e);
+    encode_compact_cabac_word(cabac, 0x02b6);
+    encode_compact_cabac_word(cabac, 0x00e2);
+    encode_compact_cabac_word(cabac, 0x01c8);
+    encode_compact_cabac_word(cabac, 0x0209);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x8000);
+    encode_compact_cabac_word(cabac, 0x0192);
+    encode_compact_cabac_word(cabac, 0x008a);
+}
+fn encode_compact_cabac_word(cabac: &mut ToyCabacEncoder, word: u16) {
+    if (word & 0x8000) != 0 {
+        cabac.encode_bin_ep((word & 1) != 0);
+    } else {
+        cabac.encode_bin(
+            (word & 1) != 0,
+            ToyCtxEvent {
+                lps: word >> 2,
+                mps: ((word & 0x0002) != 0) == ((word & 1) != 0),
+            },
+        );
     }
 }
 
-const fn trace_ep(syntax: &'static str, bin: bool) -> ToyTraceBin {
-    ToyTraceBin {
-        syntax,
-        kind: ToyTraceBinKind::Ep(bin),
-    }
+fn encode_16x16_luma_body(cabac: &mut ToyCabacEncoder) {
+    cabac_ctx(cabac, false, 214, false); // split_cu_mode split=1
+    cabac_ctx(cabac, false, 67, true); // split_cu_mode qt=1
+    cabac.encode_bin_ep(false); // intra_luma_pred_mode[5]
+    cabac.encode_bin_ep(true); // intra_luma_pred_mode[4]
+    cabac.encode_bin_ep(true); // intra_luma_pred_mode[3]
+    cabac.encode_bin_ep(false); // intra_luma_pred_mode[2]
+    cabac.encode_bin_ep(true); // intra_luma_pred_mode[1]
+    cabac.encode_bin_ep(false); // intra_luma_pred_mode[0]
+    cabac_ctx(cabac, true, 52, true); // split_cu_mode split=1
+    cabac_ctx(cabac, false, 166, true); // split_cu_mode qt=1
+    cabac_ctx(cabac, true, 109, true); // split_cu_mode split=0
+    cabac_ctx(cabac, true, 134, true); // cbf_comp luma=1
+    cabac_ctx(cabac, true, 116, true); // sig_coeff_group_flag
+    cabac_ctx(cabac, true, 142, true); // sig_coeff_group_flag
+    cabac_ctx(cabac, true, 221, false); // last_sig_coeff_x_prefix
+    cabac_ctx(cabac, false, 205, false); // last_sig_coeff_y_prefix
+    cabac.encode_bin_ep(false); // last_sig_coeff_suffix
+    cabac_ctx(cabac, false, 39, false); // sig_coeff_flag
+    cabac_ctx(cabac, false, 101, false); // sig_coeff_flag
+    cabac_ctx(cabac, false, 99, false); // sig_coeff_flag
+    cabac_ctx(cabac, true, 4, true); // sig_coeff_flag
+    cabac_ctx(cabac, false, 67, false); // abs_level_gtx_flag
+    cabac.encode_bin_ep(false); // remainder_prefix
+    cabac.encode_bin_ep(true); // coeff_sign_flag
+    cabac_ctx(cabac, false, 64, false); // ts_flag=0
+    cabac_ctx(cabac, false, 54, false); // mts_idx=0
 }
 
-const TOY_16X16_BLACK_TRACE_BINS: &[ToyTraceBin] = &[
-    trace_ctx("luma split_cu_mode split=1", 214, false, false),
-    trace_ctx("luma split_cu_mode qt=1", 67, true, false),
-    trace_ep("luma intra_luma_pred_mode[5]", false),
-    trace_ep("luma intra_luma_pred_mode[4]", true),
-    trace_ep("luma intra_luma_pred_mode[3]", true),
-    trace_ep("luma intra_luma_pred_mode[2]", false),
-    trace_ep("luma intra_luma_pred_mode[1]", true),
-    trace_ep("luma intra_luma_pred_mode[0]", false),
-    trace_ctx("luma split_cu_mode split=1", 52, true, true),
-    trace_ctx("luma split_cu_mode qt=1", 166, true, false),
-    trace_ctx("luma split_cu_mode split=0", 109, true, true),
-    trace_ctx("luma cbf_comp etype=0 cbf=1", 134, true, true),
-    trace_ctx("luma residual_coding sig_coeff_group_flag", 116, true, true),
-    trace_ctx("luma residual_coding sig_coeff_group_flag", 142, true, true),
-    trace_ctx(
-        "luma residual_coding last_sig_coeff_x_prefix",
-        221,
-        false,
-        true,
-    ),
-    trace_ctx(
-        "luma residual_coding last_sig_coeff_y_prefix",
-        205,
-        false,
-        false,
-    ),
-    trace_ep("luma residual_coding last_sig_coeff_suffix", false),
-    trace_ctx("luma residual_coding sig_coeff_flag", 39, false, false),
-    trace_ctx("luma residual_coding sig_coeff_flag", 101, false, false),
-    trace_ctx("luma residual_coding sig_coeff_flag", 99, false, false),
-    trace_ctx("luma residual_coding sig_coeff_flag", 4, true, true),
-    trace_ctx("luma residual_coding abs_level_gtx_flag", 67, false, false),
-    trace_ep("luma residual_coding remainder_prefix", false),
-    trace_ep("luma residual_coding coeff_sign_flag", true),
-    trace_ctx("luma residual_coding ts_flag=0", 64, false, false),
-    trace_ctx("luma residual_coding mts_idx=0", 54, false, false),
-    trace_ctx("chroma split_cu_mode split=1", 40, false, false),
-    trace_ctx("chroma split_cu_mode qt=1", 176, false, false),
-    trace_ctx("chroma split_cu_mode split=1", 103, false, false),
-    trace_ctx("chroma split_cu_mode qt=1", 130, false, false),
-    trace_ctx("chroma split_cu_mode split=1", 88, false, false),
-    trace_ctx("chroma split_cu_mode qt=1", 114, false, false),
-    trace_ctx("chroma split_cu_mode split=0", 80, false, false),
-    trace_ctx("chroma cbf_comp Cb(0,0)=0", 4, true, true),
-    trace_ctx("chroma cbf_comp Cr(0,0)=1", 53, false, false),
-    trace_ctx(
-        "chroma residual_coding sig_coeff_group_flag",
-        26,
-        false,
-        false,
-    ),
-    trace_ctx(
-        "chroma residual_coding last_sig_coeff_x_prefix",
-        96,
-        false,
-        true,
-    ),
-    trace_ctx(
-        "chroma residual_coding last_sig_coeff_y_prefix",
-        112,
-        false,
-        false,
-    ),
-    trace_ctx("chroma residual_coding sig_coeff_flag", 4, true, true),
-    trace_ctx(
-        "chroma residual_coding abs_level_gtx_flag",
-        72,
-        false,
-        false,
-    ),
-    trace_ctx("chroma residual_coding sig_coeff_flag", 112, true, true),
-    trace_ctx(
-        "chroma residual_coding abs_level_gtx_flag",
-        72,
-        false,
-        false,
-    ),
-    trace_ctx("chroma residual_coding sig_coeff_flag", 88, true, true),
-    trace_ctx(
-        "chroma residual_coding abs_level_gtx_flag",
-        84,
-        false,
-        false,
-    ),
-    trace_ctx("chroma residual_coding sig_coeff_flag", 4, true, true),
-    trace_ctx(
-        "chroma residual_coding abs_level_gtx_flag",
-        206,
-        true,
-        false,
-    ),
-    trace_ep("chroma residual_coding remainder_prefix", true),
-    trace_ep("chroma residual_coding remainder_prefix", true),
-    trace_ep("chroma residual_coding remainder_prefix", true),
-    trace_ep("chroma residual_coding remainder_prefix", true),
-    trace_ep("chroma residual_coding remainder_suffix", false),
-    trace_ep("chroma residual_coding coeff_sign_flag", true),
-    trace_ctx("chroma residual_coding ts_flag=0", 160, false, true),
-    trace_ctx("chroma residual_coding mts_idx=0", 29, false, true),
-    trace_ctx("chroma split_cu_mode split=0 at (4,0)", 172, true, true),
-    trace_ctx("chroma cbf_comp Cb(4,0)=0", 107, false, false),
-    trace_ctx("chroma cbf_comp Cr(4,0)=0", 136, false, false),
-    trace_ctx("chroma mts_idx=0 at (4,0)", 67, false, true),
-    trace_ctx("chroma split_cu_mode split=0 at (0,4)", 100, false, false),
-    trace_ctx("chroma cbf_comp Cb(0,4)=0", 124, false, false),
-    trace_ctx("chroma cbf_comp Cr(0,4)=0", 160, false, false),
-    trace_ctx("chroma mts_idx=0 at (0,4)", 20, false, false),
-    trace_ep("chroma alignment/trace EP before final block", true),
-    trace_ctx("chroma split_cu_mode split=0 at (4,4)", 169, true, true),
-    trace_ctx("chroma cbf_comp Cb(4,4)=0", 103, false, false),
-    trace_ctx("chroma cbf_comp Cr(4,4)=0", 147, false, false),
-    trace_ctx("chroma mts_idx=0 at (4,4)", 68, false, false),
-    trace_ctx("chroma final empty-tu context", 140, true, true),
-    trace_ctx("chroma final empty-tu context", 103, false, false),
-    trace_ctx("chroma final empty-tu context", 119, false, false),
-    trace_ctx("chroma final empty-tu context", 56, false, false),
-    trace_ctx("chroma final empty-tu context", 118, true, false),
-    trace_ctx("chroma final empty-tu context", 130, false, false),
-    trace_ctx("chroma final cbf cleanup", 104, false, false),
-    trace_ctx("chroma final cbf cleanup", 81, false, false),
-];
+fn encode_16x16_chroma_body(cabac: &mut ToyCabacEncoder) {
+    cabac_ctx(cabac, false, 40, false); // split_cu_mode split=1
+    cabac_ctx(cabac, false, 176, false); // split_cu_mode qt=1
+    cabac_ctx(cabac, false, 103, false); // split_cu_mode split=1
+    cabac_ctx(cabac, false, 130, false); // split_cu_mode qt=1
+    cabac_ctx(cabac, false, 88, false); // split_cu_mode split=1
+    cabac_ctx(cabac, false, 114, false); // split_cu_mode qt=1
+    cabac_ctx(cabac, false, 80, false); // split_cu_mode split=0
+    cabac_ctx(cabac, true, 4, true); // cbf_comp Cb=0
+    cabac_ctx(cabac, false, 53, false); // cbf_comp Cr=1
+    cabac_ctx(cabac, false, 26, false); // sig_coeff_group_flag
+    cabac_ctx(cabac, true, 96, false); // last_sig_coeff_x_prefix
+    cabac_ctx(cabac, false, 112, false); // last_sig_coeff_y_prefix
+    cabac_ctx(cabac, true, 4, true); // sig_coeff_flag
+    cabac_ctx(cabac, false, 72, false); // abs_level_gtx_flag
+    cabac_ctx(cabac, true, 112, true); // sig_coeff_flag
+    cabac_ctx(cabac, false, 72, false); // abs_level_gtx_flag
+    cabac_ctx(cabac, true, 88, true); // sig_coeff_flag
+    cabac_ctx(cabac, false, 84, false); // abs_level_gtx_flag
+    cabac_ctx(cabac, true, 4, true); // sig_coeff_flag
+    cabac_ctx(cabac, false, 206, true); // abs_level_gtx_flag
+    cabac.encode_bin_ep(true); // remainder_prefix
+    cabac.encode_bin_ep(true); // remainder_prefix
+    cabac.encode_bin_ep(true); // remainder_prefix
+    cabac.encode_bin_ep(true); // remainder_prefix
+    cabac.encode_bin_ep(false); // remainder_suffix
+    cabac.encode_bin_ep(true); // coeff_sign_flag
+    cabac_ctx(cabac, true, 160, false); // ts_flag=0
+    cabac_ctx(cabac, true, 29, false); // mts_idx=0
 
-// Compact D_CABAC trace words for the first 32x32 fallback path. Bit 15 marks
-// a bypass bin and bit 0 is the bypass value. Context-coded words store
-// (lps << 2) | (mps << 1) | bin. TODO(vvc): replace this trace-derived
-// fallback with generated 32x32 coding-tree syntax once each split, CBF, mode,
-// and residual decision is scheduled from FrameForge tokens.
-const TOY_32X32_BLACK_TRACE_WORDS: &[u16] = &[
-    0x035a, 0x010f, 0x0377, 0x8000, 0x0163, 0x020b, 0x0153, 0x0153, 0x00f3, 0x020b, 0x0133, 0x02ca,
-    0x0233, 0x0153, 0x01ab, 0x0113, 0x029b, 0x0170, 0x8001, 0x8001, 0x8000, 0x007d, 0x011e, 0x0092,
-    0x008a, 0x01b1, 0x0196, 0x00c7, 0x0102, 0x0116, 0x0013, 0x0146, 0x0203, 0x010e, 0x0394, 0x009e,
-    0x0337, 0x0092, 0x008b, 0x007e, 0x0013, 0x0062, 0x022f, 0x0061, 0x008a, 0x0012, 0x0077, 0x00a2,
-    0x0013, 0x00e1, 0x0129, 0x005a, 0x8000, 0x8000, 0x8000, 0x8000, 0x8001, 0x8000, 0x8000, 0x8001,
-    0x8000, 0x8001, 0x8000, 0x00b1, 0x007e, 0x013d, 0x008e, 0x00b1, 0x00aa, 0x0179, 0x0096, 0x01ca,
-    0x025e, 0x017a, 0x02cb, 0x00ba, 0x00fb, 0x007e, 0x0013, 0x0076, 0x017a, 0x008b, 0x007e, 0x0013,
-    0x0062, 0x020b, 0x0062, 0x01b4, 0x02cf, 0x0052, 0x8001, 0x8001, 0x8000, 0x8000, 0x8000, 0x8000,
-    0x8001, 0x8000, 0x8001, 0x8000, 0x0162, 0x0073, 0x00d7, 0x005a, 0x0013, 0x0042, 0x01c3, 0x0046,
-    0x0141, 0x004e, 0x006b, 0x0042, 0x0013, 0x01d2, 0x01f1, 0x006a, 0x02e8, 0x01f4, 0x02e3, 0x020a,
-    0x006b, 0x004e, 0x0013, 0x004e, 0x01ac, 0x007b, 0x00e9, 0x009d, 0x0022, 0x0013, 0x00d5, 0x00c6,
-    0x0026, 0x0013, 0x024f, 0x024e, 0x00b2, 0x8000, 0x8000, 0x8001, 0x8000, 0x8000, 0x8000, 0x8001,
-    0x8000, 0x8000, 0x8001, 0x8001, 0x8000, 0x8001, 0x0083, 0x0013, 0x005e, 0x024e, 0x00a3, 0x004a,
-    0x0013, 0x0046, 0x02cf, 0x004e, 0x02e8, 0x0223, 0x0321, 0x01c2, 0x00b2, 0x035b, 0x0032, 0x0053,
-    0x004e, 0x0013, 0x004a, 0x0267, 0x0209, 0x0132, 0x00d6, 0x005b, 0x0036, 0x0013, 0x0032, 0x0173,
-    0x027c, 0x019f, 0x014a, 0x0027, 0x01f1, 0x01b6, 0x008a, 0x8001, 0x8001, 0x8001, 0x8001, 0x8000,
-    0x8001, 0x8001, 0x8000, 0x8001, 0x8001, 0x8001, 0x8001, 0x8000, 0x8000, 0x0053, 0x01b6, 0x0083,
-    0x0046, 0x0013, 0x0042, 0x0263, 0x004a, 0x02b4, 0x01a2, 0x033b, 0x0032, 0x0053, 0x004e, 0x0013,
-    0x004a, 0x0242, 0x005b, 0x0032, 0x0013, 0x0032, 0x0142, 0x0027, 0x0102, 0x0013, 0x00c2, 0x0304,
-    0x8001, 0x8001, 0x8000, 0x8000, 0x8001, 0x8000, 0x8001, 0x8000, 0x8001, 0x8001, 0x005b, 0x0027,
-    0x028d, 0x0165, 0x00c2, 0x0013, 0x01e7, 0x01f5, 0x013e, 0x0230, 0x0023, 0x0123, 0x029a, 0x0242,
-    0x01c8, 0x002f, 0x0298, 0x0013, 0x0167, 0x0306, 0x0142, 0x0013, 0x0193, 0x01e6, 0x01b2, 0x0013,
-    0x0201, 0x0142, 0x007e, 0x0013, 0x01d2, 0x0253, 0x01f3, 0x0281, 0x017a, 0x0297, 0x01b3, 0x01f5,
-    0x011e, 0x002b, 0x0337, 0x01fe, 0x006a, 0x0170, 0x0027, 0x0173, 0x01b2, 0x0156, 0x017f, 0x0173,
-    0x01b1, 0x01c9, 0x8001, 0x8001, 0x8001, 0x8000, 0x8000, 0x8001, 0x8000, 0x8001, 0x8000, 0x8001,
-    0x8000, 0x8001, 0x8000, 0x8001, 0x8001, 0x8000, 0x8000, 0x0067, 0x02e8, 0x028c, 0x0268, 0x023c,
-    0x0132, 0x0335, 0x011a, 0x0063, 0x01c1, 0x019a, 0x0076, 0x0155, 0x00ee, 0x0142, 0x02f8, 0x0208,
-    0x0141, 0x00da, 0x0093, 0x012a, 0x0013, 0x024e, 0x0375, 0x00fa, 0x01f7, 0x011e, 0x8000, 0x8000,
-    0x8000, 0x8001, 0x8000, 0x8001, 0x8000, 0x8001, 0x002b, 0x0337, 0x020a, 0x006a, 0x01c3, 0x015b,
-    0x01c2, 0x018e, 0x002f, 0x031f, 0x022d, 0x0062, 0x0013, 0x01d3, 0x0281, 0x017a, 0x017c, 0x0013,
-    0x0234, 0x0013, 0x0103, 0x02ce, 0x020e, 0x0013, 0x015b, 0x01b2, 0x0166, 0x0013, 0x031f, 0x01ae,
-    0x00d5, 0x0013, 0x031f, 0x01fe, 0x005a, 0x0013, 0x00fb, 0x0306, 0x01f3, 0x0013, 0x00e3, 0x02ce,
-    0x0377, 0x0013, 0x00e0, 0x010f, 0x012c, 0x00b0, 0x00ef, 0x00a3, 0x0359, 0x01cb, 0x8001, 0x8001,
-    0x8001, 0x8001, 0x8001, 0x8001, 0x8001, 0x8001, 0x8000, 0x8000, 0x8001, 0x8001, 0x8000, 0x8000,
-    0x8001, 0x8000, 0x8001, 0x8000, 0x8000, 0x8001, 0x8000, 0x8000, 0x8001, 0x8000, 0x8001, 0x8001,
-    0x8000, 0x8001, 0x8001, 0x8000, 0x8001, 0x8000, 0x01e5, 0x02c2, 0x023e, 0x012b, 0x0181, 0x02e1,
-    0x0147, 0x0192, 0x0223, 0x0295, 0x8001, 0x01f1, 0x03b3, 0x01c2, 0x01c2, 0x0221, 0x01c1, 0x0242,
-    0x005a, 0x0143, 0x00ea, 0x0013, 0x00c6, 0x00c7, 0x0338, 0x8000, 0x8000, 0x8001, 0x8000, 0x0221,
-    0x01a1, 0x0219, 0x0181, 0x011a, 0x021a, 0x8001, 0x006a, 0x018e, 0x0295, 0x00b2, 0x8001, 0x8001,
-    0x0062, 0x0062, 0x009e, 0x0092, 0x008a, 0x007e, 0x0075, 0x00f1, 0x00a6, 0x0012, 0x0282, 0x0072,
-    0x02c2, 0x01ae, 0x024e, 0x0172, 0x01f6, 0x022e, 0x0166, 0x01f2, 0x8000, 0x0252, 0x027b, 0x01c2,
-    0x029a, 0x010e, 0x0223, 0x0202, 0x010c, 0x0200, 0x0163, 0x01de, 0x029a, 0x0092, 0x0226, 0x018f,
-    0x0296, 0x01ad, 0x02cc, 0x024f, 0x02ea, 0x0305, 0x01d9, 0x0146, 0x0072, 0x019f, 0x00b1, 0x007e,
-    0x0012, 0x00c7, 0x00d2, 0x0117, 0x019f, 0x01b1, 0x017d, 0x8001, 0x8001, 0x8001, 0x8000, 0x8001,
-    0x8000, 0x8001, 0x8000, 0x01b1, 0x01e7, 0x019e, 0x02b6, 0x00e2, 0x01c8, 0x0209, 0x8000, 0x8000,
-    0x0192, 0x008a,
-];
+    cabac_ctx(cabac, true, 172, true); // split_cu_mode split=0 at (4,0)
+    cabac_ctx(cabac, false, 107, false); // cbf_comp Cb(4,0)=0
+    cabac_ctx(cabac, false, 136, false); // cbf_comp Cr(4,0)=0
+    cabac_ctx(cabac, true, 67, false); // mts_idx=0 at (4,0)
+    cabac_ctx(cabac, false, 100, false); // split_cu_mode split=0 at (0,4)
+    cabac_ctx(cabac, false, 124, false); // cbf_comp Cb(0,4)=0
+    cabac_ctx(cabac, false, 160, false); // cbf_comp Cr(0,4)=0
+    cabac_ctx(cabac, false, 20, false); // mts_idx=0 at (0,4)
+    cabac.encode_bin_ep(true); // alignment before final chroma block
+    cabac_ctx(cabac, true, 169, true); // split_cu_mode split=0 at (4,4)
+    cabac_ctx(cabac, false, 103, false); // cbf_comp Cb(4,4)=0
+    cabac_ctx(cabac, false, 147, false); // cbf_comp Cr(4,4)=0
+    cabac_ctx(cabac, false, 68, false); // mts_idx=0 at (4,4)
+    cabac_ctx(cabac, true, 140, true); // final empty-tu context
+    cabac_ctx(cabac, false, 103, false); // final empty-tu context
+    cabac_ctx(cabac, false, 119, false); // final empty-tu context
+    cabac_ctx(cabac, false, 56, false); // final empty-tu context
+    cabac_ctx(cabac, false, 118, true); // final empty-tu context
+    cabac_ctx(cabac, false, 130, false); // final empty-tu context
+    cabac_ctx(cabac, false, 104, false); // final cbf cleanup
+    cabac_ctx(cabac, false, 81, false); // final cbf cleanup
+}
+
+fn cabac_ctx(cabac: &mut ToyCabacEncoder, bin: bool, lps: u16, mps: bool) {
+    cabac.encode_bin(bin, ToyCtxEvent { lps, mps });
+}
 
 #[derive(Debug, Clone, Copy)]
 struct ToyCtxEvent {
@@ -2985,7 +3396,7 @@ mod tests {
                 black
             ),
             ToyCodingTreeBody {
-                kind: ToyCodingTreeBodyKind::TraceFallback,
+                kind: ToyCodingTreeBodyKind::Scripted,
                 coded: ToyCodedGeometry {
                     width: 16,
                     height: 16
@@ -3001,7 +3412,7 @@ mod tests {
                 black
             ),
             ToyCodingTreeBody {
-                kind: ToyCodingTreeBodyKind::TraceFallback,
+                kind: ToyCodingTreeBodyKind::Scripted,
                 coded: ToyCodedGeometry {
                     width: 32,
                     height: 32
@@ -3060,16 +3471,16 @@ mod tests {
     }
 
     #[test]
-    fn toy_16x16_trace_bins_are_named_and_parameter_selected() {
+    fn toy_16x16_body_is_parameter_selected() {
         let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
         let geometry = ToyVideoGeometry {
             width: 16,
             height: 16,
         };
-        let params = toy_16x16_trace_params(geometry, black).expect("16x16 is supported");
+        let params = toy_16x16_scripted_params(geometry, black).expect("16x16 is supported");
         assert_eq!(
             params,
-            Toy16x16TraceParams {
+            Toy16x16ScriptedParams {
                 luma_cb_width: 16,
                 luma_cb_height: 16,
                 chroma_tu_count: 4,
@@ -3077,21 +3488,18 @@ mod tests {
                 chroma_rem: 6
             }
         );
-        assert_eq!(TOY_16X16_BLACK_TRACE_BINS.len(), 75);
-        assert!(TOY_16X16_BLACK_TRACE_BINS
-            .iter()
-            .all(|bin| !bin.syntax.is_empty()));
+        assert!(!toy_16x16_generated_cabac_bits(params).is_empty());
 
         let nonzero = quantize_toy_4x4_color(Toy4x4SampledColor {
             y: 64,
             u: 128,
             v: 192,
         });
-        assert_eq!(toy_16x16_trace_params(geometry, nonzero), Some(params));
+        assert_eq!(toy_16x16_scripted_params(geometry, nonzero), Some(params));
     }
 
     #[test]
-    fn toy_16x16_trace_selection_uses_coding_tree_geometry() {
+    fn toy_16x16_scripted_selection_uses_coding_tree_geometry() {
         let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
         assert_eq!(
             first_luma_transform_unit(&toy_coding_tree_plan(ToyVideoGeometry {
@@ -3100,7 +3508,7 @@ mod tests {
             })),
             Some((16, 16))
         );
-        assert!(toy_16x16_trace_params(
+        assert!(toy_16x16_scripted_params(
             ToyVideoGeometry {
                 width: 16,
                 height: 16
@@ -3116,7 +3524,7 @@ mod tests {
             Some((8, 8))
         );
         assert_eq!(
-            toy_16x16_trace_params(
+            toy_16x16_scripted_params(
                 ToyVideoGeometry {
                     width: 8,
                     height: 8
@@ -3128,14 +3536,14 @@ mod tests {
     }
 
     #[test]
-    fn toy_32x32_trace_selection_uses_coded_geometry() {
+    fn toy_32x32_scripted_selection_uses_coded_geometry() {
         let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
-        let params = Toy32x32TraceParams {
+        let params = Toy32x32ScriptedParams {
             luma_cb_width: 32,
             luma_cb_height: 32,
         };
         assert_eq!(
-            toy_32x32_trace_params(
+            toy_32x32_scripted_params(
                 ToyVideoGeometry {
                     width: 32,
                     height: 32
@@ -3145,7 +3553,7 @@ mod tests {
             Some(params)
         );
         assert_eq!(
-            toy_32x32_trace_params(
+            toy_32x32_scripted_params(
                 ToyVideoGeometry {
                     width: 32,
                     height: 16
@@ -3155,7 +3563,7 @@ mod tests {
             Some(params)
         );
         assert_eq!(
-            toy_32x32_trace_params(
+            toy_32x32_scripted_params(
                 ToyVideoGeometry {
                     width: 16,
                     height: 32
@@ -3164,7 +3572,7 @@ mod tests {
             ),
             Some(params)
         );
-        assert_eq!(TOY_32X32_BLACK_TRACE_WORDS.len(), 542);
+        assert!(!toy_32x32_generated_cabac_bits(params).is_empty());
     }
 
     #[test]

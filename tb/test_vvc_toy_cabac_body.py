@@ -3,7 +3,7 @@ import cocotb
 
 
 BODY_GENERATED = 0
-BODY_TRACE_FALLBACK = 1
+BODY_SCRIPTED = 1
 
 
 def cabac_bytes(dut):
@@ -29,8 +29,8 @@ async def cabac_body_generates_8x8_black_payload(dut):
 
 
 @cocotb.test()
-async def cabac_body_generates_16x16_fallback_payload(dut):
-    dut.body_kind.value = BODY_TRACE_FALLBACK
+async def cabac_body_generates_16x16_scripted_payload(dut):
+    dut.body_kind.value = BODY_SCRIPTED
     dut.coded_width.value = 16
     dut.coded_height.value = 16
     dut.luma_rem.value = 16
@@ -44,7 +44,7 @@ async def cabac_body_generates_16x16_fallback_payload(dut):
 
 @cocotb.test()
 async def cabac_body_generates_32x32_block_payload(dut):
-    dut.body_kind.value = BODY_TRACE_FALLBACK
+    dut.body_kind.value = BODY_SCRIPTED
     dut.coded_width.value = 32
     dut.coded_height.value = 32
     dut.luma_rem.value = 16

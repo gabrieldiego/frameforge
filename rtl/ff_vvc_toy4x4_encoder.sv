@@ -1130,14 +1130,7 @@ module ff_vvc_toy4x4_encoder #(
       if (generated_cabac_body_supported) begin
         toy_cabac_bitstream = {generated_cabac_body_len, generated_cabac_body_bits};
       end else begin
-        if (toy_supports_16x16_trace(rem, chroma_rem)) begin
-          st = toy_encode_16x16_trace(st, rem, chroma_rem);
-        end else if (toy_supports_8x8_mapped_tree()) begin
-          st = toy_encode_8x8_luma_tree(st, rem);
-          st = toy_encode_4x4_chroma_tree(st, chroma_rem);
-        end else begin
-          st = toy_encode_capacity_placeholder_tree(st, rem, chroma_rem, ac_tokens, rem_1, ac_tokens_1);
-        end
+        st = toy_encode_capacity_placeholder_tree(st, rem, chroma_rem, ac_tokens, rem_1, ac_tokens_1);
         st = cabac_encode_bin_trm(st, 1'b1);
         st = cabac_finish(st);
         toy_cabac_bitstream = {
@@ -1145,18 +1138,6 @@ module ff_vvc_toy4x4_encoder #(
           st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
         };
       end
-    end
-  endfunction
-
-  function automatic logic toy_supports_8x8_mapped_tree();
-    begin
-      toy_supports_8x8_mapped_tree = (luma_cb_width() == 16'd8) && (luma_cb_height() == 16'd8);
-    end
-  endfunction
-
-  function automatic logic toy_supports_16x16_trace(input logic [4:0] rem, input logic [4:0] chroma_rem);
-    begin
-      toy_supports_16x16_trace = (luma_cb_width() == 16'd16) && (luma_cb_height() == 16'd16);
     end
   endfunction
 
@@ -1228,101 +1209,6 @@ module ff_vvc_toy4x4_encoder #(
         st = cabac_encode_bins_ep(st, {24'd0, ac_tokens_1[119:112]}, 6'd8);
       end
       toy_encode_capacity_placeholder_tree = st;
-    end
-  endfunction
-
-  function automatic cabac_state_t toy_encode_16x16_trace(
-    input cabac_state_t st_in,
-    input logic [4:0]   rem,
-    input logic [4:0]   chroma_rem
-  );
-    cabac_state_t st;
-
-    begin
-      st = st_in;
-      // This 16x16 path is still trace-derived, but the emitted decisions are
-      // selected from visible geometry plus the quantized residual parameters.
-      // Luma CU split, intra mode 26, CBF, and one DC-like residual.
-      st = cabac_encode_bin(st, 1'b0, 9'd214, 1'b0); // split_cu_mode split=1
-        st = cabac_encode_bin(st, 1'b0, 9'd67, 1'b1);  // split_cu_mode qt=1
-        st = cabac_encode_bin_ep(st, 1'b0);            // intra_luma_pred_mode[5]
-        st = cabac_encode_bin_ep(st, 1'b1);            // intra_luma_pred_mode[4]
-        st = cabac_encode_bin_ep(st, 1'b1);            // intra_luma_pred_mode[3]
-        st = cabac_encode_bin_ep(st, 1'b0);            // intra_luma_pred_mode[2]
-        st = cabac_encode_bin_ep(st, 1'b1);            // intra_luma_pred_mode[1]
-        st = cabac_encode_bin_ep(st, 1'b0);            // intra_luma_pred_mode[0]
-        st = cabac_encode_bin(st, 1'b1, 9'd52, 1'b1);  // split_cu_mode split=1
-        st = cabac_encode_bin(st, 1'b0, 9'd166, 1'b1); // split_cu_mode qt=1
-        st = cabac_encode_bin(st, 1'b1, 9'd109, 1'b1); // split_cu_mode split=0
-        st = cabac_encode_bin(st, 1'b1, 9'd134, 1'b1); // cbf_comp luma=1
-        st = cabac_encode_bin(st, 1'b1, 9'd116, 1'b1); // sig_coeff_group_flag
-        st = cabac_encode_bin(st, 1'b1, 9'd142, 1'b1); // sig_coeff_group_flag
-        st = cabac_encode_bin(st, 1'b1, 9'd221, 1'b0); // last_sig_coeff_x_prefix
-        st = cabac_encode_bin(st, 1'b0, 9'd205, 1'b0); // last_sig_coeff_y_prefix
-        st = cabac_encode_bin_ep(st, 1'b0);            // last_sig_coeff_suffix
-        st = cabac_encode_bin(st, 1'b0, 9'd39, 1'b0);  // sig_coeff_flag
-        st = cabac_encode_bin(st, 1'b0, 9'd101, 1'b0); // sig_coeff_flag
-        st = cabac_encode_bin(st, 1'b0, 9'd99, 1'b0);  // sig_coeff_flag
-        st = cabac_encode_bin(st, 1'b1, 9'd4, 1'b1);   // sig_coeff_flag
-        st = cabac_encode_bin(st, 1'b0, 9'd67, 1'b0);  // abs_level_gtx_flag
-        st = cabac_encode_bin_ep(st, 1'b0);            // remainder_prefix
-        st = cabac_encode_bin_ep(st, 1'b1);            // coeff_sign_flag
-        st = cabac_encode_bin(st, 1'b0, 9'd64, 1'b0);  // ts_flag=0
-        st = cabac_encode_bin(st, 1'b0, 9'd54, 1'b0);  // mts_idx=0
-
-        // Chroma tree split plus first 4x4 Cr-coded transform unit.
-        st = cabac_encode_bin(st, 1'b0, 9'd40, 1'b0);  // split_cu_mode split=1
-        st = cabac_encode_bin(st, 1'b0, 9'd176, 1'b0); // split_cu_mode qt=1
-        st = cabac_encode_bin(st, 1'b0, 9'd103, 1'b0); // split_cu_mode split=1
-        st = cabac_encode_bin(st, 1'b0, 9'd130, 1'b0); // split_cu_mode qt=1
-        st = cabac_encode_bin(st, 1'b0, 9'd88, 1'b0);  // split_cu_mode split=1
-        st = cabac_encode_bin(st, 1'b0, 9'd114, 1'b0); // split_cu_mode qt=1
-        st = cabac_encode_bin(st, 1'b0, 9'd80, 1'b0);  // split_cu_mode split=0
-        st = cabac_encode_bin(st, 1'b1, 9'd4, 1'b1);   // cbf_comp Cb=0
-        st = cabac_encode_bin(st, 1'b0, 9'd53, 1'b0);  // cbf_comp Cr=1
-        st = cabac_encode_bin(st, 1'b0, 9'd26, 1'b0);  // sig_coeff_group_flag
-        st = cabac_encode_bin(st, 1'b1, 9'd96, 1'b0);  // last_sig_coeff_x_prefix
-        st = cabac_encode_bin(st, 1'b0, 9'd112, 1'b0); // last_sig_coeff_y_prefix
-        st = cabac_encode_bin(st, 1'b1, 9'd4, 1'b1);   // sig_coeff_flag
-        st = cabac_encode_bin(st, 1'b0, 9'd72, 1'b0);  // abs_level_gtx_flag
-        st = cabac_encode_bin(st, 1'b1, 9'd112, 1'b1); // sig_coeff_flag
-        st = cabac_encode_bin(st, 1'b0, 9'd72, 1'b0);  // abs_level_gtx_flag
-        st = cabac_encode_bin(st, 1'b1, 9'd88, 1'b1);  // sig_coeff_flag
-        st = cabac_encode_bin(st, 1'b0, 9'd84, 1'b0);  // abs_level_gtx_flag
-        st = cabac_encode_bin(st, 1'b1, 9'd4, 1'b1);   // sig_coeff_flag
-        st = cabac_encode_bin(st, 1'b0, 9'd206, 1'b1); // abs_level_gtx_flag
-        st = cabac_encode_bin_ep(st, 1'b1);            // remainder_prefix
-        st = cabac_encode_bin_ep(st, 1'b1);            // remainder_prefix
-        st = cabac_encode_bin_ep(st, 1'b1);            // remainder_prefix
-        st = cabac_encode_bin_ep(st, 1'b1);            // remainder_prefix
-        st = cabac_encode_bin_ep(st, 1'b0);            // remainder_suffix
-        st = cabac_encode_bin_ep(st, 1'b1);            // coeff_sign_flag
-        st = cabac_encode_bin(st, 1'b1, 9'd160, 1'b0); // ts_flag=0
-        st = cabac_encode_bin(st, 1'b1, 9'd29, 1'b0);  // mts_idx=0
-
-        // Remaining chroma 4x4 transform units are coded as empty.
-        st = cabac_encode_bin(st, 1'b1, 9'd172, 1'b1); // split_cu_mode split=0 at (4,0)
-        st = cabac_encode_bin(st, 1'b0, 9'd107, 1'b0); // cbf_comp Cb(4,0)=0
-        st = cabac_encode_bin(st, 1'b0, 9'd136, 1'b0); // cbf_comp Cr(4,0)=0
-        st = cabac_encode_bin(st, 1'b1, 9'd67, 1'b0);  // mts_idx=0 at (4,0)
-        st = cabac_encode_bin(st, 1'b0, 9'd100, 1'b0); // split_cu_mode split=0 at (0,4)
-        st = cabac_encode_bin(st, 1'b0, 9'd124, 1'b0); // cbf_comp Cb(0,4)=0
-        st = cabac_encode_bin(st, 1'b0, 9'd160, 1'b0); // cbf_comp Cr(0,4)=0
-        st = cabac_encode_bin(st, 1'b0, 9'd20, 1'b0);  // mts_idx=0 at (0,4)
-        st = cabac_encode_bin_ep(st, 1'b1);            // trace EP before final block
-        st = cabac_encode_bin(st, 1'b1, 9'd169, 1'b1); // split_cu_mode split=0 at (4,4)
-        st = cabac_encode_bin(st, 1'b0, 9'd103, 1'b0); // cbf_comp Cb(4,4)=0
-        st = cabac_encode_bin(st, 1'b0, 9'd147, 1'b0); // cbf_comp Cr(4,4)=0
-        st = cabac_encode_bin(st, 1'b0, 9'd68, 1'b0);  // mts_idx=0 at (4,4)
-        st = cabac_encode_bin(st, 1'b1, 9'd140, 1'b1); // final empty-tu context
-        st = cabac_encode_bin(st, 1'b0, 9'd103, 1'b0); // final empty-tu context
-        st = cabac_encode_bin(st, 1'b0, 9'd119, 1'b0); // final empty-tu context
-        st = cabac_encode_bin(st, 1'b0, 9'd56, 1'b0);  // final empty-tu context
-        st = cabac_encode_bin(st, 1'b0, 9'd118, 1'b1); // final empty-tu context
-        st = cabac_encode_bin(st, 1'b0, 9'd130, 1'b0); // final empty-tu context
-      st = cabac_encode_bin(st, 1'b0, 9'd104, 1'b0); // final cbf cleanup
-      st = cabac_encode_bin(st, 1'b0, 9'd81, 1'b0);  // final cbf cleanup
-      toy_encode_16x16_trace = st;
     end
   endfunction
 

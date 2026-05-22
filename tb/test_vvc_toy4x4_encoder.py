@@ -11,7 +11,7 @@ from cocotb.triggers import ReadOnly, RisingEdge, Timer
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-TOY_16X16_BLACK_TRACE_RECON = bytes(
+TOY_16X16_SCRIPTED_RECON = bytes(
     [
         124, 124, 124, 125, 125, 126, 127, 128, 129, 129, 130, 131, 131, 132, 132, 132,
         122, 123, 123, 123, 124, 125, 126, 126, 127, 128, 129, 129, 130, 130, 131, 131,
@@ -33,11 +33,11 @@ TOY_16X16_BLACK_TRACE_RECON = bytes(
     + [128] * 64
     + [119] * 64
 )
-TOY_32X32_BLACK_TRACE_RECON_ZLIB_B64 = (
+TOY_32X32_SCRIPTED_RECON_ZLIB_B64 = (
     "eNo1lOlz2gYWwP+wnZ1JN20d3wZs8AlufNvggI0xp4QAXUhCAt23QAgf2DXEjl2TJj5qp023s5N2nWzafOp/UmU6+768efN7b945b97zxT8e9Q/1PXrU75vbyOsX9zdne067c9K5ePP+0+//nRv71z+/eDLU/1XfSGA+DEqd73udlsufn17e//bx48OU58njx32DwyPeqdByFGSbJ5120z44OT1/efvzrw8Pk+Njg31f948FQktrm4kCozb3Wo2663B2cfnq7pd3M7Mz/uG+J57gWjSeBFFGNGynrqlmq3102D69fvvN0uqCf7Df9zSWBiCEYHjNbtVllpUNXRLrz1+HY4mtxYmxyZXdAoITFMPrzp7Fl1GiQsAw0+juZCBwe3EmuJHBqApFVjjdaRkMnIcgIJVGxCZQIqlSYn01CpAsx3zmdl3AgVRyNx6LA6SIkJzEoqlYPE9LMsdURd2UyPzudiy6GdlKlwhOMhqWgGbTxZpmKoKg6EolH4+sry4vr0a2U1nb2T9wNLoEYZxuabKi6wKeiizOB+dCT1fDz2LnZ92jls6RRIWXVVlSjM98LRgYH/dPzy8sLf/0Q++kqQocx3O1Wo2TdF2icuvTo4NDo17/1Gzw4T833YYsKppcLWNEVdJNtQZtBNx9DQyPeiam/nh4c2bLsmGpNFwqs6ppajVo3ff1476BgYEhT+DTh7cXLU2rNzQaRijJsAy5klsa/fLL/qGBJwNj/k8ffu4dWmajabAEybrlyTU0MT/yVd/w6FC/y39/eNtr182G01B5lhNEoUZCW/OewWGvb2x42Bt4/+7+fN/UzGbL1gSGIimqXIgvTfrGA5N+t8epX3581bFlQbZaLYvHi0V3S2h2c2Fudi4UCgWDodcvXxzqNYqWGo7JIkAepWuVUjKyvLi4sraxsb7WPmo3pTJUICVLZzGoWK5y1XJ+NxqOxBLpTDqlmM06V0wkIEbRBBrHiQpDE3BuN76TAmG8TBCsrlXS4XAS41VFqFIYgpUJrAhkcgWM5hU9Twg8HFtY2irVZE3lqRKYRwgCLRRKeIVT7YNEHkeTyzOhCEgJiiqQUBZEqQqB4WSVk8yDzrOdTHJjzj+zlkIYUeYIyD24WpUiKqwoytbhc7eL1ZDfN7kQBQhOZIlSiWB5lqY5Rde0xvGL+VBw2u/zTsys7KKsxJEIRgsCW2WVesOyWt3edMDn9Xi93olQDOYVnkRxxuWs6M7TttsXNwHfyMiYz+fxTG/CoiZQLuc5llPs/X3H+fb7N+UyjqEwDIsG657ycRdDEbhULBRIjqlJerNdLBagPAAACF3BKYbWISgP5rKZLEKTnzVRcDEI5HIIVdrdjm4Bf4dDBXcq4ZWV8BZFEp8zYGU0sTg793S5VmXoClEmSSIVGg9MzV49V1mOQCo1IjntC0xMv+rqnMiRZby0HZyanZr983/3vau7872DI5OEEQR5+PDT+cu3t+ff9U5butnav393d3z247/veuffnR53L287l0faXu/uuvvti9Pui96d45iqfXp7c/X6+urq+ubOUGRFO769+7+gIpECgK1YNLwTj0W+CcYxKAFhUCGzk0zEIqtPV7Kp7RJD0flUCkgnk5ubRSBeJBAsn8zAKIZnCyyeBPOJBJCGSLrKILhMpXPZ6LMMSPCSxDPZCrybL2UyWZBU65amrOey8SJVJrMAYbaatrW4mQJABC+CRdpqNZuNlc00mAOLMIzVjLpZt1BSUAVWNjXJ2Dvc39tXlfqho5t2XTedA/eTHtoH5x3bsBynYTsNTThpdy67Tc1oNnVdkwX64uLl1eWRZZqGqsiiwL66vr5+3TUNXXNtSRT/AhplPes="
 )
-TOY_32X32_BLACK_TRACE_RECON = zlib.decompress(
-    base64.b64decode(TOY_32X32_BLACK_TRACE_RECON_ZLIB_B64)
+TOY_32X32_SCRIPTED_RECON = zlib.decompress(
+    base64.b64decode(TOY_32X32_SCRIPTED_RECON_ZLIB_B64)
 )
 
 
@@ -226,10 +226,10 @@ def reconstructed_chroma(u, v):
 
 def decoded_reconstruction(frames, data):
     # This is the reconstruction of the emitted VVC bitstream.
-    if is_toy_16x16_trace_path():
-        return cropped_toy_16x16_trace_recon() * frames
-    if is_toy_32x32_trace_path():
-        return cropped_toy_32x32_trace_recon() * frames
+    if is_toy_16x16_scripted_path():
+        return cropped_toy_16x16_scripted_recon() * frames
+    if is_toy_32x32_scripted_path():
+        return cropped_toy_32x32_scripted_recon() * frames
 
     chroma = reconstructed_chroma(sample_to_8bit(data[luma_samples()]), sample_to_8bit(data[v_sample_index()]))
     if uses_capacity_tu_grid(data):
@@ -259,12 +259,12 @@ def decoded_reconstruction(frames, data):
 def uses_capacity_tu_grid(data):
     return not (
         (rtl_visible_width() == 8 and rtl_visible_height() == 8)
-        or is_toy_16x16_trace_path()
-        or is_toy_32x32_trace_path()
+        or is_toy_16x16_scripted_path()
+        or is_toy_32x32_scripted_path()
     )
 
 
-def is_toy_16x16_trace_path():
+def is_toy_16x16_scripted_path():
     return (
         rtl_visible_width() <= 16
         and rtl_visible_height() <= 16
@@ -272,7 +272,7 @@ def is_toy_16x16_trace_path():
     )
 
 
-def is_toy_32x32_trace_path():
+def is_toy_32x32_scripted_path():
     return (
         rtl_visible_width() <= 32
         and rtl_visible_height() <= 32
@@ -280,10 +280,10 @@ def is_toy_32x32_trace_path():
     )
 
 
-def cropped_toy_16x16_trace_recon():
-    luma = TOY_16X16_BLACK_TRACE_RECON[: 16 * 16]
-    cb = TOY_16X16_BLACK_TRACE_RECON[16 * 16 : 16 * 16 + 8 * 8]
-    cr = TOY_16X16_BLACK_TRACE_RECON[16 * 16 + 8 * 8 :]
+def cropped_toy_16x16_scripted_recon():
+    luma = TOY_16X16_SCRIPTED_RECON[: 16 * 16]
+    cb = TOY_16X16_SCRIPTED_RECON[16 * 16 : 16 * 16 + 8 * 8]
+    cr = TOY_16X16_SCRIPTED_RECON[16 * 16 + 8 * 8 :]
     out_luma = bytearray()
     for y in range(rtl_visible_height()):
         row = y * 16
@@ -299,9 +299,9 @@ def cropped_toy_16x16_trace_recon():
     return bytes(out_luma + out_cb + out_cr)
 
 
-def cropped_toy_32x32_trace_recon():
+def cropped_toy_32x32_scripted_recon():
     return crop_yuv420p8_frame(
-        TOY_32X32_BLACK_TRACE_RECON,
+        TOY_32X32_SCRIPTED_RECON,
         coded_width=32,
         coded_height=32,
         visible_width=rtl_visible_width(),

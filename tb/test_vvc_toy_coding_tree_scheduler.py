@@ -3,7 +3,7 @@ import cocotb
 
 
 BODY_GENERATED = 0
-BODY_TRACE_FALLBACK = 1
+BODY_SCRIPTED = 1
 BODY_CAPACITY_GRID = 2
 
 
@@ -26,9 +26,9 @@ async def check_geometry(dut, width, height, coded_width, coded_height, body_kin
 async def coding_tree_scheduler_selects_local_body_kind(dut):
     await check_geometry(dut, 4, 4, 8, 8, BODY_GENERATED)
     await check_geometry(dut, 8, 8, 8, 8, BODY_GENERATED)
-    await check_geometry(dut, 16, 16, 16, 16, BODY_TRACE_FALLBACK)
-    await check_geometry(dut, 4, 16, 16, 16, BODY_TRACE_FALLBACK)
-    await check_geometry(dut, 32, 32, 32, 32, BODY_TRACE_FALLBACK)
-    await check_geometry(dut, 32, 16, 32, 32, BODY_TRACE_FALLBACK)
-    await check_geometry(dut, 16, 32, 32, 32, BODY_TRACE_FALLBACK)
+    await check_geometry(dut, 16, 16, 16, 16, BODY_SCRIPTED)
+    await check_geometry(dut, 4, 16, 16, 16, BODY_SCRIPTED)
+    await check_geometry(dut, 32, 32, 32, 32, BODY_SCRIPTED)
+    await check_geometry(dut, 32, 16, 32, 32, BODY_SCRIPTED)
+    await check_geometry(dut, 16, 32, 32, 32, BODY_SCRIPTED)
     await check_geometry(dut, 64, 64, 64, 64, BODY_CAPACITY_GRID)

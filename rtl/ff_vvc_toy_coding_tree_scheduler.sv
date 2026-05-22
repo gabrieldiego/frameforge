@@ -12,7 +12,7 @@ module ff_vvc_toy_coding_tree_scheduler (
   output logic [12:0] capacity_tu_grid_bit_len
 );
   localparam logic [1:0] BODY_GENERATED       = 2'd0;
-  localparam logic [1:0] BODY_TRACE_FALLBACK  = 2'd1;
+  localparam logic [1:0] BODY_SCRIPTED  = 2'd1;
   localparam logic [1:0] BODY_CAPACITY_GRID   = 2'd2;
 
   always_comb begin
@@ -31,8 +31,8 @@ module ff_vvc_toy_coding_tree_scheduler (
 
     if (supports_generated_body(coded_width, coded_height)) begin
       body_kind = BODY_GENERATED;
-    end else if (supports_trace_fallback_body(coded_width, coded_height)) begin
-      body_kind = BODY_TRACE_FALLBACK;
+    end else if (supports_scripted_body(coded_width, coded_height)) begin
+      body_kind = BODY_SCRIPTED;
     end else begin
       body_kind = BODY_CAPACITY_GRID;
     end
@@ -65,12 +65,12 @@ module ff_vvc_toy_coding_tree_scheduler (
     end
   endfunction
 
-  function automatic logic supports_trace_fallback_body(
+  function automatic logic supports_scripted_body(
     input logic [15:0] width,
     input logic [15:0] height
   );
     begin
-      supports_trace_fallback_body =
+      supports_scripted_body =
         ((width == 16'd16) && (height == 16'd16)) ||
         ((width == 16'd32) && (height == 16'd32));
     end

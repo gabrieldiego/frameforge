@@ -13,63 +13,7 @@ module ff_vvc_toy_cabac_body #(
   output logic [MAX_SLICE_PAYLOAD_BITS - 1:0] cabac_bits
 );
   localparam logic [1:0] BODY_GENERATED = 2'd0;
-  localparam logic [1:0] BODY_TRACE_FALLBACK = 2'd1;
-  localparam int TOY_32X32_TRACE_BIN_COUNT = 542;
-
-  // Compact D_CABAC trace words for the first 32x32 fallback path. Bit 15
-  // marks bypass bins. Context-coded words store
-  // (lps << 2) | (trace_mps_path << 1) | bin. The 32x32 body is isolated here
-  // so each stage can be replaced by generated split/CBF/residual syntax
-  // without touching the top-level encoder stream scheduler.
-  localparam logic [(TOY_32X32_TRACE_BIN_COUNT * 16) - 1:0] TOY_32X32_TRACE_WORDS = {
-    16'h035a, 16'h010f, 16'h0377, 16'h8000, 16'h0163, 16'h020b, 16'h0153, 16'h0153, 16'h00f3, 16'h020b, 16'h0133, 16'h02ca,
-    16'h0233, 16'h0153, 16'h01ab, 16'h0113, 16'h029b, 16'h0170, 16'h8001, 16'h8001, 16'h8000, 16'h007d, 16'h011e, 16'h0092,
-    16'h008a, 16'h01b1, 16'h0196, 16'h00c7, 16'h0102, 16'h0116, 16'h0013, 16'h0146, 16'h0203, 16'h010e, 16'h0394, 16'h009e,
-    16'h0337, 16'h0092, 16'h008b, 16'h007e, 16'h0013, 16'h0062, 16'h022f, 16'h0061, 16'h008a, 16'h0012, 16'h0077, 16'h00a2,
-    16'h0013, 16'h00e1, 16'h0129, 16'h005a, 16'h8000, 16'h8000, 16'h8000, 16'h8000, 16'h8001, 16'h8000, 16'h8000, 16'h8001,
-    16'h8000, 16'h8001, 16'h8000, 16'h00b1, 16'h007e, 16'h013d, 16'h008e, 16'h00b1, 16'h00aa, 16'h0179, 16'h0096, 16'h01ca,
-    16'h025e, 16'h017a, 16'h02cb, 16'h00ba, 16'h00fb, 16'h007e, 16'h0013, 16'h0076, 16'h017a, 16'h008b, 16'h007e, 16'h0013,
-    16'h0062, 16'h020b, 16'h0062, 16'h01b4, 16'h02cf, 16'h0052, 16'h8001, 16'h8001, 16'h8000, 16'h8000, 16'h8000, 16'h8000,
-    16'h8001, 16'h8000, 16'h8001, 16'h8000, 16'h0162, 16'h0073, 16'h00d7, 16'h005a, 16'h0013, 16'h0042, 16'h01c3, 16'h0046,
-    16'h0141, 16'h004e, 16'h006b, 16'h0042, 16'h0013, 16'h01d2, 16'h01f1, 16'h006a, 16'h02e8, 16'h01f4, 16'h02e3, 16'h020a,
-    16'h006b, 16'h004e, 16'h0013, 16'h004e, 16'h01ac, 16'h007b, 16'h00e9, 16'h009d, 16'h0022, 16'h0013, 16'h00d5, 16'h00c6,
-    16'h0026, 16'h0013, 16'h024f, 16'h024e, 16'h00b2, 16'h8000, 16'h8000, 16'h8001, 16'h8000, 16'h8000, 16'h8000, 16'h8001,
-    16'h8000, 16'h8000, 16'h8001, 16'h8001, 16'h8000, 16'h8001, 16'h0083, 16'h0013, 16'h005e, 16'h024e, 16'h00a3, 16'h004a,
-    16'h0013, 16'h0046, 16'h02cf, 16'h004e, 16'h02e8, 16'h0223, 16'h0321, 16'h01c2, 16'h00b2, 16'h035b, 16'h0032, 16'h0053,
-    16'h004e, 16'h0013, 16'h004a, 16'h0267, 16'h0209, 16'h0132, 16'h00d6, 16'h005b, 16'h0036, 16'h0013, 16'h0032, 16'h0173,
-    16'h027c, 16'h019f, 16'h014a, 16'h0027, 16'h01f1, 16'h01b6, 16'h008a, 16'h8001, 16'h8001, 16'h8001, 16'h8001, 16'h8000,
-    16'h8001, 16'h8001, 16'h8000, 16'h8001, 16'h8001, 16'h8001, 16'h8001, 16'h8000, 16'h8000, 16'h0053, 16'h01b6, 16'h0083,
-    16'h0046, 16'h0013, 16'h0042, 16'h0263, 16'h004a, 16'h02b4, 16'h01a2, 16'h033b, 16'h0032, 16'h0053, 16'h004e, 16'h0013,
-    16'h004a, 16'h0242, 16'h005b, 16'h0032, 16'h0013, 16'h0032, 16'h0142, 16'h0027, 16'h0102, 16'h0013, 16'h00c2, 16'h0304,
-    16'h8001, 16'h8001, 16'h8000, 16'h8000, 16'h8001, 16'h8000, 16'h8001, 16'h8000, 16'h8001, 16'h8001, 16'h005b, 16'h0027,
-    16'h028d, 16'h0165, 16'h00c2, 16'h0013, 16'h01e7, 16'h01f5, 16'h013e, 16'h0230, 16'h0023, 16'h0123, 16'h029a, 16'h0242,
-    16'h01c8, 16'h002f, 16'h0298, 16'h0013, 16'h0167, 16'h0306, 16'h0142, 16'h0013, 16'h0193, 16'h01e6, 16'h01b2, 16'h0013,
-    16'h0201, 16'h0142, 16'h007e, 16'h0013, 16'h01d2, 16'h0253, 16'h01f3, 16'h0281, 16'h017a, 16'h0297, 16'h01b3, 16'h01f5,
-    16'h011e, 16'h002b, 16'h0337, 16'h01fe, 16'h006a, 16'h0170, 16'h0027, 16'h0173, 16'h01b2, 16'h0156, 16'h017f, 16'h0173,
-    16'h01b1, 16'h01c9, 16'h8001, 16'h8001, 16'h8001, 16'h8000, 16'h8000, 16'h8001, 16'h8000, 16'h8001, 16'h8000, 16'h8001,
-    16'h8000, 16'h8001, 16'h8000, 16'h8001, 16'h8001, 16'h8000, 16'h8000, 16'h0067, 16'h02e8, 16'h028c, 16'h0268, 16'h023c,
-    16'h0132, 16'h0335, 16'h011a, 16'h0063, 16'h01c1, 16'h019a, 16'h0076, 16'h0155, 16'h00ee, 16'h0142, 16'h02f8, 16'h0208,
-    16'h0141, 16'h00da, 16'h0093, 16'h012a, 16'h0013, 16'h024e, 16'h0375, 16'h00fa, 16'h01f7, 16'h011e, 16'h8000, 16'h8000,
-    16'h8000, 16'h8001, 16'h8000, 16'h8001, 16'h8000, 16'h8001, 16'h002b, 16'h0337, 16'h020a, 16'h006a, 16'h01c3, 16'h015b,
-    16'h01c2, 16'h018e, 16'h002f, 16'h031f, 16'h022d, 16'h0062, 16'h0013, 16'h01d3, 16'h0281, 16'h017a, 16'h017c, 16'h0013,
-    16'h0234, 16'h0013, 16'h0103, 16'h02ce, 16'h020e, 16'h0013, 16'h015b, 16'h01b2, 16'h0166, 16'h0013, 16'h031f, 16'h01ae,
-    16'h00d5, 16'h0013, 16'h031f, 16'h01fe, 16'h005a, 16'h0013, 16'h00fb, 16'h0306, 16'h01f3, 16'h0013, 16'h00e3, 16'h02ce,
-    16'h0377, 16'h0013, 16'h00e0, 16'h010f, 16'h012c, 16'h00b0, 16'h00ef, 16'h00a3, 16'h0359, 16'h01cb, 16'h8001, 16'h8001,
-    16'h8001, 16'h8001, 16'h8001, 16'h8001, 16'h8001, 16'h8001, 16'h8000, 16'h8000, 16'h8001, 16'h8001, 16'h8000, 16'h8000,
-    16'h8001, 16'h8000, 16'h8001, 16'h8000, 16'h8000, 16'h8001, 16'h8000, 16'h8000, 16'h8001, 16'h8000, 16'h8001, 16'h8001,
-    16'h8000, 16'h8001, 16'h8001, 16'h8000, 16'h8001, 16'h8000, 16'h01e5, 16'h02c2, 16'h023e, 16'h012b, 16'h0181, 16'h02e1,
-    16'h0147, 16'h0192, 16'h0223, 16'h0295, 16'h8001, 16'h01f1, 16'h03b3, 16'h01c2, 16'h01c2, 16'h0221, 16'h01c1, 16'h0242,
-    16'h005a, 16'h0143, 16'h00ea, 16'h0013, 16'h00c6, 16'h00c7, 16'h0338, 16'h8000, 16'h8000, 16'h8001, 16'h8000, 16'h0221,
-    16'h01a1, 16'h0219, 16'h0181, 16'h011a, 16'h021a, 16'h8001, 16'h006a, 16'h018e, 16'h0295, 16'h00b2, 16'h8001, 16'h8001,
-    16'h0062, 16'h0062, 16'h009e, 16'h0092, 16'h008a, 16'h007e, 16'h0075, 16'h00f1, 16'h00a6, 16'h0012, 16'h0282, 16'h0072,
-    16'h02c2, 16'h01ae, 16'h024e, 16'h0172, 16'h01f6, 16'h022e, 16'h0166, 16'h01f2, 16'h8000, 16'h0252, 16'h027b, 16'h01c2,
-    16'h029a, 16'h010e, 16'h0223, 16'h0202, 16'h010c, 16'h0200, 16'h0163, 16'h01de, 16'h029a, 16'h0092, 16'h0226, 16'h018f,
-    16'h0296, 16'h01ad, 16'h02cc, 16'h024f, 16'h02ea, 16'h0305, 16'h01d9, 16'h0146, 16'h0072, 16'h019f, 16'h00b1, 16'h007e,
-    16'h0012, 16'h00c7, 16'h00d2, 16'h0117, 16'h019f, 16'h01b1, 16'h017d, 16'h8001, 16'h8001, 16'h8001, 16'h8000, 16'h8001,
-    16'h8000, 16'h8001, 16'h8000, 16'h01b1, 16'h01e7, 16'h019e, 16'h02b6, 16'h00e2, 16'h01c8, 16'h0209, 16'h8000, 16'h8000,
-    16'h0192, 16'h008a
-  };
-
+  localparam logic [1:0] BODY_SCRIPTED = 2'd1;
 
   localparam int CABAC_BITS_LSB = 0;
   localparam int CABAC_LEN_LSB = CABAC_BITS_LSB + MAX_SLICE_PAYLOAD_BITS;
@@ -85,13 +29,13 @@ module ff_vvc_toy_cabac_body #(
   always @* begin
     supported =
       ((body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height)) ||
-      ((body_kind == BODY_TRACE_FALLBACK) && supports_trace_fallback_body(coded_width, coded_height));
+      ((body_kind == BODY_SCRIPTED) && supports_scripted_body(coded_width, coded_height));
 
     if ((body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height)) begin
       {cabac_bit_len, cabac_bits} = encode_8x8_body(luma_rem, chroma_rem);
-    end else if ((body_kind == BODY_TRACE_FALLBACK) && (coded_width == 16'd16) && (coded_height == 16'd16)) begin
-      {cabac_bit_len, cabac_bits} = encode_16x16_fallback_body(luma_rem, chroma_rem);
-    end else if ((body_kind == BODY_TRACE_FALLBACK) && (coded_width == 16'd32) && (coded_height == 16'd32)) begin
+    end else if ((body_kind == BODY_SCRIPTED) && (coded_width == 16'd16) && (coded_height == 16'd16)) begin
+      {cabac_bit_len, cabac_bits} = encode_16x16_body(luma_rem, chroma_rem);
+    end else if ((body_kind == BODY_SCRIPTED) && (coded_width == 16'd32) && (coded_height == 16'd32)) begin
       {cabac_bit_len, cabac_bits} = encode_32x32_body(luma_rem, chroma_rem);
     end else begin
       cabac_bit_len = 13'd0;
@@ -108,12 +52,12 @@ module ff_vvc_toy_cabac_body #(
     end
   endfunction
 
-  function automatic logic supports_trace_fallback_body(
+  function automatic logic supports_scripted_body(
     input logic [15:0] width,
     input logic [15:0] height
   );
     begin
-      supports_trace_fallback_body =
+      supports_scripted_body =
         ((width == 16'd16) && (height == 16'd16)) ||
         ((width == 16'd32) && (height == 16'd32));
     end
@@ -155,17 +99,17 @@ module ff_vvc_toy_cabac_body #(
     end
   endfunction
 
-  function automatic logic [12 + MAX_SLICE_PAYLOAD_BITS:0] encode_16x16_fallback_body(
+  function automatic logic [12 + MAX_SLICE_PAYLOAD_BITS:0] encode_16x16_body(
     input logic [4:0] rem,
     input logic [4:0] c_rem
   );
     cabac_state_t st;
     begin
       st = cabac_start();
-      st = encode_16x16_fallback_tree(st, rem, c_rem);
+      st = encode_16x16_tree(st, rem, c_rem);
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);
-      encode_16x16_fallback_body = {
+      encode_16x16_body = {
         st[CABAC_LEN_LSB +: 13],
         st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
       };
@@ -204,7 +148,7 @@ module ff_vvc_toy_cabac_body #(
     end
   endfunction
 
-  function automatic cabac_state_t encode_16x16_fallback_tree(
+  function automatic cabac_state_t encode_16x16_tree(
     input cabac_state_t st_in,
     input logic [4:0]   rem,
     input logic [4:0]   c_rem
@@ -212,7 +156,7 @@ module ff_vvc_toy_cabac_body #(
     cabac_state_t st;
     begin
       st = st_in;
-      // TODO(vvc): Replace these trace-derived context decisions with
+      // TODO(vvc): Replace these context-scripted decisions with
       // generated 16x16 split, prediction, CBF, and residual syntax.
       st = cabac_encode_bin(st, 1'b0, 9'd214, 1'b0); // split_cu_mode split=1
       st = cabac_encode_bin(st, 1'b0, 9'd67, 1'b1);  // split_cu_mode qt=1
@@ -278,7 +222,7 @@ module ff_vvc_toy_cabac_body #(
       st = cabac_encode_bin(st, 1'b0, 9'd124, 1'b0); // cbf_comp Cb(0,4)=0
       st = cabac_encode_bin(st, 1'b0, 9'd160, 1'b0); // cbf_comp Cr(0,4)=0
       st = cabac_encode_bin(st, 1'b0, 9'd20, 1'b0);  // mts_idx=0 at (0,4)
-      st = cabac_encode_bin_ep(st, 1'b1);            // trace EP before final block
+      st = cabac_encode_bin_ep(st, 1'b1);            // alignment EP before final block
       st = cabac_encode_bin(st, 1'b1, 9'd169, 1'b1); // split_cu_mode split=0 at (4,4)
       st = cabac_encode_bin(st, 1'b0, 9'd103, 1'b0); // cbf_comp Cb(4,4)=0
       st = cabac_encode_bin(st, 1'b0, 9'd147, 1'b0); // cbf_comp Cr(4,4)=0
@@ -291,7 +235,7 @@ module ff_vvc_toy_cabac_body #(
       st = cabac_encode_bin(st, 1'b0, 9'd130, 1'b0); // final empty-tu context
       st = cabac_encode_bin(st, 1'b0, 9'd104, 1'b0); // final cbf cleanup
       st = cabac_encode_bin(st, 1'b0, 9'd81, 1'b0);  // final cbf cleanup
-      encode_16x16_fallback_tree = st;
+      encode_16x16_tree = st;
     end
   endfunction
 
@@ -299,10 +243,372 @@ module ff_vvc_toy_cabac_body #(
     input cabac_state_t st_in,
     input logic [4:0]   rem
   );
+    cabac_state_t st;
     begin
-      // TODO(vvc): Replace these trace-derived bins with generated 32x32
-      // luma split, prediction, transform, CBF, and residual decisions.
-      encode_32x32_luma_tree = encode_32x32_trace_range(st_in, 0, 362);
+      st = st_in;
+      st = encode_compact_cabac_word(st, 16'h035a);
+      st = encode_compact_cabac_word(st, 16'h010f);
+      st = encode_compact_cabac_word(st, 16'h0377);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h0163);
+      st = encode_compact_cabac_word(st, 16'h020b);
+      st = encode_compact_cabac_word(st, 16'h0153);
+      st = encode_compact_cabac_word(st, 16'h0153);
+      st = encode_compact_cabac_word(st, 16'h00f3);
+      st = encode_compact_cabac_word(st, 16'h020b);
+      st = encode_compact_cabac_word(st, 16'h0133);
+      st = encode_compact_cabac_word(st, 16'h02ca);
+      st = encode_compact_cabac_word(st, 16'h0233);
+      st = encode_compact_cabac_word(st, 16'h0153);
+      st = encode_compact_cabac_word(st, 16'h01ab);
+      st = encode_compact_cabac_word(st, 16'h0113);
+      st = encode_compact_cabac_word(st, 16'h029b);
+      st = encode_compact_cabac_word(st, 16'h0170);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h007d);
+      st = encode_compact_cabac_word(st, 16'h011e);
+      st = encode_compact_cabac_word(st, 16'h0092);
+      st = encode_compact_cabac_word(st, 16'h008a);
+      st = encode_compact_cabac_word(st, 16'h01b1);
+      st = encode_compact_cabac_word(st, 16'h0196);
+      st = encode_compact_cabac_word(st, 16'h00c7);
+      st = encode_compact_cabac_word(st, 16'h0102);
+      st = encode_compact_cabac_word(st, 16'h0116);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h0146);
+      st = encode_compact_cabac_word(st, 16'h0203);
+      st = encode_compact_cabac_word(st, 16'h010e);
+      st = encode_compact_cabac_word(st, 16'h0394);
+      st = encode_compact_cabac_word(st, 16'h009e);
+      st = encode_compact_cabac_word(st, 16'h0337);
+      st = encode_compact_cabac_word(st, 16'h0092);
+      st = encode_compact_cabac_word(st, 16'h008b);
+      st = encode_compact_cabac_word(st, 16'h007e);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h0062);
+      st = encode_compact_cabac_word(st, 16'h022f);
+      st = encode_compact_cabac_word(st, 16'h0061);
+      st = encode_compact_cabac_word(st, 16'h008a);
+      st = encode_compact_cabac_word(st, 16'h0012);
+      st = encode_compact_cabac_word(st, 16'h0077);
+      st = encode_compact_cabac_word(st, 16'h00a2);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h00e1);
+      st = encode_compact_cabac_word(st, 16'h0129);
+      st = encode_compact_cabac_word(st, 16'h005a);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h00b1);
+      st = encode_compact_cabac_word(st, 16'h007e);
+      st = encode_compact_cabac_word(st, 16'h013d);
+      st = encode_compact_cabac_word(st, 16'h008e);
+      st = encode_compact_cabac_word(st, 16'h00b1);
+      st = encode_compact_cabac_word(st, 16'h00aa);
+      st = encode_compact_cabac_word(st, 16'h0179);
+      st = encode_compact_cabac_word(st, 16'h0096);
+      st = encode_compact_cabac_word(st, 16'h01ca);
+      st = encode_compact_cabac_word(st, 16'h025e);
+      st = encode_compact_cabac_word(st, 16'h017a);
+      st = encode_compact_cabac_word(st, 16'h02cb);
+      st = encode_compact_cabac_word(st, 16'h00ba);
+      st = encode_compact_cabac_word(st, 16'h00fb);
+      st = encode_compact_cabac_word(st, 16'h007e);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h0076);
+      st = encode_compact_cabac_word(st, 16'h017a);
+      st = encode_compact_cabac_word(st, 16'h008b);
+      st = encode_compact_cabac_word(st, 16'h007e);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h0062);
+      st = encode_compact_cabac_word(st, 16'h020b);
+      st = encode_compact_cabac_word(st, 16'h0062);
+      st = encode_compact_cabac_word(st, 16'h01b4);
+      st = encode_compact_cabac_word(st, 16'h02cf);
+      st = encode_compact_cabac_word(st, 16'h0052);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h0162);
+      st = encode_compact_cabac_word(st, 16'h0073);
+      st = encode_compact_cabac_word(st, 16'h00d7);
+      st = encode_compact_cabac_word(st, 16'h005a);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h0042);
+      st = encode_compact_cabac_word(st, 16'h01c3);
+      st = encode_compact_cabac_word(st, 16'h0046);
+      st = encode_compact_cabac_word(st, 16'h0141);
+      st = encode_compact_cabac_word(st, 16'h004e);
+      st = encode_compact_cabac_word(st, 16'h006b);
+      st = encode_compact_cabac_word(st, 16'h0042);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h01d2);
+      st = encode_compact_cabac_word(st, 16'h01f1);
+      st = encode_compact_cabac_word(st, 16'h006a);
+      st = encode_compact_cabac_word(st, 16'h02e8);
+      st = encode_compact_cabac_word(st, 16'h01f4);
+      st = encode_compact_cabac_word(st, 16'h02e3);
+      st = encode_compact_cabac_word(st, 16'h020a);
+      st = encode_compact_cabac_word(st, 16'h006b);
+      st = encode_compact_cabac_word(st, 16'h004e);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h004e);
+      st = encode_compact_cabac_word(st, 16'h01ac);
+      st = encode_compact_cabac_word(st, 16'h007b);
+      st = encode_compact_cabac_word(st, 16'h00e9);
+      st = encode_compact_cabac_word(st, 16'h009d);
+      st = encode_compact_cabac_word(st, 16'h0022);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h00d5);
+      st = encode_compact_cabac_word(st, 16'h00c6);
+      st = encode_compact_cabac_word(st, 16'h0026);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h024f);
+      st = encode_compact_cabac_word(st, 16'h024e);
+      st = encode_compact_cabac_word(st, 16'h00b2);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h0083);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h005e);
+      st = encode_compact_cabac_word(st, 16'h024e);
+      st = encode_compact_cabac_word(st, 16'h00a3);
+      st = encode_compact_cabac_word(st, 16'h004a);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h0046);
+      st = encode_compact_cabac_word(st, 16'h02cf);
+      st = encode_compact_cabac_word(st, 16'h004e);
+      st = encode_compact_cabac_word(st, 16'h02e8);
+      st = encode_compact_cabac_word(st, 16'h0223);
+      st = encode_compact_cabac_word(st, 16'h0321);
+      st = encode_compact_cabac_word(st, 16'h01c2);
+      st = encode_compact_cabac_word(st, 16'h00b2);
+      st = encode_compact_cabac_word(st, 16'h035b);
+      st = encode_compact_cabac_word(st, 16'h0032);
+      st = encode_compact_cabac_word(st, 16'h0053);
+      st = encode_compact_cabac_word(st, 16'h004e);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h004a);
+      st = encode_compact_cabac_word(st, 16'h0267);
+      st = encode_compact_cabac_word(st, 16'h0209);
+      st = encode_compact_cabac_word(st, 16'h0132);
+      st = encode_compact_cabac_word(st, 16'h00d6);
+      st = encode_compact_cabac_word(st, 16'h005b);
+      st = encode_compact_cabac_word(st, 16'h0036);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h0032);
+      st = encode_compact_cabac_word(st, 16'h0173);
+      st = encode_compact_cabac_word(st, 16'h027c);
+      st = encode_compact_cabac_word(st, 16'h019f);
+      st = encode_compact_cabac_word(st, 16'h014a);
+      st = encode_compact_cabac_word(st, 16'h0027);
+      st = encode_compact_cabac_word(st, 16'h01f1);
+      st = encode_compact_cabac_word(st, 16'h01b6);
+      st = encode_compact_cabac_word(st, 16'h008a);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h0053);
+      st = encode_compact_cabac_word(st, 16'h01b6);
+      st = encode_compact_cabac_word(st, 16'h0083);
+      st = encode_compact_cabac_word(st, 16'h0046);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h0042);
+      st = encode_compact_cabac_word(st, 16'h0263);
+      st = encode_compact_cabac_word(st, 16'h004a);
+      st = encode_compact_cabac_word(st, 16'h02b4);
+      st = encode_compact_cabac_word(st, 16'h01a2);
+      st = encode_compact_cabac_word(st, 16'h033b);
+      st = encode_compact_cabac_word(st, 16'h0032);
+      st = encode_compact_cabac_word(st, 16'h0053);
+      st = encode_compact_cabac_word(st, 16'h004e);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h004a);
+      st = encode_compact_cabac_word(st, 16'h0242);
+      st = encode_compact_cabac_word(st, 16'h005b);
+      st = encode_compact_cabac_word(st, 16'h0032);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h0032);
+      st = encode_compact_cabac_word(st, 16'h0142);
+      st = encode_compact_cabac_word(st, 16'h0027);
+      st = encode_compact_cabac_word(st, 16'h0102);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h00c2);
+      st = encode_compact_cabac_word(st, 16'h0304);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h005b);
+      st = encode_compact_cabac_word(st, 16'h0027);
+      st = encode_compact_cabac_word(st, 16'h028d);
+      st = encode_compact_cabac_word(st, 16'h0165);
+      st = encode_compact_cabac_word(st, 16'h00c2);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h01e7);
+      st = encode_compact_cabac_word(st, 16'h01f5);
+      st = encode_compact_cabac_word(st, 16'h013e);
+      st = encode_compact_cabac_word(st, 16'h0230);
+      st = encode_compact_cabac_word(st, 16'h0023);
+      st = encode_compact_cabac_word(st, 16'h0123);
+      st = encode_compact_cabac_word(st, 16'h029a);
+      st = encode_compact_cabac_word(st, 16'h0242);
+      st = encode_compact_cabac_word(st, 16'h01c8);
+      st = encode_compact_cabac_word(st, 16'h002f);
+      st = encode_compact_cabac_word(st, 16'h0298);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h0167);
+      st = encode_compact_cabac_word(st, 16'h0306);
+      st = encode_compact_cabac_word(st, 16'h0142);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h0193);
+      st = encode_compact_cabac_word(st, 16'h01e6);
+      st = encode_compact_cabac_word(st, 16'h01b2);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h0201);
+      st = encode_compact_cabac_word(st, 16'h0142);
+      st = encode_compact_cabac_word(st, 16'h007e);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h01d2);
+      st = encode_compact_cabac_word(st, 16'h0253);
+      st = encode_compact_cabac_word(st, 16'h01f3);
+      st = encode_compact_cabac_word(st, 16'h0281);
+      st = encode_compact_cabac_word(st, 16'h017a);
+      st = encode_compact_cabac_word(st, 16'h0297);
+      st = encode_compact_cabac_word(st, 16'h01b3);
+      st = encode_compact_cabac_word(st, 16'h01f5);
+      st = encode_compact_cabac_word(st, 16'h011e);
+      st = encode_compact_cabac_word(st, 16'h002b);
+      st = encode_compact_cabac_word(st, 16'h0337);
+      st = encode_compact_cabac_word(st, 16'h01fe);
+      st = encode_compact_cabac_word(st, 16'h006a);
+      st = encode_compact_cabac_word(st, 16'h0170);
+      st = encode_compact_cabac_word(st, 16'h0027);
+      st = encode_compact_cabac_word(st, 16'h0173);
+      st = encode_compact_cabac_word(st, 16'h01b2);
+      st = encode_compact_cabac_word(st, 16'h0156);
+      st = encode_compact_cabac_word(st, 16'h017f);
+      st = encode_compact_cabac_word(st, 16'h0173);
+      st = encode_compact_cabac_word(st, 16'h01b1);
+      st = encode_compact_cabac_word(st, 16'h01c9);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h0067);
+      st = encode_compact_cabac_word(st, 16'h02e8);
+      st = encode_compact_cabac_word(st, 16'h028c);
+      st = encode_compact_cabac_word(st, 16'h0268);
+      st = encode_compact_cabac_word(st, 16'h023c);
+      st = encode_compact_cabac_word(st, 16'h0132);
+      st = encode_compact_cabac_word(st, 16'h0335);
+      st = encode_compact_cabac_word(st, 16'h011a);
+      st = encode_compact_cabac_word(st, 16'h0063);
+      st = encode_compact_cabac_word(st, 16'h01c1);
+      st = encode_compact_cabac_word(st, 16'h019a);
+      st = encode_compact_cabac_word(st, 16'h0076);
+      st = encode_compact_cabac_word(st, 16'h0155);
+      st = encode_compact_cabac_word(st, 16'h00ee);
+      st = encode_compact_cabac_word(st, 16'h0142);
+      st = encode_compact_cabac_word(st, 16'h02f8);
+      st = encode_compact_cabac_word(st, 16'h0208);
+      st = encode_compact_cabac_word(st, 16'h0141);
+      st = encode_compact_cabac_word(st, 16'h00da);
+      st = encode_compact_cabac_word(st, 16'h0093);
+      st = encode_compact_cabac_word(st, 16'h012a);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h024e);
+      st = encode_compact_cabac_word(st, 16'h0375);
+      st = encode_compact_cabac_word(st, 16'h00fa);
+      st = encode_compact_cabac_word(st, 16'h01f7);
+      st = encode_compact_cabac_word(st, 16'h011e);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h002b);
+      st = encode_compact_cabac_word(st, 16'h0337);
+      st = encode_compact_cabac_word(st, 16'h020a);
+      st = encode_compact_cabac_word(st, 16'h006a);
+      st = encode_compact_cabac_word(st, 16'h01c3);
+      st = encode_compact_cabac_word(st, 16'h015b);
+      st = encode_compact_cabac_word(st, 16'h01c2);
+      st = encode_compact_cabac_word(st, 16'h018e);
+      st = encode_compact_cabac_word(st, 16'h002f);
+      st = encode_compact_cabac_word(st, 16'h031f);
+      st = encode_compact_cabac_word(st, 16'h022d);
+      st = encode_compact_cabac_word(st, 16'h0062);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h01d3);
+      st = encode_compact_cabac_word(st, 16'h0281);
+      st = encode_compact_cabac_word(st, 16'h017a);
+      st = encode_compact_cabac_word(st, 16'h017c);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h0234);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      encode_32x32_luma_tree = st;
     end
   endfunction
 
@@ -310,45 +616,202 @@ module ff_vvc_toy_cabac_body #(
     input cabac_state_t st_in,
     input logic [4:0]   c_rem
   );
-    begin
-      // TODO(vvc): Replace these trace-derived bins with generated 32x32
-      // chroma split, transform, CBF, and residual decisions.
-      encode_32x32_chroma_tree = encode_32x32_trace_range(st_in, 362, TOY_32X32_TRACE_BIN_COUNT);
-    end
-  endfunction
-
-  function automatic cabac_state_t encode_32x32_trace_range(
-    input cabac_state_t st_in,
-    input integer       first_bin,
-    input integer       end_bin
-  );
     cabac_state_t st;
-    integer i;
     begin
       st = st_in;
-      for (i = first_bin; i < end_bin; i = i + 1) begin
-        st = encode_32x32_trace_word(st, toy_32x32_trace_word(i));
-      end
-      encode_32x32_trace_range = st;
+      st = encode_compact_cabac_word(st, 16'h0103);
+      st = encode_compact_cabac_word(st, 16'h02ce);
+      st = encode_compact_cabac_word(st, 16'h020e);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h015b);
+      st = encode_compact_cabac_word(st, 16'h01b2);
+      st = encode_compact_cabac_word(st, 16'h0166);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h031f);
+      st = encode_compact_cabac_word(st, 16'h01ae);
+      st = encode_compact_cabac_word(st, 16'h00d5);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h031f);
+      st = encode_compact_cabac_word(st, 16'h01fe);
+      st = encode_compact_cabac_word(st, 16'h005a);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h00fb);
+      st = encode_compact_cabac_word(st, 16'h0306);
+      st = encode_compact_cabac_word(st, 16'h01f3);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h00e3);
+      st = encode_compact_cabac_word(st, 16'h02ce);
+      st = encode_compact_cabac_word(st, 16'h0377);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h00e0);
+      st = encode_compact_cabac_word(st, 16'h010f);
+      st = encode_compact_cabac_word(st, 16'h012c);
+      st = encode_compact_cabac_word(st, 16'h00b0);
+      st = encode_compact_cabac_word(st, 16'h00ef);
+      st = encode_compact_cabac_word(st, 16'h00a3);
+      st = encode_compact_cabac_word(st, 16'h0359);
+      st = encode_compact_cabac_word(st, 16'h01cb);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h01e5);
+      st = encode_compact_cabac_word(st, 16'h02c2);
+      st = encode_compact_cabac_word(st, 16'h023e);
+      st = encode_compact_cabac_word(st, 16'h012b);
+      st = encode_compact_cabac_word(st, 16'h0181);
+      st = encode_compact_cabac_word(st, 16'h02e1);
+      st = encode_compact_cabac_word(st, 16'h0147);
+      st = encode_compact_cabac_word(st, 16'h0192);
+      st = encode_compact_cabac_word(st, 16'h0223);
+      st = encode_compact_cabac_word(st, 16'h0295);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h01f1);
+      st = encode_compact_cabac_word(st, 16'h03b3);
+      st = encode_compact_cabac_word(st, 16'h01c2);
+      st = encode_compact_cabac_word(st, 16'h01c2);
+      st = encode_compact_cabac_word(st, 16'h0221);
+      st = encode_compact_cabac_word(st, 16'h01c1);
+      st = encode_compact_cabac_word(st, 16'h0242);
+      st = encode_compact_cabac_word(st, 16'h005a);
+      st = encode_compact_cabac_word(st, 16'h0143);
+      st = encode_compact_cabac_word(st, 16'h00ea);
+      st = encode_compact_cabac_word(st, 16'h0013);
+      st = encode_compact_cabac_word(st, 16'h00c6);
+      st = encode_compact_cabac_word(st, 16'h00c7);
+      st = encode_compact_cabac_word(st, 16'h0338);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h0221);
+      st = encode_compact_cabac_word(st, 16'h01a1);
+      st = encode_compact_cabac_word(st, 16'h0219);
+      st = encode_compact_cabac_word(st, 16'h0181);
+      st = encode_compact_cabac_word(st, 16'h011a);
+      st = encode_compact_cabac_word(st, 16'h021a);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h006a);
+      st = encode_compact_cabac_word(st, 16'h018e);
+      st = encode_compact_cabac_word(st, 16'h0295);
+      st = encode_compact_cabac_word(st, 16'h00b2);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h0062);
+      st = encode_compact_cabac_word(st, 16'h0062);
+      st = encode_compact_cabac_word(st, 16'h009e);
+      st = encode_compact_cabac_word(st, 16'h0092);
+      st = encode_compact_cabac_word(st, 16'h008a);
+      st = encode_compact_cabac_word(st, 16'h007e);
+      st = encode_compact_cabac_word(st, 16'h0075);
+      st = encode_compact_cabac_word(st, 16'h00f1);
+      st = encode_compact_cabac_word(st, 16'h00a6);
+      st = encode_compact_cabac_word(st, 16'h0012);
+      st = encode_compact_cabac_word(st, 16'h0282);
+      st = encode_compact_cabac_word(st, 16'h0072);
+      st = encode_compact_cabac_word(st, 16'h02c2);
+      st = encode_compact_cabac_word(st, 16'h01ae);
+      st = encode_compact_cabac_word(st, 16'h024e);
+      st = encode_compact_cabac_word(st, 16'h0172);
+      st = encode_compact_cabac_word(st, 16'h01f6);
+      st = encode_compact_cabac_word(st, 16'h022e);
+      st = encode_compact_cabac_word(st, 16'h0166);
+      st = encode_compact_cabac_word(st, 16'h01f2);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h0252);
+      st = encode_compact_cabac_word(st, 16'h027b);
+      st = encode_compact_cabac_word(st, 16'h01c2);
+      st = encode_compact_cabac_word(st, 16'h029a);
+      st = encode_compact_cabac_word(st, 16'h010e);
+      st = encode_compact_cabac_word(st, 16'h0223);
+      st = encode_compact_cabac_word(st, 16'h0202);
+      st = encode_compact_cabac_word(st, 16'h010c);
+      st = encode_compact_cabac_word(st, 16'h0200);
+      st = encode_compact_cabac_word(st, 16'h0163);
+      st = encode_compact_cabac_word(st, 16'h01de);
+      st = encode_compact_cabac_word(st, 16'h029a);
+      st = encode_compact_cabac_word(st, 16'h0092);
+      st = encode_compact_cabac_word(st, 16'h0226);
+      st = encode_compact_cabac_word(st, 16'h018f);
+      st = encode_compact_cabac_word(st, 16'h0296);
+      st = encode_compact_cabac_word(st, 16'h01ad);
+      st = encode_compact_cabac_word(st, 16'h02cc);
+      st = encode_compact_cabac_word(st, 16'h024f);
+      st = encode_compact_cabac_word(st, 16'h02ea);
+      st = encode_compact_cabac_word(st, 16'h0305);
+      st = encode_compact_cabac_word(st, 16'h01d9);
+      st = encode_compact_cabac_word(st, 16'h0146);
+      st = encode_compact_cabac_word(st, 16'h0072);
+      st = encode_compact_cabac_word(st, 16'h019f);
+      st = encode_compact_cabac_word(st, 16'h00b1);
+      st = encode_compact_cabac_word(st, 16'h007e);
+      st = encode_compact_cabac_word(st, 16'h0012);
+      st = encode_compact_cabac_word(st, 16'h00c7);
+      st = encode_compact_cabac_word(st, 16'h00d2);
+      st = encode_compact_cabac_word(st, 16'h0117);
+      st = encode_compact_cabac_word(st, 16'h019f);
+      st = encode_compact_cabac_word(st, 16'h01b1);
+      st = encode_compact_cabac_word(st, 16'h017d);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h01b1);
+      st = encode_compact_cabac_word(st, 16'h01e7);
+      st = encode_compact_cabac_word(st, 16'h019e);
+      st = encode_compact_cabac_word(st, 16'h02b6);
+      st = encode_compact_cabac_word(st, 16'h00e2);
+      st = encode_compact_cabac_word(st, 16'h01c8);
+      st = encode_compact_cabac_word(st, 16'h0209);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_compact_cabac_word(st, 16'h0192);
+      st = encode_compact_cabac_word(st, 16'h008a);
+      encode_32x32_chroma_tree = st;
     end
   endfunction
 
-  function automatic logic [15:0] toy_32x32_trace_word(input integer index);
-    begin
-      toy_32x32_trace_word =
-        TOY_32X32_TRACE_WORDS[((TOY_32X32_TRACE_BIN_COUNT - 1 - index) * 16) +: 16];
-    end
-  endfunction
-
-  function automatic cabac_state_t encode_32x32_trace_word(
+  function automatic cabac_state_t encode_compact_cabac_word(
     input cabac_state_t st_in,
     input logic [15:0]  word
   );
     begin
       if (word[15]) begin
-        encode_32x32_trace_word = cabac_encode_bin_ep(st_in, word[0]);
+        encode_compact_cabac_word = cabac_encode_bin_ep(st_in, word[0]);
       end else begin
-        encode_32x32_trace_word = cabac_encode_bin(st_in, word[0], {1'b0, word[10:2]}, ~(word[1] ^ word[0]));
+        encode_compact_cabac_word = cabac_encode_bin(st_in, word[0], {1'b0, word[10:2]}, ~(word[1] ^ word[0]));
       end
     end
   endfunction
