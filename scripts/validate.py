@@ -389,6 +389,9 @@ def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes
 
 
 def palette_444_single_entry_reconstruction(input_path: Path, info: InputInfo) -> bytes:
+    # Mirrors the current H.266 palette decoding subset:
+    # CurrentPaletteEntries is the single signalled Y/Cb/Cr entry, MaxPaletteIndex
+    # is 0, palette_idx_idc is inferred as 0 for every sample, and residuals are zero.
     frame = input_path.read_bytes()[: frame_len(info)]
     luma_len = info.width * info.height
     y = read_normalized_sample(frame, 0, info)

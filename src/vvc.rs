@@ -572,6 +572,14 @@ struct ToyPaletteSyntaxToken {
     kind: ToyPaletteSyntaxTokenKind,
 }
 
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ToyPalette444DecodedPicture {
+    luma: Vec<u8>,
+    cb: Vec<u8>,
+    cr: Vec<u8>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ToyEntropySchedule {
     kind: ToyEntropyScheduleKind,
@@ -1422,6 +1430,34 @@ fn toy_palette_444_binarized_syntax_bits(syntax: ToyPalette444Syntax) -> Vec<boo
         append_palette_syntax_token_bits(&mut bits, token);
     }
     bits
+}
+
+#[cfg(test)]
+fn toy_palette_444_decode_reconstruction(
+    geometry: ToyVideoGeometry,
+    syntax: ToyPalette444Syntax,
+) -> ToyPalette444DecodedPicture {
+    // H.266 8.4.5.3, restricted to the current SINGLE_TREE 4:4:4 subset:
+    // CurrentPaletteEntries is derived from the single signalled entry. Since
+    // MaxPaletteIndex is 0, palette_idx_idc is not present and each
+    // PaletteIndexMap sample is inferred to 0. The picture reconstruction
+    // process receives zero residual samples, so predSamples become recSamples.
+    debug_assert_eq!(syntax.tree_type, ToyPaletteTreeType::SingleTree);
+    debug_assert_eq!(syntax.start_comp, 0);
+    debug_assert_eq!(syntax.num_comps, 3);
+    debug_assert_eq!(syntax.current_palette_size, 1);
+    debug_assert_eq!(syntax.max_palette_index, 0);
+    debug_assert!(!syntax.palette_escape_val_present_flag);
+
+    let current_palette_entries = syntax.new_palette_entries;
+    let palette_index = 0usize;
+    let entry = current_palette_entries[palette_index];
+    let samples = geometry.luma_samples();
+    ToyPalette444DecodedPicture {
+        luma: vec![entry.y; samples],
+        cb: vec![entry.u; samples],
+        cr: vec![entry.v; samples],
+    }
 }
 
 fn toy_palette_444_syntax_tokens(syntax: ToyPalette444Syntax) -> Vec<ToyPaletteSyntaxToken> {
@@ -4313,11 +4349,12 @@ mod tests {
 
     #[test]
     fn toy_palette_444_syntax_uses_spec_single_entry_subset() {
+        let geometry = ToyVideoGeometry {
+            width: 16,
+            height: 16,
+        };
         let syntax = toy_palette_444_single_entry_syntax(
-            ToyVideoGeometry {
-                width: 16,
-                height: 16,
-            },
+            geometry,
             Toy4x4SampledColor {
                 y: 65,
                 u: 128,
@@ -4352,6 +4389,11 @@ mod tests {
                 "palette_escape_val_present_flag",
             ]
         );
+
+        let decoded = toy_palette_444_decode_reconstruction(geometry, syntax);
+        assert_eq!(decoded.luma, vec![65; geometry.luma_samples()]);
+        assert_eq!(decoded.cb, vec![128; geometry.luma_samples()]);
+        assert_eq!(decoded.cr, vec![192; geometry.luma_samples()]);
     }
 
     #[test]
