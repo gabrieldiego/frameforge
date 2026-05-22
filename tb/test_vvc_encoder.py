@@ -279,6 +279,24 @@ def decoded_reconstruction(frames, data):
     return frame * frames
 
 
+def palette_symbol_payload(data):
+    width = rtl_visible_width()
+    height = rtl_visible_height()
+    luma_len = luma_samples()
+    symbols = bytearray()
+    for origin_y in range(0, height, 8):
+        for origin_x in range(0, width, 8):
+            sample_index = origin_y * width + origin_x
+            symbols.extend(
+                [
+                    sample_to_8bit(data[sample_index]),
+                    sample_to_8bit(data[luma_len + sample_index]),
+                    sample_to_8bit(data[v_sample_index() + sample_index]),
+                ]
+            )
+    return bytes(symbols).ljust(64 * 3, b"\0")
+
+
 def uses_capacity_tu_grid(data):
     return not (
         (rtl_visible_width() == 8 and rtl_visible_height() == 8)
@@ -507,6 +525,13 @@ async def collect_stream(dut, frames):
     assert int(dut.quant_luma_ac_tokens_1_q.value) == int.from_bytes(
         quant_ac_tokens(second_residual_luma_block(data)), "big"
     )
+    if rtl_chroma_format_idc() == 3:
+        observed_palette = int(dut.palette_symbol_payload.value)
+        expected_palette = int.from_bytes(palette_symbol_payload(data), "big")
+        assert observed_palette == expected_palette, (
+            observed_palette.to_bytes(64 * 3, "big").hex(),
+            expected_palette.to_bytes(64 * 3, "big").hex(),
+        )
 
     observed = bytearray()
     if dut.m_axis_valid.value == 1:

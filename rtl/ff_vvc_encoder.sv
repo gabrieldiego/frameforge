@@ -89,6 +89,8 @@ module ff_vvc_encoder #(
   logic        cabac_enable;
   logic [7:0]  palette_symbol_count;
   logic [(24 * 64) - 1:0] palette_symbol_payload;
+  logic        palette_sample_valid;
+  logic [1:0]  palette_sample_plane;
   logic        cabac_stream_valid;
   logic [7:0]  cabac_stream_data;
   logic        cabac_stream_last;
@@ -112,8 +114,34 @@ module ff_vvc_encoder #(
     .capacity_tu_grid_bit_len(coding_tree_capacity_tu_grid_bit_len)
   );
 
-  assign palette_symbol_count =
-    (((visible_width + 16'd7) >> 3) * ((visible_height + 16'd7) >> 3));
+  always @* begin
+    palette_sample_valid = 1'b0;
+    palette_sample_plane = 2'd0;
+    if (PALETTE_MODE && input_active_q && s_axis_valid &&
+        (input_count_q < frame_samples())) begin
+      palette_sample_valid = 1'b1;
+      palette_sample_plane = palette_plane_for_input(input_count_q);
+    end
+  end
+
+  ff_vvc_palette_symbolizer #(
+    .MAX_VISIBLE_WIDTH(MAX_VISIBLE_WIDTH),
+    .MAX_VISIBLE_HEIGHT(MAX_VISIBLE_HEIGHT),
+    .SAMPLE_BITS(SAMPLE_BITS),
+    .MAX_PALETTE_SYMBOLS(64)
+  ) palette_symbolizer (
+    .clk(clk),
+    .rst_n(rst_n),
+    .clear(start && !busy),
+    .enable(PALETTE_MODE),
+    .visible_width(visible_width),
+    .visible_height(visible_height),
+    .sample_valid(palette_sample_valid),
+    .sample_plane(palette_sample_plane),
+    .sample(s_axis_data),
+    .symbol_count(palette_symbol_count),
+    .symbol_payload(palette_symbol_payload)
+  );
 
   ff_vvc_cabac #(
     .MAX_VISIBLE_WIDTH(MAX_VISIBLE_WIDTH),
@@ -195,7 +223,6 @@ module ff_vvc_encoder #(
       slice_payload_ebsp_cra_len_q <= '0;
       slice_payload_ebsp_bits_q <= '0;
       slice_payload_ebsp_cra_bits_q <= '0;
-      palette_symbol_payload <= '0;
     end else begin
       if (start && !busy) begin
         input_active_q <= 1'b1;
@@ -224,7 +251,6 @@ module ff_vvc_encoder #(
         slice_payload_ebsp_cra_len_q <= '0;
         slice_payload_ebsp_bits_q <= '0;
         slice_payload_ebsp_cra_bits_q <= '0;
-        palette_symbol_payload <= '0;
       end else if (input_active_q && s_axis_valid && s_axis_ready) begin
         if (s_axis_last != (input_count_q == input_len_q - 1'b1)) begin
           input_error <= 1'b1;
@@ -234,32 +260,12 @@ module ff_vvc_encoder #(
         end
         if (input_count_q < luma_samples()) begin
           luma_frame_q[(MAX_LUMA_SAMPLES - 1 - input_count_q) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
-          if (PALETTE_MODE && is_palette_symbol_sample(input_count_q)) begin
-            palette_symbol_payload <= palette_symbol_payload |
-              palette_symbol_component_bits(palette_symbol_index(input_count_q), 2'd2, sample_to_8bit(s_axis_data));
-          end
         end
         if (PALETTE_MODE && input_count_q >= luma_samples() && input_count_q < luma_samples() + chroma_plane_samples()) begin
           cb_frame_q[(MAX_CHROMA_PLANE_SAMPLES - 1 - (input_count_q - luma_samples())) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
-          if (is_palette_symbol_sample(input_count_q - luma_samples())) begin
-            palette_symbol_payload <= palette_symbol_payload |
-              palette_symbol_component_bits(
-                palette_symbol_index(input_count_q - luma_samples()),
-                2'd1,
-                sample_to_8bit(s_axis_data)
-              );
-          end
         end
         if (PALETTE_MODE && input_count_q >= v_sample_index() && input_count_q < v_sample_index() + chroma_plane_samples()) begin
           cr_frame_q[(MAX_CHROMA_PLANE_SAMPLES - 1 - (input_count_q - v_sample_index())) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
-          if (is_palette_symbol_sample(input_count_q - v_sample_index())) begin
-            palette_symbol_payload <= palette_symbol_payload |
-              palette_symbol_component_bits(
-                palette_symbol_index(input_count_q - v_sample_index()),
-                2'd0,
-                sample_to_8bit(s_axis_data)
-              );
-          end
         end
         if (is_residual_luma_sample(input_count_q)) begin
           luma_samples_q[(15 - residual_luma_sample_index(input_count_q)) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
@@ -361,41 +367,17 @@ module ff_vvc_encoder #(
     end
   endfunction
 
-  function automatic logic is_palette_symbol_sample(input logic [INPUT_COUNT_BITS - 1:0] plane_index);
-    logic [INPUT_COUNT_BITS - 1:0] x;
-    logic [INPUT_COUNT_BITS - 1:0] y;
-    begin
-      x = plane_index % visible_width;
-      y = plane_index / visible_width;
-      is_palette_symbol_sample = (x[2:0] == 3'd0) && (y[2:0] == 3'd0);
-    end
-  endfunction
-
-  function automatic logic [7:0] palette_symbol_index(input logic [INPUT_COUNT_BITS - 1:0] plane_index);
-    logic [INPUT_COUNT_BITS - 1:0] x;
-    logic [INPUT_COUNT_BITS - 1:0] y;
-    logic [15:0] tiles_x;
-    logic [15:0] index;
-    begin
-      x = plane_index % visible_width;
-      y = plane_index / visible_width;
-      tiles_x = (visible_width + 16'd7) >> 3;
-      index = (y >> 3) * tiles_x + (x >> 3);
-      palette_symbol_index = index[7:0];
-    end
-  endfunction
-
-  function automatic logic [(24 * 64) - 1:0] palette_symbol_component_bits(
-    input logic [7:0] symbol_index,
-    input logic [1:0] component,
-    input logic [7:0] sample
+  function automatic logic [1:0] palette_plane_for_input(
+    input logic [INPUT_COUNT_BITS - 1:0] sample_index
   );
-    logic [(24 * 64) - 1:0] bits;
-    logic [15:0] shift_bits;
     begin
-      bits = '0;
-      shift_bits = ((16'd63 - {8'd0, symbol_index}) * 16'd24) + ({14'd0, component} * 16'd8);
-      palette_symbol_component_bits = bits | ({{((24 * 64) - 8){1'b0}}, sample} << shift_bits);
+      if (sample_index < luma_samples()) begin
+        palette_plane_for_input = 2'd0;
+      end else if (sample_index < v_sample_index()) begin
+        palette_plane_for_input = 2'd1;
+      end else begin
+        palette_plane_for_input = 2'd2;
+      end
     end
   endfunction
 

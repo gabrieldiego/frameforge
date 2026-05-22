@@ -47,15 +47,15 @@ VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_generated_cabac_body.sv
 TOPLEVEL := ff_vvc_generated_cabac_body
 COCOTB_TEST_MODULES := test_vvc_generated_cabac_body
 else ifeq ($(DUT),vvc-palette-cabac)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_palette_cabac.sv
+VERILOG_SOURCES := $(RTL_DIR)/vvc_palette/ff_vvc_palette_cabac.sv
 TOPLEVEL := ff_vvc_palette_cabac
 COCOTB_TEST_MODULES := test_vvc_palette_cabac
 else ifeq ($(DUT),vvc-cabac)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_generated_cabac_body.sv $(RTL_DIR)/vvc_cabac/ff_vvc_palette_cabac.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac.sv
+VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_generated_cabac_body.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_cabac.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac.sv
 TOPLEVEL := ff_vvc_cabac
 COCOTB_TEST_MODULES := test_vvc_palette_cabac
 else ifeq ($(DUT),vvc-encoder)
-VERILOG_SOURCES := $(RTL_DIR)/ff_residual_stub.sv $(RTL_DIR)/ff_vvc_toy_coding_tree_scheduler.sv $(RTL_DIR)/vvc_cabac/ff_vvc_generated_cabac_body.sv $(RTL_DIR)/vvc_cabac/ff_vvc_palette_cabac.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac.sv $(RTL_DIR)/ff_vvc_encoder.sv
+VERILOG_SOURCES := $(RTL_DIR)/ff_residual_stub.sv $(RTL_DIR)/ff_vvc_toy_coding_tree_scheduler.sv $(RTL_DIR)/vvc_cabac/ff_vvc_generated_cabac_body.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_cabac.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_symbolizer.sv $(RTL_DIR)/ff_vvc_encoder.sv
 TOPLEVEL := ff_vvc_encoder
 COCOTB_TEST_MODULES := test_vvc_encoder
 else

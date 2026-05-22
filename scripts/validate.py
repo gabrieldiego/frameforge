@@ -166,6 +166,7 @@ def main() -> int:
     run(
         [
             "make",
+            "-B",
             "rtl-test",
             "DUT=vvc-encoder",
             f"RTL_VISIBLE_WIDTH={info.width}",
