@@ -150,24 +150,53 @@ module ff_vvc_generated_cabac_body #(
     input logic [4:0]   c_rem
   );
     cabac_state_t st;
+    begin
+      st = st_in;
+      st = encode_ctu_root_quad_split(st);
+      st = encode_ctu_luma_32x32_leaf(st, rem, 2'd0);
+      st = encode_ctu_luma_32x32_leaf(st, rem, 2'd1);
+      st = encode_ctu_luma_32x32_leaf(st, rem, 2'd2);
+      st = encode_ctu_luma_32x32_leaf(st, rem, 2'd3);
+      st = encode_ctu_chroma_32x32_tree(st, c_rem);
+      encode_64x64_partition_tree = st;
+    end
+  endfunction
+
+  function automatic cabac_state_t encode_ctu_root_quad_split(input cabac_state_t st_in);
+    cabac_state_t st;
     vvc_prob_model_t split_ctx;
     begin
       st = st_in;
       // 64x64 starts with syntax-named split decisions derived from the VVC
-      // I-slice context initialization tables. The leaves still reuse the
-      // transitional 32x32 generated encoder until those bodies are converted
-      // to syntax-driven context selection too.
-      // VVC split_cu_mode encodes split=1 as CABAC bin 0.
+      // I-slice context initialization tables. The child bodies are still
+      // transitional generated payloads until those bodies are converted to
+      // syntax-driven context selection too.
+      // VVC split_cu_mode encodes split=1 as CABAC bin 0 in this current path.
       split_ctx = vvc_prob_model_init(vvc_split_flag_init(4'd0), vvc_split_flag_log2_window(4'd0), 32);
       {split_ctx, st} = cabac_encode_vvc_model_bin(st, split_ctx, 1'b0);
       split_ctx = vvc_prob_model_init(vvc_split_qt_flag_init(4'd0), vvc_split_qt_flag_log2_window(4'd0), 32);
       {split_ctx, st} = cabac_encode_vvc_model_bin(st, split_ctx, 1'b1);
-      st = encode_32x32_luma_leaf_tree(st, rem);
-      st = encode_32x32_luma_leaf_tree(st, rem);
-      st = encode_32x32_luma_leaf_tree(st, rem);
-      st = encode_32x32_luma_leaf_tree(st, rem);
-      st = encode_32x32_chroma_tree(st, c_rem);
-      encode_64x64_partition_tree = st;
+      encode_ctu_root_quad_split = st;
+    end
+  endfunction
+
+  function automatic cabac_state_t encode_ctu_luma_32x32_leaf(
+    input cabac_state_t st_in,
+    input logic [4:0]   rem,
+    input logic [1:0]   leaf_idx
+  );
+    begin
+      // leaf_idx names the CTU child position for future context derivation.
+      encode_ctu_luma_32x32_leaf = encode_32x32_luma_leaf_tree(st_in, rem);
+    end
+  endfunction
+
+  function automatic cabac_state_t encode_ctu_chroma_32x32_tree(
+    input cabac_state_t st_in,
+    input logic [4:0]   c_rem
+  );
+    begin
+      encode_ctu_chroma_32x32_tree = encode_32x32_chroma_tree(st_in, c_rem);
     end
   endfunction
 

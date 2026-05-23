@@ -2765,26 +2765,75 @@ fn toy_64x64_partition_cabac_bits(params: Toy64x64PartitionParams) -> Vec<bool> 
     debug_assert_eq!(params.luma_leaf_count, 4);
 
     let mut cabac = ToyCabacEncoder::new();
-    let mut ctx = ToyVvcCabacContexts::new();
     cabac.start();
-    encode_64x64_partition_body(&mut cabac, &mut ctx);
+    encode_64x64_partition_body(&mut cabac);
     cabac.encode_bin_trm(true);
     cabac.finish()
 }
 
-fn encode_64x64_partition_body(cabac: &mut ToyCabacEncoder, ctx: &mut ToyVvcCabacContexts) {
-    // 64x64 starts with a real split decision derived from the VVC context
-    // initialization tables. The 32x32 leaves below are still transitional
-    // generated bodies and are the next target for replacing trace-derived
-    // compact words with syntax-driven context selection.
-    // VVC split_cu_mode encodes the split flag with an inverted CABAC bin:
-    // split=1 is bin=0, while split=0 is bin=1.
-    ctx.encode(cabac, ToyVvcCabacContext::SplitFlag(0), false);
-    ctx.encode(cabac, ToyVvcCabacContext::SplitQtFlag(0), true);
-    for _ in 0..4 {
-        encode_32x32_luma_leaf_body(cabac);
+fn encode_64x64_partition_body(cabac: &mut ToyCabacEncoder) {
+    let mut ctu = VvcCtuCabacGenerator::new();
+    for op in VvcCtuCabacOp::black_64x64_yuv420_ctu() {
+        ctu.emit(cabac, op);
     }
-    encode_32x32_chroma_body(cabac);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VvcCtuCabacOp {
+    RootQuadSplit,
+    Luma32x32Leaf { leaf_idx: u8 },
+    Chroma32x32Tree,
+}
+
+impl VvcCtuCabacOp {
+    fn black_64x64_yuv420_ctu() -> [Self; 6] {
+        [
+            Self::RootQuadSplit,
+            Self::Luma32x32Leaf { leaf_idx: 0 },
+            Self::Luma32x32Leaf { leaf_idx: 1 },
+            Self::Luma32x32Leaf { leaf_idx: 2 },
+            Self::Luma32x32Leaf { leaf_idx: 3 },
+            Self::Chroma32x32Tree,
+        ]
+    }
+}
+
+#[derive(Debug, Clone)]
+struct VvcCtuCabacGenerator {
+    contexts: ToyVvcCabacContexts,
+}
+
+impl VvcCtuCabacGenerator {
+    fn new() -> Self {
+        Self {
+            contexts: ToyVvcCabacContexts::new(),
+        }
+    }
+
+    fn emit(&mut self, cabac: &mut ToyCabacEncoder, op: VvcCtuCabacOp) {
+        match op {
+            VvcCtuCabacOp::RootQuadSplit => self.emit_root_quad_split(cabac),
+            VvcCtuCabacOp::Luma32x32Leaf { leaf_idx: _ } => {
+                // TODO(vvc): Replace the leaf body with named CU/TU/residual syntax.
+                encode_32x32_luma_leaf_body(cabac);
+            }
+            VvcCtuCabacOp::Chroma32x32Tree => {
+                // TODO(vvc): Replace the chroma body with named dual-tree chroma syntax.
+                encode_32x32_chroma_body(cabac);
+            }
+        }
+    }
+
+    fn emit_root_quad_split(&mut self, cabac: &mut ToyCabacEncoder) {
+        // TODO(vvc): The current bitstream path preserves the previously
+        // validated SW/RTL CABAC payload. This named operation is the insertion
+        // point for replacing the root split with a fully verified VTM context
+        // model once the split bin mapping is reconciled against decoder traces.
+        self.contexts
+            .encode(cabac, ToyVvcCabacContext::SplitFlag(0), false);
+        self.contexts
+            .encode(cabac, ToyVvcCabacContext::SplitQtFlag(0), true);
+    }
 }
 
 fn encode_32x32_luma_body(cabac: &mut ToyCabacEncoder) {
@@ -4837,6 +4886,44 @@ mod tests {
         cabac.start();
         ctx.encode(&mut cabac, ToyVvcCabacContext::SplitFlag(0), true);
         assert!(ctx.split_flag[0].state() > initial_state);
+    }
+
+    #[test]
+    fn vvc_ctu_cabac_generator_names_64x64_operation_sequence() {
+        assert_eq!(
+            VvcCtuCabacOp::black_64x64_yuv420_ctu(),
+            [
+                VvcCtuCabacOp::RootQuadSplit,
+                VvcCtuCabacOp::Luma32x32Leaf { leaf_idx: 0 },
+                VvcCtuCabacOp::Luma32x32Leaf { leaf_idx: 1 },
+                VvcCtuCabacOp::Luma32x32Leaf { leaf_idx: 2 },
+                VvcCtuCabacOp::Luma32x32Leaf { leaf_idx: 3 },
+                VvcCtuCabacOp::Chroma32x32Tree
+            ]
+        );
+    }
+
+    #[test]
+    fn vvc_ctu_cabac_generator_is_embedded_in_64x64_body() {
+        let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
+        let params = toy_64x64_partition_params(
+            ToyVideoGeometry {
+                width: 64,
+                height: 64,
+            },
+            black,
+        )
+        .expect("64x64 partition parameters");
+        let via_body = toy_64x64_partition_cabac_bits(params);
+
+        let mut manual = ToyCabacEncoder::new();
+        let mut ctu = VvcCtuCabacGenerator::new();
+        manual.start();
+        for op in VvcCtuCabacOp::black_64x64_yuv420_ctu() {
+            ctu.emit(&mut manual, op);
+        }
+        manual.encode_bin_trm(true);
+        assert_eq!(via_body, manual.finish());
     }
 
     #[test]
