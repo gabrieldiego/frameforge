@@ -222,7 +222,7 @@ module ff_vvc_encoder #(
     .s_axis_kind(8'd1),
     .s_axis_data(palette_stream_data),
     .s_axis_last(palette_stream_last),
-    .m_axis_ready(1'b1),
+    .m_axis_ready(cabac_capture_active_q),
     .m_axis_valid(cabac_stream_valid),
     .m_axis_data(cabac_stream_data),
     .m_axis_last(cabac_stream_last),
@@ -404,15 +404,15 @@ module ff_vvc_encoder #(
         end else begin
           input_count_q <= input_count_q + 1'b1;
         end
-      end else if (pending_output_q && !cabac_capture_active_q && !cabac_capture_done_q &&
-                   ((!PALETTE_MODE) || palette_done_q)) begin
-        cabac_start_q <= 1'b1;
+      end else if (pending_output_q && !cabac_capture_active_q && !cabac_capture_done_q) begin
+        cabac_start_q <= !PALETTE_MODE;
         cabac_capture_active_q <= 1'b1;
         cabac_capture_byte_index_q <= 13'd0;
-        cabac_captured_bit_len_q <= cabac_stream_bit_count;
-        cabac_captured_byte_len_q <= cabac_stream_byte_count;
+        cabac_captured_bit_len_q <= PALETTE_MODE ? 13'd0 : cabac_stream_bit_count;
+        cabac_captured_byte_len_q <= PALETTE_MODE ? 13'd0 : cabac_stream_byte_count;
         cabac_captured_byte_bits_q <= '0;
-      end else if (pending_output_q && cabac_capture_done_q) begin
+      end else if (pending_output_q && cabac_capture_done_q &&
+                   ((!PALETTE_MODE) || palette_done_q)) begin
         pending_output_q <= 1'b0;
         palette_done_q <= 1'b0;
         cabac_capture_done_q <= 1'b0;
@@ -443,6 +443,8 @@ module ff_vvc_encoder #(
         cabac_captured_byte_bits_q <= (cabac_captured_byte_bits_q << 8) | cabac_stream_data;
         cabac_capture_byte_index_q <= cabac_capture_byte_index_q + 13'd1;
         if (cabac_stream_last) begin
+          cabac_captured_bit_len_q <= cabac_stream_bit_count;
+          cabac_captured_byte_len_q <= cabac_stream_byte_count;
           cabac_capture_active_q <= 1'b0;
           cabac_capture_done_q <= 1'b1;
         end

@@ -110,44 +110,39 @@ def cabac_bytes(dut):
     return (value << pad).to_bytes((bit_len + 7) // 8, byteorder="big")
 
 
-async def stream_bytes(dut):
-    if not hasattr(dut, "m_axis_data") or not hasattr(dut, "clk"):
-        return None
-    byte_count = int(dut.stream_byte_count.value)
-    observed = bytearray()
-    dut.m_axis_ready.value = 1
-    if hasattr(dut, "start"):
-        dut.start.value = 1
-        await RisingEdge(dut.clk)
-        dut.start.value = 0
-    for index in range(byte_count + 4):
-        await ReadOnly()
-        assert int(dut.m_axis_valid.value) == 1
-        observed.append(int(dut.m_axis_data.value))
-        if int(dut.m_axis_last.value) == 1:
-            assert len(observed) == byte_count
-            await RisingEdge(dut.clk)
-            break
-        await RisingEdge(dut.clk)
-    assert len(observed) == byte_count
-    return bytes(observed)
-
-
 async def feed_palette_symbols(dut, symbols, count):
     if not hasattr(dut, "s_axis_valid"):
-        return
-    for index in range(count):
-        while int(dut.s_axis_ready.value) != 1:
-            await RisingEdge(dut.clk)
-        dut.s_axis_valid.value = 1
-        if hasattr(dut, "s_axis_kind"):
-            dut.s_axis_kind.value = 1
-        dut.s_axis_data.value = symbols[index]
-        dut.s_axis_last.value = index == count - 1
+        return None
+    observed = bytearray()
+    index = 0
+    saw_last = False
+    if hasattr(dut, "m_axis_ready"):
+        dut.m_axis_ready.value = 1
+    dut.s_axis_valid.value = 1 if count else 0
+    if hasattr(dut, "s_axis_kind"):
+        dut.s_axis_kind.value = 1
+    if count:
+        dut.s_axis_data.value = symbols[0]
+        dut.s_axis_last.value = count == 1
+    while index < count or not saw_last:
         await RisingEdge(dut.clk)
+        if hasattr(dut, "m_axis_valid") and int(dut.m_axis_valid.value) == 1:
+            observed.append(int(dut.m_axis_data.value))
+            saw_last = int(dut.m_axis_last.value) == 1
+        if index < count and int(dut.s_axis_valid.value) == 1 and int(dut.s_axis_ready.value) == 1:
+            index += 1
+        if index < count:
+            dut.s_axis_valid.value = 1
+            dut.s_axis_data.value = symbols[index]
+            dut.s_axis_last.value = index == count - 1
+        else:
+            dut.s_axis_valid.value = 0
+            dut.s_axis_last.value = 0
+        assert index < count or saw_last or len(observed) <= int(dut.stream_byte_count.value) + 8
     dut.s_axis_valid.value = 0
     dut.s_axis_last.value = 0
     await RisingEdge(dut.clk)
+    return bytes(observed)
 
 
 def ensure_reference_dump():
@@ -238,7 +233,7 @@ async def palette_cabac_matches_software_boundary_dump(dut):
         dut.s_axis_data.value = 0
         dut.s_axis_last.value = 0
         if hasattr(dut, "m_axis_ready"):
-            dut.m_axis_ready.value = 0
+            dut.m_axis_ready.value = 1
         for _ in range(2):
             await RisingEdge(dut.clk)
         dut.rst_n.value = 1
@@ -258,12 +253,12 @@ async def palette_cabac_matches_software_boundary_dump(dut):
         dut.body_kind.value = 0
         dut.luma_rem.value = 0
         dut.chroma_rem.value = 0
-        dut.m_axis_ready.value = 0
+        dut.m_axis_ready.value = 1
     dut.coded_width.value = reference["width"]
     dut.coded_height.value = reference["height"]
     dut.symbol_count.value = symbol_count
     await Timer(1, unit="ns")
-    await feed_palette_symbols(dut, symbols, symbol_count)
+    observed_stream = await feed_palette_symbols(dut, symbols, symbol_count)
     await Timer(1, unit="ns")
 
     compat_bytes = cabac_bytes(dut)
@@ -280,7 +275,6 @@ async def palette_cabac_matches_software_boundary_dump(dut):
     )
     if compat_bytes is not None:
         assert compat_bytes.hex() == reference["cabac_hex"], (compat_bytes.hex(), reference["cabac_hex"])
-    observed_stream = await stream_bytes(dut)
     if observed_stream is not None:
         assert observed_stream.hex() == reference["cabac_hex"]
 
@@ -306,7 +300,7 @@ async def palette_cabac_matches_multicolor_lossless_symbols(dut):
         dut.s_axis_data.value = 0
         dut.s_axis_last.value = 0
         if hasattr(dut, "m_axis_ready"):
-            dut.m_axis_ready.value = 0
+            dut.m_axis_ready.value = 1
         for _ in range(2):
             await RisingEdge(dut.clk)
         dut.rst_n.value = 1
@@ -325,12 +319,12 @@ async def palette_cabac_matches_multicolor_lossless_symbols(dut):
         dut.body_kind.value = 0
         dut.luma_rem.value = 0
         dut.chroma_rem.value = 0
-        dut.m_axis_ready.value = 0
+        dut.m_axis_ready.value = 1
     dut.coded_width.value = reference["width"]
     dut.coded_height.value = reference["height"]
     dut.symbol_count.value = symbol_count
     await Timer(1, unit="ns")
-    await feed_palette_symbols(dut, symbols, symbol_count)
+    observed_stream = await feed_palette_symbols(dut, symbols, symbol_count)
     await Timer(1, unit="ns")
 
     compat_bytes = cabac_bytes(dut)
@@ -347,6 +341,5 @@ async def palette_cabac_matches_multicolor_lossless_symbols(dut):
     )
     if compat_bytes is not None:
         assert compat_bytes.hex() == reference["cabac_hex"], (compat_bytes.hex(), reference["cabac_hex"])
-    observed_stream = await stream_bytes(dut)
     if observed_stream is not None:
         assert observed_stream.hex() == reference["cabac_hex"]
