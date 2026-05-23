@@ -2819,8 +2819,9 @@ impl VvcCtuCabacGenerator {
                 self.emit_luma_32x32_intra_mode_context_prefix(cabac, leaf_idx);
                 self.emit_luma_32x32_cbf(cabac, leaf_idx);
                 self.emit_luma_32x32_residual_prefix(cabac, leaf_idx);
+                self.emit_luma_32x32_residual_scan_prefix(cabac, leaf_idx);
                 // TODO(vvc): Replace the leaf body with named CU/TU/residual syntax.
-                encode_32x32_luma_leaf_after_residual_prefix_body(cabac);
+                encode_32x32_luma_leaf_after_residual_scan_prefix_body(cabac);
             }
             VvcCtuCabacOp::Chroma32x32Tree => {
                 // TODO(vvc): Replace the chroma body with named dual-tree chroma syntax.
@@ -2877,14 +2878,25 @@ impl VvcCtuCabacGenerator {
         cabac_ctx(cabac, true, 84, true);
         cabac_ctx(cabac, true, 84, true);
     }
+
+    fn emit_luma_32x32_residual_scan_prefix(&mut self, cabac: &mut ToyCabacEncoder, _leaf_idx: u8) {
+        // TODO(vvc): Replace this with named residual_coding syntax once the
+        // coefficient scan position and group flags are derived from the
+        // residual path. These are the next traced context-coded coefficient
+        // bins after the residual prefix.
+        cabac_ctx(cabac, true, 60, true);
+        cabac_ctx(cabac, true, 130, true);
+        cabac_ctx(cabac, true, 76, true);
+        cabac_ctx(cabac, false, 178, false);
+    }
 }
 
 fn encode_32x32_luma_body(cabac: &mut ToyCabacEncoder) {
-    encode_32x32_luma_body_inner(cabac, true, true, true, true, true, true);
+    encode_32x32_luma_body_inner(cabac, true, true, true, true, true, true, true);
 }
 
-fn encode_32x32_luma_leaf_after_residual_prefix_body(cabac: &mut ToyCabacEncoder) {
-    encode_32x32_luma_body_inner(cabac, false, false, false, false, false, false);
+fn encode_32x32_luma_leaf_after_residual_scan_prefix_body(cabac: &mut ToyCabacEncoder) {
+    encode_32x32_luma_body_inner(cabac, false, false, false, false, false, false, false);
 }
 
 fn encode_32x32_luma_body_inner(
@@ -2895,6 +2907,7 @@ fn encode_32x32_luma_body_inner(
     include_intra_mode_context_prefix: bool,
     include_luma_cbf: bool,
     include_residual_prefix: bool,
+    include_residual_scan_prefix: bool,
 ) {
     if include_standalone_root {
         encode_compact_cabac_word(cabac, 0x035a);
@@ -2916,10 +2929,12 @@ fn encode_32x32_luma_body_inner(
         encode_compact_cabac_word(cabac, 0x0153);
         encode_compact_cabac_word(cabac, 0x0153);
     }
-    encode_compact_cabac_word(cabac, 0x00f3);
-    encode_compact_cabac_word(cabac, 0x020b);
-    encode_compact_cabac_word(cabac, 0x0133);
-    encode_compact_cabac_word(cabac, 0x02ca);
+    if include_residual_scan_prefix {
+        encode_compact_cabac_word(cabac, 0x00f3);
+        encode_compact_cabac_word(cabac, 0x020b);
+        encode_compact_cabac_word(cabac, 0x0133);
+        encode_compact_cabac_word(cabac, 0x02ca);
+    }
     encode_compact_cabac_word(cabac, 0x0233);
     encode_compact_cabac_word(cabac, 0x0153);
     encode_compact_cabac_word(cabac, 0x01ab);
