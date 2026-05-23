@@ -3,6 +3,7 @@
 module ff_vvc_encoder #(
   parameter int MAX_VISIBLE_WIDTH = 64,
   parameter int MAX_VISIBLE_HEIGHT = 64,
+  parameter int CTU_SIZE = 64,
   parameter int SAMPLE_BITS = 8,
   parameter int SOURCE_SAMPLE_BITS = SAMPLE_BITS,
   // VVC chroma_format_idc values: 1=4:2:0, 2=4:2:2, 3=4:4:4.
@@ -41,6 +42,7 @@ module ff_vvc_encoder #(
   localparam int TOY_RESIDUAL_CB_SIZE = 4;
   localparam int TOY_RESIDUAL_LUMA_SAMPLES = TOY_RESIDUAL_CB_SIZE * TOY_RESIDUAL_CB_SIZE;
   localparam int MAX_SLICE_PAYLOAD_BITS = 4096;
+  localparam int MAX_CTU_PALETTE_SYMBOLS = (CTU_SIZE / 8) * (CTU_SIZE / 8);
   localparam int CABAC_BITS_LSB = 0;
   localparam int CABAC_LEN_LSB = CABAC_BITS_LSB + MAX_SLICE_PAYLOAD_BITS;
   localparam int CABAC_LOW_LSB = CABAC_LEN_LSB + 13;
@@ -110,7 +112,9 @@ module ff_vvc_encoder #(
   assign busy = input_active_q || m_axis_valid || (index_q != 0);
   assign cabac_enable = 1'b1;
 
-  ff_vvc_toy_coding_tree_scheduler coding_tree_scheduler (
+  ff_vvc_toy_coding_tree_scheduler #(
+    .CTU_SIZE(CTU_SIZE)
+  ) coding_tree_scheduler (
     .visible_width(visible_width),
     .visible_height(visible_height),
     .coded_width(coding_tree_coded_width),
@@ -149,19 +153,18 @@ module ff_vvc_encoder #(
   end
 
   ff_vvc_palette_symbolizer #(
-    .MAX_VISIBLE_WIDTH(MAX_VISIBLE_WIDTH),
-    .MAX_VISIBLE_HEIGHT(MAX_VISIBLE_HEIGHT),
+    .CTU_SIZE(CTU_SIZE),
     .SAMPLE_BITS(SAMPLE_BITS),
-    .MAX_PALETTE_SYMBOLS(64)
+    .MAX_PALETTE_SYMBOLS(MAX_CTU_PALETTE_SYMBOLS)
   ) palette_symbolizer (
     .clk(clk),
     .rst_n(rst_n),
     .clear(start && !busy),
     .enable(PALETTE_MODE),
-    .visible_width(visible_width),
-    .visible_height(visible_height),
-    .coded_width(coding_tree_coded_width),
-    .coded_height(coding_tree_coded_height),
+    .ctu_visible_width(visible_width),
+    .ctu_visible_height(visible_height),
+    .ctu_coded_width(coding_tree_coded_width),
+    .ctu_coded_height(coding_tree_coded_height),
     .sample_valid(palette_sample_valid),
     .sample_plane(palette_sample_plane),
     .sample(s_axis_data),
@@ -180,7 +183,7 @@ module ff_vvc_encoder #(
   ff_vvc_cabac #(
     .MAX_VISIBLE_WIDTH(MAX_VISIBLE_WIDTH),
     .MAX_VISIBLE_HEIGHT(MAX_VISIBLE_HEIGHT),
-    .MAX_PALETTE_SYMBOLS(64),
+    .MAX_PALETTE_SYMBOLS(MAX_CTU_PALETTE_SYMBOLS),
     .MAX_SLICE_PAYLOAD_BITS(MAX_SLICE_PAYLOAD_BITS)
   ) cabac_writer (
     .clk(clk),

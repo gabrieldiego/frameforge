@@ -1,6 +1,8 @@
 `timescale 1ns/1ps
 
-module ff_vvc_toy_coding_tree_scheduler (
+module ff_vvc_toy_coding_tree_scheduler #(
+  parameter int CTU_SIZE = 64
+) (
   input  logic [15:0] visible_width,
   input  logic [15:0] visible_height,
 
@@ -43,7 +45,7 @@ module ff_vvc_toy_coding_tree_scheduler (
       end else if (value <= 16'd32) begin
         coded_dimension = 16'd32;
       end else begin
-        coded_dimension = 16'd64;
+        coded_dimension = CTU_SIZE[15:0];
       end
     end
   endfunction
@@ -57,7 +59,7 @@ module ff_vvc_toy_coding_tree_scheduler (
         ((width == 16'd8) && (height == 16'd8)) ||
         ((width == 16'd16) && (height == 16'd16)) ||
         ((width == 16'd32) && (height == 16'd32)) ||
-        ((width == 16'd64) && (height == 16'd64));
+        ((width == CTU_SIZE[15:0]) && (height == CTU_SIZE[15:0]));
     end
   endfunction
 

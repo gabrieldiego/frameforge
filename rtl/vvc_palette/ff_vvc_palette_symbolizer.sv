@@ -1,19 +1,18 @@
 `timescale 1ns/1ps
 
 module ff_vvc_palette_symbolizer #(
-  parameter int MAX_VISIBLE_WIDTH = 64,
-  parameter int MAX_VISIBLE_HEIGHT = 64,
+  parameter int CTU_SIZE = 64,
   parameter int SAMPLE_BITS = 8,
-  parameter int MAX_PALETTE_SYMBOLS = 64
+  parameter int MAX_PALETTE_SYMBOLS = (CTU_SIZE / 8) * (CTU_SIZE / 8)
 ) (
   input  logic        clk,
   input  logic        rst_n,
   input  logic        clear,
   input  logic        enable,
-  input  logic [15:0] visible_width,
-  input  logic [15:0] visible_height,
-  input  logic [15:0] coded_width,
-  input  logic [15:0] coded_height,
+  input  logic [15:0] ctu_visible_width,
+  input  logic [15:0] ctu_visible_height,
+  input  logic [15:0] ctu_coded_width,
+  input  logic [15:0] ctu_coded_height,
   input  logic        sample_valid,
   input  logic [1:0]  sample_plane,
   input  logic [SAMPLE_BITS - 1:0] sample,
@@ -53,9 +52,9 @@ module ff_vvc_palette_symbolizer #(
   logic [7:0]  drain_symbol_index;
 
   assign symbol_count =
-    enable ? (((coded_width + 16'd7) >> 3) * ((coded_height + 16'd7) >> 3)) : 8'd0;
+    enable ? (((ctu_coded_width + 16'd7) >> 3) * ((ctu_coded_height + 16'd7) >> 3)) : 8'd0;
   assign visible_symbol_count =
-    enable ? (((visible_width + 16'd7) >> 3) * ((visible_height + 16'd7) >> 3)) : 8'd0;
+    enable ? (((ctu_visible_width + 16'd7) >> 3) * ((ctu_visible_height + 16'd7) >> 3)) : 8'd0;
   assign s_axis_ready = enable && (!m_axis_valid || m_axis_ready);
   assign input_valid = sample_valid || (s_axis_valid && s_axis_ready);
   assign input_plane = sample_valid ? sample_plane : s_axis_plane;
@@ -149,7 +148,7 @@ module ff_vvc_palette_symbolizer #(
           drain_index_q <= 8'd0;
         end
         tracked_plane_q <= input_plane;
-        if (sample_x + 16'd1 >= visible_width) begin
+        if (sample_x + 16'd1 >= ctu_visible_width) begin
           tracked_x_q <= 16'd0;
           tracked_y_q <= sample_y + 16'd1;
         end else begin
@@ -176,7 +175,7 @@ module ff_vvc_palette_symbolizer #(
     logic [15:0] tiles_x;
     logic [15:0] index;
     begin
-      tiles_x = (visible_width + 16'd7) >> 3;
+      tiles_x = (ctu_visible_width + 16'd7) >> 3;
       index = (y >> 3) * tiles_x + (x >> 3);
       symbol_index_xy = index[7:0];
     end
@@ -190,7 +189,7 @@ module ff_vvc_palette_symbolizer #(
     begin
       origin_x = 16'd0;
       origin_y = 16'd0;
-      if (coded_width == 16'd64 && coded_height == 16'd64) begin
+      if (ctu_coded_width == 16'd64 && ctu_coded_height == 16'd64) begin
         origin_x = index[4] ? 16'd32 : 16'd0;
         origin_y = index[5] ? 16'd32 : 16'd0;
         index_in_32 = {4'd0, index[3:0]};
@@ -198,7 +197,7 @@ module ff_vvc_palette_symbolizer #(
         index_in_32 = index;
       end
 
-      if (coded_width >= 16'd32 && coded_height >= 16'd32) begin
+      if (ctu_coded_width >= 16'd32 && ctu_coded_height >= 16'd32) begin
         origin_x = origin_x + (index_in_32[2] ? 16'd16 : 16'd0);
         origin_y = origin_y + (index_in_32[3] ? 16'd16 : 16'd0);
         index_in_16 = {6'd0, index_in_32[1:0]};
@@ -206,7 +205,7 @@ module ff_vvc_palette_symbolizer #(
         index_in_16 = index_in_32;
       end
 
-      if (coded_width >= 16'd16 && coded_height >= 16'd16) begin
+      if (ctu_coded_width >= 16'd16 && ctu_coded_height >= 16'd16) begin
         origin_x = origin_x + (index_in_16[0] ? 16'd8 : 16'd0);
         origin_y = origin_y + (index_in_16[1] ? 16'd8 : 16'd0);
       end else begin
@@ -224,8 +223,8 @@ module ff_vvc_palette_symbolizer #(
     logic [15:0] clamped_y;
     begin
       pos = coding_order_position(index);
-      clamped_x = (pos[31:16] < visible_width) ? pos[31:16] : visible_width - 16'd1;
-      clamped_y = (pos[15:0] < visible_height) ? pos[15:0] : visible_height - 16'd1;
+      clamped_x = (pos[31:16] < ctu_visible_width) ? pos[31:16] : ctu_visible_width - 16'd1;
+      clamped_y = (pos[15:0] < ctu_visible_height) ? pos[15:0] : ctu_visible_height - 16'd1;
       coding_order_symbol_index = symbol_index_xy(clamped_x, clamped_y);
     end
   endfunction
