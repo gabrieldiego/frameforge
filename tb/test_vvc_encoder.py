@@ -345,20 +345,9 @@ def cropped_toy_32x32_generated_recon():
 
 
 def cropped_toy_64x64_generated_recon():
-    frame_64 = tile_yuv420p8_frame(
-        TOY_32X32_SCRIPTED_RECON,
-        source_width=32,
-        source_height=32,
-        tiled_width=64,
-        tiled_height=64,
-    )
-    return crop_yuv420p8_frame(
-        frame_64,
-        coded_width=64,
-        coded_height=64,
-        visible_width=rtl_visible_width(),
-        visible_height=rtl_visible_height(),
-    )
+    luma_len = rtl_visible_width() * rtl_visible_height()
+    chroma_len = luma_len // 4
+    return bytes([128] * (luma_len + 2 * chroma_len))
 
 
 def tile_yuv420p8_frame(frame, source_width, source_height, tiled_width, tiled_height):

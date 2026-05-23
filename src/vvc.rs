@@ -1846,6 +1846,14 @@ impl ToyPaletteCabacContexts {
 enum ToyVvcCabacContext {
     SplitFlag(u8),
     SplitQtFlag(u8),
+    MultiRefLineIdx(u8),
+    IntraLumaMpmFlag,
+    IntraLumaPlanarFlag(u8),
+    CclmModeFlag,
+    IntraChromaPredMode,
+    QtCbfY(u8),
+    QtCbfCb(u8),
+    QtCbfCr(u8),
 }
 
 impl ToyVvcCabacContext {
@@ -1863,6 +1871,29 @@ impl ToyVvcCabacContext {
                 const I_SLICE_INIT: [u8; 6] = [27, 6, 15, 25, 19, 37];
                 I_SLICE_INIT[ctx as usize]
             }
+            ToyVvcCabacContext::MultiRefLineIdx(ctx) => {
+                const I_SLICE_INIT: [u8; 2] = [25, 60];
+                I_SLICE_INIT[ctx as usize]
+            }
+            ToyVvcCabacContext::IntraLumaMpmFlag => 45,
+            ToyVvcCabacContext::IntraLumaPlanarFlag(ctx) => {
+                const I_SLICE_INIT: [u8; 2] = [13, 28];
+                I_SLICE_INIT[ctx as usize]
+            }
+            ToyVvcCabacContext::CclmModeFlag => 59,
+            ToyVvcCabacContext::IntraChromaPredMode => 34,
+            ToyVvcCabacContext::QtCbfY(ctx) => {
+                const I_SLICE_INIT: [u8; 4] = [15, 12, 5, 7];
+                I_SLICE_INIT[ctx as usize]
+            }
+            ToyVvcCabacContext::QtCbfCb(ctx) => {
+                const I_SLICE_INIT: [u8; 2] = [12, 21];
+                I_SLICE_INIT[ctx as usize]
+            }
+            ToyVvcCabacContext::QtCbfCr(ctx) => {
+                const I_SLICE_INIT: [u8; 3] = [33, 28, 36];
+                I_SLICE_INIT[ctx as usize]
+            }
         }
     }
 
@@ -1876,6 +1907,29 @@ impl ToyVvcCabacContext {
                 const LOG2_WINDOW: [u8; 6] = [0, 8, 8, 12, 12, 8];
                 LOG2_WINDOW[ctx as usize]
             }
+            ToyVvcCabacContext::MultiRefLineIdx(ctx) => {
+                const LOG2_WINDOW: [u8; 2] = [5, 8];
+                LOG2_WINDOW[ctx as usize]
+            }
+            ToyVvcCabacContext::IntraLumaMpmFlag => 6,
+            ToyVvcCabacContext::IntraLumaPlanarFlag(ctx) => {
+                const LOG2_WINDOW: [u8; 2] = [1, 5];
+                LOG2_WINDOW[ctx as usize]
+            }
+            ToyVvcCabacContext::CclmModeFlag => 9,
+            ToyVvcCabacContext::IntraChromaPredMode => 9,
+            ToyVvcCabacContext::QtCbfY(ctx) => {
+                const LOG2_WINDOW: [u8; 4] = [5, 1, 8, 9];
+                LOG2_WINDOW[ctx as usize]
+            }
+            ToyVvcCabacContext::QtCbfCb(ctx) => {
+                const LOG2_WINDOW: [u8; 2] = [5, 0];
+                LOG2_WINDOW[ctx as usize]
+            }
+            ToyVvcCabacContext::QtCbfCr(ctx) => {
+                const LOG2_WINDOW: [u8; 3] = [2, 1, 0];
+                LOG2_WINDOW[ctx as usize]
+            }
         }
     }
 }
@@ -1884,6 +1938,14 @@ impl ToyVvcCabacContext {
 struct ToyVvcCabacContexts {
     split_flag: [ToyCabacProbModel; 9],
     split_qt_flag: [ToyCabacProbModel; 6],
+    multi_ref_line_idx: [ToyCabacProbModel; 2],
+    intra_luma_mpm_flag: ToyCabacProbModel,
+    intra_luma_planar_flag: [ToyCabacProbModel; 2],
+    cclm_mode_flag: ToyCabacProbModel,
+    intra_chroma_pred_mode: ToyCabacProbModel,
+    qt_cbf_y: [ToyCabacProbModel; 4],
+    qt_cbf_cb: [ToyCabacProbModel; 2],
+    qt_cbf_cr: [ToyCabacProbModel; 3],
 }
 
 impl ToyVvcCabacContexts {
@@ -1905,6 +1967,56 @@ impl ToyVvcCabacContexts {
                     ToyVvcCabacContext::SplitQtFlag(idx as u8).log2_window_size(),
                 )
             }),
+            multi_ref_line_idx: std::array::from_fn(|idx| {
+                ToyCabacProbModel::from_vtm_init_value(
+                    ToyVvcCabacContext::MultiRefLineIdx(idx as u8).init_value(),
+                    Self::DEFAULT_SLICE_QP,
+                    ToyVvcCabacContext::MultiRefLineIdx(idx as u8).log2_window_size(),
+                )
+            }),
+            intra_luma_mpm_flag: ToyCabacProbModel::from_vtm_init_value(
+                ToyVvcCabacContext::IntraLumaMpmFlag.init_value(),
+                Self::DEFAULT_SLICE_QP,
+                ToyVvcCabacContext::IntraLumaMpmFlag.log2_window_size(),
+            ),
+            intra_luma_planar_flag: std::array::from_fn(|idx| {
+                ToyCabacProbModel::from_vtm_init_value(
+                    ToyVvcCabacContext::IntraLumaPlanarFlag(idx as u8).init_value(),
+                    Self::DEFAULT_SLICE_QP,
+                    ToyVvcCabacContext::IntraLumaPlanarFlag(idx as u8).log2_window_size(),
+                )
+            }),
+            cclm_mode_flag: ToyCabacProbModel::from_vtm_init_value(
+                ToyVvcCabacContext::CclmModeFlag.init_value(),
+                Self::DEFAULT_SLICE_QP,
+                ToyVvcCabacContext::CclmModeFlag.log2_window_size(),
+            ),
+            intra_chroma_pred_mode: ToyCabacProbModel::from_vtm_init_value(
+                ToyVvcCabacContext::IntraChromaPredMode.init_value(),
+                Self::DEFAULT_SLICE_QP,
+                ToyVvcCabacContext::IntraChromaPredMode.log2_window_size(),
+            ),
+            qt_cbf_y: std::array::from_fn(|idx| {
+                ToyCabacProbModel::from_vtm_init_value(
+                    ToyVvcCabacContext::QtCbfY(idx as u8).init_value(),
+                    Self::DEFAULT_SLICE_QP,
+                    ToyVvcCabacContext::QtCbfY(idx as u8).log2_window_size(),
+                )
+            }),
+            qt_cbf_cb: std::array::from_fn(|idx| {
+                ToyCabacProbModel::from_vtm_init_value(
+                    ToyVvcCabacContext::QtCbfCb(idx as u8).init_value(),
+                    Self::DEFAULT_SLICE_QP,
+                    ToyVvcCabacContext::QtCbfCb(idx as u8).log2_window_size(),
+                )
+            }),
+            qt_cbf_cr: std::array::from_fn(|idx| {
+                ToyCabacProbModel::from_vtm_init_value(
+                    ToyVvcCabacContext::QtCbfCr(idx as u8).init_value(),
+                    Self::DEFAULT_SLICE_QP,
+                    ToyVvcCabacContext::QtCbfCr(idx as u8).log2_window_size(),
+                )
+            }),
         }
     }
 
@@ -1914,6 +2026,20 @@ impl ToyVvcCabacContexts {
             ToyVvcCabacContext::SplitQtFlag(idx) => {
                 self.split_qt_flag[idx as usize].encode(cabac, bin)
             }
+            ToyVvcCabacContext::MultiRefLineIdx(idx) => {
+                self.multi_ref_line_idx[idx as usize].encode(cabac, bin)
+            }
+            ToyVvcCabacContext::IntraLumaMpmFlag => self.intra_luma_mpm_flag.encode(cabac, bin),
+            ToyVvcCabacContext::IntraLumaPlanarFlag(idx) => {
+                self.intra_luma_planar_flag[idx as usize].encode(cabac, bin)
+            }
+            ToyVvcCabacContext::CclmModeFlag => self.cclm_mode_flag.encode(cabac, bin),
+            ToyVvcCabacContext::IntraChromaPredMode => {
+                self.intra_chroma_pred_mode.encode(cabac, bin)
+            }
+            ToyVvcCabacContext::QtCbfY(idx) => self.qt_cbf_y[idx as usize].encode(cabac, bin),
+            ToyVvcCabacContext::QtCbfCb(idx) => self.qt_cbf_cb[idx as usize].encode(cabac, bin),
+            ToyVvcCabacContext::QtCbfCr(idx) => self.qt_cbf_cr[idx as usize].encode(cabac, bin),
         }
     }
 }
@@ -1950,7 +2076,7 @@ impl ToyCabacProbModel {
             state1: 0,
             rate: 0,
         };
-        model.set_state(clipped << 8);
+        model.set_init_state(clipped << 8);
         model.set_log2_window_size(log2_window_size);
         model
     }
@@ -1964,6 +2090,11 @@ impl ToyCabacProbModel {
     fn set_state(&mut self, probability_state: u16) {
         self.state0 = (probability_state >> 1) & Self::MASK_0;
         self.state1 = (probability_state >> 1) & Self::MASK_1;
+    }
+
+    fn set_init_state(&mut self, probability_state: u16) {
+        self.state0 = probability_state & Self::MASK_0;
+        self.state1 = probability_state & Self::MASK_1;
     }
 
     fn state(&self) -> u16 {
@@ -2868,6 +2999,18 @@ impl VvcSplitCtxInput {
         }
     }
 
+    fn chroma_root_without_smaller_neighbours() -> Self {
+        Self {
+            left_condition: false,
+            above_condition: false,
+            allow_bt_vertical: true,
+            allow_bt_horizontal: true,
+            allow_tt_vertical: true,
+            allow_tt_horizontal: true,
+            allow_qt: false,
+        }
+    }
+
     fn split_cu_flag_ctx(self) -> u8 {
         // VVC 9.3.4.2.2 derives ctxInc for split_cu_flag as:
         //   condL + condA + ctxSetIdx * 3
@@ -2886,12 +3029,14 @@ impl VvcSplitCtxInput {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 struct VvcQtSplitCtxInput {
     left_deeper_qt: bool,
     above_deeper_qt: bool,
     cqt_depth: u8,
 }
 
+#[allow(dead_code)]
 impl VvcQtSplitCtxInput {
     fn from_node_without_deeper_neighbours(node: VvcCodingTreeNode) -> Self {
         Self {
@@ -2959,19 +3104,14 @@ impl VvcCtuCabacGenerator {
             VvcCtuCabacOp::QtSplit { node } => self.emit_qt_split(cabac, node),
             VvcCtuCabacOp::LumaLeaf { node } => {
                 self.emit_luma_leaf_split(cabac, node);
-                self.emit_luma_32x32_intra_mode_prefix(cabac, node);
-                self.emit_luma_32x32_intra_mode_context_prefix(cabac, node);
-                self.emit_luma_32x32_cbf(cabac, node);
-                self.emit_luma_32x32_residual_prefix(cabac, node);
-                self.emit_luma_32x32_residual_scan_prefix(cabac, node);
-                self.emit_luma_32x32_residual_scan_tail(cabac, node);
-                self.emit_luma_32x32_residual_bypass_suffix(cabac, node);
-                // TODO(vvc): Replace the leaf body with named CU/TU/residual syntax.
-                encode_32x32_luma_leaf_after_residual_bypass_suffix_body(cabac);
+                self.emit_luma_multi_ref_line(cabac, node);
+                self.emit_luma_intra_planar_mode(cabac, node);
+                self.emit_luma_cbf(cabac, node, false);
             }
-            VvcCtuCabacOp::ChromaTree { node: _node } => {
-                // TODO(vvc): Replace the chroma body with named dual-tree chroma syntax.
-                encode_32x32_chroma_body(cabac);
+            VvcCtuCabacOp::ChromaTree { node } => {
+                self.emit_chroma_leaf_split(cabac, node);
+                self.emit_chroma_dm_mode(cabac, node);
+                self.emit_chroma_cbfs(cabac, node, false, false);
             }
         }
     }
@@ -2980,17 +3120,13 @@ impl VvcCtuCabacGenerator {
         debug_assert_eq!(node.cqt_depth, 0);
         debug_assert_eq!(node.mtt_depth, 0);
         debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
-        // VVC 7.3.11.4 coding_tree emits split_cu_flag followed by
-        // split_qt_flag when a QT split is selected. The current path supports
-        // one 64x64 -> four 32x32 luma QT split and keeps the context indices
-        // explicit until the complete ctxInc derivation is implemented.
+        // VVC 7.3.11.4 coding_tree emits split_cu_flag for the 64x64 root.
+        // In this subset the root cannot use a binary/ternary split, so
+        // split_qt_flag is inferred by split_cu_mode() and no CABAC bin is
+        // written for it.
         let split_ctx = VvcSplitCtxInput::qt_only_root().split_cu_flag_ctx();
         self.contexts
-            .encode(cabac, ToyVvcCabacContext::SplitFlag(split_ctx), false);
-        let split_qt_ctx =
-            VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node).split_qt_flag_ctx();
-        self.contexts
-            .encode(cabac, ToyVvcCabacContext::SplitQtFlag(split_qt_ctx), true);
+            .encode(cabac, ToyVvcCabacContext::SplitFlag(split_ctx), true);
     }
 
     fn emit_luma_leaf_split(&mut self, cabac: &mut ToyCabacEncoder, node: VvcCodingTreeNode) {
@@ -3006,85 +3142,76 @@ impl VvcCtuCabacGenerator {
         let split_ctx =
             VvcSplitCtxInput::full_child_without_smaller_neighbours().split_cu_flag_ctx();
         self.contexts
-            .encode(cabac, ToyVvcCabacContext::SplitFlag(split_ctx), true);
+            .encode(cabac, ToyVvcCabacContext::SplitFlag(split_ctx), false);
     }
 
-    fn emit_luma_32x32_intra_mode_prefix(
+    fn emit_luma_intra_planar_mode(
         &mut self,
         cabac: &mut ToyCabacEncoder,
-        _node: VvcCodingTreeNode,
+        node: VvcCodingTreeNode,
     ) {
-        // TODO(vvc): Replace with the full intra_luma_pred_modes syntax writer.
-        cabac.encode_bin_ep(false); // intra_luma_pred_modes first bypass bin
+        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
+        // VVC 7.3.11.5 intra_luma_pred_modes for planar as MPM index 0:
+        // intra_luma_mpm_flag = 1, intra_luma_not_planar_flag = 0.
+        self.contexts
+            .encode(cabac, ToyVvcCabacContext::IntraLumaMpmFlag, true);
+        self.contexts
+            .encode(cabac, ToyVvcCabacContext::IntraLumaPlanarFlag(1), false);
     }
 
-    fn emit_luma_32x32_intra_mode_context_prefix(
+    fn emit_luma_multi_ref_line(&mut self, cabac: &mut ToyCabacEncoder, node: VvcCodingTreeNode) {
+        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
+        // With sps_mrl_enabled_flag set, VVC extend_ref_line emits
+        // MultiRefLineIdx(0) for intra luma CUs that are not on the first
+        // luma line of the CTU. The current encoder always selects the first
+        // reference line, so only the first MRL bin is needed.
+        if node.y != 0 {
+            self.contexts
+                .encode(cabac, ToyVvcCabacContext::MultiRefLineIdx(0), false);
+        }
+    }
+
+    fn emit_luma_cbf(&mut self, cabac: &mut ToyCabacEncoder, node: VvcCodingTreeNode, cbf: bool) {
+        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
+        // VVC 7.3.11.10 transform_unit emits tu_y_coded_flag / cbf_comp
+        // through QtCbf[Y]. A black no-residual leaf uses cbf=0.
+        self.contexts
+            .encode(cabac, ToyVvcCabacContext::QtCbfY(0), cbf);
+    }
+
+    fn emit_chroma_leaf_split(&mut self, cabac: &mut ToyCabacEncoder, node: VvcCodingTreeNode) {
+        debug_assert_eq!(node.width, 32);
+        debug_assert_eq!(node.height, 32);
+        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
+        let split_ctx =
+            VvcSplitCtxInput::chroma_root_without_smaller_neighbours().split_cu_flag_ctx();
+        self.contexts
+            .encode(cabac, ToyVvcCabacContext::SplitFlag(split_ctx), false);
+    }
+
+    fn emit_chroma_cbfs(
         &mut self,
         cabac: &mut ToyCabacEncoder,
-        _node: VvcCodingTreeNode,
+        node: VvcCodingTreeNode,
+        cbf_cb: bool,
+        cbf_cr: bool,
     ) {
-        // TODO(vvc): Replace this with the complete VVC 7.3.11.5
-        // intra_luma_pred_modes writer and ctxInc derivation.
-        cabac_ctx(cabac, true, 88, true);
+        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
+        self.contexts
+            .encode(cabac, ToyVvcCabacContext::QtCbfCb(0), cbf_cb);
+        self.contexts
+            .encode(cabac, ToyVvcCabacContext::QtCbfCr(u8::from(cbf_cb)), cbf_cr);
     }
 
-    fn emit_luma_32x32_cbf(&mut self, cabac: &mut ToyCabacEncoder, _node: VvcCodingTreeNode) {
-        // cbf_comp luma=1 for the 32x32 transform unit. The current path
-        // always emits a residual-bearing luma TU so the downstream residual
-        // syntax remains present.
-        cabac_ctx(cabac, true, 130, true);
-    }
-
-    fn emit_luma_32x32_residual_prefix(
-        &mut self,
-        cabac: &mut ToyCabacEncoder,
-        _node: VvcCodingTreeNode,
-    ) {
-        // TODO(vvc): Split residual_coding into named coefficient-group,
-        // last-position, significance, and level syntax from VVC 7.3.11.11.
-        cabac_ctx(cabac, true, 84, true);
-        cabac_ctx(cabac, true, 84, true);
-    }
-
-    fn emit_luma_32x32_residual_scan_prefix(
-        &mut self,
-        cabac: &mut ToyCabacEncoder,
-        _node: VvcCodingTreeNode,
-    ) {
-        // TODO(vvc): Replace this with named residual_coding syntax once the
-        // coefficient scan position and group flags are derived from the
-        // residual path.
-        cabac_ctx(cabac, true, 60, true);
-        cabac_ctx(cabac, true, 130, true);
-        cabac_ctx(cabac, true, 76, true);
-        cabac_ctx(cabac, false, 178, false);
-    }
-
-    fn emit_luma_32x32_residual_scan_tail(
-        &mut self,
-        cabac: &mut ToyCabacEncoder,
-        _node: VvcCodingTreeNode,
-    ) {
-        // TODO(vvc): Replace these coefficient-position/context bins with
-        // generated residual_coding syntax driven by transform output.
-        cabac_ctx(cabac, true, 140, true);
-        cabac_ctx(cabac, true, 84, true);
-        cabac_ctx(cabac, true, 106, true);
-        cabac_ctx(cabac, true, 68, true);
-        cabac_ctx(cabac, true, 166, true);
-        cabac_ctx(cabac, false, 92, true);
-    }
-
-    fn emit_luma_32x32_residual_bypass_suffix(
-        &mut self,
-        cabac: &mut ToyCabacEncoder,
-        _node: VvcCodingTreeNode,
-    ) {
-        // TODO(vvc): Replace this with named residual bypass syntax
-        // (suffix/remainder/sign bins) from generated coefficient levels.
-        cabac.encode_bin_ep(true);
-        cabac.encode_bin_ep(true);
-        cabac.encode_bin_ep(false);
+    fn emit_chroma_dm_mode(&mut self, cabac: &mut ToyCabacEncoder, node: VvcCodingTreeNode) {
+        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
+        // For the current dual-tree 4:2:0 path, choose derived chroma mode:
+        // CCLM disabled for this CU (cclm_mode_flag=0), then
+        // intra_chroma_pred_mode=0 to select DM_CHROMA_IDX.
+        self.contexts
+            .encode(cabac, ToyVvcCabacContext::CclmModeFlag, false);
+        self.contexts
+            .encode(cabac, ToyVvcCabacContext::IntraChromaPredMode, false);
     }
 }
 
@@ -3092,6 +3219,7 @@ fn encode_32x32_luma_body(cabac: &mut ToyCabacEncoder) {
     encode_32x32_luma_body_inner(cabac, true, true, true, true, true, true, true, true, true);
 }
 
+#[allow(dead_code)]
 fn encode_32x32_luma_leaf_after_residual_bypass_suffix_body(cabac: &mut ToyCabacEncoder) {
     encode_32x32_luma_body_inner(
         cabac, false, false, false, false, false, false, false, false, false,
@@ -3902,7 +4030,10 @@ impl ToyCabacEncoder {
                 self.write_out();
             }
         } else if self.range < 256 {
-            let num_bits = renorm_bits(self.range);
+            // VVC BinProbModel_Std::getRenormBitsRange() is fixed to 1 for
+            // MPS renormalization. LPS renormalization still uses the table
+            // equivalent implemented by renorm_bits().
+            let num_bits = 1;
             self.bits_left -= num_bits as i32;
             self.low <<= num_bits;
             self.range <<= num_bits;
@@ -5154,7 +5285,7 @@ mod tests {
         let mut ctx = ToyVvcCabacContexts::new();
         let split0 = &ctx.split_flag[0];
         assert!(!split0.mps());
-        assert_eq!(split0.lps(510), 71);
+        assert_eq!(split0.lps(510), 146);
         let initial_state = split0.state();
 
         let mut cabac = ToyCabacEncoder::new();

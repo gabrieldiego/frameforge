@@ -27,6 +27,7 @@ module ff_vvc_generated_cabac_body #(
   typedef logic [CABAC_STATE_BITS - 1:0] cabac_state_t;
   typedef logic [VVC_PROB_MODEL_BITS - 1:0] vvc_prob_model_t;
   typedef logic [CABAC_STATE_BITS + VVC_PROB_MODEL_BITS - 1:0] cabac_vvc_model_step_t;
+  typedef logic [CABAC_STATE_BITS + 5 * VVC_PROB_MODEL_BITS - 1:0] cabac_luma_leaf_step_t;
 
   always @* begin
     supported =
@@ -157,6 +158,13 @@ module ff_vvc_generated_cabac_body #(
     logic [7:0] child_width;
     logic [7:0] child_height;
     vvc_prob_model_t split_child_ctx;
+    vvc_prob_model_t split_chroma_ctx;
+    vvc_prob_model_t multi_ref_line_ctx;
+    vvc_prob_model_t intra_mpm_ctx;
+    vvc_prob_model_t intra_planar_ctx;
+    vvc_prob_model_t qt_cbf_y_ctx;
+    vvc_prob_model_t qt_cbf_cb_ctx;
+    vvc_prob_model_t qt_cbf_cr_ctx;
     begin
       st = st_in;
       child_width = root_width[8:1];
@@ -166,12 +174,27 @@ module ff_vvc_generated_cabac_body #(
         vvc_split_flag_log2_window(vvc_split_cu_ctx_full_child_no_neighbours()),
         32
       );
+      split_chroma_ctx = vvc_prob_model_init(
+        vvc_split_flag_init(vvc_split_cu_ctx_chroma_root_no_neighbours()),
+        vvc_split_flag_log2_window(vvc_split_cu_ctx_chroma_root_no_neighbours()),
+        32
+      );
+      multi_ref_line_ctx = vvc_prob_model_init(vvc_multi_ref_line_idx_init(4'd0), vvc_multi_ref_line_idx_log2_window(4'd0), 32);
+      intra_mpm_ctx = vvc_prob_model_init(vvc_intra_luma_mpm_flag_init(), vvc_intra_luma_mpm_flag_log2_window(), 32);
+      intra_planar_ctx = vvc_prob_model_init(vvc_intra_luma_planar_flag_init(4'd1), vvc_intra_luma_planar_flag_log2_window(4'd1), 32);
+      qt_cbf_y_ctx = vvc_prob_model_init(vvc_qt_cbf_y_init(4'd0), vvc_qt_cbf_y_log2_window(4'd0), 32);
+      qt_cbf_cb_ctx = vvc_prob_model_init(vvc_qt_cbf_cb_init(4'd0), vvc_qt_cbf_cb_log2_window(4'd0), 32);
+      qt_cbf_cr_ctx = vvc_prob_model_init(vvc_qt_cbf_cr_init(4'd0), vvc_qt_cbf_cr_log2_window(4'd0), 32);
       st = encode_ctu_qt_split(st, 8'd0, 8'd0, root_width[7:0], root_height[7:0], 3'd0, 3'd0);
-      {split_child_ctx, st} = encode_ctu_luma_leaf(st, split_child_ctx, rem, 8'd0, 8'd0, child_width, child_height, 3'd1, 3'd0);
-      {split_child_ctx, st} = encode_ctu_luma_leaf(st, split_child_ctx, rem, child_width, 8'd0, child_width, child_height, 3'd1, 3'd0);
-      {split_child_ctx, st} = encode_ctu_luma_leaf(st, split_child_ctx, rem, 8'd0, child_height, child_width, child_height, 3'd1, 3'd0);
-      {split_child_ctx, st} = encode_ctu_luma_leaf(st, split_child_ctx, rem, child_width, child_height, child_width, child_height, 3'd1, 3'd0);
-      st = encode_ctu_chroma_32x32_tree(st, c_rem);
+      {split_child_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, st} =
+        encode_ctu_luma_leaf(st, split_child_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, rem, 8'd0, 8'd0, child_width, child_height, 3'd1, 3'd0);
+      {split_child_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, st} =
+        encode_ctu_luma_leaf(st, split_child_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, rem, child_width, 8'd0, child_width, child_height, 3'd1, 3'd0);
+      {split_child_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, st} =
+        encode_ctu_luma_leaf(st, split_child_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, rem, 8'd0, child_height, child_width, child_height, 3'd1, 3'd0);
+      {split_child_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, st} =
+        encode_ctu_luma_leaf(st, split_child_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, rem, child_width, child_height, child_width, child_height, 3'd1, 3'd0);
+      st = encode_ctu_chroma_leaf(st, split_chroma_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, c_rem, 8'd0, 8'd0, child_width, child_height, 3'd1, 3'd0);
       encode_partitioned_ctu_tree = st;
     end
   endfunction
@@ -187,24 +210,16 @@ module ff_vvc_generated_cabac_body #(
   );
     cabac_state_t st;
     vvc_prob_model_t split_ctx;
-    logic [3:0] split_qt_ctx;
     begin
       st = st_in;
-      // VVC 7.3.11.4 coding_tree emits split_cu_flag followed by split_qt_flag
-      // when a QT split is selected. This function carries the block geometry
-      // so future ctxInc selection can be derived from the syntax state instead
-      // of from a geometry-specific function name.
-      // VVC split_cu_mode encodes split=1 as CABAC bin 0 in this current path.
+      // VVC 7.3.11.4 coding_tree emits split_cu_flag for the 64x64 root. In
+      // this subset binary/ternary root splits are unavailable, so split_qt_flag
+      // is inferred and no CABAC bin is written for it.
+      // VVC CABACWriter::split_cu_mode writes split_cu_flag as !isNo, so a
+      // QT split is encoded as bin 1.
       split_ctx = vvc_prob_model_init(
         vvc_split_flag_init(vvc_split_cu_ctx_qt_only_root()),
         vvc_split_flag_log2_window(vvc_split_cu_ctx_qt_only_root()),
-        32
-      );
-      {split_ctx, st} = cabac_encode_vvc_model_bin(st, split_ctx, 1'b0);
-      split_qt_ctx = vvc_split_qt_flag_ctx(1'b0, 1'b0, cqt_depth);
-      split_ctx = vvc_prob_model_init(
-        vvc_split_qt_flag_init(split_qt_ctx),
-        vvc_split_qt_flag_log2_window(split_qt_ctx),
         32
       );
       {split_ctx, st} = cabac_encode_vvc_model_bin(st, split_ctx, 1'b1);
@@ -212,9 +227,13 @@ module ff_vvc_generated_cabac_body #(
     end
   endfunction
 
-  function automatic cabac_vvc_model_step_t encode_ctu_luma_leaf(
+  function automatic cabac_luma_leaf_step_t encode_ctu_luma_leaf(
     input cabac_state_t st_in,
     input vvc_prob_model_t split_ctx_in,
+    input vvc_prob_model_t multi_ref_line_ctx_in,
+    input vvc_prob_model_t intra_mpm_ctx_in,
+    input vvc_prob_model_t intra_planar_ctx_in,
+    input vvc_prob_model_t qt_cbf_y_ctx_in,
     input logic [4:0]   rem,
     input logic [7:0]   cb_x,
     input logic [7:0]   cb_y,
@@ -225,17 +244,41 @@ module ff_vvc_generated_cabac_body #(
   );
     cabac_state_t st;
     vvc_prob_model_t split_ctx;
+    vvc_prob_model_t multi_ref_line_ctx;
+    vvc_prob_model_t intra_mpm_ctx;
+    vvc_prob_model_t intra_planar_ctx;
+    vvc_prob_model_t qt_cbf_y_ctx;
     begin
       {split_ctx, st} = encode_ctu_luma_leaf_split(st_in, split_ctx_in, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
-      st = encode_ctu_luma_32x32_intra_mode_prefix(st, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
-      st = encode_ctu_luma_32x32_intra_mode_context_prefix(st, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
-      st = encode_ctu_luma_32x32_cbf(st, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
-      st = encode_ctu_luma_32x32_residual_prefix(st, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
-      st = encode_ctu_luma_32x32_residual_scan_prefix(st, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
-      st = encode_ctu_luma_32x32_residual_scan_tail(st, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
-      st = encode_ctu_luma_32x32_residual_bypass_suffix(st, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
-      st = encode_32x32_luma_leaf_after_residual_bypass_suffix_tree(st, rem);
-      encode_ctu_luma_leaf = {split_ctx, st};
+      {multi_ref_line_ctx, st} = encode_ctu_luma_multi_ref_line(st, multi_ref_line_ctx_in, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
+      {intra_mpm_ctx, intra_planar_ctx, st} = encode_ctu_luma_intra_planar_mode(st, intra_mpm_ctx_in, intra_planar_ctx_in, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
+      {qt_cbf_y_ctx, st} = encode_ctu_luma_cbf(st, qt_cbf_y_ctx_in, 1'b0, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
+      encode_ctu_luma_leaf = {split_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, st};
+    end
+  endfunction
+
+  function automatic cabac_vvc_model_step_t encode_ctu_luma_multi_ref_line(
+    input cabac_state_t st_in,
+    input vvc_prob_model_t multi_ref_line_ctx_in,
+    input logic [7:0]   cb_x,
+    input logic [7:0]   cb_y,
+    input logic [7:0]   cb_width,
+    input logic [7:0]   cb_height,
+    input logic [2:0]   cqt_depth,
+    input logic [2:0]   mtt_depth
+  );
+    cabac_state_t st;
+    vvc_prob_model_t multi_ref_line_ctx;
+    begin
+      multi_ref_line_ctx = multi_ref_line_ctx_in;
+      st = st_in;
+      // With sps_mrl_enabled_flag set, VVC extend_ref_line emits
+      // MultiRefLineIdx(0) for intra luma CUs that are not on the first luma
+      // line of the CTU. FrameForge currently always selects reference line 0.
+      if (cb_y != 8'd0) begin
+        {multi_ref_line_ctx, st} = cabac_encode_vvc_model_bin(st, multi_ref_line_ctx, 1'b0);
+      end
+      encode_ctu_luma_multi_ref_line = {multi_ref_line_ctx, st};
     end
   endfunction
 
@@ -255,13 +298,15 @@ module ff_vvc_generated_cabac_body #(
       // VVC 7.3.11.4 reaches coding_unit when split_cu_flag is false. This
       // uses the split_cu_flag ctxInc derived by VVC 9.3.4.2.2 for this CTU
       // child and maintains that context across the four child leaves.
-      {split_ctx, st} = cabac_encode_vvc_model_bin(st_in, split_ctx_in, 1'b1);
+      {split_ctx, st} = cabac_encode_vvc_model_bin(st_in, split_ctx_in, 1'b0);
       encode_ctu_luma_leaf_split = {split_ctx, st};
     end
   endfunction
 
-  function automatic cabac_state_t encode_ctu_luma_32x32_intra_mode_prefix(
+  function automatic logic [2 * VVC_PROB_MODEL_BITS + CABAC_STATE_BITS - 1:0] encode_ctu_luma_intra_planar_mode(
     input cabac_state_t st_in,
+    input vvc_prob_model_t intra_mpm_ctx_in,
+    input vvc_prob_model_t intra_planar_ctx_in,
     input logic [7:0]   cb_x,
     input logic [7:0]   cb_y,
     input logic [7:0]   cb_width,
@@ -269,14 +314,20 @@ module ff_vvc_generated_cabac_body #(
     input logic [2:0]   cqt_depth,
     input logic [2:0]   mtt_depth
   );
+    cabac_state_t st;
+    vvc_prob_model_t intra_mpm_ctx;
+    vvc_prob_model_t intra_planar_ctx;
     begin
-      // TODO(vvc): Replace with the full intra_luma_pred_modes syntax writer.
-      encode_ctu_luma_32x32_intra_mode_prefix = cabac_encode_bin_ep(st_in, 1'b0);
+      {intra_mpm_ctx, st} = cabac_encode_vvc_model_bin(st_in, intra_mpm_ctx_in, 1'b1);
+      {intra_planar_ctx, st} = cabac_encode_vvc_model_bin(st, intra_planar_ctx_in, 1'b0);
+      encode_ctu_luma_intra_planar_mode = {intra_mpm_ctx, intra_planar_ctx, st};
     end
   endfunction
 
-  function automatic cabac_state_t encode_ctu_luma_32x32_intra_mode_context_prefix(
+  function automatic cabac_vvc_model_step_t encode_ctu_luma_cbf(
     input cabac_state_t st_in,
+    input vvc_prob_model_t qt_cbf_y_ctx_in,
+    input logic         cbf,
     input logic [7:0]   cb_x,
     input logic [7:0]   cb_y,
     input logic [7:0]   cb_width,
@@ -284,10 +335,44 @@ module ff_vvc_generated_cabac_body #(
     input logic [2:0]   cqt_depth,
     input logic [2:0]   mtt_depth
   );
+    cabac_state_t st;
+    vvc_prob_model_t qt_cbf_y_ctx;
     begin
-      // TODO(vvc): Replace this with the complete VVC 7.3.11.5
-      // intra_luma_pred_modes writer and ctxInc derivation.
-      encode_ctu_luma_32x32_intra_mode_context_prefix = cabac_encode_bin(st_in, 1'b1, 9'd88, 1'b1);
+      {qt_cbf_y_ctx, st} = cabac_encode_vvc_model_bin(st_in, qt_cbf_y_ctx_in, cbf);
+      encode_ctu_luma_cbf = {qt_cbf_y_ctx, st};
+    end
+  endfunction
+
+  function automatic cabac_state_t encode_ctu_chroma_leaf(
+    input cabac_state_t st_in,
+    input vvc_prob_model_t split_ctx_in,
+    input vvc_prob_model_t qt_cbf_cb_ctx_in,
+    input vvc_prob_model_t qt_cbf_cr_ctx_in,
+    input logic [4:0]   c_rem,
+    input logic [7:0]   cb_x,
+    input logic [7:0]   cb_y,
+    input logic [7:0]   cb_width,
+    input logic [7:0]   cb_height,
+    input logic [2:0]   cqt_depth,
+    input logic [2:0]   mtt_depth
+  );
+    cabac_state_t st;
+    vvc_prob_model_t split_ctx;
+    vvc_prob_model_t qt_cbf_cb_ctx;
+    vvc_prob_model_t qt_cbf_cr_ctx;
+    vvc_prob_model_t cclm_mode_ctx;
+    vvc_prob_model_t intra_chroma_pred_ctx;
+    begin
+      cclm_mode_ctx = vvc_prob_model_init(vvc_cclm_mode_flag_init(), vvc_cclm_mode_flag_log2_window(), 32);
+      intra_chroma_pred_ctx = vvc_prob_model_init(vvc_intra_chroma_pred_mode_init(), vvc_intra_chroma_pred_mode_log2_window(), 32);
+      {split_ctx, st} = cabac_encode_vvc_model_bin(st_in, split_ctx_in, 1'b0);
+      // Select derived chroma mode for this dual-tree chroma CU:
+      // cclm_mode_flag=0, intra_chroma_pred_mode=0.
+      {cclm_mode_ctx, st} = cabac_encode_vvc_model_bin(st, cclm_mode_ctx, 1'b0);
+      {intra_chroma_pred_ctx, st} = cabac_encode_vvc_model_bin(st, intra_chroma_pred_ctx, 1'b0);
+      {qt_cbf_cb_ctx, st} = cabac_encode_vvc_model_bin(st, qt_cbf_cb_ctx_in, 1'b0);
+      {qt_cbf_cr_ctx, st} = cabac_encode_vvc_model_bin(st, qt_cbf_cr_ctx_in, 1'b0);
+      encode_ctu_chroma_leaf = st;
     end
   endfunction
 
@@ -1202,8 +1287,8 @@ module ff_vvc_generated_cabac_body #(
       p_state = inistate[15:0] << 8;
       rate0 = 2 + ((log2_window_size >> 2) & 3);
       rate1 = 3 + rate0 + (log2_window_size & 3);
-      vvc_prob_model_init[0 +: 16] = (p_state >> 1) & 16'h7fe0;
-      vvc_prob_model_init[16 +: 16] = (p_state >> 1) & 16'h7ffe;
+      vvc_prob_model_init[0 +: 16] = p_state & 16'h7fe0;
+      vvc_prob_model_init[16 +: 16] = p_state & 16'h7ffe;
       vvc_prob_model_init[32 +: 8] = ((rate0 & 8'h0f) << 4) | (rate1 & 8'h0f);
     end
   endfunction
@@ -1260,6 +1345,17 @@ module ff_vvc_generated_cabac_body #(
         1'b1, 1'b1,
         1'b1, 1'b1,
         1'b1
+      );
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_split_cu_ctx_chroma_root_no_neighbours();
+    begin
+      vvc_split_cu_ctx_chroma_root_no_neighbours = vvc_split_cu_flag_ctx(
+        1'b0, 1'b0,
+        1'b1, 1'b1,
+        1'b1, 1'b1,
+        1'b0
       );
     end
   endfunction
@@ -1361,7 +1457,9 @@ module ff_vvc_generated_cabac_body #(
           st = cabac_write_out(st);
         end
       end else if (range < 16'd256) begin
-        num_bits = renorm_bits_sv(range);
+        // VVC BinProbModel_Std::getRenormBitsRange() is fixed to one bit for
+        // MPS renormalization. LPS renormalization still uses renorm_bits_sv().
+        num_bits = 4'd1;
         bits_left = bits_left - num_bits;
         low = low << num_bits;
         range = range << num_bits;
@@ -1711,6 +1809,138 @@ module ff_vvc_generated_cabac_body #(
         4'd3: vvc_split_qt_flag_log2_window = 4'd12;
         4'd4: vvc_split_qt_flag_log2_window = 4'd12;
         default: vvc_split_qt_flag_log2_window = 4'd8;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [7:0] vvc_multi_ref_line_idx_init(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_multi_ref_line_idx_init = 8'd25;
+        default: vvc_multi_ref_line_idx_init = 8'd60;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_multi_ref_line_idx_log2_window(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_multi_ref_line_idx_log2_window = 4'd5;
+        default: vvc_multi_ref_line_idx_log2_window = 4'd8;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [7:0] vvc_intra_luma_mpm_flag_init();
+    begin
+      vvc_intra_luma_mpm_flag_init = 8'd45;
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_intra_luma_mpm_flag_log2_window();
+    begin
+      vvc_intra_luma_mpm_flag_log2_window = 4'd6;
+    end
+  endfunction
+
+  function automatic logic [7:0] vvc_intra_luma_planar_flag_init(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_intra_luma_planar_flag_init = 8'd13;
+        default: vvc_intra_luma_planar_flag_init = 8'd28;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_intra_luma_planar_flag_log2_window(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_intra_luma_planar_flag_log2_window = 4'd1;
+        default: vvc_intra_luma_planar_flag_log2_window = 4'd5;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [7:0] vvc_cclm_mode_flag_init();
+    begin
+      vvc_cclm_mode_flag_init = 8'd59;
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_cclm_mode_flag_log2_window();
+    begin
+      vvc_cclm_mode_flag_log2_window = 4'd9;
+    end
+  endfunction
+
+  function automatic logic [7:0] vvc_intra_chroma_pred_mode_init();
+    begin
+      vvc_intra_chroma_pred_mode_init = 8'd34;
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_intra_chroma_pred_mode_log2_window();
+    begin
+      vvc_intra_chroma_pred_mode_log2_window = 4'd9;
+    end
+  endfunction
+
+  function automatic logic [7:0] vvc_qt_cbf_y_init(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_qt_cbf_y_init = 8'd15;
+        4'd1: vvc_qt_cbf_y_init = 8'd12;
+        4'd2: vvc_qt_cbf_y_init = 8'd5;
+        default: vvc_qt_cbf_y_init = 8'd7;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_qt_cbf_y_log2_window(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_qt_cbf_y_log2_window = 4'd5;
+        4'd1: vvc_qt_cbf_y_log2_window = 4'd1;
+        4'd2: vvc_qt_cbf_y_log2_window = 4'd8;
+        default: vvc_qt_cbf_y_log2_window = 4'd9;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [7:0] vvc_qt_cbf_cb_init(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_qt_cbf_cb_init = 8'd12;
+        default: vvc_qt_cbf_cb_init = 8'd21;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_qt_cbf_cb_log2_window(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_qt_cbf_cb_log2_window = 4'd5;
+        default: vvc_qt_cbf_cb_log2_window = 4'd0;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [7:0] vvc_qt_cbf_cr_init(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_qt_cbf_cr_init = 8'd33;
+        4'd1: vvc_qt_cbf_cr_init = 8'd28;
+        default: vvc_qt_cbf_cr_init = 8'd36;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_qt_cbf_cr_log2_window(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_qt_cbf_cr_log2_window = 4'd2;
+        4'd1: vvc_qt_cbf_cr_log2_window = 4'd1;
+        default: vvc_qt_cbf_cr_log2_window = 4'd0;
       endcase
     end
   endfunction

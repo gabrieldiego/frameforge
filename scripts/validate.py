@@ -323,13 +323,13 @@ def vtm_decode_supported(input_path: Path, info: InputInfo) -> bool:
             and coded_dimension(info.width) <= 64
             and coded_dimension(info.height) <= 64
         )
-    # The clean-room slice entropy body is currently mapped to VTM's
-    # coding-tree syntax for the generic 8x8 path plus generated 16x16
-    # and 32x32 paths. 64x64 is still generated internally by SW/RTL, but
-    # its coding-tree syntax is not yet VTM-decodable.
     if coded_dimension(info.width) == 8 and coded_dimension(info.height) == 8:
         return True
-    return is_toy_16x16_generated_path(info) or is_toy_32x32_generated_path(info)
+    return (
+        is_toy_16x16_generated_path(info)
+        or is_toy_32x32_generated_path(info)
+        or is_toy_64x64_generated_path(info)
+    )
 
 
 def coded_dimension(value: int) -> int:
@@ -464,20 +464,11 @@ def cropped_toy_32x32_generated_recon(info: InputInfo) -> bytes:
 
 
 def cropped_toy_64x64_generated_recon(info: InputInfo) -> bytes:
-    frame_64 = tile_yuv420p8_frame(
-        TOY_32X32_SCRIPTED_RECON,
-        source_width=32,
-        source_height=32,
-        tiled_width=64,
-        tiled_height=64,
-    )
-    return crop_yuv420p8_frame(
-        frame_64,
-        coded_width=64,
-        coded_height=64,
-        visible_width=info.width,
-        visible_height=info.height,
-    )
+    # The current 64x64 path emits planar intra prediction with no residuals.
+    # VTM reconstructs the neutral 8-bit sample value for Y, Cb, and Cr.
+    luma_len = info.width * info.height
+    chroma_len = luma_len // 4
+    return bytes([128] * (luma_len + 2 * chroma_len))
 
 
 def tile_yuv420p8_frame(
