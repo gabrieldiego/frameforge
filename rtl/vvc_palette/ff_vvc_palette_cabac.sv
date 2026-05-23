@@ -68,7 +68,11 @@ module ff_vvc_palette_cabac #(
   logic [(31 * 8) - 1:0] current_entry_y_q;
   logic [(31 * 8) - 1:0] current_entry_cb_q;
   logic [(31 * 8) - 1:0] current_entry_cr_q;
-  logic [(64 * 8) - 1:0] current_indices_q;
+  logic [(16 * 8) - 1:0] current_scan_indices_q;
+  logic [15:0]    current_run_copy_flags_q;
+  logic [7:0]     current_previous_index_q;
+  logic [7:0]     current_prev_run_pos_q;
+  logic [7:0]     current_prev_subblock_last_index_q;
 
   assign s_axis_ready = enable;
   assign compat_payload_bit_len = palette_state_q.cabac.bit_count;
@@ -106,14 +110,12 @@ module ff_vvc_palette_cabac #(
         end
       end
       PALETTE_PKT_INDEX: begin
-        if ((current_index_count_q + 8'd1) == 8'd64) begin
-          next_palette_state = palette_444_encode_index_map(
+        next_palette_state = palette_444_encode_index_symbol(
             palette_state_q,
             current_palette_size_q,
             current_index_count_q,
             s_axis_data[7:0]
           );
-        end
       end
       default: begin
         next_palette_state = palette_state_q;
@@ -131,7 +133,11 @@ module ff_vvc_palette_cabac #(
       current_entry_y_q <= '0;
       current_entry_cb_q <= '0;
       current_entry_cr_q <= '0;
-      current_indices_q <= '0;
+      current_scan_indices_q <= '0;
+      current_run_copy_flags_q <= 16'd0;
+      current_previous_index_q <= 8'd0;
+      current_prev_run_pos_q <= 8'd0;
+      current_prev_subblock_last_index_q <= 8'd0;
     end else if (clear || !enable) begin
       stream_symbol_index_q <= 8'd0;
       palette_state_q <= palette_start();
@@ -141,7 +147,11 @@ module ff_vvc_palette_cabac #(
       current_entry_y_q <= '0;
       current_entry_cb_q <= '0;
       current_entry_cr_q <= '0;
-      current_indices_q <= '0;
+      current_scan_indices_q <= '0;
+      current_run_copy_flags_q <= 16'd0;
+      current_previous_index_q <= 8'd0;
+      current_prev_run_pos_q <= 8'd0;
+      current_prev_subblock_last_index_q <= 8'd0;
     end else if (s_axis_valid && s_axis_ready) begin
       if (s_axis_last) begin
         palette_state_q <= palette_finish(next_palette_state);
@@ -152,7 +162,11 @@ module ff_vvc_palette_cabac #(
         current_entry_y_q <= '0;
         current_entry_cb_q <= '0;
         current_entry_cr_q <= '0;
-        current_indices_q <= '0;
+        current_scan_indices_q <= '0;
+        current_run_copy_flags_q <= 16'd0;
+        current_previous_index_q <= 8'd0;
+        current_prev_run_pos_q <= 8'd0;
+        current_prev_subblock_last_index_q <= 8'd0;
       end else begin
         palette_state_q <= next_palette_state;
         case (s_axis_data[31:28])
@@ -167,7 +181,11 @@ module ff_vvc_palette_cabac #(
             current_entry_y_q <= '0;
             current_entry_cb_q <= '0;
             current_entry_cr_q <= '0;
-            current_indices_q <= '0;
+            current_scan_indices_q <= '0;
+            current_run_copy_flags_q <= 16'd0;
+            current_previous_index_q <= 8'd0;
+            current_prev_run_pos_q <= 8'd0;
+            current_prev_subblock_last_index_q <= 8'd0;
           end
           PALETTE_PKT_ENTRY: begin
             current_entry_y_q[(current_entry_count_q * 8) +: 8] <= s_axis_data[23:16];
@@ -176,7 +194,17 @@ module ff_vvc_palette_cabac #(
             current_entry_count_q <= current_entry_count_q + 8'd1;
           end
           PALETTE_PKT_INDEX: begin
-            current_indices_q[(current_index_count_q * 8) +: 8] <= s_axis_data[7:0];
+            current_scan_indices_q[(current_index_count_q[3:0] * 8) +: 8] <= s_axis_data[7:0];
+            current_run_copy_flags_q[current_index_count_q[3:0]] <=
+              (current_index_count_q > 8'd0) && (s_axis_data[7:0] == current_previous_index_q);
+            if ((current_index_count_q == 8'd0) ||
+                (s_axis_data[7:0] != current_previous_index_q)) begin
+              current_prev_run_pos_q <= current_index_count_q;
+            end
+            current_previous_index_q <= s_axis_data[7:0];
+            if (current_index_count_q[3:0] == 4'd15) begin
+              current_prev_subblock_last_index_q <= s_axis_data[7:0];
+            end
             current_index_count_q <= current_index_count_q + 8'd1;
           end
           default: begin
@@ -316,82 +344,65 @@ module ff_vvc_palette_cabac #(
     end
   endfunction
 
-  function automatic palette_state_t palette_444_encode_index_map(
+  function automatic palette_state_t palette_444_encode_index_symbol(
     input palette_state_t pst_in,
     input logic [7:0] palette_size,
     input logic [7:0] index_count,
-    input logic [7:0] final_index
+    input logic [7:0] current_index
   );
     palette_state_t pst;
     cabac_state_t st;
-    logic [7:0] scan_indices [0:63];
-    logic [15:0] scan_x [0:63];
-    logic [15:0] scan_y [0:63];
-    logic [15:0] x;
-    logic [15:0] y;
-    logic [7:0] current_index;
+    logic [(16 * 8) - 1:0] subblock_indices;
+    logic [15:0] run_copy_flags;
     logic [7:0] previous_index;
-    logic [7:0] prev_run_pos;
+    logic [7:0] global_pos;
     logic [7:0] run_dist;
     logic identity;
-    logic run_copy_flags [0:15];
     logic [31:0] max_symbol;
     logic [31:0] level;
+    logic [7:0] prev_level_index;
     begin
       pst = pst_in;
       if (palette_size <= 8'd1) begin
-        palette_444_encode_index_map = pst;
+        palette_444_encode_index_symbol = pst;
       end else begin
-        for (int pos = 0; pos < 64; pos = pos + 1) begin
-          y = pos[15:0] >> 3;
-          if (y[0] == 1'b0) begin
-            x = pos[2:0];
-          end else begin
-            x = 16'd7 - {13'd0, pos[2:0]};
-          end
-          scan_x[pos] = x;
-          scan_y[pos] = y;
-          if ((y * 16'd8 + x) == {8'd0, index_count}) begin
-            scan_indices[pos] = final_index;
-          end else begin
-            scan_indices[pos] = current_indices_q[((y * 16'd8 + x) * 8) +: 8];
+        subblock_indices = current_scan_indices_q;
+        run_copy_flags = current_run_copy_flags_q;
+        subblock_indices[(index_count[3:0] * 8) +: 8] = current_index;
+        identity = (index_count > 8'd0) && (current_index == current_previous_index_q);
+        run_copy_flags[index_count[3:0]] = identity;
+
+        if (index_count == 8'd0) begin
+          pst = palette_encode_ctx(pst, PALETTE_CTX_ROTATION_FLAG, 1'b0);
+        end
+
+        if (index_count > 8'd0) begin
+          run_dist = index_count - current_prev_run_pos_q - 8'd1;
+          pst = palette_encode_ctx(pst, palette_idx_run_ctx_id(run_dist), identity);
+        end
+
+        if (!identity || (index_count == 8'd0)) begin
+          if ((index_count != 8'd0) && (palette_scan_y(index_count) != 8'd0)) begin
+            pst = palette_encode_ctx(pst, PALETTE_CTX_RUN_TYPE_FLAG, 1'b0);
           end
         end
 
-        pst = palette_encode_ctx(pst, PALETTE_CTX_ROTATION_FLAG, 1'b0);
-        prev_run_pos = 8'd0;
-        previous_index = 8'd0;
-
-        for (int min_sub_pos = 0; min_sub_pos < 64; min_sub_pos = min_sub_pos + 16) begin
-          for (int flag_idx = 0; flag_idx < 16; flag_idx = flag_idx + 1) begin
-            run_copy_flags[flag_idx] = 1'b0;
-          end
-
-          for (int cur_pos = min_sub_pos; cur_pos < min_sub_pos + 16; cur_pos = cur_pos + 1) begin
-            current_index = scan_indices[cur_pos];
-            identity = (cur_pos > 0) && (current_index == previous_index);
-            run_copy_flags[cur_pos - min_sub_pos] = identity;
-            if (cur_pos > 0) begin
-              run_dist = cur_pos[7:0] - prev_run_pos - 8'd1;
-              pst = palette_encode_ctx(pst, palette_idx_run_ctx_id(run_dist), identity);
-            end
-            if (!identity || (cur_pos == 0)) begin
-              prev_run_pos = cur_pos[7:0];
-              if ((cur_pos != 0) && (scan_y[cur_pos] != 16'd0)) begin
-                pst = palette_encode_ctx(pst, PALETTE_CTX_RUN_TYPE_FLAG, 1'b0);
-              end
-            end
-            previous_index = current_index;
-          end
-
+        if (index_count[3:0] == 4'd15) begin
           st = pst.cabac;
-          for (int cur_pos = min_sub_pos; cur_pos < min_sub_pos + 16; cur_pos = cur_pos + 1) begin
-            if (!run_copy_flags[cur_pos - min_sub_pos]) begin
-              max_symbol = {24'd0, palette_size} - ((cur_pos > 0) ? 32'd1 : 32'd0);
+          for (int local_pos = 0; local_pos < 16; local_pos = local_pos + 1) begin
+            global_pos = {index_count[7:4], 4'd0} + local_pos[7:0];
+            if (!run_copy_flags[local_pos]) begin
+              max_symbol = {24'd0, palette_size} - ((global_pos > 0) ? 32'd1 : 32'd0);
               if (max_symbol > 32'd1) begin
-                level = {24'd0, scan_indices[cur_pos]};
-                if (cur_pos > 0) begin
-                  if (level > {24'd0, scan_indices[cur_pos - 1]}) begin
+                level = {24'd0, subblock_indices[(local_pos * 8) +: 8]};
+                if (global_pos > 8'd0) begin
+                  if (local_pos == 0) begin
+                    previous_index = current_prev_subblock_last_index_q;
+                  end else begin
+                    previous_index = subblock_indices[((local_pos - 1) * 8) +: 8];
+                  end
+                  prev_level_index = previous_index;
+                  if (level > {24'd0, prev_level_index}) begin
                     level = level - 32'd1;
                   end
                 end
@@ -401,8 +412,14 @@ module ff_vvc_palette_cabac #(
           end
           pst.cabac = st;
         end
-        palette_444_encode_index_map = pst;
+        palette_444_encode_index_symbol = pst;
       end
+    end
+  endfunction
+
+  function automatic logic [7:0] palette_scan_y(input logic [7:0] scan_index);
+    begin
+      palette_scan_y = scan_index >> 3;
     end
   endfunction
 

@@ -233,7 +233,7 @@ module ff_vvc_palette_symbolizer #(
             m_axis_data <= {
               PALETTE_PKT_INDEX,
               20'd0,
-              cu_indices[drain_sample_index_q]
+              cu_indices[palette_scan_raster_index(drain_sample_index_q)]
             };
             m_axis_last <= ((drain_sample_index_q + 8'd1) >= cu_sample_count_q) &&
                            (drain_index_q == last_symbol_index);
@@ -417,6 +417,20 @@ module ff_vvc_palette_symbolizer #(
     begin
       count = (height + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE;
       palette_cu_count_y = count[7:0];
+    end
+  endfunction
+
+  function automatic logic [7:0] palette_scan_raster_index(input logic [7:0] scan_index);
+    logic [7:0] y;
+    logic [7:0] x;
+    begin
+      y = scan_index >> 3;
+      if (y[0] == 1'b0) begin
+        x = {5'd0, scan_index[2:0]};
+      end else begin
+        x = 8'd7 - {5'd0, scan_index[2:0]};
+      end
+      palette_scan_raster_index = (y * 8'd8) + x;
     end
   endfunction
 

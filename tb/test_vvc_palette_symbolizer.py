@@ -182,4 +182,12 @@ async def palette_symbolizer_streams_lossless_indices_for_multicolor_cu(dut):
     assert packet_entry_count(symbols[0]) == 2, [hex(symbol) for symbol in symbols[:6]]
     assert symbols[1:3] == [0x200A141E, 0x20C8D2DC]
     assert [packet_kind(symbol) for symbol in symbols[3:]] == [PKT_INDEX] * 64
-    assert [(symbol & 0xFF) for symbol in symbols[3:]] == [index % 2 for index in range(64)]
+    expected_indices = []
+    for y in range(8):
+        if y % 2 == 0:
+            x_iter = range(8)
+        else:
+            x_iter = range(7, -1, -1)
+        for x in x_iter:
+            expected_indices.append((y * 8 + x) % 2)
+    assert [(symbol & 0xFF) for symbol in symbols[3:]] == expected_indices

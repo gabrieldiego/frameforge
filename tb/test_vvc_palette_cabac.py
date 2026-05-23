@@ -61,9 +61,20 @@ def pack_palette_lossless_symbols(y, cb, cr, width=8, height=8):
     for entry_y, entry_cb, entry_cr in entries:
         symbols.append((0x2 << 28) | (entry_y << 16) | (entry_cb << 8) | entry_cr)
     if len(entries) > 1:
-        for index in indices:
+        for x, y_pos in palette_horizontal_scan_positions(width, height):
+            index = indices[y_pos * width + x]
             symbols.append((0x3 << 28) | index)
     return len(symbols), symbols
+
+
+def palette_horizontal_scan_positions(width, height):
+    for y_pos in range(height):
+        if y_pos % 2 == 0:
+            x_iter = range(width)
+        else:
+            x_iter = range(width - 1, -1, -1)
+        for x in x_iter:
+            yield x, y_pos
 
 
 def coding_order_tile(index, width, height):
