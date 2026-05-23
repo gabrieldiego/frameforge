@@ -611,19 +611,19 @@ module ff_vvc_encoder #(
   endfunction
 
   function automatic logic [12:0] stream_len_from_slice_payloads(input logic [1:0] frames);
-    logic [CABAC_PACKET_BITS - 1:0] first_slice;
-    logic [CABAC_PACKET_BITS - 1:0] second_slice;
+    logic [12:0] first_slice_len;
+    logic [12:0] second_slice_len;
     begin
-      first_slice = slice_payload_escaped_packet(1'b0);
-      second_slice = slice_payload_escaped_packet(1'b1);
+      first_slice_len = slice_payload_escaped_len_calc(1'b0);
+      second_slice_len = slice_payload_escaped_len_calc(1'b1);
       case (frames)
         2'd2: stream_len_from_slice_payloads =
           parameter_set_len() + color_filler_nal_len()
-          + NAL_OVERHEAD_LEN + first_slice[CABAC_PACKET_BITS - 1 -: 13]
-          + NAL_OVERHEAD_LEN + second_slice[CABAC_PACKET_BITS - 1 -: 13];
+          + NAL_OVERHEAD_LEN + first_slice_len
+          + NAL_OVERHEAD_LEN + second_slice_len;
         default: stream_len_from_slice_payloads =
           parameter_set_len() + color_filler_nal_len()
-          + NAL_OVERHEAD_LEN + first_slice[CABAC_PACKET_BITS - 1 -: 13];
+          + NAL_OVERHEAD_LEN + first_slice_len;
       endcase
     end
   endfunction
@@ -853,129 +853,6 @@ module ff_vvc_encoder #(
         3'd3: payload_byte = color_filler_payload_byte(payload_index);
         default: payload_byte = slice_payload_byte(payload_index, cra_picture);
       endcase
-    end
-  endfunction
-
-  function automatic logic [12:0] slice_payload_escaped_len(input logic cra_picture);
-    begin
-      slice_payload_escaped_len = slice_payload_len() + slice_payload_epb_count(cra_picture);
-    end
-  endfunction
-
-  function automatic logic [12:0] slice_payload_epb_count(input logic cra_picture);
-    logic [12:0] i;
-    logic [12:0] count;
-    logic [1:0] zero_count;
-    logic [7:0] raw_byte;
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] payload;
-    begin
-      payload = current_slice_payload_bits(cra_picture);
-      count = 13'd0;
-      zero_count = 2'd0;
-      for (i = 13'd0; i < slice_payload_len(); i = i + 13'd1) begin
-        raw_byte = slice_payload_byte_from_bits(payload, i);
-        if (zero_count >= 2'd2 && raw_byte <= 8'h03) begin
-          count = count + 13'd1;
-          zero_count = 2'd0;
-        end
-        if (raw_byte == 8'h00) begin
-          if (zero_count < 2'd2) begin
-            zero_count = zero_count + 2'd1;
-          end
-        end else begin
-          zero_count = 2'd0;
-        end
-      end
-      slice_payload_epb_count = count;
-    end
-  endfunction
-
-  function automatic logic [7:0] slice_payload_escaped_byte(
-    input logic [12:0] escaped_index,
-    input logic        cra_picture
-  );
-    logic [12:0] raw_index;
-    logic [12:0] out_index;
-    logic [1:0] zero_count;
-    logic [7:0] raw_byte;
-    logic found;
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] payload;
-    begin
-      payload = current_slice_payload_bits(cra_picture);
-      out_index = 13'd0;
-      zero_count = 2'd0;
-      found = 1'b0;
-      slice_payload_escaped_byte = 8'h00;
-
-      for (raw_index = 13'd0; raw_index < slice_payload_len(); raw_index = raw_index + 13'd1) begin
-        raw_byte = slice_payload_byte_from_bits(payload, raw_index);
-        if (!found && zero_count >= 2'd2 && raw_byte <= 8'h03) begin
-          if (out_index == escaped_index) begin
-            slice_payload_escaped_byte = 8'h03;
-            found = 1'b1;
-          end
-          out_index = out_index + 13'd1;
-          zero_count = 2'd0;
-        end
-
-        if (!found && out_index == escaped_index) begin
-          slice_payload_escaped_byte = raw_byte;
-          found = 1'b1;
-        end
-        out_index = out_index + 13'd1;
-
-        if (raw_byte == 8'h00) begin
-          if (zero_count < 2'd2) begin
-            zero_count = zero_count + 2'd1;
-          end
-        end else begin
-          zero_count = 2'd0;
-        end
-      end
-    end
-  endfunction
-
-  function automatic logic [CABAC_PACKET_BITS - 1:0] slice_payload_escaped_packet(
-    input logic cra_picture
-  );
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] raw_payload;
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] escaped_payload;
-    logic [12:0] raw_index;
-    logic [12:0] raw_len;
-    logic [12:0] escaped_len;
-    logic [1:0] zero_count;
-    logic [7:0] raw_byte;
-    begin
-      raw_payload = current_slice_payload_bits(cra_picture);
-      raw_len = slice_payload_len();
-      escaped_payload = '0;
-      escaped_len = 13'd0;
-      zero_count = 2'd0;
-
-      for (raw_index = 13'd0; raw_index < raw_len; raw_index = raw_index + 13'd1) begin
-        raw_byte = slice_payload_byte_from_bits(raw_payload, raw_index);
-        if (zero_count >= 2'd2 && raw_byte <= 8'h03) begin
-          escaped_payload = (escaped_payload << 8) | 8'h03;
-          escaped_len = escaped_len + 13'd1;
-          zero_count = 2'd0;
-        end
-
-        escaped_payload = (escaped_payload << 8) | raw_byte;
-        escaped_len = escaped_len + 13'd1;
-
-        if (raw_byte == 8'h00) begin
-          if (zero_count < 2'd2) begin
-            zero_count = zero_count + 2'd1;
-          end
-        end else begin
-          zero_count = 2'd0;
-        end
-      end
-
-      slice_payload_escaped_packet = {
-        escaped_len,
-        escaped_payload << (((MAX_SLICE_PAYLOAD_BITS >> 3) - escaped_len) * 8)
-      };
     end
   endfunction
 
