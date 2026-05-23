@@ -66,11 +66,11 @@ module ff_vvc_palette_cabac #(
     logic [7:0] partial_byte;
     logic [7:0] pending_count;
     logic [CABAC_PENDING_BYTES - 1:0][7:0] pending_bytes;
-  } cabac_capture_state_t;
+  } cabac_byte_stream_state_t;
 
   typedef struct packed {
     cabac_core_state_t core;
-    cabac_capture_state_t capture;
+    cabac_byte_stream_state_t stream;
   } cabac_writer_state_t;
 
   typedef struct packed {
@@ -96,9 +96,9 @@ module ff_vvc_palette_cabac #(
   logic           final_draining_q;
 
   assign s_axis_ready = enable && !m_axis_valid &&
-                        (palette_state_q.cabac.capture.pending_count == 8'd0);
-  assign stream_bit_count = palette_state_q.cabac.capture.bit_count;
-  assign stream_byte_count = palette_state_q.cabac.capture.byte_count;
+                        (palette_state_q.cabac.stream.pending_count == 8'd0);
+  assign stream_bit_count = palette_state_q.cabac.stream.bit_count;
+  assign stream_byte_count = palette_state_q.cabac.stream.byte_count;
   assign stream_symbol_selected = s_axis_data[24];
   assign finished_palette_state = palette_finish(next_palette_state);
   assign accepted_palette_state = s_axis_last ? finished_palette_state : next_palette_state;
@@ -179,10 +179,10 @@ module ff_vvc_palette_cabac #(
         m_axis_valid <= 1'b0;
         m_axis_data <= 8'd0;
         m_axis_last <= 1'b0;
-      end else if (popped_palette_state.cabac.capture.pending_count != 8'd0) begin
+      end else if (popped_palette_state.cabac.stream.pending_count != 8'd0) begin
         m_axis_data <= palette_pending_first_byte(popped_palette_state);
         m_axis_last <= final_draining_q &&
-                       (popped_palette_state.cabac.capture.pending_count == 8'd1);
+                       (popped_palette_state.cabac.stream.pending_count == 8'd1);
       end else begin
         m_axis_valid <= 1'b0;
         m_axis_data <= 8'd0;
@@ -241,12 +241,12 @@ module ff_vvc_palette_cabac #(
           end
         endcase
       end
-      if (accepted_palette_state.cabac.capture.pending_count != 8'd0) begin
+      if (accepted_palette_state.cabac.stream.pending_count != 8'd0) begin
         final_draining_q <= s_axis_last;
         m_axis_valid <= 1'b1;
         m_axis_data <= palette_pending_first_byte(accepted_palette_state);
         m_axis_last <= s_axis_last &&
-                       (accepted_palette_state.cabac.capture.pending_count == 8'd1);
+                       (accepted_palette_state.cabac.stream.pending_count == 8'd1);
       end
     end
   end
@@ -259,7 +259,7 @@ module ff_vvc_palette_cabac #(
       st = pst.cabac;
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);
-      st.capture = cabac_flush_partial_byte(st.capture);
+      st.stream = cabac_stream_flush_partial_byte(st.stream);
       pst.cabac = st;
       palette_finish = pst;
     end
@@ -268,7 +268,7 @@ module ff_vvc_palette_cabac #(
   function automatic logic [7:0] palette_pending_first_byte(input palette_state_t pst);
     begin
       palette_pending_first_byte =
-        pst.cabac.capture.pending_bytes >> ((pst.cabac.capture.pending_count - 8'd1) * 8);
+        pst.cabac.stream.pending_bytes >> ((pst.cabac.stream.pending_count - 8'd1) * 8);
     end
   endfunction
 
@@ -276,10 +276,10 @@ module ff_vvc_palette_cabac #(
     palette_state_t pst;
     begin
       pst = pst_in;
-      if (pst.cabac.capture.pending_count != 8'd0) begin
-        pst.cabac.capture.pending_count = pst.cabac.capture.pending_count - 8'd1;
-        if (pst.cabac.capture.pending_count == 8'd0) begin
-          pst.cabac.capture.pending_bytes = '0;
+      if (pst.cabac.stream.pending_count != 8'd0) begin
+        pst.cabac.stream.pending_count = pst.cabac.stream.pending_count - 8'd1;
+        if (pst.cabac.stream.pending_count == 8'd0) begin
+          pst.cabac.stream.pending_bytes = '0;
         end
       end
       palette_pop_pending_byte = pst;
@@ -1102,54 +1102,54 @@ module ff_vvc_palette_cabac #(
 
     begin
       st = st_in;
-      len = st.capture.bit_count;
-      partial_byte = st.capture.partial_byte;
-      partial_bit_count = st.capture.partial_bit_count;
+      len = st.stream.bit_count;
+      partial_byte = st.stream.partial_byte;
+      partial_bit_count = st.stream.partial_bit_count;
       for (i = bit_count - 1; i >= 0; i = i - 1) begin
         partial_byte = (partial_byte << 1) | value[i];
         partial_bit_count = partial_bit_count + 1;
         len = len + 13'd1;
         if (partial_bit_count == 8) begin
-          st.capture = cabac_append_pending_byte(st.capture, partial_byte);
+          st.stream = cabac_stream_append_byte(st.stream, partial_byte);
           partial_byte = 8'd0;
           partial_bit_count = 0;
         end
       end
-      st.capture.bit_count = len;
-      st.capture.partial_byte = partial_byte;
-      st.capture.partial_bit_count = partial_bit_count[2:0];
+      st.stream.bit_count = len;
+      st.stream.partial_byte = partial_byte;
+      st.stream.partial_bit_count = partial_bit_count[2:0];
       cabac_write_bits = st;
     end
   endfunction
 
-  function automatic cabac_capture_state_t cabac_append_pending_byte(
-    input cabac_capture_state_t capture_in,
+  function automatic cabac_byte_stream_state_t cabac_stream_append_byte(
+    input cabac_byte_stream_state_t stream_in,
     input logic [7:0] value
   );
-    cabac_capture_state_t capture;
+    cabac_byte_stream_state_t stream;
     begin
-      capture = capture_in;
-      if (capture.pending_count < CABAC_PENDING_BYTES[7:0]) begin
-        capture.pending_bytes = (capture.pending_bytes << 8) | value;
-        capture.pending_count = capture.pending_count + 8'd1;
+      stream = stream_in;
+      if (stream.pending_count < CABAC_PENDING_BYTES[7:0]) begin
+        stream.pending_bytes = (stream.pending_bytes << 8) | value;
+        stream.pending_count = stream.pending_count + 8'd1;
       end
-      capture.byte_count = capture.byte_count + 13'd1;
-      cabac_append_pending_byte = capture;
+      stream.byte_count = stream.byte_count + 13'd1;
+      cabac_stream_append_byte = stream;
     end
   endfunction
 
-  function automatic cabac_capture_state_t cabac_flush_partial_byte(input cabac_capture_state_t capture_in);
-    cabac_capture_state_t capture;
+  function automatic cabac_byte_stream_state_t cabac_stream_flush_partial_byte(input cabac_byte_stream_state_t stream_in);
+    cabac_byte_stream_state_t stream;
     logic [2:0] pad_bits;
     begin
-      capture = capture_in;
-      if (capture.partial_bit_count != 3'd0) begin
-        pad_bits = 3'd0 - capture.partial_bit_count;
-        capture = cabac_append_pending_byte(capture, capture.partial_byte << pad_bits);
-        capture.partial_byte = 8'd0;
-        capture.partial_bit_count = 3'd0;
+      stream = stream_in;
+      if (stream.partial_bit_count != 3'd0) begin
+        pad_bits = 3'd0 - stream.partial_bit_count;
+        stream = cabac_stream_append_byte(stream, stream.partial_byte << pad_bits);
+        stream.partial_byte = 8'd0;
+        stream.partial_bit_count = 3'd0;
       end
-      cabac_flush_partial_byte = capture;
+      cabac_stream_flush_partial_byte = stream;
     end
   endfunction
 
