@@ -38,8 +38,6 @@ module ff_vvc_generated_cabac_body #(
 
   logic [12:0] generated_bit_count;
   logic [MAX_SLICE_PAYLOAD_BITS - 1:0] generated_raw_bits;
-  logic [MAX_SLICE_PAYLOAD_BITS - 1:0] selected_bits;
-  logic [12:0] selected_pad_bits;
   logic [MAX_SLICE_PAYLOAD_BITS - 1:0] stream_bits_q;
   logic [12:0] stream_byte_count_q;
   logic [12:0] stream_byte_index_q;
@@ -61,11 +59,6 @@ module ff_vvc_generated_cabac_body #(
     end
   end
 
-  always @* begin
-    selected_pad_bits = ((((generated_bit_count + 13'd7) >> 3) << 3) - generated_bit_count);
-    selected_bits = generated_raw_bits << selected_pad_bits;
-  end
-
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       stream_bits_q <= '0;
@@ -77,12 +70,16 @@ module ff_vvc_generated_cabac_body #(
       m_axis_last <= 1'b0;
     end else begin
       if (start && supported) begin
-        stream_bits_q <= selected_bits;
+        stream_bits_q <= byte_aligned_bits(generated_raw_bits, generated_bit_count);
         stream_byte_count_q <= (generated_bit_count + 13'd7) >> 3;
         stream_byte_index_q <= 13'd0;
         stream_active_q <= ((generated_bit_count + 13'd7) >> 3) != 13'd0;
         m_axis_valid <= ((generated_bit_count + 13'd7) >> 3) != 13'd0;
-        m_axis_data <= stream_byte(selected_bits, (generated_bit_count + 13'd7) >> 3, 13'd0);
+        m_axis_data <= stream_byte(
+          byte_aligned_bits(generated_raw_bits, generated_bit_count),
+          (generated_bit_count + 13'd7) >> 3,
+          13'd0
+        );
         m_axis_last <= ((generated_bit_count + 13'd7) >> 3) == 13'd1;
       end else if (m_axis_valid && m_axis_ready) begin
         if (m_axis_last) begin
@@ -102,6 +99,17 @@ module ff_vvc_generated_cabac_body #(
       end
     end
   end
+
+  function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] byte_aligned_bits(
+    input logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bits,
+    input logic [12:0] bit_count
+  );
+    logic [12:0] pad_bits;
+    begin
+      pad_bits = ((((bit_count + 13'd7) >> 3) << 3) - bit_count);
+      byte_aligned_bits = bits << pad_bits;
+    end
+  endfunction
 
   function automatic logic [7:0] stream_byte(
     input logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bits,
