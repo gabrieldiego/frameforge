@@ -156,15 +156,21 @@ module ff_vvc_generated_cabac_body #(
     cabac_state_t st;
     logic [7:0] child_width;
     logic [7:0] child_height;
+    vvc_prob_model_t split_child_ctx;
     begin
       st = st_in;
       child_width = root_width[8:1];
       child_height = root_height[8:1];
+      split_child_ctx = vvc_prob_model_init(
+        vvc_split_flag_init(vvc_split_cu_ctx_full_child_no_neighbours()),
+        vvc_split_flag_log2_window(vvc_split_cu_ctx_full_child_no_neighbours()),
+        32
+      );
       st = encode_ctu_qt_split(st, 8'd0, 8'd0, root_width[7:0], root_height[7:0], 3'd0, 3'd0);
-      st = encode_ctu_luma_leaf(st, rem, 8'd0, 8'd0, child_width, child_height, 3'd1, 3'd0);
-      st = encode_ctu_luma_leaf(st, rem, child_width, 8'd0, child_width, child_height, 3'd1, 3'd0);
-      st = encode_ctu_luma_leaf(st, rem, 8'd0, child_height, child_width, child_height, 3'd1, 3'd0);
-      st = encode_ctu_luma_leaf(st, rem, child_width, child_height, child_width, child_height, 3'd1, 3'd0);
+      {split_child_ctx, st} = encode_ctu_luma_leaf(st, split_child_ctx, rem, 8'd0, 8'd0, child_width, child_height, 3'd1, 3'd0);
+      {split_child_ctx, st} = encode_ctu_luma_leaf(st, split_child_ctx, rem, child_width, 8'd0, child_width, child_height, 3'd1, 3'd0);
+      {split_child_ctx, st} = encode_ctu_luma_leaf(st, split_child_ctx, rem, 8'd0, child_height, child_width, child_height, 3'd1, 3'd0);
+      {split_child_ctx, st} = encode_ctu_luma_leaf(st, split_child_ctx, rem, child_width, child_height, child_width, child_height, 3'd1, 3'd0);
       st = encode_ctu_chroma_32x32_tree(st, c_rem);
       encode_partitioned_ctu_tree = st;
     end
@@ -188,7 +194,11 @@ module ff_vvc_generated_cabac_body #(
       // so future ctxInc selection can be derived from the syntax state instead
       // of from a geometry-specific function name.
       // VVC split_cu_mode encodes split=1 as CABAC bin 0 in this current path.
-      split_ctx = vvc_prob_model_init(vvc_split_flag_init(4'd0), vvc_split_flag_log2_window(4'd0), 32);
+      split_ctx = vvc_prob_model_init(
+        vvc_split_flag_init(vvc_split_cu_ctx_qt_only_root()),
+        vvc_split_flag_log2_window(vvc_split_cu_ctx_qt_only_root()),
+        32
+      );
       {split_ctx, st} = cabac_encode_vvc_model_bin(st, split_ctx, 1'b0);
       split_ctx = vvc_prob_model_init(vvc_split_qt_flag_init(4'd0), vvc_split_qt_flag_log2_window(4'd0), 32);
       {split_ctx, st} = cabac_encode_vvc_model_bin(st, split_ctx, 1'b1);
@@ -196,8 +206,9 @@ module ff_vvc_generated_cabac_body #(
     end
   endfunction
 
-  function automatic cabac_state_t encode_ctu_luma_leaf(
+  function automatic cabac_vvc_model_step_t encode_ctu_luma_leaf(
     input cabac_state_t st_in,
+    input vvc_prob_model_t split_ctx_in,
     input logic [4:0]   rem,
     input logic [7:0]   cb_x,
     input logic [7:0]   cb_y,
@@ -207,8 +218,9 @@ module ff_vvc_generated_cabac_body #(
     input logic [2:0]   mtt_depth
   );
     cabac_state_t st;
+    vvc_prob_model_t split_ctx;
     begin
-      st = encode_ctu_luma_leaf_split(st_in, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
+      {split_ctx, st} = encode_ctu_luma_leaf_split(st_in, split_ctx_in, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
       st = encode_ctu_luma_32x32_intra_mode_prefix(st, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
       st = encode_ctu_luma_32x32_intra_mode_context_prefix(st, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
       st = encode_ctu_luma_32x32_cbf(st, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
@@ -217,12 +229,13 @@ module ff_vvc_generated_cabac_body #(
       st = encode_ctu_luma_32x32_residual_scan_tail(st, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
       st = encode_ctu_luma_32x32_residual_bypass_suffix(st, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
       st = encode_32x32_luma_leaf_after_residual_bypass_suffix_tree(st, rem);
-      encode_ctu_luma_leaf = st;
+      encode_ctu_luma_leaf = {split_ctx, st};
     end
   endfunction
 
-  function automatic cabac_state_t encode_ctu_luma_leaf_split(
+  function automatic cabac_vvc_model_step_t encode_ctu_luma_leaf_split(
     input cabac_state_t st_in,
+    input vvc_prob_model_t split_ctx_in,
     input logic [7:0]   cb_x,
     input logic [7:0]   cb_y,
     input logic [7:0]   cb_width,
@@ -230,11 +243,14 @@ module ff_vvc_generated_cabac_body #(
     input logic [2:0]   cqt_depth,
     input logic [2:0]   mtt_depth
   );
+    cabac_state_t st;
+    vvc_prob_model_t split_ctx;
     begin
       // VVC 7.3.11.4 reaches coding_unit when split_cu_flag is false. This
-      // remains a transitional named bin until split_cu_flag ctxInc derivation
-      // is fully modeled for child coding-tree nodes.
-      encode_ctu_luma_leaf_split = cabac_encode_bin(st_in, 1'b1, 9'd221, 1'b1);
+      // uses the split_cu_flag ctxInc derived by VVC 9.3.4.2.2 for this CTU
+      // child and maintains that context across the four child leaves.
+      {split_ctx, st} = cabac_encode_vvc_model_bin(st_in, split_ctx_in, 1'b1);
+      encode_ctu_luma_leaf_split = {split_ctx, st};
     end
   endfunction
 
@@ -1191,6 +1207,54 @@ module ff_vvc_generated_cabac_body #(
     begin
       state_sum = {1'b0, model[0 +: 16]} + {1'b0, model[16 +: 16]};
       vvc_prob_model_state = state_sum[15:8];
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_split_cu_flag_ctx(
+    input logic left_condition,
+    input logic above_condition,
+    input logic allow_bt_vertical,
+    input logic allow_bt_horizontal,
+    input logic allow_tt_vertical,
+    input logic allow_tt_horizontal,
+    input logic allow_qt
+  );
+    logic [3:0] split_alternatives;
+    logic [3:0] ctx_set_idx;
+    begin
+      // VVC 9.3.4.2.2 derives ctxInc for split_cu_flag as:
+      // condL + condA + ctxSetIdx * 3.
+      split_alternatives =
+        {3'd0, allow_bt_vertical} +
+        {3'd0, allow_bt_horizontal} +
+        {3'd0, allow_tt_vertical} +
+        {3'd0, allow_tt_horizontal} +
+        ({3'd0, allow_qt} << 1);
+      ctx_set_idx = (split_alternatives - 4'd1) >> 1;
+      vvc_split_cu_flag_ctx =
+        {3'd0, left_condition} + {3'd0, above_condition} + (ctx_set_idx * 4'd3);
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_split_cu_ctx_qt_only_root();
+    begin
+      vvc_split_cu_ctx_qt_only_root = vvc_split_cu_flag_ctx(
+        1'b0, 1'b0,
+        1'b0, 1'b0,
+        1'b0, 1'b0,
+        1'b1
+      );
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_split_cu_ctx_full_child_no_neighbours();
+    begin
+      vvc_split_cu_ctx_full_child_no_neighbours = vvc_split_cu_flag_ctx(
+        1'b0, 1'b0,
+        1'b1, 1'b1,
+        1'b1, 1'b1,
+        1'b1
+      );
     end
   endfunction
 

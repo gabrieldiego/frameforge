@@ -2833,6 +2833,59 @@ impl VvcCodingTreeNode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VvcSplitCtxInput {
+    left_condition: bool,
+    above_condition: bool,
+    allow_bt_vertical: bool,
+    allow_bt_horizontal: bool,
+    allow_tt_vertical: bool,
+    allow_tt_horizontal: bool,
+    allow_qt: bool,
+}
+
+impl VvcSplitCtxInput {
+    fn qt_only_root() -> Self {
+        Self {
+            left_condition: false,
+            above_condition: false,
+            allow_bt_vertical: false,
+            allow_bt_horizontal: false,
+            allow_tt_vertical: false,
+            allow_tt_horizontal: false,
+            allow_qt: true,
+        }
+    }
+
+    fn full_child_without_smaller_neighbours() -> Self {
+        Self {
+            left_condition: false,
+            above_condition: false,
+            allow_bt_vertical: true,
+            allow_bt_horizontal: true,
+            allow_tt_vertical: true,
+            allow_tt_horizontal: true,
+            allow_qt: true,
+        }
+    }
+
+    fn split_cu_flag_ctx(self) -> u8 {
+        // VVC 9.3.4.2.2 derives ctxInc for split_cu_flag as:
+        //   condL + condA + ctxSetIdx * 3
+        // with ctxSetIdx =
+        //   (allowBtVer + allowBtHor + allowTtVer + allowTtHor
+        //    + 2 * allowQt - 1) / 2.
+        let split_alternatives = u8::from(self.allow_bt_vertical)
+            + u8::from(self.allow_bt_horizontal)
+            + u8::from(self.allow_tt_vertical)
+            + u8::from(self.allow_tt_horizontal)
+            + (2 * u8::from(self.allow_qt));
+        debug_assert!(split_alternatives > 0);
+        let ctx_set_idx = (split_alternatives - 1) / 2;
+        u8::from(self.left_condition) + u8::from(self.above_condition) + (3 * ctx_set_idx)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VvcCtuCabacOp {
     QtSplit { node: VvcCodingTreeNode },
     LumaLeaf { node: VvcCodingTreeNode },
@@ -2905,8 +2958,9 @@ impl VvcCtuCabacGenerator {
         // split_qt_flag when a QT split is selected. The current path supports
         // one 64x64 -> four 32x32 luma QT split and keeps the context indices
         // explicit until the complete ctxInc derivation is implemented.
+        let split_ctx = VvcSplitCtxInput::qt_only_root().split_cu_flag_ctx();
         self.contexts
-            .encode(cabac, ToyVvcCabacContext::SplitFlag(0), false);
+            .encode(cabac, ToyVvcCabacContext::SplitFlag(split_ctx), false);
         self.contexts
             .encode(cabac, ToyVvcCabacContext::SplitQtFlag(0), true);
     }
@@ -2918,10 +2972,13 @@ impl VvcCtuCabacGenerator {
         debug_assert_eq!(node.mtt_depth, 0);
         debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
         let _child_idx = node.raster_child_idx();
-        // VVC 7.3.11.4 reaches coding_unit when split_cu_flag is false. This
-        // remains a named transitional bin because full ctxInc derivation for
-        // the child split decision has not yet replaced the preserved payload.
-        cabac_ctx(cabac, true, 221, true); // split_cu_mode child split=0
+        // VVC 7.3.11.4 reaches coding_unit when split_cu_flag is false. The
+        // split_cu_flag context index is derived from VVC 9.3.4.2.2 using the
+        // split modes available for this CTU child.
+        let split_ctx =
+            VvcSplitCtxInput::full_child_without_smaller_neighbours().split_cu_flag_ctx();
+        self.contexts
+            .encode(cabac, ToyVvcCabacContext::SplitFlag(split_ctx), true);
     }
 
     fn emit_luma_32x32_intra_mode_prefix(
@@ -5076,6 +5133,28 @@ mod tests {
         cabac.start();
         ctx.encode(&mut cabac, ToyVvcCabacContext::SplitFlag(0), true);
         assert!(ctx.split_flag[0].state() > initial_state);
+    }
+
+    #[test]
+    fn vvc_split_cu_flag_context_uses_spec_ctx_set_formula() {
+        assert_eq!(VvcSplitCtxInput::qt_only_root().split_cu_flag_ctx(), 0);
+        assert_eq!(
+            VvcSplitCtxInput::full_child_without_smaller_neighbours().split_cu_flag_ctx(),
+            6
+        );
+        assert_eq!(
+            VvcSplitCtxInput {
+                left_condition: true,
+                above_condition: true,
+                allow_bt_vertical: true,
+                allow_bt_horizontal: true,
+                allow_tt_vertical: true,
+                allow_tt_horizontal: true,
+                allow_qt: true,
+            }
+            .split_cu_flag_ctx(),
+            8
+        );
     }
 
     #[test]
