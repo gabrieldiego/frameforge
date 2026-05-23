@@ -67,7 +67,7 @@ module ff_vvc_generated_cabac_body #(
       end else if ((width == 16'd32) && (height == 16'd32)) begin
         encode_generated_body = encode_32x32_body(rem, c_rem);
       end else if ((width == 16'd64) && (height == 16'd64)) begin
-        encode_generated_body = encode_64x64_body(rem, c_rem);
+        encode_generated_body = encode_64x64_body(width, height, rem, c_rem);
       end else begin
         encode_generated_body = '0;
       end
@@ -128,13 +128,15 @@ module ff_vvc_generated_cabac_body #(
   endfunction
 
   function automatic logic [12 + MAX_SLICE_PAYLOAD_BITS:0] encode_64x64_body(
+    input logic [15:0] coded_width,
+    input logic [15:0] coded_height,
     input logic [4:0] rem,
     input logic [4:0] c_rem
   );
     cabac_state_t st;
     begin
       st = cabac_start();
-      st = encode_64x64_partition_tree(st, rem, c_rem);
+      st = encode_partitioned_ctu_tree(st, coded_width, coded_height, rem, c_rem);
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);
       encode_64x64_body = {
@@ -144,79 +146,106 @@ module ff_vvc_generated_cabac_body #(
     end
   endfunction
 
-  function automatic cabac_state_t encode_64x64_partition_tree(
+  function automatic cabac_state_t encode_partitioned_ctu_tree(
     input cabac_state_t st_in,
+    input logic [15:0]  root_width,
+    input logic [15:0]  root_height,
     input logic [4:0]   rem,
     input logic [4:0]   c_rem
   );
     cabac_state_t st;
+    logic [7:0] child_width;
+    logic [7:0] child_height;
     begin
       st = st_in;
-      st = encode_ctu_root_quad_split(st);
-      st = encode_ctu_luma_32x32_leaf(st, rem, 2'd0);
-      st = encode_ctu_luma_32x32_leaf(st, rem, 2'd1);
-      st = encode_ctu_luma_32x32_leaf(st, rem, 2'd2);
-      st = encode_ctu_luma_32x32_leaf(st, rem, 2'd3);
+      child_width = root_width[8:1];
+      child_height = root_height[8:1];
+      st = encode_ctu_qt_split(st, 8'd0, 8'd0, root_width[7:0], root_height[7:0], 3'd0, 3'd0);
+      st = encode_ctu_luma_leaf(st, rem, 8'd0, 8'd0, child_width, child_height, 3'd1, 3'd0);
+      st = encode_ctu_luma_leaf(st, rem, child_width, 8'd0, child_width, child_height, 3'd1, 3'd0);
+      st = encode_ctu_luma_leaf(st, rem, 8'd0, child_height, child_width, child_height, 3'd1, 3'd0);
+      st = encode_ctu_luma_leaf(st, rem, child_width, child_height, child_width, child_height, 3'd1, 3'd0);
       st = encode_ctu_chroma_32x32_tree(st, c_rem);
-      encode_64x64_partition_tree = st;
+      encode_partitioned_ctu_tree = st;
     end
   endfunction
 
-  function automatic cabac_state_t encode_ctu_root_quad_split(input cabac_state_t st_in);
+  function automatic cabac_state_t encode_ctu_qt_split(
+    input cabac_state_t st_in,
+    input logic [7:0]   cb_x,
+    input logic [7:0]   cb_y,
+    input logic [7:0]   cb_width,
+    input logic [7:0]   cb_height,
+    input logic [2:0]   cqt_depth,
+    input logic [2:0]   mtt_depth
+  );
     cabac_state_t st;
     vvc_prob_model_t split_ctx;
     begin
       st = st_in;
-      // 64x64 starts with syntax-named split decisions derived from the VVC
-      // I-slice context initialization tables. The child bodies are still
-      // transitional generated payloads until those bodies are converted to
-      // syntax-driven context selection too.
+      // VVC 7.3.11.4 coding_tree emits split_cu_flag followed by split_qt_flag
+      // when a QT split is selected. This function carries the block geometry
+      // so future ctxInc selection can be derived from the syntax state instead
+      // of from a geometry-specific function name.
       // VVC split_cu_mode encodes split=1 as CABAC bin 0 in this current path.
       split_ctx = vvc_prob_model_init(vvc_split_flag_init(4'd0), vvc_split_flag_log2_window(4'd0), 32);
       {split_ctx, st} = cabac_encode_vvc_model_bin(st, split_ctx, 1'b0);
       split_ctx = vvc_prob_model_init(vvc_split_qt_flag_init(4'd0), vvc_split_qt_flag_log2_window(4'd0), 32);
       {split_ctx, st} = cabac_encode_vvc_model_bin(st, split_ctx, 1'b1);
-      encode_ctu_root_quad_split = st;
+      encode_ctu_qt_split = st;
     end
   endfunction
 
-  function automatic cabac_state_t encode_ctu_luma_32x32_leaf(
+  function automatic cabac_state_t encode_ctu_luma_leaf(
     input cabac_state_t st_in,
     input logic [4:0]   rem,
-    input logic [1:0]   leaf_idx
+    input logic [7:0]   cb_x,
+    input logic [7:0]   cb_y,
+    input logic [7:0]   cb_width,
+    input logic [7:0]   cb_height,
+    input logic [2:0]   cqt_depth,
+    input logic [2:0]   mtt_depth
   );
     cabac_state_t st;
     begin
-      // leaf_idx names the CTU child position for future context derivation.
-      st = encode_ctu_luma_32x32_leaf_split(st_in, leaf_idx);
-      st = encode_ctu_luma_32x32_intra_mode_prefix(st, leaf_idx);
-      st = encode_ctu_luma_32x32_intra_mode_context_prefix(st, leaf_idx);
-      st = encode_ctu_luma_32x32_cbf(st, leaf_idx);
-      st = encode_ctu_luma_32x32_residual_prefix(st, leaf_idx);
-      st = encode_ctu_luma_32x32_residual_scan_prefix(st, leaf_idx);
-      st = encode_ctu_luma_32x32_residual_scan_tail(st, leaf_idx);
-      st = encode_ctu_luma_32x32_residual_bypass_suffix(st, leaf_idx);
+      st = encode_ctu_luma_leaf_split(st_in, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
+      st = encode_ctu_luma_32x32_intra_mode_prefix(st, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
+      st = encode_ctu_luma_32x32_intra_mode_context_prefix(st, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
+      st = encode_ctu_luma_32x32_cbf(st, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
+      st = encode_ctu_luma_32x32_residual_prefix(st, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
+      st = encode_ctu_luma_32x32_residual_scan_prefix(st, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
+      st = encode_ctu_luma_32x32_residual_scan_tail(st, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
+      st = encode_ctu_luma_32x32_residual_bypass_suffix(st, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
       st = encode_32x32_luma_leaf_after_residual_bypass_suffix_tree(st, rem);
-      encode_ctu_luma_32x32_leaf = st;
+      encode_ctu_luma_leaf = st;
     end
   endfunction
 
-  function automatic cabac_state_t encode_ctu_luma_32x32_leaf_split(
+  function automatic cabac_state_t encode_ctu_luma_leaf_split(
     input cabac_state_t st_in,
-    input logic [1:0]   leaf_idx
+    input logic [7:0]   cb_x,
+    input logic [7:0]   cb_y,
+    input logic [7:0]   cb_width,
+    input logic [7:0]   cb_height,
+    input logic [2:0]   cqt_depth,
+    input logic [2:0]   mtt_depth
   );
     begin
-      // leaf_idx names the CTU child position for future context derivation.
-      // TODO(vvc): Derive SplitFlag(6) through a verified VTM-equivalent
-      // context state. For now this names the previously compact child leaf
-      // split decision while keeping the generated payload byte-identical.
-      encode_ctu_luma_32x32_leaf_split = cabac_encode_bin(st_in, 1'b1, 9'd221, 1'b1);
+      // VVC 7.3.11.4 reaches coding_unit when split_cu_flag is false. This
+      // remains a transitional named bin until split_cu_flag ctxInc derivation
+      // is fully modeled for child coding-tree nodes.
+      encode_ctu_luma_leaf_split = cabac_encode_bin(st_in, 1'b1, 9'd221, 1'b1);
     end
   endfunction
 
   function automatic cabac_state_t encode_ctu_luma_32x32_intra_mode_prefix(
     input cabac_state_t st_in,
-    input logic [1:0]   leaf_idx
+    input logic [7:0]   cb_x,
+    input logic [7:0]   cb_y,
+    input logic [7:0]   cb_width,
+    input logic [7:0]   cb_height,
+    input logic [2:0]   cqt_depth,
+    input logic [2:0]   mtt_depth
   );
     begin
       // TODO(vvc): Replace with the full intra_luma_pred_modes syntax writer.
@@ -226,23 +255,30 @@ module ff_vvc_generated_cabac_body #(
 
   function automatic cabac_state_t encode_ctu_luma_32x32_intra_mode_context_prefix(
     input cabac_state_t st_in,
-    input logic [1:0]   leaf_idx
+    input logic [7:0]   cb_x,
+    input logic [7:0]   cb_y,
+    input logic [7:0]   cb_width,
+    input logic [7:0]   cb_height,
+    input logic [2:0]   cqt_depth,
+    input logic [2:0]   mtt_depth
   );
     begin
-      // leaf_idx names the CTU child position for future context derivation.
-      // TODO(vvc): Verify the exact intra_luma_pred_modes sub-bin mapping
-      // against VTM. This names the next traced context-coded intra mode bin
-      // while preserving the current generated payload byte-for-byte.
+      // TODO(vvc): Replace this with the complete VVC 7.3.11.5
+      // intra_luma_pred_modes writer and ctxInc derivation.
       encode_ctu_luma_32x32_intra_mode_context_prefix = cabac_encode_bin(st_in, 1'b1, 9'd88, 1'b1);
     end
   endfunction
 
   function automatic cabac_state_t encode_ctu_luma_32x32_cbf(
     input cabac_state_t st_in,
-    input logic [1:0]   leaf_idx
+    input logic [7:0]   cb_x,
+    input logic [7:0]   cb_y,
+    input logic [7:0]   cb_width,
+    input logic [7:0]   cb_height,
+    input logic [2:0]   cqt_depth,
+    input logic [2:0]   mtt_depth
   );
     begin
-      // leaf_idx names the CTU child position for future context derivation.
       // cbf_comp luma=1 for the 32x32 transform unit. The current path
       // always emits a residual-bearing luma TU so the downstream residual
       // syntax remains present.
@@ -252,14 +288,18 @@ module ff_vvc_generated_cabac_body #(
 
   function automatic cabac_state_t encode_ctu_luma_32x32_residual_prefix(
     input cabac_state_t st_in,
-    input logic [1:0]   leaf_idx
+    input logic [7:0]   cb_x,
+    input logic [7:0]   cb_y,
+    input logic [7:0]   cb_width,
+    input logic [7:0]   cb_height,
+    input logic [2:0]   cqt_depth,
+    input logic [2:0]   mtt_depth
   );
     cabac_state_t st;
     begin
-      // leaf_idx names the CTU child position for future context derivation.
       // TODO(vvc): Split residual_coding into named coefficient-group,
       // last-position, significance, and level syntax. These are the first
-      // traced residual_coding context-coded bins after cbf_comp luma=1.
+      // VVC 7.3.11.11.
       st = cabac_encode_bin(st_in, 1'b1, 9'd84, 1'b1);
       st = cabac_encode_bin(st, 1'b1, 9'd84, 1'b1);
       encode_ctu_luma_32x32_residual_prefix = st;
@@ -268,15 +308,18 @@ module ff_vvc_generated_cabac_body #(
 
   function automatic cabac_state_t encode_ctu_luma_32x32_residual_scan_prefix(
     input cabac_state_t st_in,
-    input logic [1:0]   leaf_idx
+    input logic [7:0]   cb_x,
+    input logic [7:0]   cb_y,
+    input logic [7:0]   cb_width,
+    input logic [7:0]   cb_height,
+    input logic [2:0]   cqt_depth,
+    input logic [2:0]   mtt_depth
   );
     cabac_state_t st;
     begin
-      // leaf_idx names the CTU child position for future context derivation.
       // TODO(vvc): Replace this with named residual_coding syntax once the
       // coefficient scan position and group flags are derived from the
-      // residual path. These are the next traced context-coded coefficient
-      // bins after the residual prefix.
+      // residual path.
       st = cabac_encode_bin(st_in, 1'b1, 9'd60, 1'b1);
       st = cabac_encode_bin(st, 1'b1, 9'd130, 1'b1);
       st = cabac_encode_bin(st, 1'b1, 9'd76, 1'b1);
@@ -287,13 +330,17 @@ module ff_vvc_generated_cabac_body #(
 
   function automatic cabac_state_t encode_ctu_luma_32x32_residual_scan_tail(
     input cabac_state_t st_in,
-    input logic [1:0]   leaf_idx
+    input logic [7:0]   cb_x,
+    input logic [7:0]   cb_y,
+    input logic [7:0]   cb_width,
+    input logic [7:0]   cb_height,
+    input logic [2:0]   cqt_depth,
+    input logic [2:0]   mtt_depth
   );
     cabac_state_t st;
     begin
-      // leaf_idx names the CTU child position for future context derivation.
-      // TODO(vvc): Replace these traced coefficient-position/context bins
-      // with generated residual_coding syntax driven by transform output.
+      // TODO(vvc): Replace these coefficient-position/context bins with
+      // generated residual_coding syntax driven by transform output.
       st = cabac_encode_bin(st_in, 1'b1, 9'd140, 1'b1);
       st = cabac_encode_bin(st, 1'b1, 9'd84, 1'b1);
       st = cabac_encode_bin(st, 1'b1, 9'd106, 1'b1);
@@ -306,11 +353,15 @@ module ff_vvc_generated_cabac_body #(
 
   function automatic cabac_state_t encode_ctu_luma_32x32_residual_bypass_suffix(
     input cabac_state_t st_in,
-    input logic [1:0]   leaf_idx
+    input logic [7:0]   cb_x,
+    input logic [7:0]   cb_y,
+    input logic [7:0]   cb_width,
+    input logic [7:0]   cb_height,
+    input logic [2:0]   cqt_depth,
+    input logic [2:0]   mtt_depth
   );
     cabac_state_t st;
     begin
-      // leaf_idx names the CTU child position for future context derivation.
       // TODO(vvc): Replace this with named residual bypass syntax
       // (suffix/remainder/sign bins) from generated coefficient levels.
       st = cabac_encode_bin_ep(st_in, 1'b1);

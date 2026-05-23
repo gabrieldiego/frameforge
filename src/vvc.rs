@@ -2766,35 +2766,100 @@ fn toy_64x64_partition_cabac_bits(params: Toy64x64PartitionParams) -> Vec<bool> 
 
     let mut cabac = ToyCabacEncoder::new();
     cabac.start();
-    encode_64x64_partition_body(&mut cabac);
+    encode_64x64_partition_body(&mut cabac, params);
     cabac.encode_bin_trm(true);
     cabac.finish()
 }
 
-fn encode_64x64_partition_body(cabac: &mut ToyCabacEncoder) {
+fn encode_64x64_partition_body(cabac: &mut ToyCabacEncoder, params: Toy64x64PartitionParams) {
     let mut ctu = VvcCtuCabacGenerator::new();
-    for op in VvcCtuCabacOp::black_64x64_yuv420_ctu() {
+    for op in VvcCtuCabacOp::yuv420_ctu_partition(params) {
         ctu.emit(cabac, op);
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+enum VvcTreeType {
+    SingleTree,
+    DualTreeLuma,
+    DualTreeChroma,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VvcCodingTreeNode {
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+    cqt_depth: u8,
+    mtt_depth: u8,
+    tree_type: VvcTreeType,
+}
+
+impl VvcCodingTreeNode {
+    fn root(width: u16, height: u16, tree_type: VvcTreeType) -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            width,
+            height,
+            cqt_depth: 0,
+            mtt_depth: 0,
+            tree_type,
+        }
+    }
+
+    fn qt_child(self, child_idx: u8) -> Self {
+        debug_assert!(child_idx < 4);
+        let half_width = self.width / 2;
+        let half_height = self.height / 2;
+        Self {
+            x: self.x + u16::from(child_idx & 1) * half_width,
+            y: self.y + u16::from(child_idx >> 1) * half_height,
+            width: half_width,
+            height: half_height,
+            cqt_depth: self.cqt_depth + 1,
+            mtt_depth: 0,
+            tree_type: self.tree_type,
+        }
+    }
+
+    fn raster_child_idx(self) -> u8 {
+        let col = u8::from(self.x != 0);
+        let row = u8::from(self.y != 0);
+        row * 2 + col
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VvcCtuCabacOp {
-    RootQuadSplit,
-    Luma32x32Leaf { leaf_idx: u8 },
-    Chroma32x32Tree,
+    QtSplit { node: VvcCodingTreeNode },
+    LumaLeaf { node: VvcCodingTreeNode },
+    ChromaTree { node: VvcCodingTreeNode },
 }
 
 impl VvcCtuCabacOp {
-    fn black_64x64_yuv420_ctu() -> [Self; 6] {
-        [
-            Self::RootQuadSplit,
-            Self::Luma32x32Leaf { leaf_idx: 0 },
-            Self::Luma32x32Leaf { leaf_idx: 1 },
-            Self::Luma32x32Leaf { leaf_idx: 2 },
-            Self::Luma32x32Leaf { leaf_idx: 3 },
-            Self::Chroma32x32Tree,
-        ]
+    fn yuv420_ctu_partition(params: Toy64x64PartitionParams) -> Vec<Self> {
+        let root = VvcCodingTreeNode::root(
+            params.root_width as u16,
+            params.root_height as u16,
+            VvcTreeType::DualTreeLuma,
+        );
+        let chroma = VvcCodingTreeNode::root(
+            (params.root_width / 2) as u16,
+            (params.root_height / 2) as u16,
+            VvcTreeType::DualTreeChroma,
+        );
+        let mut ops = Vec::with_capacity(params.luma_leaf_count + 2);
+        ops.push(Self::QtSplit { node: root });
+        for child_idx in 0..params.luma_leaf_count {
+            ops.push(Self::LumaLeaf {
+                node: root.qt_child(child_idx as u8),
+            });
+        }
+        ops.push(Self::ChromaTree { node: chroma });
+        ops
     }
 }
 
@@ -2812,45 +2877,58 @@ impl VvcCtuCabacGenerator {
 
     fn emit(&mut self, cabac: &mut ToyCabacEncoder, op: VvcCtuCabacOp) {
         match op {
-            VvcCtuCabacOp::RootQuadSplit => self.emit_root_quad_split(cabac),
-            VvcCtuCabacOp::Luma32x32Leaf { leaf_idx } => {
-                self.emit_luma_32x32_leaf_split(cabac, leaf_idx);
-                self.emit_luma_32x32_intra_mode_prefix(cabac, leaf_idx);
-                self.emit_luma_32x32_intra_mode_context_prefix(cabac, leaf_idx);
-                self.emit_luma_32x32_cbf(cabac, leaf_idx);
-                self.emit_luma_32x32_residual_prefix(cabac, leaf_idx);
-                self.emit_luma_32x32_residual_scan_prefix(cabac, leaf_idx);
-                self.emit_luma_32x32_residual_scan_tail(cabac, leaf_idx);
-                self.emit_luma_32x32_residual_bypass_suffix(cabac, leaf_idx);
+            VvcCtuCabacOp::QtSplit { node } => self.emit_qt_split(cabac, node),
+            VvcCtuCabacOp::LumaLeaf { node } => {
+                self.emit_luma_leaf_split(cabac, node);
+                self.emit_luma_32x32_intra_mode_prefix(cabac, node);
+                self.emit_luma_32x32_intra_mode_context_prefix(cabac, node);
+                self.emit_luma_32x32_cbf(cabac, node);
+                self.emit_luma_32x32_residual_prefix(cabac, node);
+                self.emit_luma_32x32_residual_scan_prefix(cabac, node);
+                self.emit_luma_32x32_residual_scan_tail(cabac, node);
+                self.emit_luma_32x32_residual_bypass_suffix(cabac, node);
                 // TODO(vvc): Replace the leaf body with named CU/TU/residual syntax.
                 encode_32x32_luma_leaf_after_residual_bypass_suffix_body(cabac);
             }
-            VvcCtuCabacOp::Chroma32x32Tree => {
+            VvcCtuCabacOp::ChromaTree { node: _node } => {
                 // TODO(vvc): Replace the chroma body with named dual-tree chroma syntax.
                 encode_32x32_chroma_body(cabac);
             }
         }
     }
 
-    fn emit_root_quad_split(&mut self, cabac: &mut ToyCabacEncoder) {
-        // TODO(vvc): The current bitstream path preserves the previously
-        // validated SW/RTL CABAC payload. This named operation is the insertion
-        // point for replacing the root split with a fully verified VTM context
-        // model once the split bin mapping is reconciled against decoder traces.
+    fn emit_qt_split(&mut self, cabac: &mut ToyCabacEncoder, node: VvcCodingTreeNode) {
+        debug_assert_eq!(node.cqt_depth, 0);
+        debug_assert_eq!(node.mtt_depth, 0);
+        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
+        // VVC 7.3.11.4 coding_tree emits split_cu_flag followed by
+        // split_qt_flag when a QT split is selected. The current path supports
+        // one 64x64 -> four 32x32 luma QT split and keeps the context indices
+        // explicit until the complete ctxInc derivation is implemented.
         self.contexts
             .encode(cabac, ToyVvcCabacContext::SplitFlag(0), false);
         self.contexts
             .encode(cabac, ToyVvcCabacContext::SplitQtFlag(0), true);
     }
 
-    fn emit_luma_32x32_leaf_split(&mut self, cabac: &mut ToyCabacEncoder, _leaf_idx: u8) {
-        // TODO(vvc): Derive SplitFlag(6) through a verified VTM-equivalent
-        // context state. For now this names the previously compact child leaf
-        // split decision while keeping the generated payload byte-identical.
+    fn emit_luma_leaf_split(&mut self, cabac: &mut ToyCabacEncoder, node: VvcCodingTreeNode) {
+        debug_assert_eq!(node.width, 32);
+        debug_assert_eq!(node.height, 32);
+        debug_assert_eq!(node.cqt_depth, 1);
+        debug_assert_eq!(node.mtt_depth, 0);
+        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
+        let _child_idx = node.raster_child_idx();
+        // VVC 7.3.11.4 reaches coding_unit when split_cu_flag is false. This
+        // remains a named transitional bin because full ctxInc derivation for
+        // the child split decision has not yet replaced the preserved payload.
         cabac_ctx(cabac, true, 221, true); // split_cu_mode child split=0
     }
 
-    fn emit_luma_32x32_intra_mode_prefix(&mut self, cabac: &mut ToyCabacEncoder, _leaf_idx: u8) {
+    fn emit_luma_32x32_intra_mode_prefix(
+        &mut self,
+        cabac: &mut ToyCabacEncoder,
+        _node: VvcCodingTreeNode,
+    ) {
         // TODO(vvc): Replace with the full intra_luma_pred_modes syntax writer.
         cabac.encode_bin_ep(false); // intra_luma_pred_modes first bypass bin
     }
@@ -2858,43 +2936,52 @@ impl VvcCtuCabacGenerator {
     fn emit_luma_32x32_intra_mode_context_prefix(
         &mut self,
         cabac: &mut ToyCabacEncoder,
-        _leaf_idx: u8,
+        _node: VvcCodingTreeNode,
     ) {
-        // TODO(vvc): Verify the exact intra_luma_pred_modes sub-bin mapping
-        // against VTM. This names the next traced context-coded intra mode bin
-        // while preserving the current generated payload byte-for-byte.
+        // TODO(vvc): Replace this with the complete VVC 7.3.11.5
+        // intra_luma_pred_modes writer and ctxInc derivation.
         cabac_ctx(cabac, true, 88, true);
     }
 
-    fn emit_luma_32x32_cbf(&mut self, cabac: &mut ToyCabacEncoder, _leaf_idx: u8) {
+    fn emit_luma_32x32_cbf(&mut self, cabac: &mut ToyCabacEncoder, _node: VvcCodingTreeNode) {
         // cbf_comp luma=1 for the 32x32 transform unit. The current path
         // always emits a residual-bearing luma TU so the downstream residual
         // syntax remains present.
         cabac_ctx(cabac, true, 130, true);
     }
 
-    fn emit_luma_32x32_residual_prefix(&mut self, cabac: &mut ToyCabacEncoder, _leaf_idx: u8) {
+    fn emit_luma_32x32_residual_prefix(
+        &mut self,
+        cabac: &mut ToyCabacEncoder,
+        _node: VvcCodingTreeNode,
+    ) {
         // TODO(vvc): Split residual_coding into named coefficient-group,
-        // last-position, significance, and level syntax. These are the first
-        // traced residual_coding context-coded bins after cbf_comp luma=1.
+        // last-position, significance, and level syntax from VVC 7.3.11.11.
         cabac_ctx(cabac, true, 84, true);
         cabac_ctx(cabac, true, 84, true);
     }
 
-    fn emit_luma_32x32_residual_scan_prefix(&mut self, cabac: &mut ToyCabacEncoder, _leaf_idx: u8) {
+    fn emit_luma_32x32_residual_scan_prefix(
+        &mut self,
+        cabac: &mut ToyCabacEncoder,
+        _node: VvcCodingTreeNode,
+    ) {
         // TODO(vvc): Replace this with named residual_coding syntax once the
         // coefficient scan position and group flags are derived from the
-        // residual path. These are the next traced context-coded coefficient
-        // bins after the residual prefix.
+        // residual path.
         cabac_ctx(cabac, true, 60, true);
         cabac_ctx(cabac, true, 130, true);
         cabac_ctx(cabac, true, 76, true);
         cabac_ctx(cabac, false, 178, false);
     }
 
-    fn emit_luma_32x32_residual_scan_tail(&mut self, cabac: &mut ToyCabacEncoder, _leaf_idx: u8) {
-        // TODO(vvc): Replace these traced coefficient-position/context bins
-        // with generated residual_coding syntax driven by transform output.
+    fn emit_luma_32x32_residual_scan_tail(
+        &mut self,
+        cabac: &mut ToyCabacEncoder,
+        _node: VvcCodingTreeNode,
+    ) {
+        // TODO(vvc): Replace these coefficient-position/context bins with
+        // generated residual_coding syntax driven by transform output.
         cabac_ctx(cabac, true, 140, true);
         cabac_ctx(cabac, true, 84, true);
         cabac_ctx(cabac, true, 106, true);
@@ -2906,7 +2993,7 @@ impl VvcCtuCabacGenerator {
     fn emit_luma_32x32_residual_bypass_suffix(
         &mut self,
         cabac: &mut ToyCabacEncoder,
-        _leaf_idx: u8,
+        _node: VvcCodingTreeNode,
     ) {
         // TODO(vvc): Replace this with named residual bypass syntax
         // (suffix/remainder/sign bins) from generated coefficient levels.
@@ -4993,15 +5080,32 @@ mod tests {
 
     #[test]
     fn vvc_ctu_cabac_generator_names_64x64_operation_sequence() {
+        let params = Toy64x64PartitionParams {
+            root_width: 64,
+            root_height: 64,
+            luma_leaf_count: 4,
+            chroma_tu_count: 64,
+        };
+        let root = VvcCodingTreeNode::root(64, 64, VvcTreeType::DualTreeLuma);
         assert_eq!(
-            VvcCtuCabacOp::black_64x64_yuv420_ctu(),
-            [
-                VvcCtuCabacOp::RootQuadSplit,
-                VvcCtuCabacOp::Luma32x32Leaf { leaf_idx: 0 },
-                VvcCtuCabacOp::Luma32x32Leaf { leaf_idx: 1 },
-                VvcCtuCabacOp::Luma32x32Leaf { leaf_idx: 2 },
-                VvcCtuCabacOp::Luma32x32Leaf { leaf_idx: 3 },
-                VvcCtuCabacOp::Chroma32x32Tree
+            VvcCtuCabacOp::yuv420_ctu_partition(params),
+            vec![
+                VvcCtuCabacOp::QtSplit { node: root },
+                VvcCtuCabacOp::LumaLeaf {
+                    node: root.qt_child(0)
+                },
+                VvcCtuCabacOp::LumaLeaf {
+                    node: root.qt_child(1)
+                },
+                VvcCtuCabacOp::LumaLeaf {
+                    node: root.qt_child(2)
+                },
+                VvcCtuCabacOp::LumaLeaf {
+                    node: root.qt_child(3)
+                },
+                VvcCtuCabacOp::ChromaTree {
+                    node: VvcCodingTreeNode::root(32, 32, VvcTreeType::DualTreeChroma)
+                }
             ]
         );
     }
@@ -5022,7 +5126,7 @@ mod tests {
         let mut manual = ToyCabacEncoder::new();
         let mut ctu = VvcCtuCabacGenerator::new();
         manual.start();
-        for op in VvcCtuCabacOp::black_64x64_yuv420_ctu() {
+        for op in VvcCtuCabacOp::yuv420_ctu_partition(params) {
             ctu.emit(&mut manual, op);
         }
         manual.encode_bin_trm(true);
