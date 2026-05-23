@@ -42,7 +42,10 @@ module ff_vvc_encoder #(
   localparam int TOY_RESIDUAL_CB_SIZE = 4;
   localparam int TOY_RESIDUAL_LUMA_SAMPLES = TOY_RESIDUAL_CB_SIZE * TOY_RESIDUAL_CB_SIZE;
   localparam int MAX_SLICE_PAYLOAD_BITS = 4096;
-  localparam int MAX_CTU_PALETTE_SYMBOLS = (CTU_SIZE / 8) * (CTU_SIZE / 8);
+  localparam int PALETTE_CU_SIZE = 8;
+  localparam int MAX_CTU_PALETTE_SYMBOLS =
+    ((CTU_SIZE + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE) *
+    ((CTU_SIZE + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE);
   localparam int CABAC_BITS_LSB = 0;
   localparam int CABAC_LEN_LSB = CABAC_BITS_LSB + MAX_SLICE_PAYLOAD_BITS;
   localparam int CABAC_LOW_LSB = CABAC_LEN_LSB + 13;
@@ -159,6 +162,7 @@ module ff_vvc_encoder #(
 
   ff_vvc_palette_symbolizer #(
     .CTU_SIZE(CTU_SIZE),
+    .PALETTE_CU_SIZE(PALETTE_CU_SIZE),
     .SAMPLE_BITS(SAMPLE_BITS),
     .MAX_PALETTE_SYMBOLS(MAX_CTU_PALETTE_SYMBOLS)
   ) palette_symbolizer (

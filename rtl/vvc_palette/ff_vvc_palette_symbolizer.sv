@@ -2,8 +2,11 @@
 
 module ff_vvc_palette_symbolizer #(
   parameter int CTU_SIZE = 64,
+  parameter int PALETTE_CU_SIZE = 8,
   parameter int SAMPLE_BITS = 8,
-  parameter int MAX_PALETTE_SYMBOLS = (CTU_SIZE / 8) * (CTU_SIZE / 8)
+  parameter int MAX_PALETTE_SYMBOLS =
+    ((CTU_SIZE + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE) *
+    ((CTU_SIZE + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE)
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -54,9 +57,9 @@ module ff_vvc_palette_symbolizer #(
   logic [7:0]  drain_symbol_index;
 
   assign symbol_count =
-    enable ? (((ctu_coded_width + 16'd7) >> 3) * ((ctu_coded_height + 16'd7) >> 3)) : 8'd0;
+    enable ? (palette_cu_count_x(ctu_coded_width) * palette_cu_count_y(ctu_coded_height)) : 8'd0;
   assign visible_symbol_count =
-    enable ? (((ctu_visible_width + 16'd7) >> 3) * ((ctu_visible_height + 16'd7) >> 3)) : 8'd0;
+    enable ? (palette_cu_count_x(ctu_visible_width) * palette_cu_count_y(ctu_visible_height)) : 8'd0;
   assign s_axis_ready = enable && (!m_axis_valid || m_axis_ready);
   assign input_valid = sample_valid || (s_axis_valid && s_axis_ready);
   assign input_plane = sample_valid ? sample_plane : s_axis_plane;
@@ -168,7 +171,23 @@ module ff_vvc_palette_symbolizer #(
     input logic [15:0] y
   );
     begin
-      is_symbol_anchor_xy = (x[2:0] == 3'd0) && (y[2:0] == 3'd0);
+      is_symbol_anchor_xy = ((x % PALETTE_CU_SIZE) == 0) && ((y % PALETTE_CU_SIZE) == 0);
+    end
+  endfunction
+
+  function automatic logic [7:0] palette_cu_count_x(input logic [15:0] width);
+    logic [15:0] count;
+    begin
+      count = (width + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE;
+      palette_cu_count_x = count[7:0];
+    end
+  endfunction
+
+  function automatic logic [7:0] palette_cu_count_y(input logic [15:0] height);
+    logic [15:0] count;
+    begin
+      count = (height + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE;
+      palette_cu_count_y = count[7:0];
     end
   endfunction
 
@@ -179,8 +198,8 @@ module ff_vvc_palette_symbolizer #(
     logic [15:0] tiles_x;
     logic [15:0] index;
     begin
-      tiles_x = (ctu_visible_width + 16'd7) >> 3;
-      index = (y >> 3) * tiles_x + (x >> 3);
+      tiles_x = palette_cu_count_x(ctu_visible_width);
+      index = (y / PALETTE_CU_SIZE) * tiles_x + (x / PALETTE_CU_SIZE);
       symbol_index_xy = index[7:0];
     end
   endfunction
@@ -210,11 +229,11 @@ module ff_vvc_palette_symbolizer #(
       end
 
       if (ctu_coded_width >= 16'd16 && ctu_coded_height >= 16'd16) begin
-        origin_x = origin_x + (index_in_16[0] ? 16'd8 : 16'd0);
-        origin_y = origin_y + (index_in_16[1] ? 16'd8 : 16'd0);
+        origin_x = origin_x + (index_in_16[0] ? PALETTE_CU_SIZE : 16'd0);
+        origin_y = origin_y + (index_in_16[1] ? PALETTE_CU_SIZE : 16'd0);
       end else begin
-        origin_x = (index_in_16[2:0] << 3);
-        origin_y = (index_in_16[5:3] << 3);
+        origin_x = index_in_16[2:0] * PALETTE_CU_SIZE;
+        origin_y = index_in_16[5:3] * PALETTE_CU_SIZE;
       end
 
       coding_order_position = {origin_x, origin_y};
