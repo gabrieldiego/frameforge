@@ -42,12 +42,16 @@ module ff_vvc_encoder #(
   localparam int INPUT_COUNT_BITS = $clog2((MAX_FRAME_SAMPLES * 2) + 1);
   localparam int TOY_RESIDUAL_CB_SIZE = 4;
   localparam int TOY_RESIDUAL_LUMA_SAMPLES = TOY_RESIDUAL_CB_SIZE * TOY_RESIDUAL_CB_SIZE;
-  localparam int CABAC_CAPTURE_BUFFER_BYTES = 512;
+  localparam int GENERATED_CABAC_REPLAY_BYTES = 512;
   localparam int PALETTE_CU_SIZE = 8;
   localparam int MAX_CTU_PALETTE_SYMBOLS =
     ((CTU_SIZE + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE) *
     ((CTU_SIZE + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE);
   localparam bit PALETTE_MODE = (CHROMA_FORMAT_IDC == 3);
+  localparam logic [1:0] PALETTE_OUT_IDLE     = 2'd0;
+  localparam logic [1:0] PALETTE_OUT_PREAMBLE = 2'd1;
+  localparam logic [1:0] PALETTE_OUT_CABAC    = 2'd2;
+  localparam logic [1:0] PALETTE_OUT_TRAIL    = 2'd3;
 
   logic [12:0] index_q;
   logic [12:0] stream_len_q;
@@ -93,6 +97,7 @@ module ff_vvc_encoder #(
   logic        residual_sample_1_valid;
   logic        residual_sample_1_last;
   logic        cabac_stream_valid;
+  logic        cabac_stream_ready;
   logic [7:0]  cabac_stream_data;
   logic        cabac_stream_last;
   logic [12:0] cabac_stream_bit_count;
@@ -102,15 +107,30 @@ module ff_vvc_encoder #(
   logic [12:0] cabac_capture_byte_index_q;
   logic [12:0] cabac_captured_bit_len_q;
   logic [12:0] cabac_captured_byte_len_q;
-  logic [7:0]  cabac_captured_bytes_q [0:CABAC_CAPTURE_BUFFER_BYTES - 1];
+  logic [7:0]  generated_cabac_replay_bytes_q [0:GENERATED_CABAC_REPLAY_BYTES - 1];
   logic        cabac_capture_done_q;
   logic        pending_output_q;
   logic        palette_done_q;
   logic [12:0] slice_payload_ebsp_len_q;
   logic [12:0] slice_payload_ebsp_cra_len_q;
+  logic [1:0]  palette_out_state_q;
+  logic [12:0] palette_out_index_q;
+  logic        palette_hold_valid_q;
+  logic [7:0]  palette_hold_byte_q;
+  logic        palette_tail_extra_q;
+  logic [1:0]  palette_zero_count_q;
+  logic        palette_epb_pending_q;
+  logic [7:0]  palette_epb_byte_q;
+  logic        palette_epb_last_q;
 
-  assign busy = input_active_q || pending_output_q || m_axis_valid || (index_q != 0);
+  assign busy = input_active_q || pending_output_q || m_axis_valid || (index_q != 0) ||
+                (palette_out_state_q != PALETTE_OUT_IDLE);
   assign cabac_enable = 1'b1;
+  assign cabac_stream_ready =
+    PALETTE_MODE
+      ? ((palette_out_state_q == PALETTE_OUT_CABAC) && !palette_epb_pending_q &&
+         (!m_axis_valid || m_axis_ready))
+      : cabac_capture_active_q;
 
   generate
     if (PALETTE_SKIP_OFF_VIEW_CUS) begin : gen_palette_skip_off_view_cus
@@ -220,7 +240,7 @@ module ff_vvc_encoder #(
     .s_axis_kind(8'd1),
     .s_axis_data(palette_stream_data),
     .s_axis_last(palette_stream_last),
-    .m_axis_ready(cabac_capture_active_q),
+    .m_axis_ready(cabac_stream_ready),
     .m_axis_valid(cabac_stream_valid),
     .m_axis_data(cabac_stream_data),
     .m_axis_last(cabac_stream_last),
@@ -312,6 +332,15 @@ module ff_vvc_encoder #(
       cabac_capture_done_q <= 1'b0;
       pending_output_q <= 1'b0;
       palette_done_q <= 1'b0;
+      palette_out_state_q <= PALETTE_OUT_IDLE;
+      palette_out_index_q <= 13'd0;
+      palette_hold_valid_q <= 1'b0;
+      palette_hold_byte_q <= 8'd0;
+      palette_tail_extra_q <= 1'b0;
+      palette_zero_count_q <= 2'd0;
+      palette_epb_pending_q <= 1'b0;
+      palette_epb_byte_q <= 8'd0;
+      palette_epb_last_q <= 1'b0;
     end else begin
       cabac_start_q <= 1'b0;
       if (start && !busy) begin
@@ -346,6 +375,15 @@ module ff_vvc_encoder #(
         cabac_capture_done_q <= 1'b0;
         pending_output_q <= 1'b0;
         palette_done_q <= 1'b0;
+        palette_out_state_q <= PALETTE_OUT_IDLE;
+        palette_out_index_q <= 13'd0;
+        palette_hold_valid_q <= 1'b0;
+        palette_hold_byte_q <= 8'd0;
+        palette_tail_extra_q <= 1'b0;
+        palette_zero_count_q <= 2'd0;
+        palette_epb_pending_q <= 1'b0;
+        palette_epb_byte_q <= 8'd0;
+        palette_epb_last_q <= 1'b0;
       end else if (input_active_q && s_axis_valid && s_axis_ready) begin
         if (s_axis_last != (input_count_q == input_len_q - 1'b1)) begin
           input_error <= 1'b1;
@@ -396,6 +434,21 @@ module ff_vvc_encoder #(
         end else begin
           input_count_q <= input_count_q + 1'b1;
         end
+      end else if (pending_output_q && PALETTE_MODE &&
+                   (palette_out_state_q == PALETTE_OUT_IDLE)) begin
+        pending_output_q <= 1'b0;
+        palette_out_state_q <= PALETTE_OUT_PREAMBLE;
+        palette_out_index_q <= 13'd0;
+        palette_hold_valid_q <= 1'b0;
+        palette_hold_byte_q <= 8'd0;
+        palette_tail_extra_q <= 1'b0;
+        palette_zero_count_q <= 2'd0;
+        palette_epb_pending_q <= 1'b0;
+        palette_epb_byte_q <= 8'd0;
+        palette_epb_last_q <= 1'b0;
+        m_axis_valid <= 1'b0;
+        m_axis_data <= 8'd0;
+        m_axis_last <= 1'b0;
       end else if (pending_output_q && !cabac_capture_active_q && !cabac_capture_done_q) begin
         cabac_start_q <= !PALETTE_MODE;
         cabac_capture_active_q <= 1'b1;
@@ -425,11 +478,79 @@ module ff_vvc_encoder #(
           index_q     <= index_q + 1'b1;
         end
       end
+      if (PALETTE_MODE && (palette_out_state_q != PALETTE_OUT_IDLE) &&
+          (!m_axis_valid || m_axis_ready)) begin
+        if (palette_epb_pending_q) begin
+          m_axis_valid <= 1'b1;
+          m_axis_data <= palette_epb_byte_q;
+          m_axis_last <= palette_epb_last_q;
+          palette_epb_pending_q <= 1'b0;
+          palette_zero_count_q <= next_zero_count(palette_zero_count_q, palette_epb_byte_q);
+          if (palette_epb_last_q) begin
+            palette_out_state_q <= PALETTE_OUT_IDLE;
+            palette_epb_last_q <= 1'b0;
+          end
+        end else begin
+          case (palette_out_state_q)
+          PALETTE_OUT_PREAMBLE: begin
+            if (palette_out_index_q < palette_direct_preamble_len()) begin
+              if (palette_direct_preamble_is_slice_payload(palette_out_index_q)) begin
+                emit_palette_raw_byte(palette_direct_preamble_byte(palette_out_index_q), 1'b0);
+              end else begin
+                m_axis_valid <= 1'b1;
+                m_axis_data <= palette_direct_preamble_byte(palette_out_index_q);
+                m_axis_last <= 1'b0;
+                palette_zero_count_q <= 2'd0;
+              end
+              palette_out_index_q <= palette_out_index_q + 13'd1;
+            end else begin
+              m_axis_valid <= 1'b0;
+              m_axis_last <= 1'b0;
+              palette_out_state_q <= PALETTE_OUT_CABAC;
+            end
+          end
+          PALETTE_OUT_CABAC: begin
+            if (cabac_stream_valid) begin
+              if (palette_hold_valid_q) begin
+                emit_palette_raw_byte(palette_hold_byte_q, 1'b0);
+              end else begin
+                m_axis_valid <= 1'b0;
+                m_axis_last <= 1'b0;
+              end
+              palette_hold_valid_q <= 1'b1;
+              palette_hold_byte_q <= cabac_stream_data;
+              if (cabac_stream_last) begin
+                palette_out_state_q <= PALETTE_OUT_TRAIL;
+                palette_tail_extra_q <= (cabac_stream_bit_count[2:0] == 3'd0);
+              end
+            end else begin
+              m_axis_valid <= 1'b0;
+              m_axis_last <= 1'b0;
+            end
+          end
+          PALETTE_OUT_TRAIL: begin
+            if (palette_tail_extra_q && palette_hold_valid_q) begin
+              emit_palette_raw_byte(palette_hold_byte_q, 1'b0);
+              palette_hold_valid_q <= 1'b0;
+            end else if (palette_tail_extra_q) begin
+              emit_palette_raw_byte(8'h80, 1'b1);
+              palette_tail_extra_q <= 1'b0;
+            end else begin
+              emit_palette_raw_byte(palette_tail_byte(palette_hold_byte_q, cabac_stream_bit_count[2:0]), 1'b1);
+              palette_hold_valid_q <= 1'b0;
+            end
+          end
+          default: begin
+            palette_out_state_q <= PALETTE_OUT_IDLE;
+          end
+          endcase
+        end
+      end
       if (pending_output_q && palette_stream_valid && palette_stream_ready && palette_stream_last) begin
         palette_done_q <= 1'b1;
       end
-      if (cabac_capture_active_q && cabac_stream_valid) begin
-        cabac_captured_bytes_q[cabac_capture_byte_index_q] <= cabac_stream_data;
+      if (!PALETTE_MODE && cabac_capture_active_q && cabac_stream_valid) begin
+        generated_cabac_replay_bytes_q[cabac_capture_byte_index_q] <= cabac_stream_data;
         cabac_capture_byte_index_q <= cabac_capture_byte_index_q + 13'd1;
         if (cabac_stream_last) begin
           cabac_captured_bit_len_q <= cabac_stream_bit_count;
@@ -440,6 +561,96 @@ module ff_vvc_encoder #(
       end
     end
   end
+
+  task automatic emit_palette_raw_byte(input logic [7:0] raw_byte, input logic raw_last);
+    begin
+      if ((palette_zero_count_q >= 2'd2) && (raw_byte <= 8'h03)) begin
+        m_axis_valid <= 1'b1;
+        m_axis_data <= 8'h03;
+        m_axis_last <= 1'b0;
+        palette_epb_pending_q <= 1'b1;
+        palette_epb_byte_q <= raw_byte;
+        palette_epb_last_q <= raw_last;
+        palette_zero_count_q <= 2'd0;
+      end else begin
+        m_axis_valid <= 1'b1;
+        m_axis_data <= raw_byte;
+        m_axis_last <= raw_last;
+        palette_zero_count_q <= next_zero_count(palette_zero_count_q, raw_byte);
+        if (raw_last) begin
+          palette_out_state_q <= PALETTE_OUT_IDLE;
+        end
+      end
+    end
+  endtask
+
+  function automatic logic [1:0] next_zero_count(
+    input logic [1:0] zero_count,
+    input logic [7:0] byte_value
+  );
+    begin
+      if (byte_value == 8'h00) begin
+        next_zero_count = zero_count == 2'd2 ? 2'd2 : zero_count + 2'd1;
+      end else begin
+        next_zero_count = 2'd0;
+      end
+    end
+  endfunction
+
+  function automatic logic [12:0] palette_direct_preamble_len();
+    begin
+      palette_direct_preamble_len =
+        parameter_set_len() + color_filler_nal_len() + NAL_OVERHEAD_LEN + 13'd3;
+    end
+  endfunction
+
+  function automatic logic [7:0] palette_direct_preamble_byte(input logic [12:0] index);
+    logic [12:0] slice_base;
+    logic [12:0] slice_index;
+    begin
+      slice_base = parameter_set_len() + color_filler_nal_len();
+      if (index < slice_base) begin
+        palette_direct_preamble_byte = stream_byte(index);
+      end else if (index < slice_base + NAL_OVERHEAD_LEN) begin
+        slice_index = index - slice_base;
+        if (slice_index < 13'd4) begin
+          palette_direct_preamble_byte = start_code_byte(slice_index[1:0]);
+        end else begin
+          palette_direct_preamble_byte = nal_header_byte(3'd2, slice_index[0], 1'b0);
+        end
+      end else begin
+        palette_direct_preamble_byte =
+          slice_payload_prefix_byte(index - (slice_base + NAL_OVERHEAD_LEN), 1'b0);
+      end
+    end
+  endfunction
+
+  function automatic logic palette_direct_preamble_is_slice_payload(input logic [12:0] index);
+    begin
+      palette_direct_preamble_is_slice_payload =
+        index >= (parameter_set_len() + color_filler_nal_len() + NAL_OVERHEAD_LEN);
+    end
+  endfunction
+
+  function automatic logic [7:0] palette_tail_byte(
+    input logic [7:0] last_cabac_byte,
+    input logic [2:0] valid_bits
+  );
+    logic [7:0] keep_mask;
+    begin
+      case (valid_bits)
+        3'd1: keep_mask = 8'b1000_0000;
+        3'd2: keep_mask = 8'b1100_0000;
+        3'd3: keep_mask = 8'b1110_0000;
+        3'd4: keep_mask = 8'b1111_0000;
+        3'd5: keep_mask = 8'b1111_1000;
+        3'd6: keep_mask = 8'b1111_1100;
+        3'd7: keep_mask = 8'b1111_1110;
+        default: keep_mask = 8'b0000_0000;
+      endcase
+      palette_tail_byte = (last_cabac_byte & keep_mask) | (8'h80 >> valid_bits);
+    end
+  endfunction
 
   function automatic logic [INPUT_COUNT_BITS - 1:0] input_len(input logic [1:0] frames);
     case (frames)
@@ -1360,8 +1571,8 @@ module ff_vvc_encoder #(
   function automatic logic [7:0] cabac_captured_byte(input logic [12:0] byte_index);
     begin
       if ((byte_index < cabac_captured_byte_len_q) &&
-          (byte_index < CABAC_CAPTURE_BUFFER_BYTES[12:0])) begin
-        cabac_captured_byte = cabac_captured_bytes_q[byte_index];
+          (byte_index < GENERATED_CABAC_REPLAY_BYTES[12:0])) begin
+        cabac_captured_byte = generated_cabac_replay_bytes_q[byte_index];
       end else begin
         cabac_captured_byte = 8'd0;
       end
