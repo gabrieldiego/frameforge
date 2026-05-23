@@ -1887,7 +1887,7 @@ struct ToyVvcCabacContexts {
 }
 
 impl ToyVvcCabacContexts {
-    const DEFAULT_SLICE_QP: i32 = 26;
+    const DEFAULT_SLICE_QP: i32 = 32;
 
     fn new() -> Self {
         Self {
@@ -2777,18 +2777,36 @@ fn encode_64x64_partition_body(cabac: &mut ToyCabacEncoder, ctx: &mut ToyVvcCaba
     // initialization tables. The 32x32 leaves below are still transitional
     // generated bodies and are the next target for replacing trace-derived
     // compact words with syntax-driven context selection.
-    ctx.encode(cabac, ToyVvcCabacContext::SplitFlag(0), true);
+    // VVC split_cu_mode encodes the split flag with an inverted CABAC bin:
+    // split=1 is bin=0, while split=0 is bin=1.
+    ctx.encode(cabac, ToyVvcCabacContext::SplitFlag(0), false);
     ctx.encode(cabac, ToyVvcCabacContext::SplitQtFlag(0), true);
     for _ in 0..4 {
-        encode_32x32_luma_body(cabac);
+        encode_32x32_luma_leaf_body(cabac);
     }
     encode_32x32_chroma_body(cabac);
 }
 
 fn encode_32x32_luma_body(cabac: &mut ToyCabacEncoder) {
-    encode_compact_cabac_word(cabac, 0x035a);
-    encode_compact_cabac_word(cabac, 0x010f);
-    encode_compact_cabac_word(cabac, 0x0377);
+    encode_32x32_luma_body_inner(cabac, true, true);
+}
+
+fn encode_32x32_luma_leaf_body(cabac: &mut ToyCabacEncoder) {
+    encode_32x32_luma_body_inner(cabac, false, true);
+}
+
+fn encode_32x32_luma_body_inner(
+    cabac: &mut ToyCabacEncoder,
+    include_standalone_root: bool,
+    include_leaf_split: bool,
+) {
+    if include_standalone_root {
+        encode_compact_cabac_word(cabac, 0x035a);
+        encode_compact_cabac_word(cabac, 0x010f);
+    }
+    if include_leaf_split {
+        encode_compact_cabac_word(cabac, 0x0377);
+    }
     encode_compact_cabac_word(cabac, 0x8000);
     encode_compact_cabac_word(cabac, 0x0163);
     encode_compact_cabac_word(cabac, 0x020b);
@@ -4812,7 +4830,7 @@ mod tests {
         let mut ctx = ToyVvcCabacContexts::new();
         let split0 = &ctx.split_flag[0];
         assert!(!split0.mps());
-        assert_eq!(split0.lps(510), 86);
+        assert_eq!(split0.lps(510), 71);
         let initial_state = split0.state();
 
         let mut cabac = ToyCabacEncoder::new();

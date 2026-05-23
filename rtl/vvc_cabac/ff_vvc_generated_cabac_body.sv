@@ -157,14 +157,15 @@ module ff_vvc_generated_cabac_body #(
       // I-slice context initialization tables. The leaves still reuse the
       // transitional 32x32 generated encoder until those bodies are converted
       // to syntax-driven context selection too.
-      split_ctx = vvc_prob_model_init(vvc_split_flag_init(4'd0), vvc_split_flag_log2_window(4'd0), 26);
+      // VVC split_cu_mode encodes split=1 as CABAC bin 0.
+      split_ctx = vvc_prob_model_init(vvc_split_flag_init(4'd0), vvc_split_flag_log2_window(4'd0), 32);
+      {split_ctx, st} = cabac_encode_vvc_model_bin(st, split_ctx, 1'b0);
+      split_ctx = vvc_prob_model_init(vvc_split_qt_flag_init(4'd0), vvc_split_qt_flag_log2_window(4'd0), 32);
       {split_ctx, st} = cabac_encode_vvc_model_bin(st, split_ctx, 1'b1);
-      split_ctx = vvc_prob_model_init(vvc_split_qt_flag_init(4'd0), vvc_split_qt_flag_log2_window(4'd0), 26);
-      {split_ctx, st} = cabac_encode_vvc_model_bin(st, split_ctx, 1'b1);
-      st = encode_32x32_luma_tree(st, rem);
-      st = encode_32x32_luma_tree(st, rem);
-      st = encode_32x32_luma_tree(st, rem);
-      st = encode_32x32_luma_tree(st, rem);
+      st = encode_32x32_luma_leaf_tree(st, rem);
+      st = encode_32x32_luma_leaf_tree(st, rem);
+      st = encode_32x32_luma_leaf_tree(st, rem);
+      st = encode_32x32_luma_leaf_tree(st, rem);
       st = encode_32x32_chroma_tree(st, c_rem);
       encode_64x64_partition_tree = st;
     end
@@ -302,6 +303,18 @@ module ff_vvc_generated_cabac_body #(
       st = st_in;
       st = encode_compact_cabac_word(st, 16'h035a);
       st = encode_compact_cabac_word(st, 16'h010f);
+      st = encode_32x32_luma_leaf_tree(st, rem);
+      encode_32x32_luma_tree = st;
+    end
+  endfunction
+
+  function automatic cabac_state_t encode_32x32_luma_leaf_tree(
+    input cabac_state_t st_in,
+    input logic [4:0]   rem
+  );
+    cabac_state_t st;
+    begin
+      st = st_in;
       st = encode_compact_cabac_word(st, 16'h0377);
       st = encode_compact_cabac_word(st, 16'h8000);
       st = encode_compact_cabac_word(st, 16'h0163);
@@ -662,7 +675,7 @@ module ff_vvc_generated_cabac_body #(
       st = encode_compact_cabac_word(st, 16'h0013);
       st = encode_compact_cabac_word(st, 16'h0234);
       st = encode_compact_cabac_word(st, 16'h0013);
-      encode_32x32_luma_tree = st;
+      encode_32x32_luma_leaf_tree = st;
     end
   endfunction
 
