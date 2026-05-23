@@ -100,6 +100,8 @@ def coding_order_tile(index, width, height):
 
 
 def cabac_bytes(dut):
+    if not hasattr(dut, "compat_payload_bits"):
+        return None
     bit_len = int(dut.compat_payload_bit_len.value)
     value = int(dut.compat_payload_bits.value)
     if bit_len == 0:
@@ -114,9 +116,10 @@ async def stream_bytes(dut):
     byte_count = int(dut.stream_byte_count.value)
     observed = bytearray()
     dut.m_axis_ready.value = 1
-    dut.start.value = 1
-    await RisingEdge(dut.clk)
-    dut.start.value = 0
+    if hasattr(dut, "start"):
+        dut.start.value = 1
+        await RisingEdge(dut.clk)
+        dut.start.value = 0
     for index in range(byte_count + 4):
         await ReadOnly()
         assert int(dut.m_axis_valid.value) == 1
@@ -235,7 +238,7 @@ async def palette_cabac_matches_software_boundary_dump(dut):
         dut.s_axis_data.value = 0
         dut.s_axis_last.value = 0
         if hasattr(dut, "m_axis_ready"):
-            dut.m_axis_ready.value = 1
+            dut.m_axis_ready.value = 0
         for _ in range(2):
             await RisingEdge(dut.clk)
         dut.rst_n.value = 1
@@ -255,7 +258,7 @@ async def palette_cabac_matches_software_boundary_dump(dut):
         dut.body_kind.value = 0
         dut.luma_rem.value = 0
         dut.chroma_rem.value = 0
-        dut.m_axis_ready.value = 1
+        dut.m_axis_ready.value = 0
     dut.coded_width.value = reference["width"]
     dut.coded_height.value = reference["height"]
     dut.symbol_count.value = symbol_count
@@ -263,15 +266,20 @@ async def palette_cabac_matches_software_boundary_dump(dut):
     await feed_palette_symbols(dut, symbols, symbol_count)
     await Timer(1, unit="ns")
 
-    observed_hex = cabac_bytes(dut).hex()
-    observed_len = int(dut.compat_payload_bit_len.value)
+    compat_bytes = cabac_bytes(dut)
+    observed_len = (
+        int(dut.compat_payload_bit_len.value)
+        if hasattr(dut, "compat_payload_bit_len")
+        else int(dut.stream_bit_count.value)
+    )
     assert observed_len == reference["cabac_bit_len"], (
         observed_len,
         reference["cabac_bit_len"],
-        observed_hex,
+        compat_bytes.hex() if compat_bytes is not None else None,
         reference["cabac_hex"],
     )
-    assert observed_hex == reference["cabac_hex"], (observed_hex, reference["cabac_hex"])
+    if compat_bytes is not None:
+        assert compat_bytes.hex() == reference["cabac_hex"], (compat_bytes.hex(), reference["cabac_hex"])
     observed_stream = await stream_bytes(dut)
     if observed_stream is not None:
         assert observed_stream.hex() == reference["cabac_hex"]
@@ -298,7 +306,7 @@ async def palette_cabac_matches_multicolor_lossless_symbols(dut):
         dut.s_axis_data.value = 0
         dut.s_axis_last.value = 0
         if hasattr(dut, "m_axis_ready"):
-            dut.m_axis_ready.value = 1
+            dut.m_axis_ready.value = 0
         for _ in range(2):
             await RisingEdge(dut.clk)
         dut.rst_n.value = 1
@@ -317,7 +325,7 @@ async def palette_cabac_matches_multicolor_lossless_symbols(dut):
         dut.body_kind.value = 0
         dut.luma_rem.value = 0
         dut.chroma_rem.value = 0
-        dut.m_axis_ready.value = 1
+        dut.m_axis_ready.value = 0
     dut.coded_width.value = reference["width"]
     dut.coded_height.value = reference["height"]
     dut.symbol_count.value = symbol_count
@@ -325,12 +333,20 @@ async def palette_cabac_matches_multicolor_lossless_symbols(dut):
     await feed_palette_symbols(dut, symbols, symbol_count)
     await Timer(1, unit="ns")
 
-    observed_hex = cabac_bytes(dut).hex()
-    observed_len = int(dut.compat_payload_bit_len.value)
+    compat_bytes = cabac_bytes(dut)
+    observed_len = (
+        int(dut.compat_payload_bit_len.value)
+        if hasattr(dut, "compat_payload_bit_len")
+        else int(dut.stream_bit_count.value)
+    )
     assert observed_len == reference["cabac_bit_len"], (
         observed_len,
         reference["cabac_bit_len"],
-        observed_hex,
+        compat_bytes.hex() if compat_bytes is not None else None,
         reference["cabac_hex"],
     )
-    assert observed_hex == reference["cabac_hex"], (observed_hex, reference["cabac_hex"])
+    if compat_bytes is not None:
+        assert compat_bytes.hex() == reference["cabac_hex"], (compat_bytes.hex(), reference["cabac_hex"])
+    observed_stream = await stream_bytes(dut)
+    if observed_stream is not None:
+        assert observed_stream.hex() == reference["cabac_hex"]

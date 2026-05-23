@@ -242,7 +242,6 @@ module ff_vvc_encoder #(
     .chroma_rem(quant_chroma_rem_q),
     .symbol_count(palette_symbol_count),
     .supported(cabac_supported),
-    .compat_payload_bit_len(),
     .s_axis_valid(palette_stream_valid),
     .s_axis_ready(palette_stream_ready),
     .s_axis_kind(8'd1),
@@ -253,8 +252,7 @@ module ff_vvc_encoder #(
     .m_axis_data(cabac_stream_data),
     .m_axis_last(cabac_stream_last),
     .stream_bit_count(cabac_stream_bit_count),
-    .stream_byte_count(cabac_stream_byte_count),
-    .compat_payload_bits()
+    .stream_byte_count(cabac_stream_byte_count)
   );
 
   ff_residual_stub #(

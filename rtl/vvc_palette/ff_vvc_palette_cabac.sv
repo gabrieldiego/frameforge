@@ -6,6 +6,7 @@ module ff_vvc_palette_cabac #(
 ) (
   input  logic clk,
   input  logic rst_n,
+  input  logic start,
   input  logic clear,
   input  logic enable,
   input  logic [15:0] coded_width,
@@ -15,8 +16,12 @@ module ff_vvc_palette_cabac #(
   output logic        s_axis_ready,
   input  logic [31:0] s_axis_data,
   input  logic        s_axis_last,
-  output logic [12:0] compat_payload_bit_len,
-  output logic [MAX_SLICE_PAYLOAD_BITS - 1:0] compat_payload_bits
+  input  logic        m_axis_ready,
+  output logic        m_axis_valid,
+  output logic [7:0]  m_axis_data,
+  output logic        m_axis_last,
+  output logic [12:0] stream_bit_count,
+  output logic [12:0] stream_byte_count
 );
   localparam int PALETTE_MODEL_BITS = 40;
   localparam int PALETTE_CTX_COUNT = 18;
@@ -86,11 +91,18 @@ module ff_vvc_palette_cabac #(
   logic [7:0]     current_previous_index_q;
   logic [7:0]     current_prev_run_pos_q;
   logic [7:0]     current_prev_subblock_last_index_q;
+  palette_state_t finished_palette_state;
+  logic [12:0]    stream_byte_count_q;
+  logic [12:0]    stream_byte_index_q;
+  logic           stream_active_q;
 
-  assign s_axis_ready = enable;
-  assign compat_payload_bit_len = palette_state_q.cabac.capture.bit_count;
-  assign compat_payload_bits = cabac_capture_bits(palette_state_q.cabac.capture);
+  assign s_axis_ready = enable && !stream_active_q;
+  assign stream_bit_count = palette_state_q.cabac.capture.bit_count;
+  assign stream_byte_count = stream_active_q
+    ? stream_byte_count_q
+    : ((palette_state_q.cabac.capture.bit_count + 13'd7) >> 3);
   assign stream_symbol_selected = s_axis_data[24];
+  assign finished_palette_state = palette_finish(next_palette_state);
 
   always @* begin
     next_palette_state = palette_state_q;
@@ -151,6 +163,12 @@ module ff_vvc_palette_cabac #(
       current_previous_index_q <= 8'd0;
       current_prev_run_pos_q <= 8'd0;
       current_prev_subblock_last_index_q <= 8'd0;
+      stream_byte_count_q <= 13'd0;
+      stream_byte_index_q <= 13'd0;
+      stream_active_q <= 1'b0;
+      m_axis_valid <= 1'b0;
+      m_axis_data <= 8'd0;
+      m_axis_last <= 1'b0;
     end else if (clear || !enable) begin
       stream_symbol_index_q <= 8'd0;
       palette_state_q <= palette_start();
@@ -165,9 +183,15 @@ module ff_vvc_palette_cabac #(
       current_previous_index_q <= 8'd0;
       current_prev_run_pos_q <= 8'd0;
       current_prev_subblock_last_index_q <= 8'd0;
+      stream_byte_count_q <= 13'd0;
+      stream_byte_index_q <= 13'd0;
+      stream_active_q <= 1'b0;
+      m_axis_valid <= 1'b0;
+      m_axis_data <= 8'd0;
+      m_axis_last <= 1'b0;
     end else if (s_axis_valid && s_axis_ready) begin
       if (s_axis_last) begin
-        palette_state_q <= palette_finish(next_palette_state);
+        palette_state_q <= finished_palette_state;
         stream_symbol_index_q <= 8'd0;
         current_palette_size_q <= 8'd0;
         current_entry_count_q <= 8'd0;
@@ -224,6 +248,28 @@ module ff_vvc_palette_cabac #(
           end
         endcase
       end
+    end else if (start && !stream_active_q) begin
+      stream_byte_count_q <= (palette_state_q.cabac.capture.bit_count + 13'd7) >> 3;
+      stream_byte_index_q <= 13'd0;
+      stream_active_q <= ((palette_state_q.cabac.capture.bit_count + 13'd7) >> 3) != 13'd0;
+      m_axis_valid <= ((palette_state_q.cabac.capture.bit_count + 13'd7) >> 3) != 13'd0;
+      m_axis_data <= cabac_capture_stream_byte(palette_state_q.cabac.capture, 13'd0);
+      m_axis_last <= ((palette_state_q.cabac.capture.bit_count + 13'd7) >> 3) == 13'd1;
+    end else if (m_axis_valid && m_axis_ready) begin
+      if (m_axis_last) begin
+        stream_active_q <= 1'b0;
+        m_axis_valid <= 1'b0;
+        m_axis_data <= 8'd0;
+        m_axis_last <= 1'b0;
+      end else begin
+        stream_byte_index_q <= stream_byte_index_q + 13'd1;
+        m_axis_data <= cabac_capture_stream_byte(palette_state_q.cabac.capture, stream_byte_index_q + 13'd1);
+        m_axis_last <= (stream_byte_index_q + 13'd1) == (stream_byte_count_q - 13'd1);
+      end
+    end else if (!stream_active_q) begin
+      m_axis_valid <= 1'b0;
+      m_axis_last <= 1'b0;
+      m_axis_data <= 8'd0;
     end
   end
 
@@ -1171,11 +1217,23 @@ module ff_vvc_palette_cabac #(
     end
   endfunction
 
-  function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] cabac_capture_bits(
-    input cabac_capture_state_t capture
+  function automatic logic [7:0] cabac_capture_stream_byte(
+    input cabac_capture_state_t capture,
+    input logic [12:0] byte_index
   );
+    logic [12:0] bit_count;
+    logic [12:0] pad_bits;
     begin
-      cabac_capture_bits = (capture.bytes << capture.partial_bit_count) | capture.partial_byte;
+      bit_count = capture.bit_count;
+      pad_bits = ((((bit_count + 13'd7) >> 3) << 3) - bit_count);
+      if (byte_index < capture.byte_count) begin
+        cabac_capture_stream_byte =
+          capture.bytes >> (((capture.byte_count - 13'd1) - byte_index) * 8);
+      end else if ((byte_index == capture.byte_count) && (pad_bits != 13'd0)) begin
+        cabac_capture_stream_byte = capture.partial_byte << pad_bits[2:0];
+      end else begin
+        cabac_capture_stream_byte = 8'd0;
+      end
     end
   endfunction
 
