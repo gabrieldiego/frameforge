@@ -108,8 +108,6 @@ module ff_vvc_encoder #(
   logic        palette_done_q;
   logic [12:0] slice_payload_ebsp_len_q;
   logic [12:0] slice_payload_ebsp_cra_len_q;
-  logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] slice_payload_ebsp_bits_q;
-  logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] slice_payload_ebsp_cra_bits_q;
 
   assign busy = input_active_q || pending_output_q || m_axis_valid || (index_q != 0);
   assign cabac_enable = 1'b1;
@@ -306,8 +304,6 @@ module ff_vvc_encoder #(
       m_axis_last  <= 1'b0;
       slice_payload_ebsp_len_q <= '0;
       slice_payload_ebsp_cra_len_q <= '0;
-      slice_payload_ebsp_bits_q <= '0;
-      slice_payload_ebsp_cra_bits_q <= '0;
       cabac_start_q <= 1'b0;
       cabac_capture_active_q <= 1'b0;
       cabac_capture_byte_index_q <= 13'd0;
@@ -344,8 +340,6 @@ module ff_vvc_encoder #(
         index_q        <= '0;
         slice_payload_ebsp_len_q <= '0;
         slice_payload_ebsp_cra_len_q <= '0;
-        slice_payload_ebsp_bits_q <= '0;
-        slice_payload_ebsp_cra_bits_q <= '0;
         cabac_capture_active_q <= 1'b0;
         cabac_capture_byte_index_q <= 13'd0;
         cabac_captured_bit_len_q <= 13'd0;
@@ -417,9 +411,7 @@ module ff_vvc_encoder #(
         palette_done_q <= 1'b0;
         cabac_capture_done_q <= 1'b0;
         slice_payload_ebsp_len_q <= slice_payload_escaped_len_calc(1'b0);
-        slice_payload_ebsp_bits_q <= slice_payload_escaped_bits_calc(1'b0);
         slice_payload_ebsp_cra_len_q <= slice_payload_escaped_len_calc(1'b1);
-        slice_payload_ebsp_cra_bits_q <= slice_payload_escaped_bits_calc(1'b1);
         stream_len_q   <= stream_len_from_slice_payloads(frame_count);
         m_axis_valid   <= 1'b1;
         m_axis_data    <= stream_byte(13'd0);
@@ -855,33 +847,37 @@ module ff_vvc_encoder #(
     end
   endfunction
 
-  function automatic logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] slice_payload_escaped_bits_calc(
-    input logic cra_picture
+  function automatic logic [7:0] slice_payload_escaped_cached_byte(
+    input logic [12:0] escaped_index,
+    input logic        cra_picture
   );
-    logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] raw_payload;
-    logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] escaped_payload;
     logic [12:0] raw_index;
-    logic [12:0] raw_len;
-    logic [12:0] escaped_len;
+    logic [12:0] out_index;
     logic [1:0] zero_count;
     logic [7:0] raw_byte;
+    logic found;
     begin
-      raw_payload = current_slice_payload_bits(cra_picture);
-      raw_len = slice_payload_len();
-      escaped_payload = '0;
-      escaped_len = 13'd0;
+      out_index = 13'd0;
       zero_count = 2'd0;
+      found = 1'b0;
+      slice_payload_escaped_cached_byte = 8'h00;
 
-      for (raw_index = 13'd0; raw_index < raw_len; raw_index = raw_index + 13'd1) begin
-        raw_byte = slice_payload_byte_from_bits(raw_payload, raw_index);
-        if (zero_count >= 2'd2 && raw_byte <= 8'h03) begin
-          escaped_payload = (escaped_payload << 8) | 8'h03;
-          escaped_len = escaped_len + 13'd1;
+      for (raw_index = 13'd0; raw_index < slice_payload_len(); raw_index = raw_index + 13'd1) begin
+        raw_byte = slice_payload_byte(raw_index, cra_picture);
+        if (!found && zero_count >= 2'd2 && raw_byte <= 8'h03) begin
+          if (out_index == escaped_index) begin
+            slice_payload_escaped_cached_byte = 8'h03;
+            found = 1'b1;
+          end
+          out_index = out_index + 13'd1;
           zero_count = 2'd0;
         end
 
-        escaped_payload = (escaped_payload << 8) | raw_byte;
-        escaped_len = escaped_len + 13'd1;
+        if (!found && out_index == escaped_index) begin
+          slice_payload_escaped_cached_byte = raw_byte;
+          found = 1'b1;
+        end
+        out_index = out_index + 13'd1;
 
         if (raw_byte == 8'h00) begin
           if (zero_count < 2'd2) begin
@@ -891,28 +887,6 @@ module ff_vvc_encoder #(
           zero_count = 2'd0;
         end
       end
-
-      slice_payload_escaped_bits_calc =
-        escaped_payload << (((SLICE_PAYLOAD_BUFFER_BITS >> 3) - escaped_len) * 8);
-    end
-  endfunction
-
-  function automatic logic [7:0] slice_payload_escaped_cached_byte(
-    input logic [12:0] escaped_index,
-    input logic        cra_picture
-  );
-    logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] payload;
-    logic [12:0] len;
-    begin
-      if (cra_picture) begin
-        payload = slice_payload_ebsp_cra_bits_q;
-        len = slice_payload_ebsp_cra_len_q;
-      end else begin
-        payload = slice_payload_ebsp_bits_q;
-        len = slice_payload_ebsp_len_q;
-      end
-      slice_payload_escaped_cached_byte =
-        payload >> ((((SLICE_PAYLOAD_BUFFER_BITS >> 3) - 1) - escaped_index) * 8);
     end
   endfunction
 
