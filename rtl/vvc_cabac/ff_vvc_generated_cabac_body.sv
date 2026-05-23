@@ -38,9 +38,10 @@ module ff_vvc_generated_cabac_body #(
   typedef struct packed {
     logic [12:0] bit_count;
     logic [12:0] byte_count;
+    logic [12:0] target_byte_index;
     logic [2:0] partial_bit_count;
     logic [7:0] partial_byte;
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bytes;
+    logic [7:0] selected_byte;
   } cabac_capture_state_t;
 
   typedef struct packed {
@@ -127,7 +128,7 @@ module ff_vvc_generated_cabac_body #(
     cabac_writer_state_t st;
     begin
       if ((body_kind == BODY_GENERATED) && supports_generated_body(width, height)) begin
-        st = encode_generated_state(width, height, rem, c_rem);
+        st = encode_generated_state(width, height, rem, c_rem, 13'h1fff);
         current_bit_count_for_inputs = st.capture.bit_count;
       end else begin
         current_bit_count_for_inputs = 13'd0;
@@ -139,7 +140,7 @@ module ff_vvc_generated_cabac_body #(
     cabac_writer_state_t st;
     begin
       if ((body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height)) begin
-        st = encode_generated_state(coded_width, coded_height, luma_rem, chroma_rem);
+        st = encode_generated_state(coded_width, coded_height, luma_rem, chroma_rem, byte_index);
         current_stream_byte = cabac_state_stream_byte(st, byte_index);
       end else begin
         current_stream_byte = 8'd0;
@@ -159,8 +160,7 @@ module ff_vvc_generated_cabac_body #(
       byte_count = (bit_count + 13'd7) >> 3;
       pad_bits = ((((bit_count + 13'd7) >> 3) << 3) - bit_count);
       if (byte_index < st.capture.byte_count) begin
-        cabac_state_stream_byte =
-          st.capture.bytes >> (((st.capture.byte_count - 13'd1) - byte_index) * 8);
+        cabac_state_stream_byte = st.capture.selected_byte;
       end else if ((byte_index == st.capture.byte_count) && (pad_bits != 13'd0)) begin
         cabac_state_stream_byte = st.capture.partial_byte << pad_bits[2:0];
       end else begin
@@ -186,17 +186,18 @@ module ff_vvc_generated_cabac_body #(
     input logic [15:0] width,
     input logic [15:0] height,
     input logic [4:0]  rem,
-    input logic [4:0]  c_rem
+    input logic [4:0]  c_rem,
+    input logic [12:0] target_byte_index
   );
     begin
       if ((width == 16'd8) && (height == 16'd8)) begin
-        encode_generated_state = encode_8x8_state(rem, c_rem);
+        encode_generated_state = encode_8x8_state(rem, c_rem, target_byte_index);
       end else if ((width == 16'd16) && (height == 16'd16)) begin
-        encode_generated_state = encode_16x16_state(rem, c_rem);
+        encode_generated_state = encode_16x16_state(rem, c_rem, target_byte_index);
       end else if ((width == 16'd32) && (height == 16'd32)) begin
-        encode_generated_state = encode_32x32_state(rem, c_rem);
+        encode_generated_state = encode_32x32_state(rem, c_rem, target_byte_index);
       end else if ((width == 16'd64) && (height == 16'd64)) begin
-        encode_generated_state = encode_64x64_state(width, height, rem, c_rem);
+        encode_generated_state = encode_64x64_state(width, height, rem, c_rem, target_byte_index);
       end else begin
         encode_generated_state = '0;
       end
@@ -205,11 +206,12 @@ module ff_vvc_generated_cabac_body #(
 
   function automatic cabac_writer_state_t encode_8x8_state(
     input logic [4:0] rem,
-    input logic [4:0] c_rem
+    input logic [4:0] c_rem,
+    input logic [12:0] target_byte_index
   );
     cabac_writer_state_t st;
     begin
-      st = cabac_start();
+      st = cabac_start(target_byte_index);
       st = encode_8x8_luma_tree(st, rem);
       st = encode_4x4_chroma_tree(st, c_rem);
       st = cabac_encode_bin_trm(st, 1'b1);
@@ -220,11 +222,12 @@ module ff_vvc_generated_cabac_body #(
 
   function automatic cabac_writer_state_t encode_16x16_state(
     input logic [4:0] rem,
-    input logic [4:0] c_rem
+    input logic [4:0] c_rem,
+    input logic [12:0] target_byte_index
   );
     cabac_writer_state_t st;
     begin
-      st = cabac_start();
+      st = cabac_start(target_byte_index);
       st = encode_16x16_tree(st, rem, c_rem);
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);
@@ -234,11 +237,12 @@ module ff_vvc_generated_cabac_body #(
 
   function automatic cabac_writer_state_t encode_32x32_state(
     input logic [4:0] rem,
-    input logic [4:0] c_rem
+    input logic [4:0] c_rem,
+    input logic [12:0] target_byte_index
   );
     cabac_writer_state_t st;
     begin
-      st = cabac_start();
+      st = cabac_start(target_byte_index);
       st = encode_32x32_luma_tree(st, rem);
       st = encode_32x32_chroma_tree(st, c_rem);
       st = cabac_encode_bin_trm(st, 1'b1);
@@ -251,11 +255,12 @@ module ff_vvc_generated_cabac_body #(
     input logic [15:0] coded_width,
     input logic [15:0] coded_height,
     input logic [4:0] rem,
-    input logic [4:0] c_rem
+    input logic [4:0] c_rem,
+    input logic [12:0] target_byte_index
   );
     cabac_writer_state_t st;
     begin
-      st = cabac_start();
+      st = cabac_start(target_byte_index);
       st = encode_partitioned_ctu_tree(st, coded_width, coded_height, rem, c_rem);
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);
@@ -1327,7 +1332,7 @@ module ff_vvc_generated_cabac_body #(
     end
   endfunction
 
-  function automatic cabac_writer_state_t cabac_start();
+  function automatic cabac_writer_state_t cabac_start(input logic [12:0] target_byte_index);
     begin
       cabac_start = '0;
       cabac_start.core.low = 32'd0;
@@ -1335,6 +1340,7 @@ module ff_vvc_generated_cabac_body #(
       cabac_start.core.buffered_byte = 9'h0ff;
       cabac_start.core.num_buffered_bytes = 8'd0;
       cabac_start.core.bits_left = 8'd23;
+      cabac_start.capture.target_byte_index = target_byte_index;
     end
   endfunction
 
@@ -1840,7 +1846,6 @@ module ff_vvc_generated_cabac_body #(
     input logic [5:0]   bit_count
   );
     cabac_writer_state_t st;
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bytes;
     logic [12:0] len;
     logic [12:0] byte_count;
     logic [7:0] partial_byte;
@@ -1848,7 +1853,6 @@ module ff_vvc_generated_cabac_body #(
     integer i;
     begin
       st = st_in;
-      bytes = st.capture.bytes;
       len = st.capture.bit_count;
       byte_count = st.capture.byte_count;
       partial_byte = st.capture.partial_byte;
@@ -1858,13 +1862,14 @@ module ff_vvc_generated_cabac_body #(
         partial_bit_count = partial_bit_count + 1;
         len = len + 13'd1;
         if (partial_bit_count == 8) begin
-          bytes = (bytes << 8) | partial_byte;
+          if (byte_count == st.capture.target_byte_index) begin
+            st.capture.selected_byte = partial_byte;
+          end
           byte_count = byte_count + 13'd1;
           partial_byte = 8'd0;
           partial_bit_count = 0;
         end
       end
-      st.capture.bytes = bytes;
       st.capture.bit_count = len;
       st.capture.byte_count = byte_count;
       st.capture.partial_byte = partial_byte;
