@@ -37,8 +37,6 @@ module ff_vvc_generated_cabac_body #(
   typedef logic [CABAC_STATE_BITS + 5 * VVC_PROB_MODEL_BITS - 1:0] cabac_luma_leaf_step_t;
 
   logic [12:0] generated_bit_count;
-  logic [MAX_SLICE_PAYLOAD_BITS - 1:0] generated_raw_bits;
-  logic [MAX_SLICE_PAYLOAD_BITS - 1:0] stream_bits_q;
   logic [12:0] stream_byte_count_q;
   logic [12:0] stream_byte_index_q;
   logic stream_active_q;
@@ -50,18 +48,11 @@ module ff_vvc_generated_cabac_body #(
   always @* begin
     supported =
       (body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height);
-
-    if ((body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height)) begin
-      {generated_bit_count, generated_raw_bits} = encode_generated_body(coded_width, coded_height, luma_rem, chroma_rem);
-    end else begin
-      generated_bit_count = 13'd0;
-      generated_raw_bits = '0;
-    end
+    generated_bit_count = current_bit_count_for_inputs(coded_width, coded_height, luma_rem, chroma_rem);
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      stream_bits_q <= '0;
       stream_byte_count_q <= 13'd0;
       stream_byte_index_q <= 13'd0;
       stream_active_q <= 1'b0;
@@ -70,16 +61,11 @@ module ff_vvc_generated_cabac_body #(
       m_axis_last <= 1'b0;
     end else begin
       if (start && supported) begin
-        stream_bits_q <= byte_aligned_bits(generated_raw_bits, generated_bit_count);
         stream_byte_count_q <= (generated_bit_count + 13'd7) >> 3;
         stream_byte_index_q <= 13'd0;
         stream_active_q <= ((generated_bit_count + 13'd7) >> 3) != 13'd0;
         m_axis_valid <= ((generated_bit_count + 13'd7) >> 3) != 13'd0;
-        m_axis_data <= stream_byte(
-          byte_aligned_bits(generated_raw_bits, generated_bit_count),
-          (generated_bit_count + 13'd7) >> 3,
-          13'd0
-        );
+        m_axis_data <= current_stream_byte(13'd0);
         m_axis_last <= ((generated_bit_count + 13'd7) >> 3) == 13'd1;
       end else if (m_axis_valid && m_axis_ready) begin
         if (m_axis_last) begin
@@ -89,7 +75,7 @@ module ff_vvc_generated_cabac_body #(
           m_axis_last <= 1'b0;
         end else begin
           stream_byte_index_q <= stream_byte_index_q + 13'd1;
-          m_axis_data <= stream_byte(stream_bits_q, stream_byte_count_q, stream_byte_index_q + 13'd1);
+          m_axis_data <= current_stream_byte(stream_byte_index_q + 13'd1);
           m_axis_last <= (stream_byte_index_q + 13'd1) == (stream_byte_count_q - 13'd1);
         end
       end else if (!stream_active_q) begin
@@ -99,6 +85,43 @@ module ff_vvc_generated_cabac_body #(
       end
     end
   end
+
+  function automatic logic [12:0] current_bit_count_for_inputs(
+    input logic [15:0] width,
+    input logic [15:0] height,
+    input logic [4:0]  rem,
+    input logic [4:0]  c_rem
+  );
+    logic [12 + MAX_SLICE_PAYLOAD_BITS:0] packet;
+    begin
+      if ((body_kind == BODY_GENERATED) && supports_generated_body(width, height)) begin
+        packet = encode_generated_body(width, height, rem, c_rem);
+        current_bit_count_for_inputs = packet[MAX_SLICE_PAYLOAD_BITS +: 13];
+      end else begin
+        current_bit_count_for_inputs = 13'd0;
+      end
+    end
+  endfunction
+
+  function automatic logic [7:0] current_stream_byte(input logic [12:0] byte_index);
+    logic [12 + MAX_SLICE_PAYLOAD_BITS:0] packet;
+    logic [12:0] bit_count;
+    logic [12:0] byte_count;
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] raw_bits;
+    begin
+      if ((body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height)) begin
+        packet = encode_generated_body(coded_width, coded_height, luma_rem, chroma_rem);
+        bit_count = packet[MAX_SLICE_PAYLOAD_BITS +: 13];
+        byte_count = (bit_count + 13'd7) >> 3;
+        raw_bits = packet[MAX_SLICE_PAYLOAD_BITS - 1:0];
+      end else begin
+        bit_count = 13'd0;
+        byte_count = 13'd0;
+        raw_bits = '0;
+      end
+      current_stream_byte = stream_byte(byte_aligned_bits(raw_bits, bit_count), byte_count, byte_index);
+    end
+  endfunction
 
   function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] byte_aligned_bits(
     input logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bits,
