@@ -2813,9 +2813,11 @@ impl VvcCtuCabacGenerator {
     fn emit(&mut self, cabac: &mut ToyCabacEncoder, op: VvcCtuCabacOp) {
         match op {
             VvcCtuCabacOp::RootQuadSplit => self.emit_root_quad_split(cabac),
-            VvcCtuCabacOp::Luma32x32Leaf { leaf_idx: _ } => {
+            VvcCtuCabacOp::Luma32x32Leaf { leaf_idx } => {
+                self.emit_luma_32x32_leaf_split(cabac, leaf_idx);
+                self.emit_luma_32x32_intra_mode_prefix(cabac, leaf_idx);
                 // TODO(vvc): Replace the leaf body with named CU/TU/residual syntax.
-                encode_32x32_luma_leaf_body(cabac);
+                encode_32x32_luma_leaf_after_intra_prefix_body(cabac);
             }
             VvcCtuCabacOp::Chroma32x32Tree => {
                 // TODO(vvc): Replace the chroma body with named dual-tree chroma syntax.
@@ -2834,20 +2836,33 @@ impl VvcCtuCabacGenerator {
         self.contexts
             .encode(cabac, ToyVvcCabacContext::SplitQtFlag(0), true);
     }
+
+    fn emit_luma_32x32_leaf_split(&mut self, cabac: &mut ToyCabacEncoder, _leaf_idx: u8) {
+        // TODO(vvc): Derive SplitFlag(6) through a verified VTM-equivalent
+        // context state. For now this names the previously compact child leaf
+        // split decision while keeping the generated payload byte-identical.
+        cabac_ctx(cabac, true, 221, true); // split_cu_mode child split=0
+    }
+
+    fn emit_luma_32x32_intra_mode_prefix(&mut self, cabac: &mut ToyCabacEncoder, _leaf_idx: u8) {
+        // TODO(vvc): Replace with the full intra_luma_pred_modes syntax writer.
+        cabac.encode_bin_ep(false); // intra_luma_pred_modes first bypass bin
+    }
 }
 
 fn encode_32x32_luma_body(cabac: &mut ToyCabacEncoder) {
-    encode_32x32_luma_body_inner(cabac, true, true);
+    encode_32x32_luma_body_inner(cabac, true, true, true);
 }
 
-fn encode_32x32_luma_leaf_body(cabac: &mut ToyCabacEncoder) {
-    encode_32x32_luma_body_inner(cabac, false, true);
+fn encode_32x32_luma_leaf_after_intra_prefix_body(cabac: &mut ToyCabacEncoder) {
+    encode_32x32_luma_body_inner(cabac, false, false, false);
 }
 
 fn encode_32x32_luma_body_inner(
     cabac: &mut ToyCabacEncoder,
     include_standalone_root: bool,
     include_leaf_split: bool,
+    include_intra_mode_prefix: bool,
 ) {
     if include_standalone_root {
         encode_compact_cabac_word(cabac, 0x035a);
@@ -2856,7 +2871,9 @@ fn encode_32x32_luma_body_inner(
     if include_leaf_split {
         encode_compact_cabac_word(cabac, 0x0377);
     }
-    encode_compact_cabac_word(cabac, 0x8000);
+    if include_intra_mode_prefix {
+        encode_compact_cabac_word(cabac, 0x8000);
+    }
     encode_compact_cabac_word(cabac, 0x0163);
     encode_compact_cabac_word(cabac, 0x020b);
     encode_compact_cabac_word(cabac, 0x0153);
