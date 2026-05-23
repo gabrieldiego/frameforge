@@ -24,24 +24,6 @@ def pack_plane(data, width=64, height=64, max_width=64, max_height=64):
     return value
 
 
-def pack_palette_symbols(y, cb, cr, width=64, height=64, max_symbols=64):
-    symbols = []
-    tiles_x = (width + 7) // 8
-    tiles_y = (height + 7) // 8
-    count = tiles_x * tiles_y
-    for index in range(max_symbols):
-        if index < count:
-            tile_x, tile_y = coding_order_tile(index, width, height)
-            sample_x = min(tile_x * 8, width - 1)
-            sample_y = min(tile_y * 8, height - 1)
-            sample_index = sample_y * width + sample_x
-            symbol = (1 << 24) | (y[sample_index] << 16) | (cb[sample_index] << 8) | cr[sample_index]
-        else:
-            symbol = 0
-        symbols.append(symbol)
-    return count, symbols
-
-
 def palette_entries_and_indices(y, cb, cr, width, height, origin_x=0, origin_y=0):
     entries = []
     indices = []
@@ -53,6 +35,29 @@ def palette_entries_and_indices(y, cb, cr, width, height, origin_x=0, origin_y=0
                 entries.append(color)
             indices.append(entries.index(color))
     return entries, indices
+
+
+def pack_palette_lossless_frame_symbols(y, cb, cr, width=64, height=64):
+    symbols = []
+    tiles_x = (width + 7) // 8
+    tiles_y = (height + 7) // 8
+    count = tiles_x * tiles_y
+    for index in range(count):
+        tile_x, tile_y = coding_order_tile(index, width, height)
+        origin_x = tile_x * 8
+        origin_y = tile_y * 8
+        entries, indices = palette_entries_and_indices(y, cb, cr, width, height, origin_x, origin_y)
+        symbols.append((0x1 << 28) | (1 << 24) | (len(entries) << 16))
+        for entry_y, entry_cb, entry_cr in entries:
+            symbols.append((0x2 << 28) | (entry_y << 16) | (entry_cb << 8) | entry_cr)
+        if len(entries) > 1:
+            for x, y_pos in palette_horizontal_scan_positions(
+                min(8, width - origin_x),
+                min(8, height - origin_y),
+            ):
+                index = indices[y_pos * min(8, width - origin_x) + x]
+                symbols.append((0x3 << 28) | index)
+    return len(symbols), symbols
 
 
 def pack_palette_lossless_symbols(y, cb, cr, width=8, height=8):
@@ -245,7 +250,7 @@ async def palette_cabac_matches_software_boundary_dump(dut):
     y = data[:luma_len]
     cb = data[luma_len : luma_len * 2]
     cr = data[luma_len * 2 : luma_len * 3]
-    symbol_count, symbols = pack_palette_symbols(y, cb, cr)
+    symbol_count, symbols = pack_palette_lossless_frame_symbols(y, cb, cr)
 
     dut.enable.value = 1
     if hasattr(dut, "mode_palette_444"):

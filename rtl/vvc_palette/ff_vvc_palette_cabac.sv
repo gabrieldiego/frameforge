@@ -26,7 +26,6 @@ module ff_vvc_palette_cabac #(
   localparam int PALETTE_CTX_COUNT = 18;
   localparam int PALETTE_MODEL_BANK_BITS = PALETTE_CTX_COUNT * PALETTE_MODEL_BITS;
   localparam int CABAC_PENDING_BYTES = 64;
-  localparam int CABAC_PENDING_BITS = CABAC_PENDING_BYTES * 8;
   localparam int PALETTE_CTX_SPLIT0 = 0;
   localparam int PALETTE_CTX_SPLIT6 = 1;
   localparam int PALETTE_CTX_SPLIT7 = 2;
@@ -45,7 +44,6 @@ module ff_vvc_palette_cabac #(
   localparam int PALETTE_CTX_IDX_RUN_2 = 15;
   localparam int PALETTE_CTX_IDX_RUN_3 = 16;
   localparam int PALETTE_CTX_IDX_RUN_4 = 17;
-  localparam logic [3:0] PALETTE_PKT_LEGACY_SINGLE_ENTRY = 4'h0;
   localparam logic [3:0] PALETTE_PKT_CU_START            = 4'h1;
   localparam logic [3:0] PALETTE_PKT_ENTRY               = 4'h2;
   localparam logic [3:0] PALETTE_PKT_INDEX               = 4'h3;
@@ -65,7 +63,7 @@ module ff_vvc_palette_cabac #(
     logic [2:0] partial_bit_count;
     logic [7:0] partial_byte;
     logic [7:0] pending_count;
-    logic [CABAC_PENDING_BITS - 1:0] pending_bytes;
+    logic [CABAC_PENDING_BYTES - 1:0][7:0] pending_bytes;
   } cabac_capture_state_t;
 
   typedef struct packed {
@@ -110,15 +108,6 @@ module ff_vvc_palette_cabac #(
   always @* begin
     next_palette_state = palette_state_q;
     case (s_axis_data[31:28])
-      PALETTE_PKT_LEGACY_SINGLE_ENTRY: begin
-        if (stream_symbol_selected) begin
-          next_palette_state = palette_444_encode_next_symbol(
-            palette_state_q,
-            stream_symbol_index_q,
-            s_axis_data[23:0]
-          );
-        end
-      end
       PALETTE_PKT_CU_START: begin
         if (stream_symbol_selected) begin
           next_palette_state = palette_444_encode_cu_start(
@@ -222,9 +211,6 @@ module ff_vvc_palette_cabac #(
       end else begin
         palette_state_q <= accepted_palette_state;
         case (s_axis_data[31:28])
-          PALETTE_PKT_LEGACY_SINGLE_ENTRY: begin
-            stream_symbol_index_q <= stream_symbol_index_q + 8'd1;
-          end
           PALETTE_PKT_CU_START: begin
             stream_symbol_index_q <= stream_symbol_index_q + 8'd1;
             current_palette_size_q <= s_axis_data[23:16];
@@ -305,38 +291,6 @@ module ff_vvc_palette_cabac #(
         end
       end
       palette_pop_pending_byte = pst;
-    end
-  endfunction
-
-  function automatic palette_state_t palette_444_encode_next_symbol(
-    input palette_state_t pst_in,
-    input logic [7:0] symbol_index,
-    input logic [23:0] symbol
-  );
-    palette_state_t pst;
-    logic [31:0] pos;
-    logic [15:0] origin_x;
-    logic [15:0] origin_y;
-    begin
-      pst = pst_in;
-      pos = palette_coding_order_position(symbol_index);
-      origin_x = pos[31:16];
-      origin_y = pos[15:0];
-
-      if (coded_width == 16'd64 && coded_height == 16'd64 && symbol_index == 8'd0) begin
-        pst = palette_encode_ctx(pst, PALETTE_CTX_SPLIT0, 1'b1);
-      end
-      if (coded_width >= 16'd32 && coded_height >= 16'd32 && symbol_index[3:0] == 4'd0) begin
-        pst = palette_encode_ctx(pst, palette_split_ctx_id(origin_x, origin_y, 16'd32), 1'b1);
-        pst = palette_encode_ctx(pst, palette_split_qt_ctx_id(origin_x, origin_y, 16'd32, 1'b1), 1'b1);
-      end
-      if (coded_width >= 16'd16 && coded_height >= 16'd16 && symbol_index[1:0] == 2'd0) begin
-        pst = palette_encode_ctx(pst, palette_split_ctx_id(origin_x, origin_y, 16'd16), 1'b1);
-        pst = palette_encode_ctx(pst, palette_split_qt_ctx_id(origin_x, origin_y, 16'd16, 1'b0), 1'b1);
-      end
-
-      pst = palette_444_encode_8x8_symbol(pst, origin_x, origin_y, symbol_index == 8'd0, symbol);
-      palette_444_encode_next_symbol = pst;
     end
   endfunction
 
@@ -537,39 +491,6 @@ module ff_vvc_palette_cabac #(
       end
 
       palette_coding_order_position = {origin_x, origin_y};
-    end
-  endfunction
-
-  function automatic palette_state_t palette_444_encode_8x8_symbol(
-    input palette_state_t pst_in,
-    input logic [15:0] origin_x,
-    input logic [15:0] origin_y,
-    input logic signal_new_entry,
-    input logic [23:0] symbol
-  );
-    palette_state_t pst;
-    cabac_writer_state_t st;
-    logic [7:0] entry_y;
-    logic [7:0] entry_u;
-    logic [7:0] entry_v;
-    begin
-      pst = pst_in;
-      pst = palette_encode_ctx(pst, PALETTE_CTX_SPLIT0, 1'b0);    // split_cu_mode split=0 for an 8x8 palette CU
-      pst = palette_encode_ctx(pst, PALETTE_CTX_PLT_FLAG, 1'b1);  // pred_mode PLTFlag=1
-      st = pst.cabac;
-      entry_y = symbol[23:16];
-      entry_u = symbol[15:8];
-      entry_v = symbol[7:0];
-      if (!signal_new_entry) begin
-        st = cabac_encode_exp_golomb_ep(st, 6'd1, 6'd0); // palette_predictor_run=1: no reused entries
-      end
-      st = cabac_encode_exp_golomb_ep(st, 6'd1, 6'd0); // num_signalled_palette_entries=1
-      st = cabac_encode_bins_ep(st, {24'd0, entry_y}, 6'd8);
-      st = cabac_encode_bins_ep(st, {24'd0, entry_u}, 6'd8);
-      st = cabac_encode_bins_ep(st, {24'd0, entry_v}, 6'd8);
-      st = cabac_encode_bin_ep(st, 1'b0); // palette_escape_val_present_flag=0
-      pst.cabac = st;
-      palette_444_encode_8x8_symbol = pst;
     end
   endfunction
 

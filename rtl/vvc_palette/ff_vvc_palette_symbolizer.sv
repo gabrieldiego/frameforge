@@ -32,7 +32,6 @@ module ff_vvc_palette_symbolizer #(
   localparam logic [1:0] PLANE_Y  = 2'd0;
   localparam logic [1:0] PLANE_CB = 2'd1;
   localparam logic [1:0] PLANE_CR = 2'd2;
-  localparam logic [3:0] PALETTE_PKT_LEGACY_SINGLE_ENTRY = 4'h0;
   localparam logic [3:0] PALETTE_PKT_CU_START            = 4'h1;
   localparam logic [3:0] PALETTE_PKT_ENTRY               = 4'h2;
   localparam logic [3:0] PALETTE_PKT_INDEX               = 4'h3;
