@@ -109,12 +109,14 @@ module ff_vvc_encoder #(
   logic [7:0]  cabac_stream_data;
   logic        cabac_stream_last;
   logic [12:0] cabac_stream_byte_count;
+  logic        pending_output_q;
+  logic        palette_done_q;
   logic [12:0] slice_payload_ebsp_len_q;
   logic [12:0] slice_payload_ebsp_cra_len_q;
   logic [MAX_SLICE_PAYLOAD_BITS - 1:0] slice_payload_ebsp_bits_q;
   logic [MAX_SLICE_PAYLOAD_BITS - 1:0] slice_payload_ebsp_cra_bits_q;
 
-  assign busy = input_active_q || m_axis_valid || (index_q != 0);
+  assign busy = input_active_q || pending_output_q || m_axis_valid || (index_q != 0);
   assign cabac_enable = 1'b1;
 
   generate
@@ -313,6 +315,8 @@ module ff_vvc_encoder #(
       slice_payload_ebsp_cra_len_q <= '0;
       slice_payload_ebsp_bits_q <= '0;
       slice_payload_ebsp_cra_bits_q <= '0;
+      pending_output_q <= 1'b0;
+      palette_done_q <= 1'b0;
     end else begin
       if (start && !busy) begin
         input_active_q <= 1'b1;
@@ -341,6 +345,8 @@ module ff_vvc_encoder #(
         slice_payload_ebsp_cra_len_q <= '0;
         slice_payload_ebsp_bits_q <= '0;
         slice_payload_ebsp_cra_bits_q <= '0;
+        pending_output_q <= 1'b0;
+        palette_done_q <= 1'b0;
       end else if (input_active_q && s_axis_valid && s_axis_ready) begin
         if (s_axis_last != (input_count_q == input_len_q - 1'b1)) begin
           input_error <= 1'b1;
@@ -387,18 +393,34 @@ module ff_vvc_encoder #(
           input_active_q <= 1'b0;
           s_axis_ready   <= 1'b0;
           sampled_color_valid <= !input_error && s_axis_last;
-          slice_payload_ebsp_len_q <= slice_payload_escaped_len_calc(1'b0);
-          slice_payload_ebsp_bits_q <= slice_payload_escaped_bits_calc(1'b0);
-          slice_payload_ebsp_cra_len_q <= slice_payload_escaped_len_calc(1'b1);
-          slice_payload_ebsp_cra_bits_q <= slice_payload_escaped_bits_calc(1'b1);
-          stream_len_q   <= stream_len_from_slice_payloads(frame_count);
-          m_axis_valid   <= 1'b1;
-          m_axis_data    <= stream_byte(13'd0);
-          m_axis_last    <= 1'b0;
-          index_q        <= 8'd1;
+          if (PALETTE_MODE) begin
+            pending_output_q <= 1'b1;
+          end else begin
+            slice_payload_ebsp_len_q <= slice_payload_escaped_len_calc(1'b0);
+            slice_payload_ebsp_bits_q <= slice_payload_escaped_bits_calc(1'b0);
+            slice_payload_ebsp_cra_len_q <= slice_payload_escaped_len_calc(1'b1);
+            slice_payload_ebsp_cra_bits_q <= slice_payload_escaped_bits_calc(1'b1);
+            stream_len_q   <= stream_len_from_slice_payloads(frame_count);
+            m_axis_valid   <= 1'b1;
+            m_axis_data    <= stream_byte(13'd0);
+            m_axis_last    <= 1'b0;
+            index_q        <= 8'd1;
+          end
         end else begin
           input_count_q <= input_count_q + 1'b1;
         end
+      end else if (pending_output_q && PALETTE_MODE && palette_done_q) begin
+        pending_output_q <= 1'b0;
+        palette_done_q <= 1'b0;
+        slice_payload_ebsp_len_q <= slice_payload_escaped_len_calc(1'b0);
+        slice_payload_ebsp_bits_q <= slice_payload_escaped_bits_calc(1'b0);
+        slice_payload_ebsp_cra_len_q <= slice_payload_escaped_len_calc(1'b1);
+        slice_payload_ebsp_cra_bits_q <= slice_payload_escaped_bits_calc(1'b1);
+        stream_len_q   <= stream_len_from_slice_payloads(frame_count);
+        m_axis_valid   <= 1'b1;
+        m_axis_data    <= stream_byte(13'd0);
+        m_axis_last    <= 1'b0;
+        index_q        <= 8'd1;
       end else if (m_axis_valid && m_axis_ready) begin
         if (index_q == stream_len_q) begin
           m_axis_valid <= 1'b0;
@@ -409,6 +431,9 @@ module ff_vvc_encoder #(
           m_axis_last <= (index_q == stream_len_q - 1'b1);
           index_q     <= index_q + 1'b1;
         end
+      end
+      if (pending_output_q && palette_stream_valid && palette_stream_ready && palette_stream_last) begin
+        palette_done_q <= 1'b1;
       end
     end
   end

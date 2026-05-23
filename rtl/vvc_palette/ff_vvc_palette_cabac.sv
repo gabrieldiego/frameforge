@@ -39,6 +39,10 @@ module ff_vvc_palette_cabac #(
   localparam int PALETTE_CTX_SPLIT_QT13 = 8;
   localparam int PALETTE_CTX_SPLIT_QT14 = 9;
   localparam int PALETTE_CTX_PLT_FLAG = 10;
+  localparam logic [3:0] PALETTE_PKT_LEGACY_SINGLE_ENTRY = 4'h0;
+  localparam logic [3:0] PALETTE_PKT_CU_START            = 4'h1;
+  localparam logic [3:0] PALETTE_PKT_ENTRY               = 4'h2;
+  localparam logic [3:0] PALETTE_PKT_INDEX               = 4'h3;
   localparam int PALETTE_CABAC_LSB = 0;
   localparam int PALETTE_MODEL_LSB = PALETTE_CABAC_LSB + CABAC_STATE_BITS;
   localparam int PALETTE_STATE_BITS = PALETTE_MODEL_LSB + (PALETTE_CTX_COUNT * PALETTE_MODEL_BITS);
@@ -50,20 +54,53 @@ module ff_vvc_palette_cabac #(
   logic [7:0]     stream_symbol_index_q;
   logic           stream_symbol_selected;
   palette_state_t next_palette_state;
+  logic [7:0]     current_palette_size_q;
+  logic [7:0]     current_entry_count_q;
+  logic [5:0]     current_index_bits_q;
 
-  assign s_axis_ready = enable && (stream_symbol_index_q < symbol_count);
+  assign s_axis_ready = enable;
   assign payload_bit_len = palette_state_q[PALETTE_CABAC_LSB + CABAC_LEN_LSB +: 13];
   assign payload_bits = palette_state_q[PALETTE_CABAC_LSB + CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS];
   assign stream_symbol_selected = s_axis_data[24];
 
   always @* begin
     next_palette_state = palette_state_q;
-    if (stream_symbol_selected) begin
-      next_palette_state = palette_444_encode_next_symbol(
-        palette_state_q,
-        stream_symbol_index_q,
-        s_axis_data[23:0]
-      );
+    case (s_axis_data[31:28])
+      PALETTE_PKT_LEGACY_SINGLE_ENTRY: begin
+        if (stream_symbol_selected) begin
+          next_palette_state = palette_444_encode_next_symbol(
+            palette_state_q,
+            stream_symbol_index_q,
+            s_axis_data[23:0]
+          );
+        end
+      end
+      PALETTE_PKT_CU_START: begin
+        if (stream_symbol_selected) begin
+          next_palette_state = palette_444_encode_cu_start(
+            palette_state_q,
+            stream_symbol_index_q,
+            s_axis_data[23:16]
+          );
+        end
+      end
+      PALETTE_PKT_ENTRY: begin
+        next_palette_state = palette_444_encode_entry(palette_state_q, s_axis_data[23:0]);
+      end
+      PALETTE_PKT_INDEX: begin
+        next_palette_state = palette_444_encode_index(
+          palette_state_q,
+          s_axis_data[7:0],
+          current_index_bits_q
+        );
+      end
+      default: begin
+        next_palette_state = palette_state_q;
+      end
+    endcase
+    if ((s_axis_data[31:28] == PALETTE_PKT_ENTRY) &&
+        ((current_entry_count_q + 8'd1) == current_palette_size_q)) begin
+      next_palette_state = palette_444_encode_palette_escape_flag(next_palette_state);
     end
   end
 
@@ -71,16 +108,40 @@ module ff_vvc_palette_cabac #(
     if (!rst_n) begin
       stream_symbol_index_q <= 8'd0;
       palette_state_q <= palette_start();
+      current_palette_size_q <= 8'd0;
+      current_entry_count_q <= 8'd0;
+      current_index_bits_q <= 6'd0;
     end else if (clear || !enable) begin
       stream_symbol_index_q <= 8'd0;
       palette_state_q <= palette_start();
+      current_palette_size_q <= 8'd0;
+      current_entry_count_q <= 8'd0;
+      current_index_bits_q <= 6'd0;
     end else if (s_axis_valid && s_axis_ready) begin
       if (s_axis_last) begin
         palette_state_q <= palette_finish(next_palette_state);
         stream_symbol_index_q <= 8'd0;
+        current_palette_size_q <= 8'd0;
+        current_entry_count_q <= 8'd0;
+        current_index_bits_q <= 6'd0;
       end else begin
         palette_state_q <= next_palette_state;
-        stream_symbol_index_q <= stream_symbol_index_q + 8'd1;
+        case (s_axis_data[31:28])
+          PALETTE_PKT_LEGACY_SINGLE_ENTRY: begin
+            stream_symbol_index_q <= stream_symbol_index_q + 8'd1;
+          end
+          PALETTE_PKT_CU_START: begin
+            stream_symbol_index_q <= stream_symbol_index_q + 8'd1;
+            current_palette_size_q <= s_axis_data[23:16];
+            current_entry_count_q <= 8'd0;
+            current_index_bits_q <= palette_index_bit_count(s_axis_data[23:16]);
+          end
+          PALETTE_PKT_ENTRY: begin
+            current_entry_count_q <= current_entry_count_q + 8'd1;
+          end
+          default: begin
+          end
+        endcase
       end
     end
   end
@@ -127,6 +188,111 @@ module ff_vvc_palette_cabac #(
 
       pst = palette_444_encode_8x8_symbol(pst, origin_x, origin_y, symbol_index == 8'd0, symbol);
       palette_444_encode_next_symbol = pst;
+    end
+  endfunction
+
+  function automatic palette_state_t palette_444_encode_cu_start(
+    input palette_state_t pst_in,
+    input logic [7:0] symbol_index,
+    input logic [7:0] entry_count
+  );
+    palette_state_t pst;
+    logic [31:0] pos;
+    logic [15:0] origin_x;
+    logic [15:0] origin_y;
+    cabac_state_t st;
+    begin
+      pst = pst_in;
+      pos = palette_coding_order_position(symbol_index);
+      origin_x = pos[31:16];
+      origin_y = pos[15:0];
+
+      if (coded_width == 16'd64 && coded_height == 16'd64 && symbol_index == 8'd0) begin
+        pst = palette_encode_ctx(pst, PALETTE_CTX_SPLIT0, 1'b1);
+      end
+      if (coded_width >= 16'd32 && coded_height >= 16'd32 && symbol_index[3:0] == 4'd0) begin
+        pst = palette_encode_ctx(pst, palette_split_ctx_id(origin_x, origin_y, 16'd32), 1'b1);
+        pst = palette_encode_ctx(pst, palette_split_qt_ctx_id(origin_x, origin_y, 16'd32, 1'b1), 1'b1);
+      end
+      if (coded_width >= 16'd16 && coded_height >= 16'd16 && symbol_index[1:0] == 2'd0) begin
+        pst = palette_encode_ctx(pst, palette_split_ctx_id(origin_x, origin_y, 16'd16), 1'b1);
+        pst = palette_encode_ctx(pst, palette_split_qt_ctx_id(origin_x, origin_y, 16'd16, 1'b0), 1'b1);
+      end
+
+      pst = palette_encode_ctx(pst, PALETTE_CTX_SPLIT0, 1'b0);    // split_cu_mode split=0 for an 8x8 palette CU
+      pst = palette_encode_ctx(pst, PALETTE_CTX_PLT_FLAG, 1'b1);  // pred_mode PLTFlag=1
+      st = pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS];
+      if (symbol_index != 8'd0) begin
+        st = cabac_encode_exp_golomb_ep(st, 6'd1, 6'd0); // palette_predictor_run=1: no reused entries
+      end
+      st = cabac_encode_exp_golomb_ep(st, entry_count[5:0], 6'd0);
+      pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS] = st;
+      palette_444_encode_cu_start = pst;
+    end
+  endfunction
+
+  function automatic palette_state_t palette_444_encode_entry(
+    input palette_state_t pst_in,
+    input logic [23:0] symbol
+  );
+    palette_state_t pst;
+    cabac_state_t st;
+    begin
+      pst = pst_in;
+      st = pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS];
+      st = cabac_encode_bins_ep(st, {24'd0, symbol[23:16]}, 6'd8);
+      st = cabac_encode_bins_ep(st, {24'd0, symbol[15:8]}, 6'd8);
+      st = cabac_encode_bins_ep(st, {24'd0, symbol[7:0]}, 6'd8);
+      pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS] = st;
+      palette_444_encode_entry = pst;
+    end
+  endfunction
+
+  function automatic palette_state_t palette_444_encode_palette_escape_flag(
+    input palette_state_t pst_in
+  );
+    palette_state_t pst;
+    cabac_state_t st;
+    begin
+      pst = pst_in;
+      st = pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS];
+      st = cabac_encode_bin_ep(st, 1'b0); // palette_escape_val_present_flag=0
+      pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS] = st;
+      palette_444_encode_palette_escape_flag = pst;
+    end
+  endfunction
+
+  function automatic palette_state_t palette_444_encode_index(
+    input palette_state_t pst_in,
+    input logic [7:0] index,
+    input logic [5:0] bit_count
+  );
+    palette_state_t pst;
+    cabac_state_t st;
+    begin
+      pst = pst_in;
+      st = pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS];
+      st = cabac_encode_bins_ep(st, {24'd0, index}, bit_count);
+      pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS] = st;
+      palette_444_encode_index = pst;
+    end
+  endfunction
+
+  function automatic logic [5:0] palette_index_bit_count(input logic [7:0] palette_size);
+    logic [7:0] max_index;
+    begin
+      max_index = palette_size == 8'd0 ? 8'd0 : palette_size - 8'd1;
+      if (max_index <= 8'd1) begin
+        palette_index_bit_count = 6'd1;
+      end else if (max_index <= 8'd3) begin
+        palette_index_bit_count = 6'd2;
+      end else if (max_index <= 8'd7) begin
+        palette_index_bit_count = 6'd3;
+      end else if (max_index <= 8'd15) begin
+        palette_index_bit_count = 6'd4;
+      end else begin
+        palette_index_bit_count = 6'd5;
+      end
     end
   endfunction
 

@@ -32,16 +32,35 @@ module ff_vvc_palette_symbolizer #(
   localparam logic [1:0] PLANE_Y  = 2'd0;
   localparam logic [1:0] PLANE_CB = 2'd1;
   localparam logic [1:0] PLANE_CR = 2'd2;
+  localparam logic [3:0] PALETTE_PKT_LEGACY_SINGLE_ENTRY = 4'h0;
+  localparam logic [3:0] PALETTE_PKT_CU_START            = 4'h1;
+  localparam logic [3:0] PALETTE_PKT_ENTRY               = 4'h2;
+  localparam logic [3:0] PALETTE_PKT_INDEX               = 4'h3;
+  localparam int MAX_CTU_SAMPLES = CTU_SIZE * CTU_SIZE;
+  localparam int MAX_CU_SAMPLES = PALETTE_CU_SIZE * PALETTE_CU_SIZE;
+  localparam int MAX_PALETTE_ENTRIES = 31;
+  localparam logic [2:0] DRAIN_IDLE  = 3'd0;
+  localparam logic [2:0] DRAIN_START = 3'd1;
+  localparam logic [2:0] DRAIN_ENTRY = 3'd2;
+  localparam logic [2:0] DRAIN_INDEX = 3'd3;
 
-  logic [7:0] symbol_y [0:MAX_PALETTE_SYMBOLS - 1];
-  logic [7:0] symbol_cb [0:MAX_PALETTE_SYMBOLS - 1];
-  logic [7:0] symbol_cr [0:MAX_PALETTE_SYMBOLS - 1];
+  logic [7:0] plane_y [0:MAX_CTU_SAMPLES - 1];
+  logic [7:0] plane_cb [0:MAX_CTU_SAMPLES - 1];
+  logic [7:0] plane_cr [0:MAX_CTU_SAMPLES - 1];
+  logic [7:0] cu_entry_y [0:MAX_PALETTE_ENTRIES - 1];
+  logic [7:0] cu_entry_cb [0:MAX_PALETTE_ENTRIES - 1];
+  logic [7:0] cu_entry_cr [0:MAX_PALETTE_ENTRIES - 1];
+  logic [7:0] cu_indices [0:MAX_CU_SAMPLES - 1];
   logic [1:0] tracked_plane_q;
   logic [15:0] tracked_x_q;
   logic [15:0] tracked_y_q;
   logic [15:0] sample_x;
   logic [15:0] sample_y;
+  logic [15:0] selected_width;
+  logic [15:0] selected_height;
+  logic [15:0] input_sample_index;
   logic        input_valid;
+  logic        input_last;
   logic [1:0]  input_plane;
   logic [SAMPLE_BITS - 1:0] input_sample;
   logic [7:0]  anchor_index;
@@ -49,12 +68,15 @@ module ff_vvc_palette_symbolizer #(
   logic [7:0]  selected_cu_count_y;
   logic [7:0]  visible_symbol_count;
   logic [7:0]  last_symbol_index;
-  logic [7:0]  last_visible_symbol_index;
   logic        start_drain;
   logic        drain_symbol_selected;
-  logic        drain_active_q;
+  logic [2:0]  drain_state_q;
   logic [7:0]  drain_index_q;
   logic [7:0]  drain_symbol_index;
+  logic [7:0]  drain_entry_index_q;
+  logic [7:0]  drain_sample_index_q;
+  logic [7:0]  cu_palette_size_q;
+  logic [7:0]  cu_sample_count_q;
 
   assign symbol_count =
     enable ? (palette_cu_count_x(ctu_coded_width) * palette_cu_count_y(ctu_coded_height)) : 8'd0;
@@ -62,13 +84,15 @@ module ff_vvc_palette_symbolizer #(
     enable ? (selected_cu_count_x * selected_cu_count_y) : 8'd0;
   assign s_axis_ready = enable && (!m_axis_valid || m_axis_ready);
   assign input_valid = sample_valid || (s_axis_valid && s_axis_ready);
+  assign input_last = s_axis_last && s_axis_valid && s_axis_ready;
   assign input_plane = sample_valid ? sample_plane : s_axis_plane;
   assign input_sample = sample_valid ? sample : s_axis_sample;
   assign anchor_index = symbol_index_xy(sample_x, sample_y);
   assign last_symbol_index = symbol_count == 8'd0 ? 8'd0 : symbol_count - 8'd1;
-  assign last_visible_symbol_index = visible_symbol_count == 8'd0 ? 8'd0 : visible_symbol_count - 8'd1;
-  assign start_drain = input_valid && is_symbol_anchor_xy(sample_x, sample_y) &&
-                       (input_plane == PLANE_CR) && (anchor_index == last_visible_symbol_index);
+  assign selected_width = {8'd0, selected_cu_count_x} * PALETTE_CU_SIZE;
+  assign selected_height = {8'd0, selected_cu_count_y} * PALETTE_CU_SIZE;
+  assign input_sample_index = (sample_y * selected_width) + sample_x;
+  assign start_drain = input_valid && input_last && (input_plane == PLANE_CR);
   assign drain_symbol_index = coding_order_symbol_index(drain_index_q);
   assign drain_symbol_selected = cu_select_mask[MAX_PALETTE_SYMBOLS - 1 - drain_index_q];
 
@@ -110,12 +134,24 @@ module ff_vvc_palette_symbolizer #(
       m_axis_valid <= 1'b0;
       m_axis_data <= 32'd0;
       m_axis_last <= 1'b0;
-      drain_active_q <= 1'b0;
+      drain_state_q <= DRAIN_IDLE;
       drain_index_q <= 8'd0;
-      for (int i = 0; i < MAX_PALETTE_SYMBOLS; i = i + 1) begin
-        symbol_y[i] <= 8'd0;
-        symbol_cb[i] <= 8'd0;
-        symbol_cr[i] <= 8'd0;
+      drain_entry_index_q <= 8'd0;
+      drain_sample_index_q <= 8'd0;
+      cu_palette_size_q <= 8'd0;
+      cu_sample_count_q <= 8'd0;
+      for (int i = 0; i < MAX_CTU_SAMPLES; i = i + 1) begin
+        plane_y[i] <= 8'd0;
+        plane_cb[i] <= 8'd0;
+        plane_cr[i] <= 8'd0;
+      end
+      for (int i = 0; i < MAX_PALETTE_ENTRIES; i = i + 1) begin
+        cu_entry_y[i] <= 8'd0;
+        cu_entry_cb[i] <= 8'd0;
+        cu_entry_cr[i] <= 8'd0;
+      end
+      for (int i = 0; i < MAX_CU_SAMPLES; i = i + 1) begin
+        cu_indices[i] <= 8'd0;
       end
     end else if (clear || !enable) begin
       tracked_plane_q <= PLANE_Y;
@@ -124,12 +160,24 @@ module ff_vvc_palette_symbolizer #(
       m_axis_valid <= 1'b0;
       m_axis_data <= 32'd0;
       m_axis_last <= 1'b0;
-      drain_active_q <= 1'b0;
+      drain_state_q <= DRAIN_IDLE;
       drain_index_q <= 8'd0;
-      for (int i = 0; i < MAX_PALETTE_SYMBOLS; i = i + 1) begin
-        symbol_y[i] <= 8'd0;
-        symbol_cb[i] <= 8'd0;
-        symbol_cr[i] <= 8'd0;
+      drain_entry_index_q <= 8'd0;
+      drain_sample_index_q <= 8'd0;
+      cu_palette_size_q <= 8'd0;
+      cu_sample_count_q <= 8'd0;
+      for (int i = 0; i < MAX_CTU_SAMPLES; i = i + 1) begin
+        plane_y[i] <= 8'd0;
+        plane_cb[i] <= 8'd0;
+        plane_cr[i] <= 8'd0;
+      end
+      for (int i = 0; i < MAX_PALETTE_ENTRIES; i = i + 1) begin
+        cu_entry_y[i] <= 8'd0;
+        cu_entry_cb[i] <= 8'd0;
+        cu_entry_cr[i] <= 8'd0;
+      end
+      for (int i = 0; i < MAX_CU_SAMPLES; i = i + 1) begin
+        cu_indices[i] <= 8'd0;
       end
     end else begin
       if (m_axis_valid && m_axis_ready) begin
@@ -137,45 +185,90 @@ module ff_vvc_palette_symbolizer #(
         m_axis_data <= 32'd0;
         m_axis_last <= 1'b0;
       end
-      if (drain_active_q && (!m_axis_valid || m_axis_ready)) begin
-        m_axis_valid <= 1'b1;
-        m_axis_data <= {
-          7'd0,
-          drain_symbol_selected,
-          symbol_y[drain_symbol_index],
-          symbol_cb[drain_symbol_index],
-          symbol_cr[drain_symbol_index]
-        };
-        m_axis_last <= drain_index_q == last_symbol_index;
-        if (drain_index_q == last_symbol_index) begin
-          drain_active_q <= 1'b0;
-          drain_index_q <= 8'd0;
-        end else begin
-          drain_index_q <= drain_index_q + 8'd1;
-        end
+      if ((drain_state_q != DRAIN_IDLE) && (!m_axis_valid || m_axis_ready)) begin
+        case (drain_state_q)
+          DRAIN_START: begin
+            m_axis_valid <= 1'b1;
+            m_axis_data <= {
+              PALETTE_PKT_CU_START,
+              3'd0,
+              drain_symbol_selected,
+              cu_palette_size_q,
+              16'd0
+            };
+            m_axis_last <= (!drain_symbol_selected || (cu_palette_size_q == 8'd0)) &&
+                           (drain_index_q == last_symbol_index);
+            if (!drain_symbol_selected || (cu_palette_size_q == 8'd0)) begin
+              advance_drain_cu(last_symbol_index);
+            end else begin
+              drain_state_q <= DRAIN_ENTRY;
+              drain_entry_index_q <= 8'd0;
+            end
+          end
+          DRAIN_ENTRY: begin
+            m_axis_valid <= 1'b1;
+            m_axis_data <= {
+              PALETTE_PKT_ENTRY,
+              4'd0,
+              cu_entry_y[drain_entry_index_q],
+              cu_entry_cb[drain_entry_index_q],
+              cu_entry_cr[drain_entry_index_q]
+            };
+            m_axis_last <= (cu_palette_size_q <= 8'd1) &&
+                           ((drain_entry_index_q + 8'd1) >= cu_palette_size_q) &&
+                           (drain_index_q == last_symbol_index);
+            if ((drain_entry_index_q + 8'd1) >= cu_palette_size_q) begin
+              if (cu_palette_size_q <= 8'd1) begin
+                advance_drain_cu(last_symbol_index);
+              end else begin
+                drain_state_q <= DRAIN_INDEX;
+                drain_sample_index_q <= 8'd0;
+              end
+            end else begin
+              drain_entry_index_q <= drain_entry_index_q + 8'd1;
+            end
+          end
+          DRAIN_INDEX: begin
+            m_axis_valid <= 1'b1;
+            m_axis_data <= {
+              PALETTE_PKT_INDEX,
+              20'd0,
+              cu_indices[drain_sample_index_q]
+            };
+            m_axis_last <= ((drain_sample_index_q + 8'd1) >= cu_sample_count_q) &&
+                           (drain_index_q == last_symbol_index);
+            if ((drain_sample_index_q + 8'd1) >= cu_sample_count_q) begin
+              advance_drain_cu(last_symbol_index);
+            end else begin
+              drain_sample_index_q <= drain_sample_index_q + 8'd1;
+            end
+          end
+          default: begin
+            drain_state_q <= DRAIN_IDLE;
+          end
+        endcase
       end
       if (input_valid) begin
-        if (is_symbol_anchor_xy(sample_x, sample_y)) begin
-          case (input_plane)
-            PLANE_Y: begin
-              symbol_y[anchor_index] <= sample_to_8bit(input_sample);
-            end
-            PLANE_CB: begin
-              symbol_cb[anchor_index] <= sample_to_8bit(input_sample);
-            end
-            PLANE_CR: begin
-              symbol_cr[anchor_index] <= sample_to_8bit(input_sample);
-            end
-            default: begin
-            end
-          endcase
-        end
+        case (input_plane)
+          PLANE_Y: begin
+            plane_y[input_sample_index] <= sample_to_8bit(input_sample);
+          end
+          PLANE_CB: begin
+            plane_cb[input_sample_index] <= sample_to_8bit(input_sample);
+          end
+          PLANE_CR: begin
+            plane_cr[input_sample_index] <= sample_to_8bit(input_sample);
+          end
+          default: begin
+          end
+        endcase
         if (start_drain) begin
-          drain_active_q <= 1'b1;
+          build_drain_cu(8'd0);
+          drain_state_q <= DRAIN_START;
           drain_index_q <= 8'd0;
         end
         tracked_plane_q <= input_plane;
-        if (sample_x + 16'd1 >= selected_sample_width(1'b0)) begin
+        if (sample_x + 16'd1 >= selected_width) begin
           tracked_x_q <= 16'd0;
           tracked_y_q <= sample_y + 16'd1;
         end else begin
@@ -185,6 +278,110 @@ module ff_vvc_palette_symbolizer #(
       end
     end
   end
+
+  task automatic advance_drain_cu(input logic [7:0] last_index);
+    logic [7:0] next_index;
+    begin
+      if (drain_index_q == last_index) begin
+        drain_state_q <= DRAIN_IDLE;
+        drain_index_q <= 8'd0;
+      end else begin
+        next_index = drain_index_q + 8'd1;
+        build_drain_cu(next_index);
+        drain_state_q <= DRAIN_START;
+        drain_index_q <= next_index;
+      end
+      drain_entry_index_q <= 8'd0;
+      drain_sample_index_q <= 8'd0;
+    end
+  endtask
+
+  task automatic build_drain_cu(input logic [7:0] coding_index);
+    logic [7:0] symbol_index;
+    logic [31:0] pos;
+    logic [15:0] origin_x;
+    logic [15:0] origin_y;
+    logic [15:0] frame_width;
+    logic [15:0] frame_height;
+    logic [15:0] sx;
+    logic [15:0] sy;
+    logic [15:0] sample_index;
+    logic [7:0] y_value;
+    logic [7:0] cb_value;
+    logic [7:0] cr_value;
+    logic [7:0] palette_index;
+    logic found;
+    logic [7:0] sample_count;
+    logic [7:0] palette_size;
+    begin
+      for (int i = 0; i < MAX_PALETTE_ENTRIES; i = i + 1) begin
+        cu_entry_y[i] = 8'd0;
+        cu_entry_cb[i] = 8'd0;
+        cu_entry_cr[i] = 8'd0;
+      end
+      for (int i = 0; i < MAX_CU_SAMPLES; i = i + 1) begin
+        cu_indices[i] = 8'd0;
+      end
+
+      if (!cu_select_mask[MAX_PALETTE_SYMBOLS - 1 - coding_index]) begin
+        cu_palette_size_q = 8'd0;
+        cu_sample_count_q = 8'd0;
+      end else begin
+        symbol_index = coding_order_symbol_index(coding_index);
+        pos = coding_order_position(coding_index);
+        origin_x = pos[31:16];
+        origin_y = pos[15:0];
+        frame_width = {8'd0, selected_cu_count_x} * PALETTE_CU_SIZE;
+        frame_height = {8'd0, selected_cu_count_y} * PALETTE_CU_SIZE;
+        sample_count = 8'd0;
+        palette_size = 8'd0;
+
+        for (int y_off = 0; y_off < PALETTE_CU_SIZE; y_off = y_off + 1) begin
+          for (int x_off = 0; x_off < PALETTE_CU_SIZE; x_off = x_off + 1) begin
+            sx = origin_x + x_off[15:0];
+            sy = origin_y + y_off[15:0];
+            if ((sx < frame_width) && (sy < frame_height)) begin
+              sample_index = (sy * frame_width) + sx;
+              y_value = plane_y[sample_index];
+              cb_value = plane_cb[sample_index];
+              if (input_valid && (input_plane == PLANE_CR) && (sample_index == input_sample_index)) begin
+                cr_value = sample_to_8bit(input_sample);
+              end else begin
+                cr_value = plane_cr[sample_index];
+              end
+              found = 1'b0;
+              palette_index = 8'd0;
+              for (int entry = 0; entry < MAX_PALETTE_ENTRIES; entry = entry + 1) begin
+                if ((entry < palette_size) &&
+                    (cu_entry_y[entry] == y_value) &&
+                    (cu_entry_cb[entry] == cb_value) &&
+                    (cu_entry_cr[entry] == cr_value)) begin
+                  found = 1'b1;
+                  palette_index = entry[7:0];
+                end
+              end
+              if (!found) begin
+                if (palette_size < MAX_PALETTE_ENTRIES) begin
+                  cu_entry_y[palette_size] = y_value;
+                  cu_entry_cb[palette_size] = cb_value;
+                  cu_entry_cr[palette_size] = cr_value;
+                  palette_index = palette_size;
+                  palette_size = palette_size + 8'd1;
+                end else begin
+                  // TODO: add escape-coded sample support for more than 31 colors per CU.
+                  palette_index = 8'd30;
+                end
+              end
+              cu_indices[sample_count] = palette_index;
+              sample_count = sample_count + 8'd1;
+            end
+          end
+        end
+        cu_palette_size_q = palette_size;
+        cu_sample_count_q = sample_count;
+      end
+    end
+  endtask
 
   function automatic logic is_symbol_anchor_xy(
     input logic [15:0] x,

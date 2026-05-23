@@ -10,6 +10,8 @@ from cocotb.triggers import ReadOnly, RisingEdge, Timer
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VECTOR = REPO_ROOT / "verification/test_vectors/palette_tiles_64x64_1f_yuv444p8.yuv"
 DUMP = REPO_ROOT / "verification/generated/checksums/palette_tiles_64x64_1f_yuv444p8_palette_cabac.json"
+MULTICOLOR_VECTOR = REPO_ROOT / "verification/generated/checksums/palette_multicolor_8x8_1f_yuv444p8.yuv"
+MULTICOLOR_DUMP = REPO_ROOT / "verification/generated/checksums/palette_multicolor_8x8_1f_yuv444p8_palette_cabac.json"
 
 
 def pack_plane(data, width=64, height=64, max_width=64, max_height=64):
@@ -38,6 +40,30 @@ def pack_palette_symbols(y, cb, cr, width=64, height=64, max_symbols=64):
             symbol = 0
         symbols.append(symbol)
     return count, symbols
+
+
+def palette_entries_and_indices(y, cb, cr, width, height, origin_x=0, origin_y=0):
+    entries = []
+    indices = []
+    for y_off in range(min(8, height - origin_y)):
+        for x_off in range(min(8, width - origin_x)):
+            sample_index = (origin_y + y_off) * width + origin_x + x_off
+            color = (y[sample_index], cb[sample_index], cr[sample_index])
+            if color not in entries:
+                entries.append(color)
+            indices.append(entries.index(color))
+    return entries, indices
+
+
+def pack_palette_lossless_symbols(y, cb, cr, width=8, height=8):
+    entries, indices = palette_entries_and_indices(y, cb, cr, width, height)
+    symbols = [(0x1 << 28) | (1 << 24) | (len(entries) << 16)]
+    for entry_y, entry_cb, entry_cr in entries:
+        symbols.append((0x2 << 28) | (entry_y << 16) | (entry_cb << 8) | entry_cr)
+    if len(entries) > 1:
+        for index in indices:
+            symbols.append((0x3 << 28) | index)
+    return len(symbols), symbols
 
 
 def coding_order_tile(index, width, height):
@@ -145,6 +171,41 @@ def ensure_reference_dump():
     return json.loads(DUMP.read_text())
 
 
+def ensure_multicolor_reference_dump():
+    MULTICOLOR_VECTOR.parent.mkdir(parents=True, exist_ok=True)
+    y = bytearray()
+    cb = bytearray()
+    cr = bytearray()
+    for index in range(64):
+        even = index % 2 == 0
+        y.append(10 if even else 200)
+        cb.append(20 if even else 210)
+        cr.append(30 if even else 220)
+    MULTICOLOR_VECTOR.write_bytes(bytes(y + cb + cr))
+    subprocess.run(
+        [
+            "cargo",
+            "run",
+            "--quiet",
+            "--",
+            "vvc-palette-cabac-dump",
+            "--input",
+            str(MULTICOLOR_VECTOR),
+            "--output",
+            str(MULTICOLOR_DUMP),
+            "--width",
+            "8",
+            "--height",
+            "8",
+            "--format",
+            "yuv444p8",
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+    )
+    return json.loads(MULTICOLOR_DUMP.read_text())
+
+
 @cocotb.test()
 async def palette_cabac_matches_software_boundary_dump(dut):
     if hasattr(dut, "clk"):
@@ -200,3 +261,56 @@ async def palette_cabac_matches_software_boundary_dump(dut):
     observed_stream = await stream_bytes(dut)
     if observed_stream is not None:
         assert observed_stream.hex() == reference["cabac_hex"]
+
+
+@cocotb.test()
+async def palette_cabac_matches_multicolor_lossless_symbols(dut):
+    if hasattr(dut, "clk"):
+        cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
+        dut.rst_n.value = 1
+        await Timer(1, unit="ns")
+        dut.rst_n.value = 0
+        dut.enable.value = 1
+        if hasattr(dut, "start"):
+            dut.start.value = 0
+        if hasattr(dut, "mode_palette_444"):
+            dut.mode_palette_444.value = 1
+            dut.body_kind.value = 0
+            dut.luma_rem.value = 0
+            dut.chroma_rem.value = 0
+        dut.s_axis_valid.value = 0
+        if hasattr(dut, "s_axis_kind"):
+            dut.s_axis_kind.value = 0
+        dut.s_axis_data.value = 0
+        dut.s_axis_last.value = 0
+        if hasattr(dut, "m_axis_ready"):
+            dut.m_axis_ready.value = 1
+        for _ in range(2):
+            await RisingEdge(dut.clk)
+        dut.rst_n.value = 1
+        await RisingEdge(dut.clk)
+
+    reference = ensure_multicolor_reference_dump()
+    data = MULTICOLOR_VECTOR.read_bytes()
+    y = data[:64]
+    cb = data[64:128]
+    cr = data[128:192]
+    symbol_count, symbols = pack_palette_lossless_symbols(y, cb, cr)
+
+    dut.enable.value = 1
+    if hasattr(dut, "mode_palette_444"):
+        dut.mode_palette_444.value = 1
+        dut.body_kind.value = 0
+        dut.luma_rem.value = 0
+        dut.chroma_rem.value = 0
+        dut.m_axis_ready.value = 1
+    dut.coded_width.value = reference["width"]
+    dut.coded_height.value = reference["height"]
+    dut.symbol_count.value = symbol_count
+    await Timer(1, unit="ns")
+    await feed_palette_symbols(dut, symbols, symbol_count)
+    await Timer(1, unit="ns")
+
+    assert int(dut.payload_bit_len.value) == reference["cabac_bit_len"]
+    observed_hex = cabac_bytes(dut).hex()
+    assert observed_hex == reference["cabac_hex"], (observed_hex, reference["cabac_hex"])
