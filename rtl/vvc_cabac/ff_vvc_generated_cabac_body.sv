@@ -92,11 +92,11 @@ module ff_vvc_generated_cabac_body #(
     input logic [4:0]  rem,
     input logic [4:0]  c_rem
   );
-    logic [12 + MAX_SLICE_PAYLOAD_BITS:0] packet;
+    cabac_state_t st;
     begin
       if ((body_kind == BODY_GENERATED) && supports_generated_body(width, height)) begin
-        packet = encode_generated_body(width, height, rem, c_rem);
-        current_bit_count_for_inputs = packet[MAX_SLICE_PAYLOAD_BITS +: 13];
+        st = encode_generated_state(width, height, rem, c_rem);
+        current_bit_count_for_inputs = st[CABAC_LEN_LSB +: 13];
       end else begin
         current_bit_count_for_inputs = 13'd0;
       end
@@ -104,16 +104,16 @@ module ff_vvc_generated_cabac_body #(
   endfunction
 
   function automatic logic [7:0] current_stream_byte(input logic [12:0] byte_index);
-    logic [12 + MAX_SLICE_PAYLOAD_BITS:0] packet;
+    cabac_state_t st;
     logic [12:0] bit_count;
     logic [12:0] byte_count;
     logic [MAX_SLICE_PAYLOAD_BITS - 1:0] raw_bits;
     begin
       if ((body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height)) begin
-        packet = encode_generated_body(coded_width, coded_height, luma_rem, chroma_rem);
-        bit_count = packet[MAX_SLICE_PAYLOAD_BITS +: 13];
+        st = encode_generated_state(coded_width, coded_height, luma_rem, chroma_rem);
+        bit_count = st[CABAC_LEN_LSB +: 13];
         byte_count = (bit_count + 13'd7) >> 3;
-        raw_bits = packet[MAX_SLICE_PAYLOAD_BITS - 1:0];
+        raw_bits = st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS];
       end else begin
         bit_count = 13'd0;
         byte_count = 13'd0;
@@ -161,7 +161,7 @@ module ff_vvc_generated_cabac_body #(
     end
   endfunction
 
-  function automatic logic [12 + MAX_SLICE_PAYLOAD_BITS:0] encode_generated_body(
+  function automatic cabac_state_t encode_generated_state(
     input logic [15:0] width,
     input logic [15:0] height,
     input logic [4:0]  rem,
@@ -169,20 +169,20 @@ module ff_vvc_generated_cabac_body #(
   );
     begin
       if ((width == 16'd8) && (height == 16'd8)) begin
-        encode_generated_body = encode_8x8_body(rem, c_rem);
+        encode_generated_state = encode_8x8_state(rem, c_rem);
       end else if ((width == 16'd16) && (height == 16'd16)) begin
-        encode_generated_body = encode_16x16_body(rem, c_rem);
+        encode_generated_state = encode_16x16_state(rem, c_rem);
       end else if ((width == 16'd32) && (height == 16'd32)) begin
-        encode_generated_body = encode_32x32_body(rem, c_rem);
+        encode_generated_state = encode_32x32_state(rem, c_rem);
       end else if ((width == 16'd64) && (height == 16'd64)) begin
-        encode_generated_body = encode_64x64_body(width, height, rem, c_rem);
+        encode_generated_state = encode_64x64_state(width, height, rem, c_rem);
       end else begin
-        encode_generated_body = '0;
+        encode_generated_state = '0;
       end
     end
   endfunction
 
-  function automatic logic [12 + MAX_SLICE_PAYLOAD_BITS:0] encode_8x8_body(
+  function automatic cabac_state_t encode_8x8_state(
     input logic [4:0] rem,
     input logic [4:0] c_rem
   );
@@ -193,14 +193,11 @@ module ff_vvc_generated_cabac_body #(
       st = encode_4x4_chroma_tree(st, c_rem);
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);
-      encode_8x8_body = {
-        st[CABAC_LEN_LSB +: 13],
-        st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
-      };
+      encode_8x8_state = st;
     end
   endfunction
 
-  function automatic logic [12 + MAX_SLICE_PAYLOAD_BITS:0] encode_16x16_body(
+  function automatic cabac_state_t encode_16x16_state(
     input logic [4:0] rem,
     input logic [4:0] c_rem
   );
@@ -210,14 +207,11 @@ module ff_vvc_generated_cabac_body #(
       st = encode_16x16_tree(st, rem, c_rem);
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);
-      encode_16x16_body = {
-        st[CABAC_LEN_LSB +: 13],
-        st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
-      };
+      encode_16x16_state = st;
     end
   endfunction
 
-  function automatic logic [12 + MAX_SLICE_PAYLOAD_BITS:0] encode_32x32_body(
+  function automatic cabac_state_t encode_32x32_state(
     input logic [4:0] rem,
     input logic [4:0] c_rem
   );
@@ -228,14 +222,11 @@ module ff_vvc_generated_cabac_body #(
       st = encode_32x32_chroma_tree(st, c_rem);
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);
-      encode_32x32_body = {
-        st[CABAC_LEN_LSB +: 13],
-        st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
-      };
+      encode_32x32_state = st;
     end
   endfunction
 
-  function automatic logic [12 + MAX_SLICE_PAYLOAD_BITS:0] encode_64x64_body(
+  function automatic cabac_state_t encode_64x64_state(
     input logic [15:0] coded_width,
     input logic [15:0] coded_height,
     input logic [4:0] rem,
@@ -247,10 +238,7 @@ module ff_vvc_generated_cabac_body #(
       st = encode_partitioned_ctu_tree(st, coded_width, coded_height, rem, c_rem);
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);
-      encode_64x64_body = {
-        st[CABAC_LEN_LSB +: 13],
-        st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
-      };
+      encode_64x64_state = st;
     end
   endfunction
 
