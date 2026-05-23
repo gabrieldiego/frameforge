@@ -33,15 +33,19 @@ module ff_vvc_palette_symbolizer #(
   localparam logic [1:0] PLANE_CB = 2'd1;
   localparam logic [1:0] PLANE_CR = 2'd2;
   localparam logic [3:0] PALETTE_PKT_CU_START            = 4'h1;
-  localparam logic [3:0] PALETTE_PKT_ENTRY               = 4'h2;
+  localparam logic [3:0] PALETTE_PKT_ENTRY_Y             = 4'h2;
   localparam logic [3:0] PALETTE_PKT_INDEX               = 4'h3;
+  localparam logic [3:0] PALETTE_PKT_ENTRY_CB            = 4'h4;
+  localparam logic [3:0] PALETTE_PKT_ENTRY_CR            = 4'h5;
   localparam int MAX_CTU_SAMPLES = CTU_SIZE * CTU_SIZE;
   localparam int MAX_CU_SAMPLES = PALETTE_CU_SIZE * PALETTE_CU_SIZE;
   localparam int MAX_PALETTE_ENTRIES = 31;
   localparam logic [2:0] DRAIN_IDLE  = 3'd0;
   localparam logic [2:0] DRAIN_START = 3'd1;
-  localparam logic [2:0] DRAIN_ENTRY = 3'd2;
+  localparam logic [2:0] DRAIN_ENTRY_Y = 3'd2;
   localparam logic [2:0] DRAIN_INDEX = 3'd3;
+  localparam logic [2:0] DRAIN_ENTRY_CB = 3'd4;
+  localparam logic [2:0] DRAIN_ENTRY_CR = 3'd5;
 
   logic [7:0] plane_y [0:MAX_CTU_SAMPLES - 1];
   logic [7:0] plane_cb [0:MAX_CTU_SAMPLES - 1];
@@ -200,17 +204,45 @@ module ff_vvc_palette_symbolizer #(
             if (!drain_symbol_selected || (cu_palette_size_q == 8'd0)) begin
               advance_drain_cu(last_symbol_index);
             end else begin
-              drain_state_q <= DRAIN_ENTRY;
+              drain_state_q <= DRAIN_ENTRY_Y;
               drain_entry_index_q <= 8'd0;
             end
           end
-          DRAIN_ENTRY: begin
+          DRAIN_ENTRY_Y: begin
             m_axis_valid <= 1'b1;
             m_axis_data <= {
-              PALETTE_PKT_ENTRY,
-              4'd0,
-              cu_entry_y[drain_entry_index_q],
-              cu_entry_cb[drain_entry_index_q],
+              PALETTE_PKT_ENTRY_Y,
+              20'd0,
+              cu_entry_y[drain_entry_index_q]
+            };
+            m_axis_last <= 1'b0;
+            if ((drain_entry_index_q + 8'd1) >= cu_palette_size_q) begin
+              drain_state_q <= DRAIN_ENTRY_CB;
+              drain_entry_index_q <= 8'd0;
+            end else begin
+              drain_entry_index_q <= drain_entry_index_q + 8'd1;
+            end
+          end
+          DRAIN_ENTRY_CB: begin
+            m_axis_valid <= 1'b1;
+            m_axis_data <= {
+              PALETTE_PKT_ENTRY_CB,
+              20'd0,
+              cu_entry_cb[drain_entry_index_q]
+            };
+            m_axis_last <= 1'b0;
+            if ((drain_entry_index_q + 8'd1) >= cu_palette_size_q) begin
+              drain_state_q <= DRAIN_ENTRY_CR;
+              drain_entry_index_q <= 8'd0;
+            end else begin
+              drain_entry_index_q <= drain_entry_index_q + 8'd1;
+            end
+          end
+          DRAIN_ENTRY_CR: begin
+            m_axis_valid <= 1'b1;
+            m_axis_data <= {
+              PALETTE_PKT_ENTRY_CR,
+              20'd0,
               cu_entry_cr[drain_entry_index_q]
             };
             m_axis_last <= (cu_palette_size_q <= 8'd1) &&

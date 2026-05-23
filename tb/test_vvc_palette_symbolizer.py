@@ -5,8 +5,10 @@ from cocotb.triggers import ReadOnly, RisingEdge, Timer
 
 VISIBLE_SAMPLES = 64
 PKT_CU_START = 0x1
-PKT_ENTRY = 0x2
+PKT_ENTRY_Y = 0x2
 PKT_INDEX = 0x3
+PKT_ENTRY_CB = 0x4
+PKT_ENTRY_CR = 0x5
 
 
 async def reset(dut):
@@ -71,18 +73,20 @@ async def palette_symbolizer_streams_anchor_symbol(dut):
     await reset(dut)
 
     symbols = []
-    monitor = cocotb.start_soon(monitor_symbols(dut, symbols, 2))
+    monitor = cocotb.start_soon(monitor_symbols(dut, symbols, 4))
     await send_plane(dut, 0, 10)
     await send_plane(dut, 1, 20)
     await send_plane(dut, 2, 30, last=True)
-    for _ in range(8):
-        if len(symbols) >= 2:
+    for _ in range(32):
+        if len(symbols) >= 4:
             break
         await RisingEdge(dut.clk)
     monitor.cancel()
 
     assert int(dut.symbol_count.value) == 1
-    assert symbols == [0x11010000, 0x200A141E], [hex(symbol) for symbol in symbols]
+    assert symbols == [0x11010000, 0x2000000A, 0x40000014, 0x5000001E], [
+        hex(symbol) for symbol in symbols
+    ]
     await RisingEdge(dut.clk)
     await Timer(1, unit="ns")
 
@@ -116,12 +120,12 @@ async def palette_symbolizer_marks_off_view_right_column_unselected(dut):
     dut.cu_select_mask.value = (1 << 63) | (1 << 61)
 
     symbols = []
-    monitor = cocotb.start_soon(monitor_symbols(dut, symbols, 6))
+    monitor = cocotb.start_soon(monitor_symbols(dut, symbols, 10))
     await send_plane(dut, 0, 10, samples=8 * 16)
     await send_plane(dut, 1, 20, samples=8 * 16)
     await send_plane(dut, 2, 30, last=True, samples=8 * 16)
-    for _ in range(8):
-        if len(symbols) >= 6:
+    for _ in range(32):
+        if len(symbols) >= 10:
             break
         await RisingEdge(dut.clk)
     monitor.cancel()
@@ -141,19 +145,19 @@ async def palette_symbolizer_marks_off_view_bottom_row_unselected(dut):
     dut.cu_select_mask.value = (1 << 63) | (1 << 62)
 
     symbols = []
-    monitor = cocotb.start_soon(monitor_symbols(dut, symbols, 6))
+    monitor = cocotb.start_soon(monitor_symbols(dut, symbols, 10))
     await send_plane(dut, 0, 10, samples=16 * 8)
     await send_plane(dut, 1, 20, samples=16 * 8)
     await send_plane(dut, 2, 30, last=True, samples=16 * 8)
-    for _ in range(8):
-        if len(symbols) >= 6:
+    for _ in range(32):
+        if len(symbols) >= 10:
             break
         await RisingEdge(dut.clk)
     monitor.cancel()
 
     assert int(dut.symbol_count.value) == 4
     selected = [packet_selected(symbol) for symbol in symbols if packet_kind(symbol) == PKT_CU_START]
-    assert selected == [1, 1, 0, 0], selected
+    assert selected == [1, 1, 0, 0], [selected, [hex(symbol) for symbol in symbols]]
 
 
 @cocotb.test()
@@ -164,7 +168,7 @@ async def palette_symbolizer_streams_lossless_indices_for_multicolor_cu(dut):
     cb_samples = [20 if index % 2 == 0 else 210 for index in range(64)]
     cr_samples = [30 if index % 2 == 0 else 220 for index in range(64)]
     symbols = []
-    monitor = cocotb.start_soon(monitor_symbols(dut, symbols, 67))
+    monitor = cocotb.start_soon(monitor_symbols(dut, symbols, 71))
     for sample in y_samples:
         await send_plane(dut, 0, sample, samples=1)
     for sample in cb_samples:
@@ -172,7 +176,7 @@ async def palette_symbolizer_streams_lossless_indices_for_multicolor_cu(dut):
     for index, sample in enumerate(cr_samples):
         await send_plane(dut, 2, sample, last=index == len(cr_samples) - 1, samples=1)
     for _ in range(80):
-        if len(symbols) >= 67:
+        if len(symbols) >= 71:
             break
         await RisingEdge(dut.clk)
     monitor.cancel()
@@ -180,8 +184,15 @@ async def palette_symbolizer_streams_lossless_indices_for_multicolor_cu(dut):
     assert packet_kind(symbols[0]) == PKT_CU_START
     assert packet_selected(symbols[0]) == 1
     assert packet_entry_count(symbols[0]) == 2, [hex(symbol) for symbol in symbols[:6]]
-    assert symbols[1:3] == [0x200A141E, 0x20C8D2DC]
-    assert [packet_kind(symbol) for symbol in symbols[3:]] == [PKT_INDEX] * 64
+    assert symbols[1:7] == [
+        0x2000000A,
+        0x200000C8,
+        0x40000014,
+        0x400000D2,
+        0x5000001E,
+        0x500000DC,
+    ]
+    assert [packet_kind(symbol) for symbol in symbols[7:]] == [PKT_INDEX] * 64
     expected_indices = []
     for y in range(8):
         if y % 2 == 0:
@@ -190,4 +201,4 @@ async def palette_symbolizer_streams_lossless_indices_for_multicolor_cu(dut):
             x_iter = range(7, -1, -1)
         for x in x_iter:
             expected_indices.append((y * 8 + x) % 2)
-    assert [(symbol & 0xFF) for symbol in symbols[3:]] == expected_indices
+    assert [(symbol & 0xFF) for symbol in symbols[7:]] == expected_indices

@@ -45,8 +45,10 @@ module ff_vvc_palette_cabac #(
   localparam int PALETTE_CTX_IDX_RUN_3 = 16;
   localparam int PALETTE_CTX_IDX_RUN_4 = 17;
   localparam logic [3:0] PALETTE_PKT_CU_START            = 4'h1;
-  localparam logic [3:0] PALETTE_PKT_ENTRY               = 4'h2;
+  localparam logic [3:0] PALETTE_PKT_ENTRY_Y             = 4'h2;
   localparam logic [3:0] PALETTE_PKT_INDEX               = 4'h3;
+  localparam logic [3:0] PALETTE_PKT_ENTRY_CB            = 4'h4;
+  localparam logic [3:0] PALETTE_PKT_ENTRY_CR            = 4'h5;
   typedef struct packed {
     logic [7:0] bits_left;
     logic [7:0] num_buffered_bytes;
@@ -83,9 +85,6 @@ module ff_vvc_palette_cabac #(
   logic [7:0]     current_palette_size_q;
   logic [7:0]     current_entry_count_q;
   logic [7:0]     current_index_count_q;
-  logic [(31 * 8) - 1:0] current_entry_y_q;
-  logic [(31 * 8) - 1:0] current_entry_cb_q;
-  logic [(31 * 8) - 1:0] current_entry_cr_q;
   logic [(16 * 8) - 1:0] current_scan_indices_q;
   logic [15:0]    current_run_copy_flags_q;
   logic [7:0]     current_previous_index_q;
@@ -117,14 +116,16 @@ module ff_vvc_palette_cabac #(
           );
         end
       end
-      PALETTE_PKT_ENTRY: begin
-        if ((current_entry_count_q + 8'd1) == current_palette_size_q) begin
-          next_palette_state = palette_444_encode_entries_and_escape(
-            palette_state_q,
-            current_entry_count_q,
-            s_axis_data[23:0]
-          );
-        end
+      PALETTE_PKT_ENTRY_Y,
+      PALETTE_PKT_ENTRY_CB,
+      PALETTE_PKT_ENTRY_CR: begin
+        next_palette_state = palette_444_encode_entry_component(
+          palette_state_q,
+          s_axis_data[31:28],
+          current_palette_size_q,
+          current_entry_count_q,
+          s_axis_data[7:0]
+        );
       end
       PALETTE_PKT_INDEX: begin
         next_palette_state = palette_444_encode_index_symbol(
@@ -147,9 +148,6 @@ module ff_vvc_palette_cabac #(
       current_palette_size_q <= 8'd0;
       current_entry_count_q <= 8'd0;
       current_index_count_q <= 8'd0;
-      current_entry_y_q <= '0;
-      current_entry_cb_q <= '0;
-      current_entry_cr_q <= '0;
       current_scan_indices_q <= '0;
       current_run_copy_flags_q <= 16'd0;
       current_previous_index_q <= 8'd0;
@@ -165,9 +163,6 @@ module ff_vvc_palette_cabac #(
       current_palette_size_q <= 8'd0;
       current_entry_count_q <= 8'd0;
       current_index_count_q <= 8'd0;
-      current_entry_y_q <= '0;
-      current_entry_cb_q <= '0;
-      current_entry_cr_q <= '0;
       current_scan_indices_q <= '0;
       current_run_copy_flags_q <= 16'd0;
       current_previous_index_q <= 8'd0;
@@ -200,9 +195,6 @@ module ff_vvc_palette_cabac #(
         current_palette_size_q <= 8'd0;
         current_entry_count_q <= 8'd0;
         current_index_count_q <= 8'd0;
-        current_entry_y_q <= '0;
-        current_entry_cb_q <= '0;
-        current_entry_cr_q <= '0;
         current_scan_indices_q <= '0;
         current_run_copy_flags_q <= 16'd0;
         current_previous_index_q <= 8'd0;
@@ -216,20 +208,20 @@ module ff_vvc_palette_cabac #(
             current_palette_size_q <= s_axis_data[23:16];
             current_entry_count_q <= 8'd0;
             current_index_count_q <= 8'd0;
-            current_entry_y_q <= '0;
-            current_entry_cb_q <= '0;
-            current_entry_cr_q <= '0;
             current_scan_indices_q <= '0;
             current_run_copy_flags_q <= 16'd0;
             current_previous_index_q <= 8'd0;
             current_prev_run_pos_q <= 8'd0;
             current_prev_subblock_last_index_q <= 8'd0;
           end
-          PALETTE_PKT_ENTRY: begin
-            current_entry_y_q[(current_entry_count_q * 8) +: 8] <= s_axis_data[23:16];
-            current_entry_cb_q[(current_entry_count_q * 8) +: 8] <= s_axis_data[15:8];
-            current_entry_cr_q[(current_entry_count_q * 8) +: 8] <= s_axis_data[7:0];
-            current_entry_count_q <= current_entry_count_q + 8'd1;
+          PALETTE_PKT_ENTRY_Y,
+          PALETTE_PKT_ENTRY_CB,
+          PALETTE_PKT_ENTRY_CR: begin
+            if ((current_entry_count_q + 8'd1) >= current_palette_size_q) begin
+              current_entry_count_q <= 8'd0;
+            end else begin
+              current_entry_count_q <= current_entry_count_q + 8'd1;
+            end
           end
           PALETTE_PKT_INDEX: begin
             current_scan_indices_q[(current_index_count_q[3:0] * 8) +: 8] <= s_axis_data[7:0];
@@ -334,48 +326,25 @@ module ff_vvc_palette_cabac #(
     end
   endfunction
 
-  function automatic palette_state_t palette_444_encode_entries_and_escape(
+  function automatic palette_state_t palette_444_encode_entry_component(
     input palette_state_t pst_in,
+    input logic [3:0] packet_kind,
+    input logic [7:0] palette_size,
     input logic [7:0] entry_count,
-    input logic [23:0] symbol
+    input logic [7:0] sample
   );
     palette_state_t pst;
     cabac_writer_state_t st;
-    logic [7:0] entry_y;
-    logic [7:0] entry_cb;
-    logic [7:0] entry_cr;
     begin
       pst = pst_in;
       st = pst.cabac;
-      // VVC writes palette entries component-major: all Y entries, then Cb,
-      // then Cr. The input symbol stream remains entry-major.
-      for (int entry = 0; entry < 31; entry = entry + 1) begin
-        if (entry < entry_count) begin
-          entry_y = current_entry_y_q[(entry * 8) +: 8];
-          st = cabac_encode_bins_ep(st, {24'd0, entry_y}, 6'd8);
-        end else if (entry == entry_count) begin
-          st = cabac_encode_bins_ep(st, {24'd0, symbol[23:16]}, 6'd8);
-        end
+      st = cabac_encode_bins_ep(st, {24'd0, sample}, 6'd8);
+      if ((packet_kind == PALETTE_PKT_ENTRY_CR) &&
+          ((entry_count + 8'd1) >= palette_size)) begin
+        st = cabac_encode_bin_ep(st, 1'b0); // palette_escape_val_present_flag=0
       end
-      for (int entry = 0; entry < 31; entry = entry + 1) begin
-        if (entry < entry_count) begin
-          entry_cb = current_entry_cb_q[(entry * 8) +: 8];
-          st = cabac_encode_bins_ep(st, {24'd0, entry_cb}, 6'd8);
-        end else if (entry == entry_count) begin
-          st = cabac_encode_bins_ep(st, {24'd0, symbol[15:8]}, 6'd8);
-        end
-      end
-      for (int entry = 0; entry < 31; entry = entry + 1) begin
-        if (entry < entry_count) begin
-          entry_cr = current_entry_cr_q[(entry * 8) +: 8];
-          st = cabac_encode_bins_ep(st, {24'd0, entry_cr}, 6'd8);
-        end else if (entry == entry_count) begin
-          st = cabac_encode_bins_ep(st, {24'd0, symbol[7:0]}, 6'd8);
-        end
-      end
-      st = cabac_encode_bin_ep(st, 1'b0); // palette_escape_val_present_flag=0
       pst.cabac = st;
-      palette_444_encode_entries_and_escape = pst;
+      palette_444_encode_entry_component = pst;
     end
   endfunction
 

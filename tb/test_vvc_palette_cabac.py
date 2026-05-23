@@ -48,8 +48,12 @@ def pack_palette_lossless_frame_symbols(y, cb, cr, width=64, height=64):
         origin_y = tile_y * 8
         entries, indices = palette_entries_and_indices(y, cb, cr, width, height, origin_x, origin_y)
         symbols.append((0x1 << 28) | (1 << 24) | (len(entries) << 16))
-        for entry_y, entry_cb, entry_cr in entries:
-            symbols.append((0x2 << 28) | (entry_y << 16) | (entry_cb << 8) | entry_cr)
+        for entry_y, _, _ in entries:
+            symbols.append((0x2 << 28) | entry_y)
+        for _, entry_cb, _ in entries:
+            symbols.append((0x4 << 28) | entry_cb)
+        for _, _, entry_cr in entries:
+            symbols.append((0x5 << 28) | entry_cr)
         if len(entries) > 1:
             for x, y_pos in palette_horizontal_scan_positions(
                 min(8, width - origin_x),
@@ -63,14 +67,17 @@ def pack_palette_lossless_frame_symbols(y, cb, cr, width=64, height=64):
 def pack_palette_lossless_symbols(y, cb, cr, width=8, height=8):
     entries, indices = palette_entries_and_indices(y, cb, cr, width, height)
     symbols = [(0x1 << 28) | (1 << 24) | (len(entries) << 16)]
-    for entry_y, entry_cb, entry_cr in entries:
-        symbols.append((0x2 << 28) | (entry_y << 16) | (entry_cb << 8) | entry_cr)
+    for entry_y, _, _ in entries:
+        symbols.append((0x2 << 28) | entry_y)
+    for _, entry_cb, _ in entries:
+        symbols.append((0x4 << 28) | entry_cb)
+    for _, _, entry_cr in entries:
+        symbols.append((0x5 << 28) | entry_cr)
     if len(entries) > 1:
         for x, y_pos in palette_horizontal_scan_positions(width, height):
             index = indices[y_pos * width + x]
             symbols.append((0x3 << 28) | index)
     return len(symbols), symbols
-
 
 def palette_horizontal_scan_positions(width, height):
     for y_pos in range(height):
@@ -261,7 +268,7 @@ async def palette_cabac_matches_software_boundary_dump(dut):
         dut.m_axis_ready.value = 1
     dut.coded_width.value = reference["width"]
     dut.coded_height.value = reference["height"]
-    dut.symbol_count.value = symbol_count
+    dut.symbol_count.value = ((reference["width"] + 7) // 8) * ((reference["height"] + 7) // 8)
     await Timer(1, unit="ns")
     observed_stream = await feed_palette_symbols(dut, symbols, symbol_count)
     await Timer(1, unit="ns")
