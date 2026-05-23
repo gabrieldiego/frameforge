@@ -42,7 +42,7 @@ module ff_vvc_encoder #(
   localparam int INPUT_COUNT_BITS = $clog2((MAX_FRAME_SAMPLES * 2) + 1);
   localparam int TOY_RESIDUAL_CB_SIZE = 4;
   localparam int TOY_RESIDUAL_LUMA_SAMPLES = TOY_RESIDUAL_CB_SIZE * TOY_RESIDUAL_CB_SIZE;
-  localparam int CABAC_CAPTURE_BUFFER_BITS = 4096;
+  localparam int CABAC_CAPTURE_BUFFER_BYTES = 512;
   localparam int PALETTE_CU_SIZE = 8;
   localparam int MAX_CTU_PALETTE_SYMBOLS =
     ((CTU_SIZE + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE) *
@@ -102,7 +102,7 @@ module ff_vvc_encoder #(
   logic [12:0] cabac_capture_byte_index_q;
   logic [12:0] cabac_captured_bit_len_q;
   logic [12:0] cabac_captured_byte_len_q;
-  logic [CABAC_CAPTURE_BUFFER_BITS - 1:0] cabac_captured_byte_bits_q;
+  logic [7:0]  cabac_captured_bytes_q [0:CABAC_CAPTURE_BUFFER_BYTES - 1];
   logic        cabac_capture_done_q;
   logic        pending_output_q;
   logic        palette_done_q;
@@ -309,7 +309,6 @@ module ff_vvc_encoder #(
       cabac_capture_byte_index_q <= 13'd0;
       cabac_captured_bit_len_q <= 13'd0;
       cabac_captured_byte_len_q <= 13'd0;
-      cabac_captured_byte_bits_q <= '0;
       cabac_capture_done_q <= 1'b0;
       pending_output_q <= 1'b0;
       palette_done_q <= 1'b0;
@@ -344,7 +343,6 @@ module ff_vvc_encoder #(
         cabac_capture_byte_index_q <= 13'd0;
         cabac_captured_bit_len_q <= 13'd0;
         cabac_captured_byte_len_q <= 13'd0;
-        cabac_captured_byte_bits_q <= '0;
         cabac_capture_done_q <= 1'b0;
         pending_output_q <= 1'b0;
         palette_done_q <= 1'b0;
@@ -404,7 +402,6 @@ module ff_vvc_encoder #(
         cabac_capture_byte_index_q <= 13'd0;
         cabac_captured_bit_len_q <= PALETTE_MODE ? 13'd0 : cabac_stream_bit_count;
         cabac_captured_byte_len_q <= PALETTE_MODE ? 13'd0 : cabac_stream_byte_count;
-        cabac_captured_byte_bits_q <= '0;
       end else if (pending_output_q && cabac_capture_done_q &&
                    ((!PALETTE_MODE) || palette_done_q)) begin
         pending_output_q <= 1'b0;
@@ -432,7 +429,7 @@ module ff_vvc_encoder #(
         palette_done_q <= 1'b1;
       end
       if (cabac_capture_active_q && cabac_stream_valid) begin
-        cabac_captured_byte_bits_q <= (cabac_captured_byte_bits_q << 8) | cabac_stream_data;
+        cabac_captured_bytes_q[cabac_capture_byte_index_q] <= cabac_stream_data;
         cabac_capture_byte_index_q <= cabac_capture_byte_index_q + 13'd1;
         if (cabac_stream_last) begin
           cabac_captured_bit_len_q <= cabac_stream_bit_count;
@@ -1362,9 +1359,9 @@ module ff_vvc_encoder #(
 
   function automatic logic [7:0] cabac_captured_byte(input logic [12:0] byte_index);
     begin
-      if (byte_index < cabac_captured_byte_len_q) begin
-        cabac_captured_byte =
-          cabac_captured_byte_bits_q >> (((cabac_captured_byte_len_q - 13'd1) - byte_index) * 8);
+      if ((byte_index < cabac_captured_byte_len_q) &&
+          (byte_index < CABAC_CAPTURE_BUFFER_BYTES[12:0])) begin
+        cabac_captured_byte = cabac_captured_bytes_q[byte_index];
       end else begin
         cabac_captured_byte = 8'd0;
       end
