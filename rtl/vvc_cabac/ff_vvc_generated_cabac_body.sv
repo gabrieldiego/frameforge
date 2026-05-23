@@ -37,7 +37,10 @@ module ff_vvc_generated_cabac_body #(
 
   typedef struct packed {
     logic [12:0] bit_count;
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bits;
+    logic [12:0] byte_count;
+    logic [2:0] partial_bit_count;
+    logic [7:0] partial_byte;
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bytes;
   } cabac_capture_state_t;
 
   typedef struct packed {
@@ -155,10 +158,11 @@ module ff_vvc_generated_cabac_body #(
       bit_count = st.capture.bit_count;
       byte_count = (bit_count + 13'd7) >> 3;
       pad_bits = ((((bit_count + 13'd7) >> 3) << 3) - bit_count);
-      if (byte_index < byte_count) begin
+      if (byte_index < st.capture.byte_count) begin
         cabac_state_stream_byte =
-          (st.capture.bits << pad_bits) >>
-          (((byte_count - 13'd1) - byte_index) * 8);
+          st.capture.bytes >> (((st.capture.byte_count - 13'd1) - byte_index) * 8);
+      end else if ((byte_index == st.capture.byte_count) && (pad_bits != 13'd0)) begin
+        cabac_state_stream_byte = st.capture.partial_byte << pad_bits[2:0];
       end else begin
         cabac_state_stream_byte = 8'd0;
       end
@@ -1836,17 +1840,35 @@ module ff_vvc_generated_cabac_body #(
     input logic [5:0]   bit_count
   );
     cabac_writer_state_t st;
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bytes;
     logic [12:0] len;
+    logic [12:0] byte_count;
+    logic [7:0] partial_byte;
+    integer partial_bit_count;
     integer i;
     begin
       st = st_in;
+      bytes = st.capture.bytes;
       len = st.capture.bit_count;
+      byte_count = st.capture.byte_count;
+      partial_byte = st.capture.partial_byte;
+      partial_bit_count = st.capture.partial_bit_count;
       for (i = bit_count - 1; i >= 0; i = i - 1) begin
-        st.capture.bits =
-          (st.capture.bits << 1) | value[i];
+        partial_byte = (partial_byte << 1) | value[i];
+        partial_bit_count = partial_bit_count + 1;
         len = len + 13'd1;
+        if (partial_bit_count == 8) begin
+          bytes = (bytes << 8) | partial_byte;
+          byte_count = byte_count + 13'd1;
+          partial_byte = 8'd0;
+          partial_bit_count = 0;
+        end
       end
+      st.capture.bytes = bytes;
       st.capture.bit_count = len;
+      st.capture.byte_count = byte_count;
+      st.capture.partial_byte = partial_byte;
+      st.capture.partial_bit_count = partial_bit_count[2:0];
       cabac_write_bits = st;
     end
   endfunction

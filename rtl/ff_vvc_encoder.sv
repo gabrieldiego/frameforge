@@ -62,7 +62,10 @@ module ff_vvc_encoder #(
 
   typedef struct packed {
     logic [12:0] bit_count;
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bits;
+    logic [12:0] byte_count;
+    logic [2:0] partial_bit_count;
+    logic [7:0] partial_byte;
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bytes;
   } cabac_capture_state_t;
 
   typedef struct packed {
@@ -1749,7 +1752,7 @@ module ff_vvc_encoder #(
       st = cabac_finish(st);
       generated_cabac_bitstream = {
         st.capture.bit_count,
-        st.capture.bits
+        cabac_capture_bits(st.capture)
       };
     end
   endfunction
@@ -2195,21 +2198,45 @@ module ff_vvc_encoder #(
     input logic [5:0]   bit_count
   );
     cabac_writer_state_t st;
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bits;
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bytes;
     logic [12:0] len;
+    logic [12:0] byte_count;
+    logic [7:0] partial_byte;
+    integer partial_bit_count;
     integer i;
 
     begin
       st = st_in;
-      bits = st.capture.bits;
+      bytes = st.capture.bytes;
       len = st.capture.bit_count;
+      byte_count = st.capture.byte_count;
+      partial_byte = st.capture.partial_byte;
+      partial_bit_count = st.capture.partial_bit_count;
       for (i = bit_count - 1; i >= 0; i = i - 1) begin
-        bits = (bits << 1) | value[i];
+        partial_byte = (partial_byte << 1) | value[i];
+        partial_bit_count = partial_bit_count + 1;
         len = len + 13'd1;
+        if (partial_bit_count == 8) begin
+          bytes = (bytes << 8) | partial_byte;
+          byte_count = byte_count + 13'd1;
+          partial_byte = 8'd0;
+          partial_bit_count = 0;
+        end
       end
-      st.capture.bits = bits;
+      st.capture.bytes = bytes;
       st.capture.bit_count = len;
+      st.capture.byte_count = byte_count;
+      st.capture.partial_byte = partial_byte;
+      st.capture.partial_bit_count = partial_bit_count[2:0];
       cabac_write_bits = st;
+    end
+  endfunction
+
+  function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] cabac_capture_bits(
+    input cabac_capture_state_t capture
+  );
+    begin
+      cabac_capture_bits = (capture.bytes << capture.partial_bit_count) | capture.partial_byte;
     end
   endfunction
 
