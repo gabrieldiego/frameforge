@@ -6,16 +6,6 @@ import cocotb
 BODY_GENERATED = 0
 
 
-def compat_cabac_bytes(dut):
-    bit_len = int(dut.compat_payload_bit_len.value)
-    value = int(dut.compat_payload_bits.value)
-    if bit_len == 0:
-        return b""
-    byte_len = (bit_len + 7) // 8
-    pad_bits = (byte_len * 8) - bit_len
-    return (value << pad_bits).to_bytes(byte_len, byteorder="big")
-
-
 async def reset_dut(dut):
     cocotb.start_soon(Clock(dut.clk, 1, unit="ns").start())
     dut.rst_n.value = 0
@@ -55,9 +45,8 @@ async def cabac_body_generates_8x8_black_payload(dut):
     await Timer(1, unit="ns")
 
     assert int(dut.supported.value) == 1
-    assert int(dut.compat_payload_bit_len.value) == 56
+    assert int(dut.stream_bit_count.value) == 56
     assert int(dut.stream_byte_count.value) == 7
-    assert compat_cabac_bytes(dut).hex() == "8062f5b7ebcb1f"
     assert (await stream_cabac_bytes(dut)).hex() == "8062f5b7ebcb1f"
 
 
@@ -72,9 +61,9 @@ async def cabac_body_generates_16x16_generated_payload(dut):
     await Timer(1, unit="ns")
 
     assert int(dut.supported.value) == 1
-    assert int(dut.compat_payload_bit_len.value) > 56
-    assert compat_cabac_bytes(dut) != b""
-    assert await stream_cabac_bytes(dut) == compat_cabac_bytes(dut)
+    assert int(dut.stream_bit_count.value) > 56
+    assert int(dut.stream_byte_count.value) > 0
+    assert await stream_cabac_bytes(dut) != b""
 
 
 @cocotb.test()
@@ -88,13 +77,12 @@ async def cabac_body_generates_32x32_block_payload(dut):
     await Timer(1, unit="ns")
 
     assert int(dut.supported.value) == 1
-    bit_len = int(dut.compat_payload_bit_len.value)
-    payload = compat_cabac_bytes(dut)
+    bit_len = int(dut.stream_bit_count.value)
+    payload = await stream_cabac_bytes(dut)
     assert bit_len == 403
     assert payload.hex() == (
         "0040820410208104082041020810408204102081040820410208104082041020810408204102081040820410208104082047c0"
     )
-    assert await stream_cabac_bytes(dut) == payload
 
 
 @cocotb.test()
@@ -108,6 +96,6 @@ async def cabac_body_generates_64x64_partition_payload(dut):
     await Timer(1, unit="ns")
 
     assert int(dut.supported.value) == 1
-    assert int(dut.compat_payload_bit_len.value) > 0
-    assert compat_cabac_bytes(dut) != b""
-    assert await stream_cabac_bytes(dut) == compat_cabac_bytes(dut)
+    assert int(dut.stream_bit_count.value) > 0
+    assert int(dut.stream_byte_count.value) > 0
+    assert await stream_cabac_bytes(dut) != b""

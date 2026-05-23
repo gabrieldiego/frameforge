@@ -17,12 +17,7 @@ module ff_vvc_generated_cabac_body #(
   output logic [7:0]   m_axis_data,
   output logic         m_axis_last,
   output logic [12:0]  stream_bit_count,
-  output logic [12:0]  stream_byte_count,
-
-  // Temporary glue for modules that still pack the enclosing slice as a
-  // combinational bit vector. The byte stream above is the block boundary.
-  output logic [12:0]  compat_payload_bit_len,
-  output logic [MAX_SLICE_PAYLOAD_BITS - 1:0] compat_payload_bits
+  output logic [12:0]  stream_byte_count
 );
   localparam logic [1:0] BODY_GENERATED = 2'd0;
 
@@ -41,6 +36,8 @@ module ff_vvc_generated_cabac_body #(
   typedef logic [CABAC_STATE_BITS + VVC_PROB_MODEL_BITS - 1:0] cabac_vvc_model_step_t;
   typedef logic [CABAC_STATE_BITS + 5 * VVC_PROB_MODEL_BITS - 1:0] cabac_luma_leaf_step_t;
 
+  logic [12:0] generated_bit_count;
+  logic [MAX_SLICE_PAYLOAD_BITS - 1:0] generated_raw_bits;
   logic [MAX_SLICE_PAYLOAD_BITS - 1:0] selected_bits;
   logic [12:0] selected_pad_bits;
   logic [MAX_SLICE_PAYLOAD_BITS - 1:0] stream_bits_q;
@@ -49,24 +46,24 @@ module ff_vvc_generated_cabac_body #(
   logic stream_active_q;
 
   assign stream_byte_count =
-    stream_active_q ? stream_byte_count_q : ((compat_payload_bit_len + 13'd7) >> 3);
-  assign stream_bit_count = compat_payload_bit_len;
+    stream_active_q ? stream_byte_count_q : ((generated_bit_count + 13'd7) >> 3);
+  assign stream_bit_count = generated_bit_count;
 
   always @* begin
     supported =
       (body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height);
 
     if ((body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height)) begin
-      {compat_payload_bit_len, compat_payload_bits} = encode_generated_body(coded_width, coded_height, luma_rem, chroma_rem);
+      {generated_bit_count, generated_raw_bits} = encode_generated_body(coded_width, coded_height, luma_rem, chroma_rem);
     end else begin
-      compat_payload_bit_len = 13'd0;
-      compat_payload_bits = '0;
+      generated_bit_count = 13'd0;
+      generated_raw_bits = '0;
     end
   end
 
   always @* begin
-    selected_pad_bits = ((((compat_payload_bit_len + 13'd7) >> 3) << 3) - compat_payload_bit_len);
-    selected_bits = compat_payload_bits << selected_pad_bits;
+    selected_pad_bits = ((((generated_bit_count + 13'd7) >> 3) << 3) - generated_bit_count);
+    selected_bits = generated_raw_bits << selected_pad_bits;
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -81,12 +78,12 @@ module ff_vvc_generated_cabac_body #(
     end else begin
       if (start && supported) begin
         stream_bits_q <= selected_bits;
-        stream_byte_count_q <= (compat_payload_bit_len + 13'd7) >> 3;
+        stream_byte_count_q <= (generated_bit_count + 13'd7) >> 3;
         stream_byte_index_q <= 13'd0;
-        stream_active_q <= ((compat_payload_bit_len + 13'd7) >> 3) != 13'd0;
-        m_axis_valid <= ((compat_payload_bit_len + 13'd7) >> 3) != 13'd0;
-        m_axis_data <= stream_byte(selected_bits, (compat_payload_bit_len + 13'd7) >> 3, 13'd0);
-        m_axis_last <= ((compat_payload_bit_len + 13'd7) >> 3) == 13'd1;
+        stream_active_q <= ((generated_bit_count + 13'd7) >> 3) != 13'd0;
+        m_axis_valid <= ((generated_bit_count + 13'd7) >> 3) != 13'd0;
+        m_axis_data <= stream_byte(selected_bits, (generated_bit_count + 13'd7) >> 3, 13'd0);
+        m_axis_last <= ((generated_bit_count + 13'd7) >> 3) == 13'd1;
       end else if (m_axis_valid && m_axis_ready) begin
         if (m_axis_last) begin
           stream_active_q <= 1'b0;
