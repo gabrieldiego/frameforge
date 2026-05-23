@@ -223,7 +223,7 @@ module ff_vvc_encoder #(
     .chroma_rem(quant_chroma_rem_q),
     .symbol_count(palette_symbol_count),
     .supported(cabac_supported),
-    .payload_bit_len(cabac_payload_bit_len),
+    .compat_payload_bit_len(cabac_payload_bit_len),
     .s_axis_valid(palette_stream_valid),
     .s_axis_ready(palette_stream_ready),
     .s_axis_kind(8'd1),

@@ -15,8 +15,8 @@ module ff_vvc_palette_cabac #(
   output logic        s_axis_ready,
   input  logic [31:0] s_axis_data,
   input  logic        s_axis_last,
-  output logic [12:0] payload_bit_len,
-  output logic [MAX_SLICE_PAYLOAD_BITS - 1:0] payload_bits
+  output logic [12:0] compat_payload_bit_len,
+  output logic [MAX_SLICE_PAYLOAD_BITS - 1:0] compat_payload_bits
 );
   localparam int CABAC_BITS_LSB = 0;
   localparam int CABAC_LEN_LSB = CABAC_BITS_LSB + MAX_SLICE_PAYLOAD_BITS;
@@ -70,8 +70,8 @@ module ff_vvc_palette_cabac #(
   logic [(64 * 8) - 1:0] current_indices_q;
 
   assign s_axis_ready = enable;
-  assign payload_bit_len = palette_state_q[PALETTE_CABAC_LSB + CABAC_LEN_LSB +: 13];
-  assign payload_bits = palette_state_q[PALETTE_CABAC_LSB + CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS];
+  assign compat_payload_bit_len = palette_state_q[PALETTE_CABAC_LSB + CABAC_LEN_LSB +: 13];
+  assign compat_payload_bits = palette_state_q[PALETTE_CABAC_LSB + CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS];
   assign stream_symbol_selected = s_axis_data[24];
 
   always @* begin

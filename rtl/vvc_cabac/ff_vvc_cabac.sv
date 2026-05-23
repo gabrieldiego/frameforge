@@ -21,7 +21,7 @@ module ff_vvc_cabac #(
   input  logic [7:0]  symbol_count,
 
   output logic        supported,
-  output logic [12:0] payload_bit_len,
+  output logic [12:0] compat_payload_bit_len,
 
   // Symbol stream boundary for future sequential CABAC. The current clean-room
   // body generators still use the parameter inputs above, but upstream blocks
@@ -49,6 +49,10 @@ module ff_vvc_cabac #(
   logic generated_supported;
   logic [12:0] generated_bit_len;
   logic [MAX_SLICE_PAYLOAD_BITS - 1:0] generated_bits;
+  logic generated_m_axis_valid;
+  logic [7:0] generated_m_axis_data;
+  logic generated_m_axis_last;
+  logic [12:0] generated_stream_byte_count;
   logic [12:0] palette_bit_len;
   logic [MAX_SLICE_PAYLOAD_BITS - 1:0] palette_bits;
   logic [MAX_SLICE_PAYLOAD_BITS - 1:0] selected_bits;
@@ -63,19 +67,27 @@ module ff_vvc_cabac #(
   logic palette_s_axis_ready;
 
   assign s_axis_ready = mode_palette_444 ? palette_s_axis_ready : enable;
-  assign stream_byte_count = stream_active_q ? stream_byte_count_q : ((payload_bit_len + 13'd7) >> 3);
+  assign stream_byte_count = stream_active_q ? stream_byte_count_q : ((compat_payload_bit_len + 13'd7) >> 3);
 
   ff_vvc_generated_cabac_body #(
     .MAX_SLICE_PAYLOAD_BITS(MAX_SLICE_PAYLOAD_BITS)
   ) generated_body (
+    .clk(clk),
+    .rst_n(rst_n),
+    .start(start && enable && !mode_palette_444),
     .body_kind(body_kind),
     .coded_width(coded_width),
     .coded_height(coded_height),
     .luma_rem(luma_rem),
     .chroma_rem(chroma_rem),
     .supported(generated_supported),
-    .payload_bit_len(generated_bit_len),
-    .payload_bits(generated_bits)
+    .m_axis_ready(1'b1),
+    .m_axis_valid(generated_m_axis_valid),
+    .m_axis_data(generated_m_axis_data),
+    .m_axis_last(generated_m_axis_last),
+    .stream_byte_count(generated_stream_byte_count),
+    .compat_payload_bit_len(generated_bit_len),
+    .compat_payload_bits(generated_bits)
   );
 
   ff_vvc_palette_cabac #(
@@ -93,28 +105,28 @@ module ff_vvc_cabac #(
     .s_axis_ready(palette_s_axis_ready),
     .s_axis_data(s_axis_data),
     .s_axis_last(s_axis_last),
-    .payload_bit_len(palette_bit_len),
-    .payload_bits(palette_bits)
+    .compat_payload_bit_len(palette_bit_len),
+    .compat_payload_bits(palette_bits)
   );
 
   always @* begin
     if (!enable) begin
       supported = 1'b0;
-      payload_bit_len = 13'd0;
+      compat_payload_bit_len = 13'd0;
       compat_payload_bits = '0;
     end else if (mode_palette_444) begin
       supported = 1'b1;
-      payload_bit_len = palette_bit_len;
+      compat_payload_bit_len = palette_bit_len;
       compat_payload_bits = palette_bits;
     end else begin
       supported = generated_supported;
-      payload_bit_len = generated_bit_len;
+      compat_payload_bit_len = generated_bit_len;
       compat_payload_bits = generated_bits;
     end
   end
 
   always @* begin
-    selected_pad_bits = ((((payload_bit_len + 13'd7) >> 3) << 3) - payload_bit_len);
+    selected_pad_bits = ((((compat_payload_bit_len + 13'd7) >> 3) << 3) - compat_payload_bit_len);
     selected_bits = compat_payload_bits << selected_pad_bits;
   end
 
@@ -130,12 +142,12 @@ module ff_vvc_cabac #(
     end else begin
       if (start && enable && supported) begin
         stream_bits_q <= selected_bits;
-        stream_byte_count_q <= (payload_bit_len + 13'd7) >> 3;
+        stream_byte_count_q <= (compat_payload_bit_len + 13'd7) >> 3;
         stream_byte_index_q <= 13'd0;
-        stream_active_q <= ((payload_bit_len + 13'd7) >> 3) != 13'd0;
-        m_axis_valid <= ((payload_bit_len + 13'd7) >> 3) != 13'd0;
-        m_axis_data <= stream_byte(selected_bits, (payload_bit_len + 13'd7) >> 3, 13'd0);
-        m_axis_last <= ((payload_bit_len + 13'd7) >> 3) == 13'd1;
+        stream_active_q <= ((compat_payload_bit_len + 13'd7) >> 3) != 13'd0;
+        m_axis_valid <= ((compat_payload_bit_len + 13'd7) >> 3) != 13'd0;
+        m_axis_data <= stream_byte(selected_bits, (compat_payload_bit_len + 13'd7) >> 3, 13'd0);
+        m_axis_last <= ((compat_payload_bit_len + 13'd7) >> 3) == 13'd1;
       end else if (m_axis_valid && m_axis_ready) begin
         if (m_axis_last) begin
           stream_active_q <= 1'b0;

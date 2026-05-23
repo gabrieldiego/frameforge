@@ -3,14 +3,25 @@
 module ff_vvc_generated_cabac_body #(
   parameter int MAX_SLICE_PAYLOAD_BITS = 4096
 ) (
+  input  logic         clk,
+  input  logic         rst_n,
+  input  logic         start,
   input  logic [1:0]   body_kind,
   input  logic [15:0]  coded_width,
   input  logic [15:0]  coded_height,
   input  logic [4:0]   luma_rem,
   input  logic [4:0]   chroma_rem,
   output logic         supported,
-  output logic [12:0]  payload_bit_len,
-  output logic [MAX_SLICE_PAYLOAD_BITS - 1:0] payload_bits
+  input  logic         m_axis_ready,
+  output logic         m_axis_valid,
+  output logic [7:0]   m_axis_data,
+  output logic         m_axis_last,
+  output logic [12:0]  stream_byte_count,
+
+  // Temporary glue for modules that still pack the enclosing slice as a
+  // combinational bit vector. The byte stream above is the block boundary.
+  output logic [12:0]  compat_payload_bit_len,
+  output logic [MAX_SLICE_PAYLOAD_BITS - 1:0] compat_payload_bits
 );
   localparam logic [1:0] BODY_GENERATED = 2'd0;
 
@@ -29,17 +40,83 @@ module ff_vvc_generated_cabac_body #(
   typedef logic [CABAC_STATE_BITS + VVC_PROB_MODEL_BITS - 1:0] cabac_vvc_model_step_t;
   typedef logic [CABAC_STATE_BITS + 5 * VVC_PROB_MODEL_BITS - 1:0] cabac_luma_leaf_step_t;
 
+  logic [MAX_SLICE_PAYLOAD_BITS - 1:0] selected_bits;
+  logic [12:0] selected_pad_bits;
+  logic [MAX_SLICE_PAYLOAD_BITS - 1:0] stream_bits_q;
+  logic [12:0] stream_byte_count_q;
+  logic [12:0] stream_byte_index_q;
+  logic stream_active_q;
+
+  assign stream_byte_count =
+    stream_active_q ? stream_byte_count_q : ((compat_payload_bit_len + 13'd7) >> 3);
+
   always @* begin
     supported =
       (body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height);
 
     if ((body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height)) begin
-      {payload_bit_len, payload_bits} = encode_generated_body(coded_width, coded_height, luma_rem, chroma_rem);
+      {compat_payload_bit_len, compat_payload_bits} = encode_generated_body(coded_width, coded_height, luma_rem, chroma_rem);
     end else begin
-      payload_bit_len = 13'd0;
-      payload_bits = '0;
+      compat_payload_bit_len = 13'd0;
+      compat_payload_bits = '0;
     end
   end
+
+  always @* begin
+    selected_pad_bits = ((((compat_payload_bit_len + 13'd7) >> 3) << 3) - compat_payload_bit_len);
+    selected_bits = compat_payload_bits << selected_pad_bits;
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      stream_bits_q <= '0;
+      stream_byte_count_q <= 13'd0;
+      stream_byte_index_q <= 13'd0;
+      stream_active_q <= 1'b0;
+      m_axis_valid <= 1'b0;
+      m_axis_data <= 8'd0;
+      m_axis_last <= 1'b0;
+    end else begin
+      if (start && supported) begin
+        stream_bits_q <= selected_bits;
+        stream_byte_count_q <= (compat_payload_bit_len + 13'd7) >> 3;
+        stream_byte_index_q <= 13'd0;
+        stream_active_q <= ((compat_payload_bit_len + 13'd7) >> 3) != 13'd0;
+        m_axis_valid <= ((compat_payload_bit_len + 13'd7) >> 3) != 13'd0;
+        m_axis_data <= stream_byte(selected_bits, (compat_payload_bit_len + 13'd7) >> 3, 13'd0);
+        m_axis_last <= ((compat_payload_bit_len + 13'd7) >> 3) == 13'd1;
+      end else if (m_axis_valid && m_axis_ready) begin
+        if (m_axis_last) begin
+          stream_active_q <= 1'b0;
+          m_axis_valid <= 1'b0;
+          m_axis_data <= 8'd0;
+          m_axis_last <= 1'b0;
+        end else begin
+          stream_byte_index_q <= stream_byte_index_q + 13'd1;
+          m_axis_data <= stream_byte(stream_bits_q, stream_byte_count_q, stream_byte_index_q + 13'd1);
+          m_axis_last <= (stream_byte_index_q + 13'd1) == (stream_byte_count_q - 13'd1);
+        end
+      end else if (!stream_active_q) begin
+        m_axis_valid <= 1'b0;
+        m_axis_last <= 1'b0;
+        m_axis_data <= 8'd0;
+      end
+    end
+  end
+
+  function automatic logic [7:0] stream_byte(
+    input logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bits,
+    input logic [12:0] byte_count,
+    input logic [12:0] byte_index
+  );
+    begin
+      if (byte_index < byte_count) begin
+        stream_byte = bits >> (((byte_count - 13'd1) - byte_index) * 8);
+      end else begin
+        stream_byte = 8'd0;
+      end
+    end
+  endfunction
 
   function automatic logic supports_generated_body(
     input logic [15:0] width,

@@ -89,11 +89,8 @@ def coding_order_tile(index, width, height):
 
 
 def cabac_bytes(dut):
-    bit_len = int(dut.payload_bit_len.value)
-    if hasattr(dut, "compat_payload_bits"):
-        value = int(dut.compat_payload_bits.value)
-    else:
-        value = int(dut.payload_bits.value)
+    bit_len = int(dut.compat_payload_bit_len.value)
+    value = int(dut.compat_payload_bits.value)
     if bit_len == 0:
         return b""
     pad = ((bit_len + 7) // 8 * 8) - bit_len
@@ -256,7 +253,7 @@ async def palette_cabac_matches_software_boundary_dump(dut):
     await Timer(1, unit="ns")
 
     observed_hex = cabac_bytes(dut).hex()
-    observed_len = int(dut.payload_bit_len.value)
+    observed_len = int(dut.compat_payload_bit_len.value)
     assert observed_len == reference["cabac_bit_len"], (
         observed_len,
         reference["cabac_bit_len"],
@@ -318,7 +315,7 @@ async def palette_cabac_matches_multicolor_lossless_symbols(dut):
     await Timer(1, unit="ns")
 
     observed_hex = cabac_bytes(dut).hex()
-    observed_len = int(dut.payload_bit_len.value)
+    observed_len = int(dut.compat_payload_bit_len.value)
     assert observed_len == reference["cabac_bit_len"], (
         observed_len,
         reference["cabac_bit_len"],
