@@ -73,7 +73,7 @@ module ff_vvc_palette_symbolizer #(
   assign drain_symbol_selected = cu_select_mask[MAX_PALETTE_SYMBOLS - 1 - drain_index_q];
 
   always_comb begin
-    if (sample_plane != tracked_plane_q) begin
+    if (input_plane != tracked_plane_q) begin
       sample_x = 16'd0;
       sample_y = 16'd0;
     end else begin

@@ -576,6 +576,9 @@ async def vvc_encoder_matches_software_stream(dut):
     assert one_frame == expected_one_frame, (
         one_frame.hex(),
         expected_one_frame.hex(),
+        str(dut.palette_cu_select_mask.value) if hasattr(dut, "palette_cu_select_mask") else None,
+        int(dut.palette_symbol_count.value) if hasattr(dut, "palette_symbol_count") else None,
+        int(dut.cabac_payload_bit_len.value) if hasattr(dut, "cabac_payload_bit_len") else None,
     )
     if path := os.environ.get("FRAMEFORGE_RTL_VVC_ENCODER_OUT_1F"):
         output = Path(path)
