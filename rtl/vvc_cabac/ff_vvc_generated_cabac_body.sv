@@ -22,8 +22,11 @@ module ff_vvc_generated_cabac_body #(
   localparam int CABAC_NUM_BUFFERED_BYTES_LSB = CABAC_BUFFERED_BYTE_LSB + 9;
   localparam int CABAC_BITS_LEFT_LSB = CABAC_NUM_BUFFERED_BYTES_LSB + 8;
   localparam int CABAC_STATE_BITS = CABAC_BITS_LEFT_LSB + 8;
+  localparam int VVC_PROB_MODEL_BITS = 40;
 
   typedef logic [CABAC_STATE_BITS - 1:0] cabac_state_t;
+  typedef logic [VVC_PROB_MODEL_BITS - 1:0] vvc_prob_model_t;
+  typedef logic [CABAC_STATE_BITS + VVC_PROB_MODEL_BITS - 1:0] cabac_vvc_model_step_t;
 
   always @* begin
     supported =
@@ -147,13 +150,17 @@ module ff_vvc_generated_cabac_body #(
     input logic [4:0]   c_rem
   );
     cabac_state_t st;
+    vvc_prob_model_t split_ctx;
     begin
       st = st_in;
-      // TODO(vvc): Replace this provisional root split context with named
-      // context derivation from the coding-tree state. The leaves reuse the
-      // existing 32x32 generated leaf encoder until the 32x32 body itself is
-      // replaced with generated syntax.
-      st = encode_compact_cabac_word(st, 16'h035a);
+      // 64x64 starts with syntax-named split decisions derived from the VVC
+      // I-slice context initialization tables. The leaves still reuse the
+      // transitional 32x32 generated encoder until those bodies are converted
+      // to syntax-driven context selection too.
+      split_ctx = vvc_prob_model_init(vvc_split_flag_init(4'd0), vvc_split_flag_log2_window(4'd0), 26);
+      {split_ctx, st} = cabac_encode_vvc_model_bin(st, split_ctx, 1'b1);
+      split_ctx = vvc_prob_model_init(vvc_split_qt_flag_init(4'd0), vvc_split_qt_flag_log2_window(4'd0), 26);
+      {split_ctx, st} = cabac_encode_vvc_model_bin(st, split_ctx, 1'b1);
       st = encode_32x32_luma_tree(st, rem);
       st = encode_32x32_luma_tree(st, rem);
       st = encode_32x32_luma_tree(st, rem);
@@ -896,6 +903,114 @@ module ff_vvc_generated_cabac_body #(
     end
   endfunction
 
+  function automatic cabac_vvc_model_step_t cabac_encode_vvc_model_bin(
+    input cabac_state_t     st_in,
+    input vvc_prob_model_t  model_in,
+    input logic             bin
+  );
+    cabac_state_t st;
+    vvc_prob_model_t model;
+    begin
+      st = cabac_encode_bin(
+        st_in,
+        bin,
+        vvc_prob_model_lps(model_in, st_in[CABAC_RANGE_LSB +: 16]),
+        vvc_prob_model_mps(model_in)
+      );
+      model = vvc_prob_model_update(model_in, bin);
+      cabac_encode_vvc_model_bin = {model, st};
+    end
+  endfunction
+
+  function automatic vvc_prob_model_t vvc_prob_model_init(
+    input logic [7:0] init_value,
+    input logic [3:0] log2_window_size,
+    input integer     qp
+  );
+    integer slope;
+    integer offset;
+    integer inistate;
+    logic [15:0] p_state;
+    integer rate0;
+    integer rate1;
+    begin
+      // Mirrors VTM BinProbModel_Std initialization for the all-intra path.
+      slope = (init_value >> 3) - 4;
+      offset = ((init_value & 8'd7) * 18) + 1;
+      inistate = ((slope * (qp - 16)) >>> 1) + offset;
+      if (inistate < 1) begin
+        inistate = 1;
+      end else if (inistate > 127) begin
+        inistate = 127;
+      end
+      p_state = inistate[15:0] << 8;
+      rate0 = 2 + ((log2_window_size >> 2) & 3);
+      rate1 = 3 + rate0 + (log2_window_size & 3);
+      vvc_prob_model_init[0 +: 16] = (p_state >> 1) & 16'h7fe0;
+      vvc_prob_model_init[16 +: 16] = (p_state >> 1) & 16'h7ffe;
+      vvc_prob_model_init[32 +: 8] = ((rate0 & 8'h0f) << 4) | (rate1 & 8'h0f);
+    end
+  endfunction
+
+  function automatic logic [7:0] vvc_prob_model_state(input vvc_prob_model_t model);
+    logic [16:0] state_sum;
+    begin
+      state_sum = {1'b0, model[0 +: 16]} + {1'b0, model[16 +: 16]};
+      vvc_prob_model_state = state_sum[15:8];
+    end
+  endfunction
+
+  function automatic logic vvc_prob_model_mps(input vvc_prob_model_t model);
+    logic [7:0] state;
+    begin
+      state = vvc_prob_model_state(model);
+      vvc_prob_model_mps = state[7];
+    end
+  endfunction
+
+  function automatic logic [8:0] vvc_prob_model_lps(
+    input vvc_prob_model_t model,
+    input logic [15:0]     range
+  );
+    logic [15:0] q;
+    logic [15:0] lps_full;
+    begin
+      q = {8'd0, vvc_prob_model_state(model)};
+      if (q[7]) begin
+        q = q ^ 16'h00ff;
+      end
+      lps_full = (((q >> 2) * (range >> 5)) >> 1) + 16'd4;
+      vvc_prob_model_lps = lps_full[8:0];
+    end
+  endfunction
+
+  function automatic vvc_prob_model_t vvc_prob_model_update(
+    input vvc_prob_model_t model_in,
+    input logic            bin
+  );
+    logic [15:0] state0;
+    logic [15:0] state1;
+    logic [7:0]  rate;
+    integer rate0;
+    integer rate1;
+    begin
+      state0 = model_in[0 +: 16];
+      state1 = model_in[16 +: 16];
+      rate = model_in[32 +: 8];
+      rate0 = rate[7:4];
+      rate1 = rate[3:0];
+      state0 = state0 - ((state0 >> rate0) & 16'h7fe0);
+      state1 = state1 - ((state1 >> rate1) & 16'h7ffe);
+      if (bin) begin
+        state0 = state0 + ((16'h7fff >> rate0) & 16'h7fe0);
+        state1 = state1 + ((16'h7fff >> rate1) & 16'h7ffe);
+      end
+      vvc_prob_model_update = model_in;
+      vvc_prob_model_update[0 +: 16] = state0;
+      vvc_prob_model_update[16 +: 16] = state1;
+    end
+  endfunction
+
   function automatic cabac_state_t cabac_encode_bin(
     input cabac_state_t st_in,
     input logic         bin,
@@ -1222,6 +1337,64 @@ module ff_vvc_generated_cabac_body #(
         count = count + 4'd1;
       end
       renorm_bits_sv = count;
+    end
+  endfunction
+
+  function automatic logic [7:0] vvc_split_flag_init(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_split_flag_init = 8'd19;
+        4'd1: vvc_split_flag_init = 8'd28;
+        4'd2: vvc_split_flag_init = 8'd38;
+        4'd3: vvc_split_flag_init = 8'd27;
+        4'd4: vvc_split_flag_init = 8'd29;
+        4'd5: vvc_split_flag_init = 8'd38;
+        4'd6: vvc_split_flag_init = 8'd20;
+        4'd7: vvc_split_flag_init = 8'd30;
+        default: vvc_split_flag_init = 8'd31;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_split_flag_log2_window(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_split_flag_log2_window = 4'd12;
+        4'd1: vvc_split_flag_log2_window = 4'd13;
+        4'd2: vvc_split_flag_log2_window = 4'd8;
+        4'd3: vvc_split_flag_log2_window = 4'd8;
+        4'd4: vvc_split_flag_log2_window = 4'd13;
+        4'd5: vvc_split_flag_log2_window = 4'd12;
+        4'd6: vvc_split_flag_log2_window = 4'd5;
+        4'd7: vvc_split_flag_log2_window = 4'd9;
+        default: vvc_split_flag_log2_window = 4'd9;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [7:0] vvc_split_qt_flag_init(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_split_qt_flag_init = 8'd27;
+        4'd1: vvc_split_qt_flag_init = 8'd6;
+        4'd2: vvc_split_qt_flag_init = 8'd15;
+        4'd3: vvc_split_qt_flag_init = 8'd25;
+        4'd4: vvc_split_qt_flag_init = 8'd19;
+        default: vvc_split_qt_flag_init = 8'd37;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_split_qt_flag_log2_window(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_split_qt_flag_log2_window = 4'd0;
+        4'd1: vvc_split_qt_flag_log2_window = 4'd8;
+        4'd2: vvc_split_qt_flag_log2_window = 4'd8;
+        4'd3: vvc_split_qt_flag_log2_window = 4'd12;
+        4'd4: vvc_split_qt_flag_log2_window = 4'd12;
+        default: vvc_split_qt_flag_log2_window = 4'd8;
+      endcase
     end
   endfunction
 

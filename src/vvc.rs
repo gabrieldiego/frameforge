@@ -1842,6 +1842,82 @@ impl ToyPaletteCabacContexts {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum ToyVvcCabacContext {
+    SplitFlag(u8),
+    SplitQtFlag(u8),
+}
+
+impl ToyVvcCabacContext {
+    fn init_value(self) -> u8 {
+        match self {
+            // VTM Contexts.cpp, I-slice initialization table. Keeping the
+            // table local to the encoder makes the syntax writer derive CABAC
+            // probability state from the selected syntax context instead of
+            // consuming pre-generated lps/mps pairs.
+            ToyVvcCabacContext::SplitFlag(ctx) => {
+                const I_SLICE_INIT: [u8; 9] = [19, 28, 38, 27, 29, 38, 20, 30, 31];
+                I_SLICE_INIT[ctx as usize]
+            }
+            ToyVvcCabacContext::SplitQtFlag(ctx) => {
+                const I_SLICE_INIT: [u8; 6] = [27, 6, 15, 25, 19, 37];
+                I_SLICE_INIT[ctx as usize]
+            }
+        }
+    }
+
+    fn log2_window_size(self) -> u8 {
+        match self {
+            ToyVvcCabacContext::SplitFlag(ctx) => {
+                const LOG2_WINDOW: [u8; 9] = [12, 13, 8, 8, 13, 12, 5, 9, 9];
+                LOG2_WINDOW[ctx as usize]
+            }
+            ToyVvcCabacContext::SplitQtFlag(ctx) => {
+                const LOG2_WINDOW: [u8; 6] = [0, 8, 8, 12, 12, 8];
+                LOG2_WINDOW[ctx as usize]
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ToyVvcCabacContexts {
+    split_flag: [ToyCabacProbModel; 9],
+    split_qt_flag: [ToyCabacProbModel; 6],
+}
+
+impl ToyVvcCabacContexts {
+    const DEFAULT_SLICE_QP: i32 = 26;
+
+    fn new() -> Self {
+        Self {
+            split_flag: std::array::from_fn(|idx| {
+                ToyCabacProbModel::from_vtm_init_value(
+                    ToyVvcCabacContext::SplitFlag(idx as u8).init_value(),
+                    Self::DEFAULT_SLICE_QP,
+                    ToyVvcCabacContext::SplitFlag(idx as u8).log2_window_size(),
+                )
+            }),
+            split_qt_flag: std::array::from_fn(|idx| {
+                ToyCabacProbModel::from_vtm_init_value(
+                    ToyVvcCabacContext::SplitQtFlag(idx as u8).init_value(),
+                    Self::DEFAULT_SLICE_QP,
+                    ToyVvcCabacContext::SplitQtFlag(idx as u8).log2_window_size(),
+                )
+            }),
+        }
+    }
+
+    fn encode(&mut self, cabac: &mut ToyCabacEncoder, ctx: ToyVvcCabacContext, bin: bool) {
+        match ctx {
+            ToyVvcCabacContext::SplitFlag(idx) => self.split_flag[idx as usize].encode(cabac, bin),
+            ToyVvcCabacContext::SplitQtFlag(idx) => {
+                self.split_qt_flag[idx as usize].encode(cabac, bin)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ToyCabacProbModel {
     state0: u16,
@@ -1860,6 +1936,21 @@ impl ToyCabacProbModel {
             rate: 0,
         };
         model.set_state((state as u16) << 8);
+        model.set_log2_window_size(log2_window_size);
+        model
+    }
+
+    fn from_vtm_init_value(init_value: u8, qp: i32, log2_window_size: u8) -> Self {
+        let slope = ((init_value >> 3) as i32) - 4;
+        let offset = (((init_value & 7) as i32) * 18) + 1;
+        let inistate = ((slope * (qp - 16)) >> 1) + offset;
+        let clipped = inistate.clamp(1, 127) as u16;
+        let mut model = Self {
+            state0: 0,
+            state1: 0,
+            rate: 0,
+        };
+        model.set_state(clipped << 8);
         model.set_log2_window_size(log2_window_size);
         model
     }
@@ -2674,18 +2765,20 @@ fn toy_64x64_partition_cabac_bits(params: Toy64x64PartitionParams) -> Vec<bool> 
     debug_assert_eq!(params.luma_leaf_count, 4);
 
     let mut cabac = ToyCabacEncoder::new();
+    let mut ctx = ToyVvcCabacContexts::new();
     cabac.start();
-    encode_64x64_partition_body(&mut cabac);
+    encode_64x64_partition_body(&mut cabac, &mut ctx);
     cabac.encode_bin_trm(true);
     cabac.finish()
 }
 
-fn encode_64x64_partition_body(cabac: &mut ToyCabacEncoder) {
-    // TODO(vvc): Replace these provisional root split contexts with named
-    // context derivation from the coding-tree state. The four leaves below
-    // deliberately reuse the existing 32x32 generated leaf encoder so the
-    // 64x64 path is structurally generated before it is VTM-compliant.
-    encode_compact_cabac_word(cabac, 0x035a);
+fn encode_64x64_partition_body(cabac: &mut ToyCabacEncoder, ctx: &mut ToyVvcCabacContexts) {
+    // 64x64 starts with a real split decision derived from the VVC context
+    // initialization tables. The 32x32 leaves below are still transitional
+    // generated bodies and are the next target for replacing trace-derived
+    // compact words with syntax-driven context selection.
+    ctx.encode(cabac, ToyVvcCabacContext::SplitFlag(0), true);
+    ctx.encode(cabac, ToyVvcCabacContext::SplitQtFlag(0), true);
     for _ in 0..4 {
         encode_32x32_luma_body(cabac);
     }
@@ -4712,6 +4805,20 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn toy_vvc_contexts_derive_split_probability_from_init_tables() {
+        let mut ctx = ToyVvcCabacContexts::new();
+        let split0 = &ctx.split_flag[0];
+        assert!(!split0.mps());
+        assert_eq!(split0.lps(510), 86);
+        let initial_state = split0.state();
+
+        let mut cabac = ToyCabacEncoder::new();
+        cabac.start();
+        ctx.encode(&mut cabac, ToyVvcCabacContext::SplitFlag(0), true);
+        assert!(ctx.split_flag[0].state() > initial_state);
     }
 
     #[test]
