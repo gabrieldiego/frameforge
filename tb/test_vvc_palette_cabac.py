@@ -33,7 +33,7 @@ def pack_palette_symbols(y, cb, cr, width=64, height=64, max_symbols=64):
             sample_x = min(tile_x * 8, width - 1)
             sample_y = min(tile_y * 8, height - 1)
             sample_index = sample_y * width + sample_x
-            symbol = (y[sample_index] << 16) | (cb[sample_index] << 8) | cr[sample_index]
+            symbol = (1 << 24) | (y[sample_index] << 16) | (cb[sample_index] << 8) | cr[sample_index]
         else:
             symbol = 0
         symbols.append(symbol)

@@ -13,6 +13,7 @@ module ff_vvc_palette_symbolizer #(
   input  logic [15:0] ctu_visible_height,
   input  logic [15:0] ctu_coded_width,
   input  logic [15:0] ctu_coded_height,
+  input  logic [MAX_PALETTE_SYMBOLS - 1:0] cu_select_mask,
   input  logic        sample_valid,
   input  logic [1:0]  sample_plane,
   input  logic [SAMPLE_BITS - 1:0] sample,
@@ -47,6 +48,7 @@ module ff_vvc_palette_symbolizer #(
   logic [7:0]  last_symbol_index;
   logic [7:0]  last_visible_symbol_index;
   logic        start_drain;
+  logic        drain_symbol_selected;
   logic        drain_active_q;
   logic [7:0]  drain_index_q;
   logic [7:0]  drain_symbol_index;
@@ -65,6 +67,7 @@ module ff_vvc_palette_symbolizer #(
   assign start_drain = input_valid && is_symbol_anchor_xy(sample_x, sample_y) &&
                        (input_plane == PLANE_CR) && (anchor_index == last_visible_symbol_index);
   assign drain_symbol_index = coding_order_symbol_index(drain_index_q);
+  assign drain_symbol_selected = cu_select_mask[MAX_PALETTE_SYMBOLS - 1 - drain_index_q];
 
   always_comb begin
     if (sample_plane != tracked_plane_q) begin
@@ -114,7 +117,8 @@ module ff_vvc_palette_symbolizer #(
       if (drain_active_q && (!m_axis_valid || m_axis_ready)) begin
         m_axis_valid <= 1'b1;
         m_axis_data <= {
-          8'd0,
+          7'd0,
+          drain_symbol_selected,
           symbol_y[drain_symbol_index],
           symbol_cb[drain_symbol_index],
           symbol_cr[drain_symbol_index]

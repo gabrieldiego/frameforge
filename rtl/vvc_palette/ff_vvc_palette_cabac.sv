@@ -48,10 +48,24 @@ module ff_vvc_palette_cabac #(
 
   palette_state_t palette_state_q;
   logic [7:0]     stream_symbol_index_q;
+  logic           stream_symbol_selected;
+  palette_state_t next_palette_state;
 
   assign s_axis_ready = enable && (stream_symbol_index_q < symbol_count);
   assign payload_bit_len = palette_state_q[PALETTE_CABAC_LSB + CABAC_LEN_LSB +: 13];
   assign payload_bits = palette_state_q[PALETTE_CABAC_LSB + CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS];
+  assign stream_symbol_selected = s_axis_data[24];
+
+  always @* begin
+    next_palette_state = palette_state_q;
+    if (stream_symbol_selected) begin
+      next_palette_state = palette_444_encode_next_symbol(
+        palette_state_q,
+        stream_symbol_index_q,
+        s_axis_data[23:0]
+      );
+    end
+  end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -62,18 +76,10 @@ module ff_vvc_palette_cabac #(
       palette_state_q <= palette_start();
     end else if (s_axis_valid && s_axis_ready) begin
       if (s_axis_last) begin
-        palette_state_q <= palette_finish(palette_444_encode_next_symbol(
-          palette_state_q,
-          stream_symbol_index_q,
-          s_axis_data[23:0]
-        ));
+        palette_state_q <= palette_finish(next_palette_state);
         stream_symbol_index_q <= 8'd0;
       end else begin
-        palette_state_q <= palette_444_encode_next_symbol(
-          palette_state_q,
-          stream_symbol_index_q,
-          s_axis_data[23:0]
-        );
+        palette_state_q <= next_palette_state;
         stream_symbol_index_q <= stream_symbol_index_q + 8'd1;
       end
     end

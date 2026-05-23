@@ -90,6 +90,7 @@ module ff_vvc_encoder #(
   logic [MAX_SLICE_PAYLOAD_BITS - 1:0] cabac_compat_payload_bits;
   logic        cabac_enable;
   logic [7:0]  palette_symbol_count;
+  logic [MAX_CTU_PALETTE_SYMBOLS - 1:0] palette_cu_select_mask;
   logic        palette_sample_valid;
   logic [1:0]  palette_sample_plane;
   logic        palette_stream_valid;
@@ -111,6 +112,10 @@ module ff_vvc_encoder #(
 
   assign busy = input_active_q || m_axis_valid || (index_q != 0);
   assign cabac_enable = 1'b1;
+  // Current clean-room syntax still codes padded CUs so VTM reconstruction
+  // stays aligned. This mask is the CTU-local hook for future CU-level palette
+  // decisions, including off-picture CU suppression once the syntax supports it.
+  assign palette_cu_select_mask = {MAX_CTU_PALETTE_SYMBOLS{1'b1}};
 
   ff_vvc_toy_coding_tree_scheduler #(
     .CTU_SIZE(CTU_SIZE)
@@ -165,6 +170,7 @@ module ff_vvc_encoder #(
     .ctu_visible_height(visible_height),
     .ctu_coded_width(coding_tree_coded_width),
     .ctu_coded_height(coding_tree_coded_height),
+    .cu_select_mask(palette_cu_select_mask),
     .sample_valid(palette_sample_valid),
     .sample_plane(palette_sample_plane),
     .sample(s_axis_data),

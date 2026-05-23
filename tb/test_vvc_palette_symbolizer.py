@@ -12,6 +12,7 @@ async def reset(dut):
     dut.ctu_visible_height.value = 8
     dut.ctu_coded_width.value = 8
     dut.ctu_coded_height.value = 8
+    dut.cu_select_mask.value = (1 << 64) - 1
     dut.sample_valid.value = 0
     dut.sample_plane.value = 0
     dut.sample.value = 0
@@ -51,7 +52,23 @@ async def palette_symbolizer_streams_anchor_symbol(dut):
 
     assert int(dut.symbol_count.value) == 1
     assert int(dut.m_axis_valid.value) == 1
-    assert int(dut.m_axis_data.value) == 0x000A141E
+    assert int(dut.m_axis_data.value) == 0x010A141E
     assert int(dut.m_axis_last.value) == 1
     await RisingEdge(dut.clk)
     await Timer(1, unit="ns")
+
+
+@cocotb.test()
+async def palette_symbolizer_marks_unselected_cu(dut):
+    await reset(dut)
+    dut.cu_select_mask.value = 0
+
+    await send_plane(dut, 0, 10)
+    await send_plane(dut, 1, 20)
+    await send_plane(dut, 2, 30, last=True)
+    await RisingEdge(dut.clk)
+    await ReadOnly()
+
+    assert int(dut.m_axis_valid.value) == 1
+    assert int(dut.m_axis_data.value) == 0x000A141E
+    assert int(dut.m_axis_last.value) == 1
