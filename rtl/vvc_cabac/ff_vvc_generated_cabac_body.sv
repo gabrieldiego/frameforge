@@ -105,45 +105,33 @@ module ff_vvc_generated_cabac_body #(
 
   function automatic logic [7:0] current_stream_byte(input logic [12:0] byte_index);
     cabac_state_t st;
-    logic [12:0] bit_count;
-    logic [12:0] byte_count;
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] raw_bits;
     begin
       if ((body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height)) begin
         st = encode_generated_state(coded_width, coded_height, luma_rem, chroma_rem);
-        bit_count = st[CABAC_LEN_LSB +: 13];
-        byte_count = (bit_count + 13'd7) >> 3;
-        raw_bits = st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS];
+        current_stream_byte = cabac_state_stream_byte(st, byte_index);
       end else begin
-        bit_count = 13'd0;
-        byte_count = 13'd0;
-        raw_bits = '0;
+        current_stream_byte = 8'd0;
       end
-      current_stream_byte = stream_byte(byte_aligned_bits(raw_bits, bit_count), byte_count, byte_index);
     end
   endfunction
 
-  function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] byte_aligned_bits(
-    input logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bits,
-    input logic [12:0] bit_count
-  );
-    logic [12:0] pad_bits;
-    begin
-      pad_bits = ((((bit_count + 13'd7) >> 3) << 3) - bit_count);
-      byte_aligned_bits = bits << pad_bits;
-    end
-  endfunction
-
-  function automatic logic [7:0] stream_byte(
-    input logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bits,
-    input logic [12:0] byte_count,
+  function automatic logic [7:0] cabac_state_stream_byte(
+    input cabac_state_t st,
     input logic [12:0] byte_index
   );
+    logic [12:0] bit_count;
+    logic [12:0] byte_count;
+    logic [12:0] pad_bits;
     begin
+      bit_count = st[CABAC_LEN_LSB +: 13];
+      byte_count = (bit_count + 13'd7) >> 3;
+      pad_bits = ((((bit_count + 13'd7) >> 3) << 3) - bit_count);
       if (byte_index < byte_count) begin
-        stream_byte = bits >> (((byte_count - 13'd1) - byte_index) * 8);
+        cabac_state_stream_byte =
+          (st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS] << pad_bits) >>
+          (((byte_count - 13'd1) - byte_index) * 8);
       end else begin
-        stream_byte = 8'd0;
+        cabac_state_stream_byte = 8'd0;
       end
     end
   endfunction
@@ -1819,18 +1807,16 @@ module ff_vvc_generated_cabac_body #(
     input logic [5:0]   bit_count
   );
     cabac_state_t st;
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bits;
     logic [12:0] len;
     integer i;
     begin
       st = st_in;
-      bits = st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS];
       len = st[CABAC_LEN_LSB +: 13];
       for (i = bit_count - 1; i >= 0; i = i - 1) begin
-        bits = (bits << 1) | value[i];
+        st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS] =
+          (st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS] << 1) | value[i];
         len = len + 13'd1;
       end
-      st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS] = bits;
       st[CABAC_LEN_LSB +: 13] = len;
       cabac_write_bits = st;
     end
