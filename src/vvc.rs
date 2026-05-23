@@ -544,7 +544,7 @@ enum ToyPaletteTreeType {
     SingleTree,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ToyPalette444Syntax {
     tree_type: ToyPaletteTreeType,
     cb_width: usize,
@@ -554,10 +554,11 @@ struct ToyPalette444Syntax {
     max_num_palette_entries: u8,
     num_predicted_palette_entries: u8,
     num_signalled_palette_entries: u8,
-    new_palette_entries: [Toy4x4SampledColor; 1],
+    new_palette_entries: Vec<Toy4x4SampledColor>,
     current_palette_size: u8,
     palette_escape_val_present_flag: bool,
     max_palette_index: u8,
+    palette_indices: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1645,10 +1646,7 @@ fn append_toy_palette_444_8x8_cu_with_events(
     }
     ctx.encode(cabac, ToyPaletteCtx::Split0, false);
     ctx.encode(cabac, ToyPaletteCtx::PltFlag, true);
-    let syntax = toy_palette_444_single_entry_syntax(
-        frame.geometry,
-        toy_palette_444_sample_at(frame, origin_x as usize, origin_y as usize),
-    );
+    let syntax = toy_palette_444_cu_syntax(frame, origin_x as usize, origin_y as usize);
     for token in toy_palette_444_syntax_tokens(syntax, predictor_mode) {
         append_palette_syntax_token_cabac(cabac, token);
     }
@@ -1797,6 +1795,7 @@ impl ToyCabacProbModel {
     }
 }
 
+#[cfg(test)]
 fn toy_palette_444_single_entry_syntax(
     geometry: ToyVideoGeometry,
     color: Toy4x4SampledColor,
@@ -1816,10 +1815,60 @@ fn toy_palette_444_single_entry_syntax(
         max_num_palette_entries: 31,
         num_predicted_palette_entries: 0,
         num_signalled_palette_entries: 1,
-        new_palette_entries: [color],
+        new_palette_entries: vec![color],
         current_palette_size: 1,
         palette_escape_val_present_flag: false,
         max_palette_index: 0,
+        palette_indices: Vec::new(),
+    }
+}
+
+fn toy_palette_444_cu_syntax(
+    frame: &Toy4x4SampledFrame,
+    origin_x: usize,
+    origin_y: usize,
+) -> ToyPalette444Syntax {
+    let mut entries = Vec::new();
+    let mut indices = Vec::new();
+    let width = 8.min(frame.geometry.width.saturating_sub(origin_x));
+    let height = 8.min(frame.geometry.height.saturating_sub(origin_y));
+
+    for y_off in 0..height {
+        for x_off in 0..width {
+            let color = toy_palette_444_sample_at(frame, origin_x + x_off, origin_y + y_off);
+            let index = if let Some(index) = entries.iter().position(|entry| *entry == color) {
+                index
+            } else if entries.len() < 31 {
+                entries.push(color);
+                entries.len() - 1
+            } else {
+                // TODO: add palette escape coding for CUs with more than 31 colors.
+                30
+            };
+            indices.push(index as u8);
+        }
+    }
+
+    let current_palette_size = entries.len().max(1) as u8;
+    let max_palette_index = current_palette_size.saturating_sub(1);
+    ToyPalette444Syntax {
+        tree_type: ToyPaletteTreeType::SingleTree,
+        cb_width: width,
+        cb_height: height,
+        start_comp: 0,
+        num_comps: 3,
+        max_num_palette_entries: 31,
+        num_predicted_palette_entries: 0,
+        num_signalled_palette_entries: current_palette_size,
+        new_palette_entries: entries,
+        current_palette_size,
+        palette_escape_val_present_flag: false,
+        max_palette_index,
+        palette_indices: if max_palette_index == 0 {
+            Vec::new()
+        } else {
+            indices
+        },
     }
 }
 
@@ -1894,19 +1943,28 @@ fn toy_palette_444_decode_reconstruction(
     debug_assert_eq!(syntax.tree_type, ToyPaletteTreeType::SingleTree);
     debug_assert_eq!(syntax.start_comp, 0);
     debug_assert_eq!(syntax.num_comps, 3);
-    debug_assert_eq!(syntax.current_palette_size, 1);
-    debug_assert_eq!(syntax.max_palette_index, 0);
     debug_assert!(!syntax.palette_escape_val_present_flag);
 
-    let current_palette_entries = syntax.new_palette_entries;
-    let palette_index = 0usize;
-    let entry = current_palette_entries[palette_index];
     let samples = geometry.luma_samples();
-    ToyPalette444DecodedPicture {
-        luma: vec![entry.y; samples],
-        cb: vec![entry.u; samples],
-        cr: vec![entry.v; samples],
+    if syntax.max_palette_index == 0 {
+        let entry = syntax.new_palette_entries[0];
+        return ToyPalette444DecodedPicture {
+            luma: vec![entry.y; samples],
+            cb: vec![entry.u; samples],
+            cr: vec![entry.v; samples],
+        };
     }
+
+    let mut luma = Vec::with_capacity(samples);
+    let mut cb = Vec::with_capacity(samples);
+    let mut cr = Vec::with_capacity(samples);
+    for index in syntax.palette_indices {
+        let entry = syntax.new_palette_entries[index as usize];
+        luma.push(entry.y);
+        cb.push(entry.u);
+        cr.push(entry.v);
+    }
+    ToyPalette444DecodedPicture { luma, cb, cr }
 }
 
 fn toy_palette_444_syntax_tokens(
@@ -1922,7 +1980,6 @@ fn toy_palette_444_syntax_tokens(
         syntax.current_palette_size,
         syntax.num_signalled_palette_entries
     );
-    debug_assert_eq!(syntax.max_palette_index, 0);
 
     let mut tokens = Vec::new();
     if predictor_mode == ToyPalettePredictorMode::SignalNewEntryAfterPredictor {
@@ -1971,7 +2028,31 @@ fn toy_palette_444_syntax_tokens(
             bit_count: 1,
         },
     });
+    if syntax.max_palette_index > 0 {
+        let index_bits = palette_index_bit_count(syntax.current_palette_size);
+        for index in syntax.palette_indices {
+            tokens.push(ToyPaletteSyntaxToken {
+                name: "palette_idx_idc",
+                // TODO: replace this fixed EP subset with the VVC transpose,
+                // run/copy, and index-map binarization once that syntax is in
+                // the clean-room decoder model.
+                kind: ToyPaletteSyntaxTokenKind::FixedLength {
+                    value: index as u32,
+                    bit_count: index_bits,
+                },
+            });
+        }
+    }
     tokens
+}
+
+fn palette_index_bit_count(current_palette_size: u8) -> u8 {
+    let max_index = current_palette_size.saturating_sub(1);
+    if max_index <= 1 {
+        1
+    } else {
+        u8::BITS as u8 - max_index.leading_zeros() as u8
+    }
 }
 
 #[cfg(test)]
@@ -4859,11 +4940,12 @@ mod tests {
         assert!(!syntax.palette_escape_val_present_flag);
         assert_eq!(syntax.max_palette_index, 0);
 
-        let bits = toy_palette_444_binarized_syntax_bits(syntax);
+        let bits = toy_palette_444_binarized_syntax_bits(syntax.clone());
         assert_eq!(bits.len(), 28);
         assert_eq!(&bits[0..3], &[false, true, false]); // EG0 for value 1.
 
-        let tokens = toy_palette_444_syntax_tokens(syntax, ToyPalettePredictorMode::SignalNewEntry);
+        let tokens =
+            toy_palette_444_syntax_tokens(syntax.clone(), ToyPalettePredictorMode::SignalNewEntry);
         let names: Vec<&str> = tokens.iter().map(|token| token.name).collect();
         assert_eq!(
             names,
@@ -4880,6 +4962,55 @@ mod tests {
         assert_eq!(decoded.luma, vec![65; geometry.luma_samples()]);
         assert_eq!(decoded.cb, vec![128; geometry.luma_samples()]);
         assert_eq!(decoded.cr, vec![192; geometry.luma_samples()]);
+    }
+
+    #[test]
+    fn toy_palette_444_cu_syntax_carries_palette_indices_for_lossless_8x8() {
+        let geometry = ToyVideoGeometry {
+            width: 8,
+            height: 8,
+        };
+        let mut luma = Vec::with_capacity(64);
+        let mut cb = Vec::with_capacity(64);
+        let mut cr = Vec::with_capacity(64);
+        for idx in 0..64 {
+            let even = idx % 2 == 0;
+            luma.push(if even { 10 } else { 200 });
+            cb.push(if even { 20 } else { 210 });
+            cr.push(if even { 30 } else { 220 });
+        }
+        let frame = Toy4x4SampledFrame {
+            geometry,
+            format: Toy4x4PictureFormat {
+                chroma_sampling: ChromaSampling::Cs444,
+                bit_depth: SampleBitDepth::Eight,
+            },
+            luma: luma.clone(),
+            cb: cb.clone(),
+            cr: cr.clone(),
+            chroma_len: 64,
+        };
+
+        let syntax = toy_palette_444_cu_syntax(&frame, 0, 0);
+        assert_eq!(syntax.num_signalled_palette_entries, 2);
+        assert_eq!(syntax.current_palette_size, 2);
+        assert_eq!(syntax.max_palette_index, 1);
+        assert_eq!(syntax.palette_indices.len(), 64);
+
+        let tokens =
+            toy_palette_444_syntax_tokens(syntax.clone(), ToyPalettePredictorMode::SignalNewEntry);
+        assert_eq!(
+            tokens
+                .iter()
+                .filter(|token| token.name == "palette_idx_idc")
+                .count(),
+            64
+        );
+
+        let decoded = toy_palette_444_decode_reconstruction(geometry, syntax);
+        assert_eq!(decoded.luma, luma);
+        assert_eq!(decoded.cb, cb);
+        assert_eq!(decoded.cr, cr);
     }
 
     #[test]
