@@ -42,7 +42,7 @@ module ff_vvc_encoder #(
   localparam int INPUT_COUNT_BITS = $clog2((MAX_FRAME_SAMPLES * 2) + 1);
   localparam int TOY_RESIDUAL_CB_SIZE = 4;
   localparam int TOY_RESIDUAL_LUMA_SAMPLES = TOY_RESIDUAL_CB_SIZE * TOY_RESIDUAL_CB_SIZE;
-  localparam int SLICE_PAYLOAD_BUFFER_BITS = 4096;
+  localparam int CABAC_CAPTURE_BUFFER_BITS = 4096;
   localparam int PALETTE_CU_SIZE = 8;
   localparam int MAX_CTU_PALETTE_SYMBOLS =
     ((CTU_SIZE + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE) *
@@ -102,7 +102,7 @@ module ff_vvc_encoder #(
   logic [12:0] cabac_capture_byte_index_q;
   logic [12:0] cabac_captured_bit_len_q;
   logic [12:0] cabac_captured_byte_len_q;
-  logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] cabac_captured_byte_bits_q;
+  logic [CABAC_CAPTURE_BUFFER_BITS - 1:0] cabac_captured_byte_bits_q;
   logic        cabac_capture_done_q;
   logic        pending_output_q;
   logic        palette_done_q;
@@ -618,15 +618,7 @@ module ff_vvc_encoder #(
   function automatic logic [12:0] slice_payload_len();
     logic [12:0]  bit_len;
     begin
-      if (PALETTE_MODE) begin
-        bit_len = 13'd24 + captured_cabac_payload_bit_len() + 13'd1;
-      end else if (uses_capacity_tu_grid()) begin
-        bit_len = 13'd24 + capacity_tu_grid_bit_len() + 13'd1;
-      end else if (cabac_supported) begin
-        bit_len = 13'd24 + captured_cabac_payload_bit_len() + 13'd1;
-      end else begin
-        bit_len = 13'd24 + 13'd1;
-      end
+      bit_len = 13'd24 + slice_body_bit_len() + 13'd1;
       slice_payload_len = (bit_len + 13'd7) >> 3;
     end
   endfunction
@@ -817,19 +809,17 @@ module ff_vvc_encoder #(
   endfunction
 
   function automatic logic [12:0] slice_payload_escaped_len_calc(input logic cra_picture);
-    logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] raw_payload;
     logic [12:0] raw_index;
     logic [12:0] raw_len;
     logic [12:0] escaped_len;
     logic [1:0] zero_count;
     logic [7:0] raw_byte;
     begin
-      raw_payload = current_slice_payload_bits(cra_picture);
       raw_len = slice_payload_len();
       escaped_len = 13'd0;
       zero_count = 2'd0;
       for (raw_index = 13'd0; raw_index < raw_len; raw_index = raw_index + 13'd1) begin
-        raw_byte = slice_payload_byte_from_bits(raw_payload, raw_index);
+        raw_byte = slice_payload_byte(raw_index, cra_picture);
         if (zero_count >= 2'd2 && raw_byte <= 8'h03) begin
           escaped_len = escaped_len + 13'd1;
           zero_count = 2'd0;
@@ -1281,144 +1271,109 @@ module ff_vvc_encoder #(
     input logic [12:0] index,
     input logic       cra_picture
   );
+    logic [12:0] body_byte_index;
+    logic [12:0] body_bit_index;
+    logic [12:0] body_len;
+    logic [12:0] indexed_bit;
+    logic [7:0] out_byte;
+    integer bit_idx;
     begin
-      slice_payload_byte = quant_luma_payload_byte(
-        quant_luma_rem(),
-        quant_luma_ac_tokens(),
-        quant_luma_rem_1(),
-        quant_luma_ac_tokens_1(),
-        index,
-        cra_picture
-      );
-    end
-  endfunction
-
-  function automatic logic [7:0] quant_luma_payload_byte(
-    input logic [4:0] rem,
-    input logic [119:0] ac_tokens,
-    input logic [4:0] rem_1,
-    input logic [119:0] ac_tokens_1,
-    input logic [12:0] index,
-    input logic       cra_picture
-  );
-    logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] payload;
-
-    begin
-      payload = generated_slice_payload_bits(rem, ac_tokens, rem_1, ac_tokens_1, cra_picture);
-      quant_luma_payload_byte = slice_payload_byte_from_bits(payload, index);
-    end
-  endfunction
-
-  function automatic logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] current_slice_payload_bits(
-    input logic cra_picture
-  );
-    begin
-      current_slice_payload_bits = generated_slice_payload_bits(
-        quant_luma_rem(),
-        quant_luma_ac_tokens(),
-        quant_luma_rem_1(),
-        quant_luma_ac_tokens_1(),
-        cra_picture
-      );
-    end
-  endfunction
-
-  function automatic logic [7:0] slice_payload_byte_from_bits(
-    input logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] payload,
-    input logic [12:0] index
-  );
-    begin
-      slice_payload_byte_from_bits = payload >> (((slice_payload_len() - 13'd1) - index) * 8);
-    end
-  endfunction
-
-  function automatic logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] generated_slice_payload_bits(
-    input logic [4:0] rem,
-    input logic [119:0] ac_tokens,
-    input logic [4:0] rem_1,
-    input logic [119:0] ac_tokens_1,
-    input logic       cra_picture
-  );
-    logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] acc;
-    logic [12:0]  bit_len;
-    logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] selected_cabac_payload_bits;
-    logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] capacity_bits;
-    logic [12:0]  payload_len;
-    logic [12:0]  payload_bits_len;
-    logic [12:0]  payload_byte_len;
-
-    begin
-      acc = '0;
-      bit_len = 13'd0;
-
-      acc = (acc << 19) | slice_header_bits(cra_picture);
-      bit_len = bit_len + 13'd19;
-
-      acc = (acc << 1) | 1'b1; // cabac_alignment_one_bit
-      bit_len = bit_len + 13'd1;
-      if (cra_picture) begin
-        acc = (acc << 1) | 1'b1; // current CRA slice alignment bit
-        bit_len = bit_len + 13'd1;
-      end
-      while (bit_len[2:0] != 3'd0) begin
-        acc = acc << 1;
-        bit_len = bit_len + 13'd1;
-      end
-
-      if (uses_capacity_tu_grid()) begin
-        if (PALETTE_MODE) begin
-          payload_len = captured_cabac_payload_bit_len();
-          selected_cabac_payload_bits = captured_cabac_payload_bits();
-          acc = (acc << payload_len) | selected_cabac_payload_bits;
-          bit_len = bit_len + payload_len;
-        end else begin
-        capacity_bits = capacity_tu_grid_bits();
-        payload_len = capacity_tu_grid_bit_len();
-        acc = (acc << payload_len) | capacity_bits;
-        bit_len = bit_len + payload_len;
-        end
+      if (index < 13'd3) begin
+        slice_payload_byte = slice_payload_prefix_byte(index, cra_picture);
       end else begin
-        if (PALETTE_MODE) begin
-          payload_len = captured_cabac_payload_bit_len();
-          selected_cabac_payload_bits = captured_cabac_payload_bits();
-          acc = (acc << payload_len) | selected_cabac_payload_bits;
-          bit_len = bit_len + payload_len;
-        end else begin
-          payload_len = cabac_supported ? captured_cabac_payload_bit_len() : 13'd0;
-          selected_cabac_payload_bits = cabac_supported ? captured_cabac_payload_bits() : '0;
-          acc = (acc << payload_len) | selected_cabac_payload_bits;
-          bit_len = bit_len + payload_len;
+        body_byte_index = index - 13'd3;
+        body_bit_index = body_byte_index << 3;
+        body_len = slice_body_bit_len();
+        out_byte = 8'd0;
+        for (bit_idx = 0; bit_idx < 8; bit_idx = bit_idx + 1) begin
+          indexed_bit = body_bit_index + bit_idx[12:0];
+          out_byte = out_byte << 1;
+          if (indexed_bit < body_len) begin
+            out_byte[0] = slice_body_bit(indexed_bit);
+          end else if (indexed_bit == body_len) begin
+            out_byte[0] = 1'b1;
+          end
         end
+        slice_payload_byte = out_byte;
       end
+    end
+  endfunction
 
-      acc = (acc << 1) | 1'b1; // rbsp_stop_one_bit
-      bit_len = bit_len + 13'd1;
-      while (bit_len[2:0] != 3'd0) begin
-        acc = acc << 1;
-        bit_len = bit_len + 13'd1;
+  function automatic logic [7:0] slice_payload_prefix_byte(
+    input logic [12:0] index,
+    input logic        cra_picture
+  );
+    logic [23:0] prefix;
+    begin
+      prefix = cra_picture
+        ? {slice_header_bits(cra_picture), 1'b1, 1'b1, 3'b000}
+        : {slice_header_bits(cra_picture), 1'b1, 4'b0000};
+      case (index)
+        13'd0: slice_payload_prefix_byte = prefix[23:16];
+        13'd1: slice_payload_prefix_byte = prefix[15:8];
+        default: slice_payload_prefix_byte = prefix[7:0];
+      endcase
+    end
+  endfunction
+
+  function automatic logic [12:0] slice_body_bit_len();
+    begin
+      if (PALETTE_MODE) begin
+        slice_body_bit_len = captured_cabac_payload_bit_len();
+      end else if (uses_capacity_tu_grid()) begin
+        slice_body_bit_len = capacity_tu_grid_bit_len();
+      end else if (cabac_supported) begin
+        slice_body_bit_len = captured_cabac_payload_bit_len();
+      end else begin
+        slice_body_bit_len = 13'd0;
       end
+    end
+  endfunction
 
-      payload_byte_len = (bit_len + 13'd7) >> 3;
-      payload_bits_len = payload_byte_len << 3;
-      generated_slice_payload_bits = acc << (payload_bits_len - bit_len);
+  function automatic logic slice_body_bit(input logic [12:0] bit_index);
+    begin
+      if (PALETTE_MODE) begin
+        slice_body_bit = captured_cabac_payload_bit(bit_index);
+      end else if (uses_capacity_tu_grid()) begin
+        slice_body_bit = capacity_tu_grid_bit(bit_index);
+      end else if (cabac_supported) begin
+        slice_body_bit = captured_cabac_payload_bit(bit_index);
+      end else begin
+        slice_body_bit = 1'b0;
+      end
+    end
+  endfunction
+
+  function automatic logic captured_cabac_payload_bit(input logic [12:0] bit_index);
+    logic [12:0] byte_index;
+    logic [2:0] bit_in_byte;
+    logic [7:0] byte_value;
+    begin
+      if (bit_index >= cabac_captured_bit_len_q) begin
+        captured_cabac_payload_bit = 1'b0;
+      end else begin
+        byte_index = bit_index >> 3;
+        bit_in_byte = bit_index[2:0];
+        byte_value = cabac_captured_byte(byte_index);
+        captured_cabac_payload_bit = byte_value[3'd7 - bit_in_byte];
+      end
+    end
+  endfunction
+
+  function automatic logic [7:0] cabac_captured_byte(input logic [12:0] byte_index);
+    begin
+      if (byte_index < cabac_captured_byte_len_q) begin
+        cabac_captured_byte =
+          cabac_captured_byte_bits_q >> (((cabac_captured_byte_len_q - 13'd1) - byte_index) * 8);
+      end else begin
+        cabac_captured_byte = 8'd0;
+      end
     end
   endfunction
 
   function automatic logic [12:0] captured_cabac_payload_bit_len();
     begin
       captured_cabac_payload_bit_len = cabac_captured_bit_len_q;
-    end
-  endfunction
-
-  function automatic logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] captured_cabac_payload_bits();
-    logic [12:0] pad_bits;
-    begin
-      if (cabac_captured_bit_len_q == 13'd0) begin
-        captured_cabac_payload_bits = '0;
-      end else begin
-        pad_bits = (cabac_captured_byte_len_q << 3) - cabac_captured_bit_len_q;
-        captured_cabac_payload_bits = cabac_captured_byte_bits_q >> pad_bits;
-      end
     end
   endfunction
 
@@ -1440,16 +1395,37 @@ module ff_vvc_encoder #(
     end
   endfunction
 
-  function automatic logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] capacity_tu_grid_bits();
-    logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] bits;
+  function automatic logic capacity_tu_grid_bit(input logic [12:0] bit_index);
     logic [12:0] tu;
+    logic [12:0] tu_payload_bit;
+    logic [15:0] count_bits;
+    logic [4:0] rem;
+    logic [7:0] ac0;
     begin
-      bits = luma_tu_count();
-      for (tu = 13'd0; tu < luma_tu_count(); tu = tu + 13'd1) begin
-        bits = (bits << 5) | quant_luma_rem_for_tu(tu);
-        bits = (bits << 8) | quant_luma_ac0_for_tu(tu);
+      if (bit_index < 13'd16) begin
+        count_bits = {3'd0, luma_tu_count()};
+        capacity_tu_grid_bit = count_bits[13'd15 - bit_index];
+      end else begin
+        tu_payload_bit = bit_index - 13'd16;
+        tu = tu_payload_bit / 13'd13;
+        rem = quant_luma_rem_for_tu(tu);
+        ac0 = quant_luma_ac0_for_tu(tu);
+        case (tu_payload_bit % 13'd13)
+          13'd0: capacity_tu_grid_bit = rem[4];
+          13'd1: capacity_tu_grid_bit = rem[3];
+          13'd2: capacity_tu_grid_bit = rem[2];
+          13'd3: capacity_tu_grid_bit = rem[1];
+          13'd4: capacity_tu_grid_bit = rem[0];
+          13'd5: capacity_tu_grid_bit = ac0[7];
+          13'd6: capacity_tu_grid_bit = ac0[6];
+          13'd7: capacity_tu_grid_bit = ac0[5];
+          13'd8: capacity_tu_grid_bit = ac0[4];
+          13'd9: capacity_tu_grid_bit = ac0[3];
+          13'd10: capacity_tu_grid_bit = ac0[2];
+          13'd11: capacity_tu_grid_bit = ac0[1];
+          default: capacity_tu_grid_bit = ac0[0];
+        endcase
       end
-      capacity_tu_grid_bits = bits;
     end
   endfunction
 
