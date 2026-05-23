@@ -37,6 +37,7 @@ module ff_vvc_cabac #(
   output logic        m_axis_valid,
   output logic [7:0]  m_axis_data,
   output logic        m_axis_last,
+  output logic [12:0] stream_bit_count,
   output logic [12:0] stream_byte_count,
 
   // Temporary bridge for the surrounding combinational slice payload packer.
@@ -67,6 +68,7 @@ module ff_vvc_cabac #(
   logic palette_s_axis_ready;
 
   assign s_axis_ready = mode_palette_444 ? palette_s_axis_ready : enable;
+  assign stream_bit_count = compat_payload_bit_len;
   assign stream_byte_count = stream_active_q ? stream_byte_count_q : ((compat_payload_bit_len + 13'd7) >> 3);
 
   ff_vvc_generated_cabac_body #(
@@ -85,6 +87,7 @@ module ff_vvc_cabac #(
     .m_axis_valid(generated_m_axis_valid),
     .m_axis_data(generated_m_axis_data),
     .m_axis_last(generated_m_axis_last),
+    .stream_bit_count(),
     .stream_byte_count(generated_stream_byte_count),
     .compat_payload_bit_len(generated_bit_len),
     .compat_payload_bits(generated_bits)

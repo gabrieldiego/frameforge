@@ -16,6 +16,7 @@ module ff_vvc_generated_cabac_body #(
   output logic         m_axis_valid,
   output logic [7:0]   m_axis_data,
   output logic         m_axis_last,
+  output logic [12:0]  stream_bit_count,
   output logic [12:0]  stream_byte_count,
 
   // Temporary glue for modules that still pack the enclosing slice as a
@@ -49,6 +50,7 @@ module ff_vvc_generated_cabac_body #(
 
   assign stream_byte_count =
     stream_active_q ? stream_byte_count_q : ((compat_payload_bit_len + 13'd7) >> 3);
+  assign stream_bit_count = compat_payload_bit_len;
 
   always @* begin
     supported =

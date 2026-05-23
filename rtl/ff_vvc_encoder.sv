@@ -90,8 +90,6 @@ module ff_vvc_encoder #(
   logic [12:0] coding_tree_luma_tu_count;
   logic [12:0] coding_tree_capacity_tu_grid_bit_len;
   logic        cabac_supported;
-  logic [12:0] cabac_payload_bit_len;
-  logic [MAX_SLICE_PAYLOAD_BITS - 1:0] cabac_compat_payload_bits;
   logic        cabac_enable;
   logic [7:0]  palette_symbol_count;
   logic [MAX_CTU_PALETTE_SYMBOLS - 1:0] palette_cu_select_mask;
@@ -108,7 +106,15 @@ module ff_vvc_encoder #(
   logic        cabac_stream_valid;
   logic [7:0]  cabac_stream_data;
   logic        cabac_stream_last;
+  logic [12:0] cabac_stream_bit_count;
   logic [12:0] cabac_stream_byte_count;
+  logic        cabac_start_q;
+  logic        cabac_capture_active_q;
+  logic [12:0] cabac_capture_byte_index_q;
+  logic [12:0] cabac_captured_bit_len_q;
+  logic [12:0] cabac_captured_byte_len_q;
+  logic [MAX_SLICE_PAYLOAD_BITS - 1:0] cabac_captured_byte_bits_q;
+  logic        cabac_capture_done_q;
   logic        pending_output_q;
   logic        palette_done_q;
   logic [12:0] slice_payload_ebsp_len_q;
@@ -211,7 +217,7 @@ module ff_vvc_encoder #(
   ) cabac_writer (
     .clk(clk),
     .rst_n(rst_n),
-    .start(1'b0),
+    .start(cabac_start_q),
     .enable(cabac_enable),
     .mode_palette_444(PALETTE_MODE),
     .body_kind(coding_tree_body_kind),
@@ -223,7 +229,7 @@ module ff_vvc_encoder #(
     .chroma_rem(quant_chroma_rem_q),
     .symbol_count(palette_symbol_count),
     .supported(cabac_supported),
-    .compat_payload_bit_len(cabac_payload_bit_len),
+    .compat_payload_bit_len(),
     .s_axis_valid(palette_stream_valid),
     .s_axis_ready(palette_stream_ready),
     .s_axis_kind(8'd1),
@@ -233,8 +239,9 @@ module ff_vvc_encoder #(
     .m_axis_valid(cabac_stream_valid),
     .m_axis_data(cabac_stream_data),
     .m_axis_last(cabac_stream_last),
+    .stream_bit_count(cabac_stream_bit_count),
     .stream_byte_count(cabac_stream_byte_count),
-    .compat_payload_bits(cabac_compat_payload_bits)
+    .compat_payload_bits()
   );
 
   ff_residual_stub #(
@@ -315,9 +322,17 @@ module ff_vvc_encoder #(
       slice_payload_ebsp_cra_len_q <= '0;
       slice_payload_ebsp_bits_q <= '0;
       slice_payload_ebsp_cra_bits_q <= '0;
+      cabac_start_q <= 1'b0;
+      cabac_capture_active_q <= 1'b0;
+      cabac_capture_byte_index_q <= 13'd0;
+      cabac_captured_bit_len_q <= 13'd0;
+      cabac_captured_byte_len_q <= 13'd0;
+      cabac_captured_byte_bits_q <= '0;
+      cabac_capture_done_q <= 1'b0;
       pending_output_q <= 1'b0;
       palette_done_q <= 1'b0;
     end else begin
+      cabac_start_q <= 1'b0;
       if (start && !busy) begin
         input_active_q <= 1'b1;
         s_axis_ready   <= 1'b1;
@@ -345,6 +360,12 @@ module ff_vvc_encoder #(
         slice_payload_ebsp_cra_len_q <= '0;
         slice_payload_ebsp_bits_q <= '0;
         slice_payload_ebsp_cra_bits_q <= '0;
+        cabac_capture_active_q <= 1'b0;
+        cabac_capture_byte_index_q <= 13'd0;
+        cabac_captured_bit_len_q <= 13'd0;
+        cabac_captured_byte_len_q <= 13'd0;
+        cabac_captured_byte_bits_q <= '0;
+        cabac_capture_done_q <= 1'b0;
         pending_output_q <= 1'b0;
         palette_done_q <= 1'b0;
       end else if (input_active_q && s_axis_valid && s_axis_ready) begin
@@ -393,25 +414,22 @@ module ff_vvc_encoder #(
           input_active_q <= 1'b0;
           s_axis_ready   <= 1'b0;
           sampled_color_valid <= !input_error && s_axis_last;
-          if (PALETTE_MODE) begin
-            pending_output_q <= 1'b1;
-          end else begin
-            slice_payload_ebsp_len_q <= slice_payload_escaped_len_calc(1'b0);
-            slice_payload_ebsp_bits_q <= slice_payload_escaped_bits_calc(1'b0);
-            slice_payload_ebsp_cra_len_q <= slice_payload_escaped_len_calc(1'b1);
-            slice_payload_ebsp_cra_bits_q <= slice_payload_escaped_bits_calc(1'b1);
-            stream_len_q   <= stream_len_from_slice_payloads(frame_count);
-            m_axis_valid   <= 1'b1;
-            m_axis_data    <= stream_byte(13'd0);
-            m_axis_last    <= 1'b0;
-            index_q        <= 8'd1;
-          end
+          pending_output_q <= 1'b1;
         end else begin
           input_count_q <= input_count_q + 1'b1;
         end
-      end else if (pending_output_q && PALETTE_MODE && palette_done_q) begin
+      end else if (pending_output_q && !cabac_capture_active_q && !cabac_capture_done_q &&
+                   ((!PALETTE_MODE) || palette_done_q)) begin
+        cabac_start_q <= 1'b1;
+        cabac_capture_active_q <= 1'b1;
+        cabac_capture_byte_index_q <= 13'd0;
+        cabac_captured_bit_len_q <= cabac_stream_bit_count;
+        cabac_captured_byte_len_q <= cabac_stream_byte_count;
+        cabac_captured_byte_bits_q <= '0;
+      end else if (pending_output_q && cabac_capture_done_q) begin
         pending_output_q <= 1'b0;
         palette_done_q <= 1'b0;
+        cabac_capture_done_q <= 1'b0;
         slice_payload_ebsp_len_q <= slice_payload_escaped_len_calc(1'b0);
         slice_payload_ebsp_bits_q <= slice_payload_escaped_bits_calc(1'b0);
         slice_payload_ebsp_cra_len_q <= slice_payload_escaped_len_calc(1'b1);
@@ -434,6 +452,14 @@ module ff_vvc_encoder #(
       end
       if (pending_output_q && palette_stream_valid && palette_stream_ready && palette_stream_last) begin
         palette_done_q <= 1'b1;
+      end
+      if (cabac_capture_active_q && cabac_stream_valid) begin
+        cabac_captured_byte_bits_q <= (cabac_captured_byte_bits_q << 8) | cabac_stream_data;
+        cabac_capture_byte_index_q <= cabac_capture_byte_index_q + 13'd1;
+        if (cabac_stream_last) begin
+          cabac_capture_active_q <= 1'b0;
+          cabac_capture_done_q <= 1'b1;
+        end
       end
     end
   end
@@ -614,17 +640,21 @@ module ff_vvc_encoder #(
     logic [12:0]  bit_len;
     begin
       if (PALETTE_MODE) begin
-        bit_len = 13'd24 + palette_444_payload_bit_len() + 13'd1;
+        bit_len = 13'd24 + captured_cabac_payload_bit_len() + 13'd1;
       end else if (uses_capacity_tu_grid()) begin
         bit_len = 13'd24 + capacity_tu_grid_bit_len() + 13'd1;
       end else begin
-        cabac = generated_cabac_bitstream(
-          quant_luma_rem(),
-          quant_luma_ac_tokens(),
-          quant_luma_rem_1(),
-          quant_luma_ac_tokens_1()
-        );
-        bit_len = 13'd24 + cabac[CABAC_PACKET_BITS - 1 -: 13] + 13'd1;
+        if (cabac_supported) begin
+          bit_len = 13'd24 + captured_cabac_payload_bit_len() + 13'd1;
+        end else begin
+          cabac = generated_cabac_bitstream(
+            quant_luma_rem(),
+            quant_luma_ac_tokens(),
+            quant_luma_rem_1(),
+            quant_luma_ac_tokens_1()
+          );
+          bit_len = 13'd24 + cabac[CABAC_PACKET_BITS - 1 -: 13] + 13'd1;
+        end
       end
       slice_payload_len = (bit_len + 13'd7) >> 3;
     end
@@ -1508,8 +1538,8 @@ module ff_vvc_encoder #(
 
       if (uses_capacity_tu_grid()) begin
         if (PALETTE_MODE) begin
-          payload_len = cabac_payload_bit_len;
-          selected_cabac_payload_bits = cabac_compat_payload_bits;
+          payload_len = captured_cabac_payload_bit_len();
+          selected_cabac_payload_bits = captured_cabac_payload_bits();
           acc = (acc << payload_len) | selected_cabac_payload_bits;
           bit_len = bit_len + payload_len;
         end else begin
@@ -1520,14 +1550,19 @@ module ff_vvc_encoder #(
         end
       end else begin
         if (PALETTE_MODE) begin
-          payload_len = cabac_payload_bit_len;
-          selected_cabac_payload_bits = cabac_compat_payload_bits;
+          payload_len = captured_cabac_payload_bit_len();
+          selected_cabac_payload_bits = captured_cabac_payload_bits();
           acc = (acc << payload_len) | selected_cabac_payload_bits;
           bit_len = bit_len + payload_len;
         end else begin
-          cabac = generated_cabac_bitstream(rem, ac_tokens, rem_1, ac_tokens_1);
-          payload_len = cabac[CABAC_PACKET_BITS - 1 -: 13];
-          selected_cabac_payload_bits = cabac[MAX_SLICE_PAYLOAD_BITS - 1:0];
+          if (cabac_supported) begin
+            payload_len = captured_cabac_payload_bit_len();
+            selected_cabac_payload_bits = captured_cabac_payload_bits();
+          end else begin
+            cabac = generated_cabac_bitstream(rem, ac_tokens, rem_1, ac_tokens_1);
+            payload_len = cabac[CABAC_PACKET_BITS - 1 -: 13];
+            selected_cabac_payload_bits = cabac[MAX_SLICE_PAYLOAD_BITS - 1:0];
+          end
           acc = (acc << payload_len) | selected_cabac_payload_bits;
           bit_len = bit_len + payload_len;
         end
@@ -1546,15 +1581,21 @@ module ff_vvc_encoder #(
     end
   endfunction
 
-  function automatic logic [12:0] palette_444_payload_bit_len();
+  function automatic logic [12:0] captured_cabac_payload_bit_len();
     begin
-      palette_444_payload_bit_len = cabac_payload_bit_len;
+      captured_cabac_payload_bit_len = cabac_captured_bit_len_q;
     end
   endfunction
 
-  function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] palette_444_payload_bits();
+  function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] captured_cabac_payload_bits();
+    logic [12:0] pad_bits;
     begin
-      palette_444_payload_bits = cabac_compat_payload_bits;
+      if (cabac_captured_bit_len_q == 13'd0) begin
+        captured_cabac_payload_bits = '0;
+      end else begin
+        pad_bits = (cabac_captured_byte_len_q << 3) - cabac_captured_bit_len_q;
+        captured_cabac_payload_bits = cabac_captured_byte_bits_q >> pad_bits;
+      end
     end
   endfunction
 
@@ -1693,17 +1734,13 @@ module ff_vvc_encoder #(
     begin
       chroma_rem = quant_chroma_rem();
       st = cabac_start();
-      if (cabac_supported) begin
-        generated_cabac_bitstream = {cabac_payload_bit_len, cabac_compat_payload_bits};
-      end else begin
-        st = toy_encode_capacity_placeholder_tree(st, rem, chroma_rem, ac_tokens, rem_1, ac_tokens_1);
-        st = cabac_encode_bin_trm(st, 1'b1);
-        st = cabac_finish(st);
-        generated_cabac_bitstream = {
-          st[CABAC_LEN_LSB +: 13],
-          st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
-        };
-      end
+      st = toy_encode_capacity_placeholder_tree(st, rem, chroma_rem, ac_tokens, rem_1, ac_tokens_1);
+      st = cabac_encode_bin_trm(st, 1'b1);
+      st = cabac_finish(st);
+      generated_cabac_bitstream = {
+        st[CABAC_LEN_LSB +: 13],
+        st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS]
+      };
     end
   endfunction
 
