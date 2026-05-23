@@ -1,8 +1,7 @@
 `timescale 1ns/1ps
 
 module ff_vvc_palette_cabac #(
-  parameter int MAX_PALETTE_SYMBOLS = 64,
-  parameter int MAX_SLICE_PAYLOAD_BITS = 4096
+  parameter int MAX_PALETTE_SYMBOLS = 64
 ) (
   input  logic clk,
   input  logic rst_n,
@@ -26,6 +25,7 @@ module ff_vvc_palette_cabac #(
   localparam int PALETTE_MODEL_BITS = 40;
   localparam int PALETTE_CTX_COUNT = 18;
   localparam int PALETTE_MODEL_BANK_BITS = PALETTE_CTX_COUNT * PALETTE_MODEL_BITS;
+  localparam int CABAC_CAPTURE_BITS = 4096;
   localparam int PALETTE_CTX_SPLIT0 = 0;
   localparam int PALETTE_CTX_SPLIT6 = 1;
   localparam int PALETTE_CTX_SPLIT7 = 2;
@@ -63,7 +63,7 @@ module ff_vvc_palette_cabac #(
     logic [12:0] byte_count;
     logic [2:0] partial_bit_count;
     logic [7:0] partial_byte;
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bytes;
+    logic [CABAC_CAPTURE_BITS - 1:0] bytes;
   } cabac_capture_state_t;
 
   typedef struct packed {
@@ -1183,7 +1183,7 @@ module ff_vvc_palette_cabac #(
     input logic [5:0]   bit_count
   );
     cabac_writer_state_t st;
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bytes;
+    logic [CABAC_CAPTURE_BITS - 1:0] bytes;
     logic [12:0] len;
     logic [12:0] byte_count;
     logic [7:0] partial_byte;

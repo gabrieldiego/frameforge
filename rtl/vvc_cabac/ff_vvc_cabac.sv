@@ -3,8 +3,7 @@
 module ff_vvc_cabac #(
   parameter int MAX_VISIBLE_WIDTH = 64,
   parameter int MAX_VISIBLE_HEIGHT = 64,
-  parameter int MAX_PALETTE_SYMBOLS = 64,
-  parameter int MAX_SLICE_PAYLOAD_BITS = 4096
+  parameter int MAX_PALETTE_SYMBOLS = 64
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -64,9 +63,7 @@ module ff_vvc_cabac #(
   assign m_axis_data = mode_palette_444 ? palette_m_axis_data : generated_m_axis_data;
   assign m_axis_last = mode_palette_444 ? palette_m_axis_last : generated_m_axis_last;
 
-  ff_vvc_generated_cabac_body #(
-    .MAX_SLICE_PAYLOAD_BITS(MAX_SLICE_PAYLOAD_BITS)
-  ) generated_body (
+  ff_vvc_generated_cabac_body generated_body (
     .clk(clk),
     .rst_n(rst_n),
     .start(start && enable && !mode_palette_444),
@@ -85,8 +82,7 @@ module ff_vvc_cabac #(
   );
 
   ff_vvc_palette_cabac #(
-    .MAX_PALETTE_SYMBOLS(MAX_PALETTE_SYMBOLS),
-    .MAX_SLICE_PAYLOAD_BITS(MAX_SLICE_PAYLOAD_BITS)
+    .MAX_PALETTE_SYMBOLS(MAX_PALETTE_SYMBOLS)
   ) palette_444 (
     .clk(clk),
     .rst_n(rst_n),

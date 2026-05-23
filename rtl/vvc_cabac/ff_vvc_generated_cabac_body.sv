@@ -1,8 +1,6 @@
 `timescale 1ns/1ps
 
-module ff_vvc_generated_cabac_body #(
-  parameter int MAX_SLICE_PAYLOAD_BITS = 4096
-) (
+module ff_vvc_generated_cabac_body (
   input  logic         clk,
   input  logic         rst_n,
   input  logic         start,

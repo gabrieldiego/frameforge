@@ -42,7 +42,7 @@ module ff_vvc_encoder #(
   localparam int INPUT_COUNT_BITS = $clog2((MAX_FRAME_SAMPLES * 2) + 1);
   localparam int TOY_RESIDUAL_CB_SIZE = 4;
   localparam int TOY_RESIDUAL_LUMA_SAMPLES = TOY_RESIDUAL_CB_SIZE * TOY_RESIDUAL_CB_SIZE;
-  localparam int MAX_SLICE_PAYLOAD_BITS = 4096;
+  localparam int SLICE_PAYLOAD_BUFFER_BITS = 4096;
   localparam int PALETTE_CU_SIZE = 8;
   localparam int MAX_CTU_PALETTE_SYMBOLS =
     ((CTU_SIZE + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE) *
@@ -102,14 +102,14 @@ module ff_vvc_encoder #(
   logic [12:0] cabac_capture_byte_index_q;
   logic [12:0] cabac_captured_bit_len_q;
   logic [12:0] cabac_captured_byte_len_q;
-  logic [MAX_SLICE_PAYLOAD_BITS - 1:0] cabac_captured_byte_bits_q;
+  logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] cabac_captured_byte_bits_q;
   logic        cabac_capture_done_q;
   logic        pending_output_q;
   logic        palette_done_q;
   logic [12:0] slice_payload_ebsp_len_q;
   logic [12:0] slice_payload_ebsp_cra_len_q;
-  logic [MAX_SLICE_PAYLOAD_BITS - 1:0] slice_payload_ebsp_bits_q;
-  logic [MAX_SLICE_PAYLOAD_BITS - 1:0] slice_payload_ebsp_cra_bits_q;
+  logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] slice_payload_ebsp_bits_q;
+  logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] slice_payload_ebsp_cra_bits_q;
 
   assign busy = input_active_q || pending_output_q || m_axis_valid || (index_q != 0);
   assign cabac_enable = 1'b1;
@@ -201,8 +201,7 @@ module ff_vvc_encoder #(
   ff_vvc_cabac #(
     .MAX_VISIBLE_WIDTH(MAX_VISIBLE_WIDTH),
     .MAX_VISIBLE_HEIGHT(MAX_VISIBLE_HEIGHT),
-    .MAX_PALETTE_SYMBOLS(MAX_CTU_PALETTE_SYMBOLS),
-    .MAX_SLICE_PAYLOAD_BITS(MAX_SLICE_PAYLOAD_BITS)
+    .MAX_PALETTE_SYMBOLS(MAX_CTU_PALETTE_SYMBOLS)
   ) cabac_writer (
     .clk(clk),
     .rst_n(rst_n),
@@ -824,7 +823,7 @@ module ff_vvc_encoder #(
   endfunction
 
   function automatic logic [12:0] slice_payload_escaped_len_calc(input logic cra_picture);
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] raw_payload;
+    logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] raw_payload;
     logic [12:0] raw_index;
     logic [12:0] raw_len;
     logic [12:0] escaped_len;
@@ -854,11 +853,11 @@ module ff_vvc_encoder #(
     end
   endfunction
 
-  function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] slice_payload_escaped_bits_calc(
+  function automatic logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] slice_payload_escaped_bits_calc(
     input logic cra_picture
   );
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] raw_payload;
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] escaped_payload;
+    logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] raw_payload;
+    logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] escaped_payload;
     logic [12:0] raw_index;
     logic [12:0] raw_len;
     logic [12:0] escaped_len;
@@ -892,7 +891,7 @@ module ff_vvc_encoder #(
       end
 
       slice_payload_escaped_bits_calc =
-        escaped_payload << (((MAX_SLICE_PAYLOAD_BITS >> 3) - escaped_len) * 8);
+        escaped_payload << (((SLICE_PAYLOAD_BUFFER_BITS >> 3) - escaped_len) * 8);
     end
   endfunction
 
@@ -900,7 +899,7 @@ module ff_vvc_encoder #(
     input logic [12:0] escaped_index,
     input logic        cra_picture
   );
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] payload;
+    logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] payload;
     logic [12:0] len;
     begin
       if (cra_picture) begin
@@ -911,7 +910,7 @@ module ff_vvc_encoder #(
         len = slice_payload_ebsp_len_q;
       end
       slice_payload_escaped_cached_byte =
-        payload >> ((((MAX_SLICE_PAYLOAD_BITS >> 3) - 1) - escaped_index) * 8);
+        payload >> ((((SLICE_PAYLOAD_BUFFER_BITS >> 3) - 1) - escaped_index) * 8);
     end
   endfunction
 
@@ -1326,7 +1325,7 @@ module ff_vvc_encoder #(
     input logic [12:0] index,
     input logic       cra_picture
   );
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] payload;
+    logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] payload;
 
     begin
       payload = generated_slice_payload_bits(rem, ac_tokens, rem_1, ac_tokens_1, cra_picture);
@@ -1334,7 +1333,7 @@ module ff_vvc_encoder #(
     end
   endfunction
 
-  function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] current_slice_payload_bits(
+  function automatic logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] current_slice_payload_bits(
     input logic cra_picture
   );
     begin
@@ -1349,7 +1348,7 @@ module ff_vvc_encoder #(
   endfunction
 
   function automatic logic [7:0] slice_payload_byte_from_bits(
-    input logic [MAX_SLICE_PAYLOAD_BITS - 1:0] payload,
+    input logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] payload,
     input logic [12:0] index
   );
     begin
@@ -1357,17 +1356,17 @@ module ff_vvc_encoder #(
     end
   endfunction
 
-  function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] generated_slice_payload_bits(
+  function automatic logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] generated_slice_payload_bits(
     input logic [4:0] rem,
     input logic [119:0] ac_tokens,
     input logic [4:0] rem_1,
     input logic [119:0] ac_tokens_1,
     input logic       cra_picture
   );
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] acc;
+    logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] acc;
     logic [12:0]  bit_len;
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] selected_cabac_payload_bits;
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] capacity_bits;
+    logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] selected_cabac_payload_bits;
+    logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] capacity_bits;
     logic [12:0]  payload_len;
     logic [12:0]  payload_bits_len;
     logic [12:0]  payload_byte_len;
@@ -1435,7 +1434,7 @@ module ff_vvc_encoder #(
     end
   endfunction
 
-  function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] captured_cabac_payload_bits();
+  function automatic logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] captured_cabac_payload_bits();
     logic [12:0] pad_bits;
     begin
       if (cabac_captured_bit_len_q == 13'd0) begin
@@ -1465,8 +1464,8 @@ module ff_vvc_encoder #(
     end
   endfunction
 
-  function automatic logic [MAX_SLICE_PAYLOAD_BITS - 1:0] capacity_tu_grid_bits();
-    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bits;
+  function automatic logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] capacity_tu_grid_bits();
+    logic [SLICE_PAYLOAD_BUFFER_BITS - 1:0] bits;
     logic [12:0] tu;
     begin
       bits = luma_tu_count();
