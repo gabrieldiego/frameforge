@@ -2816,8 +2816,9 @@ impl VvcCtuCabacGenerator {
             VvcCtuCabacOp::Luma32x32Leaf { leaf_idx } => {
                 self.emit_luma_32x32_leaf_split(cabac, leaf_idx);
                 self.emit_luma_32x32_intra_mode_prefix(cabac, leaf_idx);
+                self.emit_luma_32x32_intra_mode_context_prefix(cabac, leaf_idx);
                 // TODO(vvc): Replace the leaf body with named CU/TU/residual syntax.
-                encode_32x32_luma_leaf_after_intra_prefix_body(cabac);
+                encode_32x32_luma_leaf_after_intra_mode_body(cabac);
             }
             VvcCtuCabacOp::Chroma32x32Tree => {
                 // TODO(vvc): Replace the chroma body with named dual-tree chroma syntax.
@@ -2848,14 +2849,25 @@ impl VvcCtuCabacGenerator {
         // TODO(vvc): Replace with the full intra_luma_pred_modes syntax writer.
         cabac.encode_bin_ep(false); // intra_luma_pred_modes first bypass bin
     }
+
+    fn emit_luma_32x32_intra_mode_context_prefix(
+        &mut self,
+        cabac: &mut ToyCabacEncoder,
+        _leaf_idx: u8,
+    ) {
+        // TODO(vvc): Verify the exact intra_luma_pred_modes sub-bin mapping
+        // against VTM. This names the next traced context-coded intra mode bin
+        // while preserving the current generated payload byte-for-byte.
+        cabac_ctx(cabac, true, 88, true);
+    }
 }
 
 fn encode_32x32_luma_body(cabac: &mut ToyCabacEncoder) {
-    encode_32x32_luma_body_inner(cabac, true, true, true);
+    encode_32x32_luma_body_inner(cabac, true, true, true, true);
 }
 
-fn encode_32x32_luma_leaf_after_intra_prefix_body(cabac: &mut ToyCabacEncoder) {
-    encode_32x32_luma_body_inner(cabac, false, false, false);
+fn encode_32x32_luma_leaf_after_intra_mode_body(cabac: &mut ToyCabacEncoder) {
+    encode_32x32_luma_body_inner(cabac, false, false, false, false);
 }
 
 fn encode_32x32_luma_body_inner(
@@ -2863,6 +2875,7 @@ fn encode_32x32_luma_body_inner(
     include_standalone_root: bool,
     include_leaf_split: bool,
     include_intra_mode_prefix: bool,
+    include_intra_mode_context_prefix: bool,
 ) {
     if include_standalone_root {
         encode_compact_cabac_word(cabac, 0x035a);
@@ -2874,7 +2887,9 @@ fn encode_32x32_luma_body_inner(
     if include_intra_mode_prefix {
         encode_compact_cabac_word(cabac, 0x8000);
     }
-    encode_compact_cabac_word(cabac, 0x0163);
+    if include_intra_mode_context_prefix {
+        encode_compact_cabac_word(cabac, 0x0163);
+    }
     encode_compact_cabac_word(cabac, 0x020b);
     encode_compact_cabac_word(cabac, 0x0153);
     encode_compact_cabac_word(cabac, 0x0153);
