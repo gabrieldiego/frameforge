@@ -21,20 +21,39 @@ module ff_vvc_generated_cabac_body #(
 );
   localparam logic [1:0] BODY_GENERATED = 2'd0;
 
-  localparam int CABAC_BITS_LSB = 0;
-  localparam int CABAC_LEN_LSB = CABAC_BITS_LSB + MAX_SLICE_PAYLOAD_BITS;
-  localparam int CABAC_LOW_LSB = CABAC_LEN_LSB + 13;
-  localparam int CABAC_RANGE_LSB = CABAC_LOW_LSB + 32;
-  localparam int CABAC_BUFFERED_BYTE_LSB = CABAC_RANGE_LSB + 16;
-  localparam int CABAC_NUM_BUFFERED_BYTES_LSB = CABAC_BUFFERED_BYTE_LSB + 9;
-  localparam int CABAC_BITS_LEFT_LSB = CABAC_NUM_BUFFERED_BYTES_LSB + 8;
-  localparam int CABAC_STATE_BITS = CABAC_BITS_LEFT_LSB + 8;
   localparam int VVC_PROB_MODEL_BITS = 40;
 
-  typedef logic [CABAC_STATE_BITS - 1:0] cabac_state_t;
   typedef logic [VVC_PROB_MODEL_BITS - 1:0] vvc_prob_model_t;
-  typedef logic [CABAC_STATE_BITS + VVC_PROB_MODEL_BITS - 1:0] cabac_vvc_model_step_t;
-  typedef logic [CABAC_STATE_BITS + 5 * VVC_PROB_MODEL_BITS - 1:0] cabac_luma_leaf_step_t;
+
+  typedef struct packed {
+    logic [7:0] bits_left;
+    logic [7:0] num_buffered_bytes;
+    logic [8:0] buffered_byte;
+    logic [15:0] range;
+    logic [31:0] low;
+    logic [12:0] bit_count;
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bits;
+  } cabac_state_t;
+
+  typedef struct packed {
+    vvc_prob_model_t model;
+    cabac_state_t st;
+  } cabac_vvc_model_step_t;
+
+  typedef struct packed {
+    vvc_prob_model_t model0;
+    vvc_prob_model_t model1;
+    cabac_state_t st;
+  } cabac_two_model_step_t;
+
+  typedef struct packed {
+    vvc_prob_model_t split_ctx;
+    vvc_prob_model_t multi_ref_line_ctx;
+    vvc_prob_model_t intra_mpm_ctx;
+    vvc_prob_model_t intra_planar_ctx;
+    vvc_prob_model_t qt_cbf_y_ctx;
+    cabac_state_t st;
+  } cabac_luma_leaf_step_t;
 
   logic [12:0] generated_bit_count;
   logic [12:0] stream_byte_count_q;
@@ -96,7 +115,7 @@ module ff_vvc_generated_cabac_body #(
     begin
       if ((body_kind == BODY_GENERATED) && supports_generated_body(width, height)) begin
         st = encode_generated_state(width, height, rem, c_rem);
-        current_bit_count_for_inputs = st[CABAC_LEN_LSB +: 13];
+        current_bit_count_for_inputs = st.bit_count;
       end else begin
         current_bit_count_for_inputs = 13'd0;
       end
@@ -123,12 +142,12 @@ module ff_vvc_generated_cabac_body #(
     logic [12:0] byte_count;
     logic [12:0] pad_bits;
     begin
-      bit_count = st[CABAC_LEN_LSB +: 13];
+      bit_count = st.bit_count;
       byte_count = (bit_count + 13'd7) >> 3;
       pad_bits = ((((bit_count + 13'd7) >> 3) << 3) - bit_count);
       if (byte_index < byte_count) begin
         cabac_state_stream_byte =
-          (st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS] << pad_bits) >>
+          (st.bits << pad_bits) >>
           (((byte_count - 13'd1) - byte_index) * 8);
       end else begin
         cabac_state_stream_byte = 8'd0;
@@ -386,7 +405,7 @@ module ff_vvc_generated_cabac_body #(
     end
   endfunction
 
-  function automatic logic [2 * VVC_PROB_MODEL_BITS + CABAC_STATE_BITS - 1:0] encode_ctu_luma_intra_planar_mode(
+  function automatic cabac_two_model_step_t encode_ctu_luma_intra_planar_mode(
     input cabac_state_t st_in,
     input vvc_prob_model_t intra_mpm_ctx_in,
     input vvc_prob_model_t intra_planar_ctx_in,
@@ -1297,11 +1316,11 @@ module ff_vvc_generated_cabac_body #(
   function automatic cabac_state_t cabac_start();
     begin
       cabac_start = '0;
-      cabac_start[CABAC_LOW_LSB +: 32] = 32'd0;
-      cabac_start[CABAC_RANGE_LSB +: 16] = 16'd510;
-      cabac_start[CABAC_BUFFERED_BYTE_LSB +: 9] = 9'h0ff;
-      cabac_start[CABAC_NUM_BUFFERED_BYTES_LSB +: 8] = 8'd0;
-      cabac_start[CABAC_BITS_LEFT_LSB +: 8] = 8'd23;
+      cabac_start.low = 32'd0;
+      cabac_start.range = 16'd510;
+      cabac_start.buffered_byte = 9'h0ff;
+      cabac_start.num_buffered_bytes = 8'd0;
+      cabac_start.bits_left = 8'd23;
     end
   endfunction
 
@@ -1338,7 +1357,7 @@ module ff_vvc_generated_cabac_body #(
       st = cabac_encode_bin(
         st_in,
         bin,
-        vvc_prob_model_lps(model_in, st_in[CABAC_RANGE_LSB +: 16]),
+        vvc_prob_model_lps(model_in, st_in.range),
         vvc_prob_model_mps(model_in)
       );
       model = vvc_prob_model_update(model_in, bin);
@@ -1521,9 +1540,9 @@ module ff_vvc_generated_cabac_body #(
     integer num_bits;
     begin
       st = st_in;
-      low = st[CABAC_LOW_LSB +: 32];
-      range = st[CABAC_RANGE_LSB +: 16];
-      bits_left = st[CABAC_BITS_LEFT_LSB +: 8];
+      low = st.low;
+      range = st.range;
+      bits_left = st.bits_left;
       lps = lps_in;
 
       range = range - lps;
@@ -1533,9 +1552,9 @@ module ff_vvc_generated_cabac_body #(
         low = low + range;
         low = low << num_bits;
         range = lps << num_bits;
-        st[CABAC_LOW_LSB +: 32] = low;
-        st[CABAC_RANGE_LSB +: 16] = range;
-        st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
+        st.low = low;
+        st.range = range;
+        st.bits_left = bits_left[7:0];
         if (bits_left < 12) begin
           st = cabac_write_out(st);
         end
@@ -1546,14 +1565,14 @@ module ff_vvc_generated_cabac_body #(
         bits_left = bits_left - num_bits;
         low = low << num_bits;
         range = range << num_bits;
-        st[CABAC_LOW_LSB +: 32] = low;
-        st[CABAC_RANGE_LSB +: 16] = range;
-        st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
+        st.low = low;
+        st.range = range;
+        st.bits_left = bits_left[7:0];
         if (bits_left < 12) begin
           st = cabac_write_out(st);
         end
       end else begin
-        st[CABAC_RANGE_LSB +: 16] = range;
+        st.range = range;
       end
       cabac_encode_bin = st;
     end
@@ -1569,14 +1588,14 @@ module ff_vvc_generated_cabac_body #(
     integer bits_left;
     begin
       st = st_in;
-      low = st[CABAC_LOW_LSB +: 32] << 1;
-      range = st[CABAC_RANGE_LSB +: 16];
-      bits_left = st[CABAC_BITS_LEFT_LSB +: 8] - 1;
+      low = st.low << 1;
+      range = st.range;
+      bits_left = st.bits_left - 1;
       if (bin) begin
         low = low + range;
       end
-      st[CABAC_LOW_LSB +: 32] = low;
-      st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
+      st.low = low;
+      st.bits_left = bits_left[7:0];
       if (bits_left < 12) begin
         st = cabac_write_out(st);
       end
@@ -1600,9 +1619,9 @@ module ff_vvc_generated_cabac_body #(
       st = st_in;
       bin_pattern = bin_pattern_in;
       num_bins = num_bins_in;
-      low = st[CABAC_LOW_LSB +: 32];
-      range = st[CABAC_RANGE_LSB +: 16];
-      bits_left = st[CABAC_BITS_LEFT_LSB +: 8];
+      low = st.low;
+      range = st.range;
+      bits_left = st.bits_left;
 
       while (num_bins > 8) begin
         num_bins = num_bins - 8;
@@ -1611,20 +1630,20 @@ module ff_vvc_generated_cabac_body #(
         low = low + (range * pattern);
         bin_pattern = bin_pattern - (pattern << num_bins);
         bits_left = bits_left - 8;
-        st[CABAC_LOW_LSB +: 32] = low;
-        st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
+        st.low = low;
+        st.bits_left = bits_left[7:0];
         if (bits_left < 12) begin
           st = cabac_write_out(st);
-          low = st[CABAC_LOW_LSB +: 32];
-          bits_left = st[CABAC_BITS_LEFT_LSB +: 8];
+          low = st.low;
+          bits_left = st.bits_left;
         end
       end
 
       low = low << num_bins;
       low = low + (range * bin_pattern);
       bits_left = bits_left - num_bins;
-      st[CABAC_LOW_LSB +: 32] = low;
-      st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
+      st.low = low;
+      st.bits_left = bits_left[7:0];
       if (bits_left < 12) begin
         st = cabac_write_out(st);
       end
@@ -1681,9 +1700,9 @@ module ff_vvc_generated_cabac_body #(
     integer bits_left;
     begin
       st = st_in;
-      low = st[CABAC_LOW_LSB +: 32];
-      range = st[CABAC_RANGE_LSB +: 16] - 16'd2;
-      bits_left = st[CABAC_BITS_LEFT_LSB +: 8];
+      low = st.low;
+      range = st.range - 16'd2;
+      bits_left = st.bits_left;
       if (bin) begin
         low = low + range;
         low = low << 7;
@@ -1694,9 +1713,9 @@ module ff_vvc_generated_cabac_body #(
         range = range << 1;
         bits_left = bits_left - 1;
       end
-      st[CABAC_LOW_LSB +: 32] = low;
-      st[CABAC_RANGE_LSB +: 16] = range;
-      st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
+      st.low = low;
+      st.range = range;
+      st.bits_left = bits_left[7:0];
       if (bits_left < 12) begin
         st = cabac_write_out(st);
       end
@@ -1713,30 +1732,30 @@ module ff_vvc_generated_cabac_body #(
     integer final_bits;
     begin
       st = st_in;
-      low = st[CABAC_LOW_LSB +: 32];
-      buffered_byte = st[CABAC_BUFFERED_BYTE_LSB +: 9];
-      num_buffered_bytes = st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8];
-      bits_left = st[CABAC_BITS_LEFT_LSB +: 8];
+      low = st.low;
+      buffered_byte = st.buffered_byte;
+      num_buffered_bytes = st.num_buffered_bytes;
+      bits_left = st.bits_left;
 
       if ((low >> (32 - bits_left)) != 0) begin
         st = cabac_write_bits(st, buffered_byte + 9'd1, 6'd8);
-        num_buffered_bytes = st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8];
+        num_buffered_bytes = st.num_buffered_bytes;
         while (num_buffered_bytes > 8'd1) begin
           st = cabac_write_bits(st, 9'd0, 6'd8);
           num_buffered_bytes = num_buffered_bytes - 8'd1;
-          st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8] = num_buffered_bytes;
+          st.num_buffered_bytes = num_buffered_bytes;
         end
         low = low - (32'd1 << (32 - bits_left));
-        st[CABAC_LOW_LSB +: 32] = low;
+        st.low = low;
       end else begin
         if (num_buffered_bytes > 8'd0) begin
           st = cabac_write_bits(st, buffered_byte, 6'd8);
         end
-        num_buffered_bytes = st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8];
+        num_buffered_bytes = st.num_buffered_bytes;
         while (num_buffered_bytes > 8'd1) begin
           st = cabac_write_bits(st, 9'h0ff, 6'd8);
           num_buffered_bytes = num_buffered_bytes - 8'd1;
-          st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8] = num_buffered_bytes;
+          st.num_buffered_bytes = num_buffered_bytes;
         end
       end
 
@@ -1761,10 +1780,10 @@ module ff_vvc_generated_cabac_body #(
     integer bits_left;
     begin
       st = st_in;
-      low = st[CABAC_LOW_LSB +: 32];
-      bits_left = st[CABAC_BITS_LEFT_LSB +: 8];
-      buffered_byte = st[CABAC_BUFFERED_BYTE_LSB +: 9];
-      num_buffered_bytes = st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8];
+      low = st.low;
+      bits_left = st.bits_left;
+      buffered_byte = st.buffered_byte;
+      num_buffered_bytes = st.num_buffered_bytes;
       lead_byte = low >> (24 - bits_left);
       bits_left = bits_left + 8;
       mask = 32'hffff_ffff >> bits_left;
@@ -1776,27 +1795,27 @@ module ff_vvc_generated_cabac_body #(
         carry = lead_byte >> 8;
         byte_value = buffered_byte + carry;
         buffered_byte = lead_byte[7:0];
-        st[CABAC_LOW_LSB +: 32] = low;
-        st[CABAC_BUFFERED_BYTE_LSB +: 9] = buffered_byte;
-        st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8] = num_buffered_bytes;
-        st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
+        st.low = low;
+        st.buffered_byte = buffered_byte;
+        st.num_buffered_bytes = num_buffered_bytes;
+        st.bits_left = bits_left[7:0];
         st = cabac_write_bits(st, byte_value, 6'd8);
         repeated_byte = (9'h0ff + carry) & 9'h0ff;
-        num_buffered_bytes = st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8];
+        num_buffered_bytes = st.num_buffered_bytes;
         while (num_buffered_bytes > 8'd1) begin
           st = cabac_write_bits(st, repeated_byte, 6'd8);
           num_buffered_bytes = num_buffered_bytes - 8'd1;
-          st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8] = num_buffered_bytes;
+          st.num_buffered_bytes = num_buffered_bytes;
         end
       end else begin
         num_buffered_bytes = 8'd1;
         buffered_byte = lead_byte[7:0];
       end
 
-      st[CABAC_LOW_LSB +: 32] = low;
-      st[CABAC_BUFFERED_BYTE_LSB +: 9] = buffered_byte;
-      st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8] = num_buffered_bytes;
-      st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
+      st.low = low;
+      st.buffered_byte = buffered_byte;
+      st.num_buffered_bytes = num_buffered_bytes;
+      st.bits_left = bits_left[7:0];
       cabac_write_out = st;
     end
   endfunction
@@ -1811,13 +1830,13 @@ module ff_vvc_generated_cabac_body #(
     integer i;
     begin
       st = st_in;
-      len = st[CABAC_LEN_LSB +: 13];
+      len = st.bit_count;
       for (i = bit_count - 1; i >= 0; i = i - 1) begin
-        st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS] =
-          (st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS] << 1) | value[i];
+        st.bits =
+          (st.bits << 1) | value[i];
         len = len + 13'd1;
       end
-      st[CABAC_LEN_LSB +: 13] = len;
+      st.bit_count = len;
       cabac_write_bits = st;
     end
   endfunction

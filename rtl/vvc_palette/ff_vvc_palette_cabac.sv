@@ -18,16 +18,9 @@ module ff_vvc_palette_cabac #(
   output logic [12:0] compat_payload_bit_len,
   output logic [MAX_SLICE_PAYLOAD_BITS - 1:0] compat_payload_bits
 );
-  localparam int CABAC_BITS_LSB = 0;
-  localparam int CABAC_LEN_LSB = CABAC_BITS_LSB + MAX_SLICE_PAYLOAD_BITS;
-  localparam int CABAC_LOW_LSB = CABAC_LEN_LSB + 13;
-  localparam int CABAC_RANGE_LSB = CABAC_LOW_LSB + 32;
-  localparam int CABAC_BUFFERED_BYTE_LSB = CABAC_RANGE_LSB + 16;
-  localparam int CABAC_NUM_BUFFERED_BYTES_LSB = CABAC_BUFFERED_BYTE_LSB + 9;
-  localparam int CABAC_BITS_LEFT_LSB = CABAC_NUM_BUFFERED_BYTES_LSB + 8;
-  localparam int CABAC_STATE_BITS = CABAC_BITS_LEFT_LSB + 8;
   localparam int PALETTE_MODEL_BITS = 40;
   localparam int PALETTE_CTX_COUNT = 18;
+  localparam int PALETTE_MODEL_BANK_BITS = PALETTE_CTX_COUNT * PALETTE_MODEL_BITS;
   localparam int PALETTE_CTX_SPLIT0 = 0;
   localparam int PALETTE_CTX_SPLIT6 = 1;
   localparam int PALETTE_CTX_SPLIT7 = 2;
@@ -50,12 +43,20 @@ module ff_vvc_palette_cabac #(
   localparam logic [3:0] PALETTE_PKT_CU_START            = 4'h1;
   localparam logic [3:0] PALETTE_PKT_ENTRY               = 4'h2;
   localparam logic [3:0] PALETTE_PKT_INDEX               = 4'h3;
-  localparam int PALETTE_CABAC_LSB = 0;
-  localparam int PALETTE_MODEL_LSB = PALETTE_CABAC_LSB + CABAC_STATE_BITS;
-  localparam int PALETTE_STATE_BITS = PALETTE_MODEL_LSB + (PALETTE_CTX_COUNT * PALETTE_MODEL_BITS);
+  typedef struct packed {
+    logic [7:0] bits_left;
+    logic [7:0] num_buffered_bytes;
+    logic [8:0] buffered_byte;
+    logic [15:0] range;
+    logic [31:0] low;
+    logic [12:0] bit_count;
+    logic [MAX_SLICE_PAYLOAD_BITS - 1:0] bits;
+  } cabac_state_t;
 
-  typedef logic [CABAC_STATE_BITS - 1:0] cabac_state_t;
-  typedef logic [PALETTE_STATE_BITS - 1:0] palette_state_t;
+  typedef struct packed {
+    logic [PALETTE_MODEL_BANK_BITS - 1:0] models;
+    cabac_state_t cabac;
+  } palette_state_t;
 
   palette_state_t palette_state_q;
   logic [7:0]     stream_symbol_index_q;
@@ -70,8 +71,8 @@ module ff_vvc_palette_cabac #(
   logic [(64 * 8) - 1:0] current_indices_q;
 
   assign s_axis_ready = enable;
-  assign compat_payload_bit_len = palette_state_q[PALETTE_CABAC_LSB + CABAC_LEN_LSB +: 13];
-  assign compat_payload_bits = palette_state_q[PALETTE_CABAC_LSB + CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS];
+  assign compat_payload_bit_len = palette_state_q.cabac.bit_count;
+  assign compat_payload_bits = palette_state_q.cabac.bits;
   assign stream_symbol_selected = s_axis_data[24];
 
   always @* begin
@@ -190,10 +191,10 @@ module ff_vvc_palette_cabac #(
     cabac_state_t st;
     begin
       pst = pst_in;
-      st = pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS];
+      st = pst.cabac;
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);
-      pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS] = st;
+      pst.cabac = st;
       palette_finish = pst;
     end
   endfunction
@@ -260,12 +261,12 @@ module ff_vvc_palette_cabac #(
 
       pst = palette_encode_ctx(pst, PALETTE_CTX_SPLIT0, 1'b0);    // split_cu_mode split=0 for an 8x8 palette CU
       pst = palette_encode_ctx(pst, PALETTE_CTX_PLT_FLAG, 1'b1);  // pred_mode PLTFlag=1
-      st = pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS];
+      st = pst.cabac;
       if (symbol_index != 8'd0) begin
         st = cabac_encode_exp_golomb_ep(st, 6'd1, 6'd0); // palette_predictor_run=1: no reused entries
       end
       st = cabac_encode_exp_golomb_ep(st, entry_count[5:0], 6'd0);
-      pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS] = st;
+      pst.cabac = st;
       palette_444_encode_cu_start = pst;
     end
   endfunction
@@ -282,7 +283,7 @@ module ff_vvc_palette_cabac #(
     logic [7:0] entry_cr;
     begin
       pst = pst_in;
-      st = pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS];
+      st = pst.cabac;
       // VVC writes palette entries component-major: all Y entries, then Cb,
       // then Cr. The input symbol stream remains entry-major.
       for (int entry = 0; entry < 31; entry = entry + 1) begin
@@ -310,7 +311,7 @@ module ff_vvc_palette_cabac #(
         end
       end
       st = cabac_encode_bin_ep(st, 1'b0); // palette_escape_val_present_flag=0
-      pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS] = st;
+      pst.cabac = st;
       palette_444_encode_entries_and_escape = pst;
     end
   endfunction
@@ -383,7 +384,7 @@ module ff_vvc_palette_cabac #(
             previous_index = current_index;
           end
 
-          st = pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS];
+          st = pst.cabac;
           for (int cur_pos = min_sub_pos; cur_pos < min_sub_pos + 16; cur_pos = cur_pos + 1) begin
             if (!run_copy_flags[cur_pos - min_sub_pos]) begin
               max_symbol = {24'd0, palette_size} - ((cur_pos > 0) ? 32'd1 : 32'd0);
@@ -398,7 +399,7 @@ module ff_vvc_palette_cabac #(
               end
             end
           end
-          pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS] = st;
+          pst.cabac = st;
         end
         palette_444_encode_index_map = pst;
       end
@@ -457,7 +458,7 @@ module ff_vvc_palette_cabac #(
       pst = pst_in;
       pst = palette_encode_ctx(pst, PALETTE_CTX_SPLIT0, 1'b0);    // split_cu_mode split=0 for an 8x8 palette CU
       pst = palette_encode_ctx(pst, PALETTE_CTX_PLT_FLAG, 1'b1);  // pred_mode PLTFlag=1
-      st = pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS];
+      st = pst.cabac;
       entry_y = symbol[23:16];
       entry_u = symbol[15:8];
       entry_v = symbol[7:0];
@@ -469,14 +470,14 @@ module ff_vvc_palette_cabac #(
       st = cabac_encode_bins_ep(st, {24'd0, entry_u}, 6'd8);
       st = cabac_encode_bins_ep(st, {24'd0, entry_v}, 6'd8);
       st = cabac_encode_bin_ep(st, 1'b0); // palette_escape_val_present_flag=0
-      pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS] = st;
+      pst.cabac = st;
       palette_444_encode_8x8_symbol = pst;
     end
   endfunction
 
   function automatic int palette_model_lsb(input int ctx_id);
     begin
-      palette_model_lsb = PALETTE_MODEL_LSB + (ctx_id * PALETTE_MODEL_BITS);
+      palette_model_lsb = ctx_id * PALETTE_MODEL_BITS;
     end
   endfunction
 
@@ -484,7 +485,7 @@ module ff_vvc_palette_cabac #(
     palette_state_t pst;
     begin
       pst = '0;
-      pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS] = cabac_start();
+      pst.cabac = cabac_start();
       pst = palette_init_model(pst, PALETTE_CTX_SPLIT0, 8'd78, 8'd12);
       pst = palette_init_model(pst, PALETTE_CTX_SPLIT6, 8'd114, 8'd5);
       pst = palette_init_model(pst, PALETTE_CTX_SPLIT7, 8'd202, 8'd9);
@@ -514,29 +515,34 @@ module ff_vvc_palette_cabac #(
     input logic [7:0] log2_window_size
   );
     palette_state_t pst;
+    logic [PALETTE_MODEL_BANK_BITS - 1:0] models;
     int lsb;
     logic [15:0] pstate;
     logic [3:0] rate0;
     logic [3:0] rate1;
     begin
       pst = pst_in;
+      models = pst.models;
       lsb = palette_model_lsb(ctx_id);
       pstate = {state, 8'd0};
-      pst[lsb +: 16] = (pstate >> 1) & 16'h7fe0;
-      pst[lsb + 16 +: 16] = (pstate >> 1) & 16'h7ffe;
+      models[lsb +: 16] = (pstate >> 1) & 16'h7fe0;
+      models[lsb + 16 +: 16] = (pstate >> 1) & 16'h7ffe;
       rate0 = 4'd2 + {2'd0, log2_window_size[3:2]};
       rate1 = 4'd3 + rate0 + {2'd0, log2_window_size[1:0]};
-      pst[lsb + 32 +: 8] = {rate0, rate1};
+      models[lsb + 32 +: 8] = {rate0, rate1};
+      pst.models = models;
       palette_init_model = pst;
     end
   endfunction
 
   function automatic logic [7:0] palette_model_state(input palette_state_t pst, input int ctx_id);
     int lsb;
+    logic [PALETTE_MODEL_BANK_BITS - 1:0] models;
     logic [16:0] sum;
     begin
+      models = pst.models;
       lsb = palette_model_lsb(ctx_id);
-      sum = {1'b0, pst[lsb +: 16]} + {1'b0, pst[lsb + 16 +: 16]};
+      sum = {1'b0, models[lsb +: 16]} + {1'b0, models[lsb + 16 +: 16]};
       palette_model_state = sum[15:8];
     end
   endfunction
@@ -573,14 +579,14 @@ module ff_vvc_palette_cabac #(
     cabac_state_t st;
     begin
       pst = pst_in;
-      st = pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS];
+      st = pst.cabac;
       st = cabac_encode_bin(
         st,
         bin,
-        palette_model_lps(pst, ctx_id, st[CABAC_RANGE_LSB +: 16]),
+        palette_model_lps(pst, ctx_id, st.range),
         palette_model_mps(pst, ctx_id)
       );
-      pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS] = st;
+      pst.cabac = st;
       pst = palette_update_model(pst, ctx_id, bin);
       palette_encode_ctx = pst;
     end
@@ -592,6 +598,7 @@ module ff_vvc_palette_cabac #(
     input logic bin
   );
     palette_state_t pst;
+    logic [PALETTE_MODEL_BANK_BITS - 1:0] models;
     int lsb;
     logic [15:0] state0;
     logic [15:0] state1;
@@ -600,10 +607,11 @@ module ff_vvc_palette_cabac #(
     logic [3:0] rate1;
     begin
       pst = pst_in;
+      models = pst.models;
       lsb = palette_model_lsb(ctx_id);
-      state0 = pst[lsb +: 16];
-      state1 = pst[lsb + 16 +: 16];
-      rate = pst[lsb + 32 +: 8];
+      state0 = models[lsb +: 16];
+      state1 = models[lsb + 16 +: 16];
+      rate = models[lsb + 32 +: 8];
       rate0 = rate[7:4];
       rate1 = rate[3:0];
       state0 = state0 - ((state0 >> rate0) & 16'h7fe0);
@@ -612,8 +620,9 @@ module ff_vvc_palette_cabac #(
         state0 = state0 + ((16'h7fff >> rate0) & 16'h7fe0);
         state1 = state1 + ((16'h7fff >> rate1) & 16'h7ffe);
       end
-      pst[lsb +: 16] = state0;
-      pst[lsb + 16 +: 16] = state1;
+      models[lsb +: 16] = state0;
+      models[lsb + 16 +: 16] = state1;
+      pst.models = models;
       palette_update_model = pst;
     end
   endfunction
@@ -695,11 +704,11 @@ module ff_vvc_palette_cabac #(
   function automatic cabac_state_t cabac_start();
     begin
       cabac_start = '0;
-      cabac_start[CABAC_LOW_LSB +: 32] = 32'd0;
-      cabac_start[CABAC_RANGE_LSB +: 16] = 16'd510;
-      cabac_start[CABAC_BUFFERED_BYTE_LSB +: 9] = 9'h0ff;
-      cabac_start[CABAC_NUM_BUFFERED_BYTES_LSB +: 8] = 8'd0;
-      cabac_start[CABAC_BITS_LEFT_LSB +: 8] = 8'd23;
+      cabac_start.low = 32'd0;
+      cabac_start.range = 16'd510;
+      cabac_start.buffered_byte = 9'h0ff;
+      cabac_start.num_buffered_bytes = 8'd0;
+      cabac_start.bits_left = 8'd23;
     end
   endfunction
 
@@ -741,9 +750,9 @@ module ff_vvc_palette_cabac #(
 
     begin
       st = st_in;
-      low = st[CABAC_LOW_LSB +: 32];
-      range = st[CABAC_RANGE_LSB +: 16];
-      bits_left = st[CABAC_BITS_LEFT_LSB +: 8];
+      low = st.low;
+      range = st.range;
+      bits_left = st.bits_left;
       lps = lps_in;
 
       range = range - lps;
@@ -753,9 +762,9 @@ module ff_vvc_palette_cabac #(
         low = low + range;
         low = low << num_bits;
         range = lps << num_bits;
-        st[CABAC_LOW_LSB +: 32] = low;
-        st[CABAC_RANGE_LSB +: 16] = range;
-        st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
+        st.low = low;
+        st.range = range;
+        st.bits_left = bits_left[7:0];
         if (bits_left < 12) begin
           st = cabac_write_out(st);
         end
@@ -764,14 +773,14 @@ module ff_vvc_palette_cabac #(
         bits_left = bits_left - num_bits;
         low = low << num_bits;
         range = range << num_bits;
-        st[CABAC_LOW_LSB +: 32] = low;
-        st[CABAC_RANGE_LSB +: 16] = range;
-        st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
+        st.low = low;
+        st.range = range;
+        st.bits_left = bits_left[7:0];
         if (bits_left < 12) begin
           st = cabac_write_out(st);
         end
       end else begin
-        st[CABAC_RANGE_LSB +: 16] = range;
+        st.range = range;
       end
       cabac_encode_bin = st;
     end
@@ -788,14 +797,14 @@ module ff_vvc_palette_cabac #(
 
     begin
       st = st_in;
-      low = st[CABAC_LOW_LSB +: 32] << 1;
-      range = st[CABAC_RANGE_LSB +: 16];
-      bits_left = st[CABAC_BITS_LEFT_LSB +: 8] - 1;
+      low = st.low << 1;
+      range = st.range;
+      bits_left = st.bits_left - 1;
       if (bin) begin
         low = low + range;
       end
-      st[CABAC_LOW_LSB +: 32] = low;
-      st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
+      st.low = low;
+      st.bits_left = bits_left[7:0];
       if (bits_left < 12) begin
         st = cabac_write_out(st);
       end
@@ -820,9 +829,9 @@ module ff_vvc_palette_cabac #(
       st = st_in;
       bin_pattern = bin_pattern_in;
       num_bins = num_bins_in;
-      low = st[CABAC_LOW_LSB +: 32];
-      range = st[CABAC_RANGE_LSB +: 16];
-      bits_left = st[CABAC_BITS_LEFT_LSB +: 8];
+      low = st.low;
+      range = st.range;
+      bits_left = st.bits_left;
 
       while (num_bins > 8) begin
         num_bins = num_bins - 8;
@@ -831,20 +840,20 @@ module ff_vvc_palette_cabac #(
         low = low + (range * pattern);
         bin_pattern = bin_pattern - (pattern << num_bins);
         bits_left = bits_left - 8;
-        st[CABAC_LOW_LSB +: 32] = low;
-        st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
+        st.low = low;
+        st.bits_left = bits_left[7:0];
         if (bits_left < 12) begin
           st = cabac_write_out(st);
-          low = st[CABAC_LOW_LSB +: 32];
-          bits_left = st[CABAC_BITS_LEFT_LSB +: 8];
+          low = st.low;
+          bits_left = st.bits_left;
         end
       end
 
       low = low << num_bins;
       low = low + (range * bin_pattern);
       bits_left = bits_left - num_bins;
-      st[CABAC_LOW_LSB +: 32] = low;
-      st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
+      st.low = low;
+      st.bits_left = bits_left[7:0];
       if (bits_left < 12) begin
         st = cabac_write_out(st);
       end
@@ -970,9 +979,9 @@ module ff_vvc_palette_cabac #(
 
     begin
       st = st_in;
-      low = st[CABAC_LOW_LSB +: 32];
-      range = st[CABAC_RANGE_LSB +: 16] - 16'd2;
-      bits_left = st[CABAC_BITS_LEFT_LSB +: 8];
+      low = st.low;
+      range = st.range - 16'd2;
+      bits_left = st.bits_left;
       if (bin) begin
         low = low + range;
         low = low << 7;
@@ -983,9 +992,9 @@ module ff_vvc_palette_cabac #(
         range = range << 1;
         bits_left = bits_left - 1;
       end
-      st[CABAC_LOW_LSB +: 32] = low;
-      st[CABAC_RANGE_LSB +: 16] = range;
-      st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
+      st.low = low;
+      st.range = range;
+      st.bits_left = bits_left[7:0];
       if (bits_left < 12) begin
         st = cabac_write_out(st);
       end
@@ -1003,30 +1012,30 @@ module ff_vvc_palette_cabac #(
 
     begin
       st = st_in;
-      low = st[CABAC_LOW_LSB +: 32];
-      buffered_byte = st[CABAC_BUFFERED_BYTE_LSB +: 9];
-      num_buffered_bytes = st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8];
-      bits_left = st[CABAC_BITS_LEFT_LSB +: 8];
+      low = st.low;
+      buffered_byte = st.buffered_byte;
+      num_buffered_bytes = st.num_buffered_bytes;
+      bits_left = st.bits_left;
 
       if ((low >> (32 - bits_left)) != 0) begin
         st = cabac_write_bits(st, buffered_byte + 9'd1, 6'd8);
-        num_buffered_bytes = st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8];
+        num_buffered_bytes = st.num_buffered_bytes;
         while (num_buffered_bytes > 8'd1) begin
           st = cabac_write_bits(st, 9'd0, 6'd8);
           num_buffered_bytes = num_buffered_bytes - 8'd1;
-          st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8] = num_buffered_bytes;
+          st.num_buffered_bytes = num_buffered_bytes;
         end
         low = low - (32'd1 << (32 - bits_left));
-        st[CABAC_LOW_LSB +: 32] = low;
+        st.low = low;
       end else begin
         if (num_buffered_bytes > 8'd0) begin
           st = cabac_write_bits(st, buffered_byte, 6'd8);
         end
-        num_buffered_bytes = st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8];
+        num_buffered_bytes = st.num_buffered_bytes;
         while (num_buffered_bytes > 8'd1) begin
           st = cabac_write_bits(st, 9'h0ff, 6'd8);
           num_buffered_bytes = num_buffered_bytes - 8'd1;
-          st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8] = num_buffered_bytes;
+          st.num_buffered_bytes = num_buffered_bytes;
         end
       end
 
@@ -1052,10 +1061,10 @@ module ff_vvc_palette_cabac #(
 
     begin
       st = st_in;
-      low = st[CABAC_LOW_LSB +: 32];
-      bits_left = st[CABAC_BITS_LEFT_LSB +: 8];
-      buffered_byte = st[CABAC_BUFFERED_BYTE_LSB +: 9];
-      num_buffered_bytes = st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8];
+      low = st.low;
+      bits_left = st.bits_left;
+      buffered_byte = st.buffered_byte;
+      num_buffered_bytes = st.num_buffered_bytes;
       lead_byte = low >> (24 - bits_left);
       bits_left = bits_left + 8;
       mask = 32'hffff_ffff >> bits_left;
@@ -1067,27 +1076,27 @@ module ff_vvc_palette_cabac #(
         carry = lead_byte >> 8;
         byte_value = buffered_byte + carry;
         buffered_byte = lead_byte[7:0];
-        st[CABAC_LOW_LSB +: 32] = low;
-        st[CABAC_BUFFERED_BYTE_LSB +: 9] = buffered_byte;
-        st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8] = num_buffered_bytes;
-        st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
+        st.low = low;
+        st.buffered_byte = buffered_byte;
+        st.num_buffered_bytes = num_buffered_bytes;
+        st.bits_left = bits_left[7:0];
         st = cabac_write_bits(st, byte_value, 6'd8);
         repeated_byte = (9'h0ff + carry) & 9'h0ff;
-        num_buffered_bytes = st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8];
+        num_buffered_bytes = st.num_buffered_bytes;
         while (num_buffered_bytes > 8'd1) begin
           st = cabac_write_bits(st, repeated_byte, 6'd8);
           num_buffered_bytes = num_buffered_bytes - 8'd1;
-          st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8] = num_buffered_bytes;
+          st.num_buffered_bytes = num_buffered_bytes;
         end
       end else begin
         num_buffered_bytes = 8'd1;
         buffered_byte = lead_byte[7:0];
       end
 
-      st[CABAC_LOW_LSB +: 32] = low;
-      st[CABAC_BUFFERED_BYTE_LSB +: 9] = buffered_byte;
-      st[CABAC_NUM_BUFFERED_BYTES_LSB +: 8] = num_buffered_bytes;
-      st[CABAC_BITS_LEFT_LSB +: 8] = bits_left[7:0];
+      st.low = low;
+      st.buffered_byte = buffered_byte;
+      st.num_buffered_bytes = num_buffered_bytes;
+      st.bits_left = bits_left[7:0];
       cabac_write_out = st;
     end
   endfunction
@@ -1104,14 +1113,14 @@ module ff_vvc_palette_cabac #(
 
     begin
       st = st_in;
-      bits = st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS];
-      len = st[CABAC_LEN_LSB +: 13];
+      bits = st.bits;
+      len = st.bit_count;
       for (i = bit_count - 1; i >= 0; i = i - 1) begin
         bits = (bits << 1) | value[i];
         len = len + 13'd1;
       end
-      st[CABAC_BITS_LSB +: MAX_SLICE_PAYLOAD_BITS] = bits;
-      st[CABAC_LEN_LSB +: 13] = len;
+      st.bits = bits;
+      st.bit_count = len;
       cabac_write_bits = st;
     end
   endfunction

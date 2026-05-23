@@ -55,7 +55,6 @@ module ff_vvc_cabac #(
   logic [12:0] generated_stream_byte_count;
   logic [12:0] palette_bit_len;
   logic [MAX_SLICE_PAYLOAD_BITS - 1:0] palette_bits;
-  logic [MAX_SLICE_PAYLOAD_BITS - 1:0] stream_bits_q;
   logic [12:0] stream_byte_count_q;
   logic [12:0] stream_byte_index_q;
   logic stream_active_q;
@@ -133,7 +132,6 @@ module ff_vvc_cabac #(
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      stream_bits_q <= '0;
       stream_byte_count_q <= 13'd0;
       stream_byte_index_q <= 13'd0;
       stream_active_q <= 1'b0;
@@ -142,7 +140,6 @@ module ff_vvc_cabac #(
       palette_m_axis_last <= 1'b0;
     end else begin
       if (start && enable && supported && mode_palette_444) begin
-        stream_bits_q <= byte_aligned_bits(compat_payload_bits, compat_payload_bit_len);
         stream_byte_count_q <= (compat_payload_bit_len + 13'd7) >> 3;
         stream_byte_index_q <= 13'd0;
         stream_active_q <= ((compat_payload_bit_len + 13'd7) >> 3) != 13'd0;
@@ -161,7 +158,11 @@ module ff_vvc_cabac #(
           palette_m_axis_last <= 1'b0;
         end else begin
           stream_byte_index_q <= stream_byte_index_q + 13'd1;
-          palette_m_axis_data <= stream_byte(stream_bits_q, stream_byte_count_q, stream_byte_index_q + 13'd1);
+          palette_m_axis_data <= stream_byte(
+            byte_aligned_bits(palette_bits, palette_bit_len),
+            stream_byte_count_q,
+            stream_byte_index_q + 13'd1
+          );
           palette_m_axis_last <= (stream_byte_index_q + 13'd1) == (stream_byte_count_q - 13'd1);
         end
       end else if (!stream_active_q) begin
