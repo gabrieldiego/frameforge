@@ -12,6 +12,8 @@ module ff_vvc_palette_symbolizer #(
   input  logic        enable,
   input  logic [15:0] visible_width,
   input  logic [15:0] visible_height,
+  input  logic [15:0] coded_width,
+  input  logic [15:0] coded_height,
   input  logic        sample_valid,
   input  logic [1:0]  sample_plane,
   input  logic [SAMPLE_BITS - 1:0] sample,
@@ -42,13 +44,17 @@ module ff_vvc_palette_symbolizer #(
   logic [1:0]  input_plane;
   logic [SAMPLE_BITS - 1:0] input_sample;
   logic [7:0]  anchor_index;
+  logic [7:0]  visible_symbol_count;
   logic [7:0]  last_symbol_index;
+  logic [7:0]  last_visible_symbol_index;
   logic        start_drain;
   logic        drain_active_q;
   logic [7:0]  drain_index_q;
   logic [7:0]  drain_symbol_index;
 
   assign symbol_count =
+    enable ? (((coded_width + 16'd7) >> 3) * ((coded_height + 16'd7) >> 3)) : 8'd0;
+  assign visible_symbol_count =
     enable ? (((visible_width + 16'd7) >> 3) * ((visible_height + 16'd7) >> 3)) : 8'd0;
   assign s_axis_ready = enable && (!m_axis_valid || m_axis_ready);
   assign input_valid = sample_valid || (s_axis_valid && s_axis_ready);
@@ -56,8 +62,9 @@ module ff_vvc_palette_symbolizer #(
   assign input_sample = sample_valid ? sample : s_axis_sample;
   assign anchor_index = symbol_index_xy(sample_x, sample_y);
   assign last_symbol_index = symbol_count == 8'd0 ? 8'd0 : symbol_count - 8'd1;
+  assign last_visible_symbol_index = visible_symbol_count == 8'd0 ? 8'd0 : visible_symbol_count - 8'd1;
   assign start_drain = input_valid && is_symbol_anchor_xy(sample_x, sample_y) &&
-                       (input_plane == PLANE_CR) && (anchor_index == last_symbol_index);
+                       (input_plane == PLANE_CR) && (anchor_index == last_visible_symbol_index);
   assign drain_symbol_index = coding_order_symbol_index(drain_index_q);
 
   always_comb begin
@@ -183,7 +190,7 @@ module ff_vvc_palette_symbolizer #(
     begin
       origin_x = 16'd0;
       origin_y = 16'd0;
-      if (visible_width == 16'd64 && visible_height == 16'd64) begin
+      if (coded_width == 16'd64 && coded_height == 16'd64) begin
         origin_x = index[4] ? 16'd32 : 16'd0;
         origin_y = index[5] ? 16'd32 : 16'd0;
         index_in_32 = {4'd0, index[3:0]};
@@ -191,7 +198,7 @@ module ff_vvc_palette_symbolizer #(
         index_in_32 = index;
       end
 
-      if (visible_width >= 16'd32 && visible_height >= 16'd32) begin
+      if (coded_width >= 16'd32 && coded_height >= 16'd32) begin
         origin_x = origin_x + (index_in_32[2] ? 16'd16 : 16'd0);
         origin_y = origin_y + (index_in_32[3] ? 16'd16 : 16'd0);
         index_in_16 = {6'd0, index_in_32[1:0]};
@@ -199,7 +206,7 @@ module ff_vvc_palette_symbolizer #(
         index_in_16 = index_in_32;
       end
 
-      if (visible_width >= 16'd16 && visible_height >= 16'd16) begin
+      if (coded_width >= 16'd16 && coded_height >= 16'd16) begin
         origin_x = origin_x + (index_in_16[0] ? 16'd8 : 16'd0);
         origin_y = origin_y + (index_in_16[1] ? 16'd8 : 16'd0);
       end else begin
@@ -213,9 +220,13 @@ module ff_vvc_palette_symbolizer #(
 
   function automatic logic [7:0] coding_order_symbol_index(input logic [7:0] index);
     logic [31:0] pos;
+    logic [15:0] clamped_x;
+    logic [15:0] clamped_y;
     begin
       pos = coding_order_position(index);
-      coding_order_symbol_index = symbol_index_xy(pos[31:16], pos[15:0]);
+      clamped_x = (pos[31:16] < visible_width) ? pos[31:16] : visible_width - 16'd1;
+      clamped_y = (pos[15:0] < visible_height) ? pos[15:0] : visible_height - 16'd1;
+      coding_order_symbol_index = symbol_index_xy(clamped_x, clamped_y);
     end
   endfunction
 

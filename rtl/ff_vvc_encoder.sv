@@ -160,6 +160,8 @@ module ff_vvc_encoder #(
     .enable(PALETTE_MODE),
     .visible_width(visible_width),
     .visible_height(visible_height),
+    .coded_width(coding_tree_coded_width),
+    .coded_height(coding_tree_coded_height),
     .sample_valid(palette_sample_valid),
     .sample_plane(palette_sample_plane),
     .sample(s_axis_data),

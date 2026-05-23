@@ -10,6 +10,8 @@ async def reset(dut):
     dut.enable.value = 1
     dut.visible_width.value = 8
     dut.visible_height.value = 8
+    dut.coded_width.value = 8
+    dut.coded_height.value = 8
     dut.sample_valid.value = 0
     dut.sample_plane.value = 0
     dut.sample.value = 0
