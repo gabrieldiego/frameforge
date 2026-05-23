@@ -187,6 +187,7 @@ module ff_vvc_generated_cabac_body #(
   );
     cabac_state_t st;
     vvc_prob_model_t split_ctx;
+    logic [3:0] split_qt_ctx;
     begin
       st = st_in;
       // VVC 7.3.11.4 coding_tree emits split_cu_flag followed by split_qt_flag
@@ -200,7 +201,12 @@ module ff_vvc_generated_cabac_body #(
         32
       );
       {split_ctx, st} = cabac_encode_vvc_model_bin(st, split_ctx, 1'b0);
-      split_ctx = vvc_prob_model_init(vvc_split_qt_flag_init(4'd0), vvc_split_qt_flag_log2_window(4'd0), 32);
+      split_qt_ctx = vvc_split_qt_flag_ctx(1'b0, 1'b0, cqt_depth);
+      split_ctx = vvc_prob_model_init(
+        vvc_split_qt_flag_init(split_qt_ctx),
+        vvc_split_qt_flag_log2_window(split_qt_ctx),
+        32
+      );
       {split_ctx, st} = cabac_encode_vvc_model_bin(st, split_ctx, 1'b1);
       encode_ctu_qt_split = st;
     end
@@ -1255,6 +1261,19 @@ module ff_vvc_generated_cabac_body #(
         1'b1, 1'b1,
         1'b1
       );
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_split_qt_flag_ctx(
+    input logic left_deeper_qt,
+    input logic above_deeper_qt,
+    input logic [2:0] cqt_depth
+  );
+    begin
+      // VVC 9.3.4.2.2 derives ctxInc for split_qt_flag as:
+      // condL + condA + ctxSetIdx * 3, where ctxSetIdx is cqtDepth >= 2.
+      vvc_split_qt_flag_ctx =
+        {3'd0, left_deeper_qt} + {3'd0, above_deeper_qt} + (cqt_depth >= 3'd2 ? 4'd3 : 4'd0);
     end
   endfunction
 

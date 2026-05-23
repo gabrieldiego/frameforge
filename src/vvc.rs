@@ -2886,6 +2886,32 @@ impl VvcSplitCtxInput {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VvcQtSplitCtxInput {
+    left_deeper_qt: bool,
+    above_deeper_qt: bool,
+    cqt_depth: u8,
+}
+
+impl VvcQtSplitCtxInput {
+    fn from_node_without_deeper_neighbours(node: VvcCodingTreeNode) -> Self {
+        Self {
+            left_deeper_qt: false,
+            above_deeper_qt: false,
+            cqt_depth: node.cqt_depth,
+        }
+    }
+
+    fn split_qt_flag_ctx(self) -> u8 {
+        // VVC 9.3.4.2.2 derives ctxInc for split_qt_flag as:
+        //   condL + condA + ctxSetIdx * 3
+        // where ctxSetIdx is cqtDepth >= 2.
+        u8::from(self.left_deeper_qt)
+            + u8::from(self.above_deeper_qt)
+            + (3 * u8::from(self.cqt_depth >= 2))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VvcCtuCabacOp {
     QtSplit { node: VvcCodingTreeNode },
     LumaLeaf { node: VvcCodingTreeNode },
@@ -2961,8 +2987,10 @@ impl VvcCtuCabacGenerator {
         let split_ctx = VvcSplitCtxInput::qt_only_root().split_cu_flag_ctx();
         self.contexts
             .encode(cabac, ToyVvcCabacContext::SplitFlag(split_ctx), false);
+        let split_qt_ctx =
+            VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node).split_qt_flag_ctx();
         self.contexts
-            .encode(cabac, ToyVvcCabacContext::SplitQtFlag(0), true);
+            .encode(cabac, ToyVvcCabacContext::SplitQtFlag(split_qt_ctx), true);
     }
 
     fn emit_luma_leaf_split(&mut self, cabac: &mut ToyCabacEncoder, node: VvcCodingTreeNode) {
@@ -5154,6 +5182,24 @@ mod tests {
             }
             .split_cu_flag_ctx(),
             8
+        );
+    }
+
+    #[test]
+    fn vvc_split_qt_flag_context_uses_spec_depth_formula() {
+        let root = VvcCodingTreeNode::root(64, 64, VvcTreeType::DualTreeLuma);
+        assert_eq!(
+            VvcQtSplitCtxInput::from_node_without_deeper_neighbours(root).split_qt_flag_ctx(),
+            0
+        );
+        assert_eq!(
+            VvcQtSplitCtxInput {
+                left_deeper_qt: true,
+                above_deeper_qt: true,
+                cqt_depth: 2,
+            }
+            .split_qt_flag_ctx(),
+            5
         );
     }
 
