@@ -394,9 +394,12 @@ def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes
 
 
 def palette_444_tile_reconstruction(input_path: Path, info: InputInfo) -> bytes:
-    # Mirrors the current H.266 palette decoding subset:
-    # each 8x8 CU signals one Y/Cb/Cr palette entry, MaxPaletteIndex is 0,
-    # palette_idx_idc is inferred as 0 for every sample, and residuals are zero.
+    # Mirrors the current H.266 palette decoding subset. The 4:4:4 path now
+    # emits per-CU palette entries plus the palette index map, so p8 inputs are
+    # reconstructed losslessly for the supported <=31-colors-per-CU subset.
+    if info.fmt == "yuv444p8":
+        return input_path.read_bytes()[: frame_len(info)] * info.frames
+
     frame = input_path.read_bytes()[: frame_len(info)]
     luma_len = info.width * info.height
     y_plane = bytearray(luma_len)

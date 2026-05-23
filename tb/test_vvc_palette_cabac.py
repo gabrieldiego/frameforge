@@ -255,8 +255,14 @@ async def palette_cabac_matches_software_boundary_dump(dut):
     await feed_palette_symbols(dut, symbols, symbol_count)
     await Timer(1, unit="ns")
 
-    assert int(dut.payload_bit_len.value) == reference["cabac_bit_len"]
     observed_hex = cabac_bytes(dut).hex()
+    observed_len = int(dut.payload_bit_len.value)
+    assert observed_len == reference["cabac_bit_len"], (
+        observed_len,
+        reference["cabac_bit_len"],
+        observed_hex,
+        reference["cabac_hex"],
+    )
     assert observed_hex == reference["cabac_hex"], (observed_hex, reference["cabac_hex"])
     observed_stream = await stream_bytes(dut)
     if observed_stream is not None:
@@ -311,6 +317,12 @@ async def palette_cabac_matches_multicolor_lossless_symbols(dut):
     await feed_palette_symbols(dut, symbols, symbol_count)
     await Timer(1, unit="ns")
 
-    assert int(dut.payload_bit_len.value) == reference["cabac_bit_len"]
     observed_hex = cabac_bytes(dut).hex()
+    observed_len = int(dut.payload_bit_len.value)
+    assert observed_len == reference["cabac_bit_len"], (
+        observed_len,
+        reference["cabac_bit_len"],
+        observed_hex,
+        reference["cabac_hex"],
+    )
     assert observed_hex == reference["cabac_hex"], (observed_hex, reference["cabac_hex"])

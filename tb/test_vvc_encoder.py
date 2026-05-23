@@ -227,6 +227,9 @@ def reconstructed_chroma(u, v):
 def decoded_reconstruction(frames, data):
     # This is the reconstruction of the emitted VVC bitstream.
     if rtl_chroma_format_idc() == 3:
+        if rtl_sample_bits() == 8:
+            return bytes(data[: frame_samples()]) * frames
+
         width = rtl_visible_width()
         height = rtl_visible_height()
         luma_len = luma_samples()

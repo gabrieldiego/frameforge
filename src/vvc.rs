@@ -1647,10 +1647,107 @@ fn append_toy_palette_444_8x8_cu_with_events(
     ctx.encode(cabac, ToyPaletteCtx::Split0, false);
     ctx.encode(cabac, ToyPaletteCtx::PltFlag, true);
     let syntax = toy_palette_444_cu_syntax(frame, origin_x as usize, origin_y as usize);
+    let palette_index_map = syntax.palette_indices.clone();
+    let current_palette_size = syntax.current_palette_size;
     for token in toy_palette_444_syntax_tokens(syntax, predictor_mode) {
         append_palette_syntax_token_cabac(cabac, token);
     }
+    append_toy_palette_444_index_map(cabac, ctx, current_palette_size, &palette_index_map);
     true
+}
+
+fn append_toy_palette_444_index_map(
+    cabac: &mut ToyCabacEncoder,
+    ctx: &mut ToyPaletteCabacContexts,
+    current_palette_size: u8,
+    palette_indices: &[u8],
+) {
+    if current_palette_size <= 1 {
+        return;
+    }
+
+    ctx.encode(cabac, ToyPaletteCtx::RotationFlag, false);
+    let scan_positions = toy_palette_horizontal_scan_positions(8, 8);
+    let scan_indices: Vec<u8> = scan_positions
+        .iter()
+        .map(|&(x, y)| palette_indices[y * 8 + x])
+        .collect();
+    let mut prev_run_pos = 0usize;
+    let mut prev_index = 0u8;
+    let mut run_copy_flags = [false; 16];
+
+    for min_sub_pos in (0..scan_indices.len()).step_by(16) {
+        let max_sub_pos = (min_sub_pos + 16).min(scan_indices.len());
+
+        for cur_pos in min_sub_pos..max_sub_pos {
+            let index = scan_indices[cur_pos];
+            let identity = cur_pos > 0 && index == prev_index;
+            run_copy_flags[cur_pos - min_sub_pos] = identity;
+            if cur_pos > 0 {
+                let dist = cur_pos - prev_run_pos - 1;
+                ctx.encode(
+                    cabac,
+                    ToyPaletteCtx::IdxRunModel(toy_palette_copy_flag_ctx_id(dist)),
+                    identity,
+                );
+            }
+            if !identity || cur_pos == 0 {
+                let (_, y) = scan_positions[cur_pos];
+                let run_type_is_inferred_index = y == 0;
+                prev_run_pos = cur_pos;
+                if cur_pos != 0 && !run_type_is_inferred_index {
+                    ctx.encode(cabac, ToyPaletteCtx::RunTypeFlag, false);
+                }
+            };
+            prev_index = index;
+        }
+
+        for cur_pos in min_sub_pos..max_sub_pos {
+            if run_copy_flags[cur_pos - min_sub_pos] {
+                continue;
+            }
+            let index = scan_indices[cur_pos];
+            let max_symbol = current_palette_size as u32 - u32::from(cur_pos > 0);
+            if max_symbol <= 1 {
+                continue;
+            }
+            let mut level = index as u32;
+            if cur_pos > 0 {
+                let previous = scan_indices[cur_pos - 1] as u32;
+                debug_assert_ne!(level, previous);
+                if level > previous {
+                    level -= 1;
+                }
+            }
+            encode_trunc_bin_code_ep(cabac, level, max_symbol);
+        }
+    }
+}
+
+fn toy_palette_horizontal_scan_positions(width: usize, height: usize) -> Vec<(usize, usize)> {
+    let mut scanned = Vec::with_capacity(width * height);
+    for y in 0..height {
+        if y % 2 == 0 {
+            for x in 0..width {
+                scanned.push((x, y));
+            }
+        } else {
+            for x in (0..width).rev() {
+                scanned.push((x, y));
+            }
+        }
+    }
+    scanned
+}
+
+fn toy_palette_copy_flag_ctx_id(dist: usize) -> u8 {
+    match dist {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        3 => 3,
+        _ => 4,
+    }
 }
 
 fn toy_palette_cu_origin_is_visible(
@@ -1674,6 +1771,9 @@ enum ToyPaletteCtx {
     SplitQt13,
     SplitQt14,
     PltFlag,
+    RotationFlag,
+    RunTypeFlag,
+    IdxRunModel(u8),
 }
 
 #[derive(Debug, Clone)]
@@ -1689,6 +1789,9 @@ struct ToyPaletteCabacContexts {
     split_qt13: ToyCabacProbModel,
     split_qt14: ToyCabacProbModel,
     plt_flag: ToyCabacProbModel,
+    rotation_flag: ToyCabacProbModel,
+    run_type_flag: ToyCabacProbModel,
+    idx_run_model: [ToyCabacProbModel; 5],
 }
 
 impl ToyPaletteCabacContexts {
@@ -1705,6 +1808,15 @@ impl ToyPaletteCabacContexts {
             split_qt13: ToyCabacProbModel::from_vtm_state(78, 12),
             split_qt14: ToyCabacProbModel::from_vtm_state(182, 8),
             plt_flag: ToyCabacProbModel::from_vtm_state(22, 1),
+            rotation_flag: ToyCabacProbModel::from_vtm_state(90, 5),
+            run_type_flag: ToyCabacProbModel::from_vtm_state(90, 9),
+            idx_run_model: [
+                ToyCabacProbModel::from_vtm_state(106, 9),
+                ToyCabacProbModel::from_vtm_state(182, 6),
+                ToyCabacProbModel::from_vtm_state(198, 9),
+                ToyCabacProbModel::from_vtm_state(202, 10),
+                ToyCabacProbModel::from_vtm_state(234, 5),
+            ],
         }
     }
 
@@ -1721,6 +1833,11 @@ impl ToyPaletteCabacContexts {
             ToyPaletteCtx::SplitQt13 => self.split_qt13.encode(cabac, bin),
             ToyPaletteCtx::SplitQt14 => self.split_qt14.encode(cabac, bin),
             ToyPaletteCtx::PltFlag => self.plt_flag.encode(cabac, bin),
+            ToyPaletteCtx::RotationFlag => self.rotation_flag.encode(cabac, bin),
+            ToyPaletteCtx::RunTypeFlag => self.run_type_flag.encode(cabac, bin),
+            ToyPaletteCtx::IdxRunModel(ctx_id) => {
+                self.idx_run_model[ctx_id as usize].encode(cabac, bin)
+            }
         }
     }
 }
@@ -1998,7 +2115,7 @@ fn toy_palette_444_syntax_tokens(
             value: syntax.num_signalled_palette_entries as u32,
         },
     });
-    for entry in syntax.new_palette_entries {
+    for entry in &syntax.new_palette_entries {
         tokens.push(ToyPaletteSyntaxToken {
             name: "new_palette_entries[0][i]",
             kind: ToyPaletteSyntaxTokenKind::FixedLength {
@@ -2006,6 +2123,8 @@ fn toy_palette_444_syntax_tokens(
                 bit_count: 8,
             },
         });
+    }
+    for entry in &syntax.new_palette_entries {
         tokens.push(ToyPaletteSyntaxToken {
             name: "new_palette_entries[1][i]",
             kind: ToyPaletteSyntaxTokenKind::FixedLength {
@@ -2013,6 +2132,8 @@ fn toy_palette_444_syntax_tokens(
                 bit_count: 8,
             },
         });
+    }
+    for entry in &syntax.new_palette_entries {
         tokens.push(ToyPaletteSyntaxToken {
             name: "new_palette_entries[2][i]",
             kind: ToyPaletteSyntaxTokenKind::FixedLength {
@@ -2029,30 +2150,12 @@ fn toy_palette_444_syntax_tokens(
         },
     });
     if syntax.max_palette_index > 0 {
-        let index_bits = palette_index_bit_count(syntax.current_palette_size);
-        for index in syntax.palette_indices {
-            tokens.push(ToyPaletteSyntaxToken {
-                name: "palette_idx_idc",
-                // TODO: replace this fixed EP subset with the VVC transpose,
-                // run/copy, and index-map binarization once that syntax is in
-                // the clean-room decoder model.
-                kind: ToyPaletteSyntaxTokenKind::FixedLength {
-                    value: index as u32,
-                    bit_count: index_bits,
-                },
-            });
-        }
+        // Palette index maps are not a flat list of fixed-width EP bins in
+        // VVC. They are written by append_toy_palette_444_index_map() so the
+        // context-coded copy flags and truncated index bins stay synchronized
+        // with CABAC state.
     }
     tokens
-}
-
-fn palette_index_bit_count(current_palette_size: u8) -> u8 {
-    let max_index = current_palette_size.saturating_sub(1);
-    if max_index <= 1 {
-        1
-    } else {
-        u8::BITS as u8 - max_index.leading_zeros() as u8
-    }
 }
 
 #[cfg(test)]
@@ -2071,6 +2174,18 @@ fn append_palette_syntax_token_cabac(cabac: &mut ToyCabacEncoder, token: ToyPale
         ToyPaletteSyntaxTokenKind::FixedLength { value, bit_count } => {
             cabac.encode_bins_ep(value, bit_count as u32);
         }
+    }
+}
+
+fn encode_trunc_bin_code_ep(cabac: &mut ToyCabacEncoder, symbol: u32, num_symbols: u32) {
+    debug_assert!(symbol < num_symbols);
+    let thresh = 31 - num_symbols.leading_zeros();
+    let val = 1 << thresh;
+    let b = num_symbols - val;
+    if symbol < val - b {
+        cabac.encode_bins_ep(symbol, thresh);
+    } else {
+        cabac.encode_bins_ep(symbol + val - b, thresh + 1);
     }
 }
 
@@ -5004,7 +5119,7 @@ mod tests {
                 .iter()
                 .filter(|token| token.name == "palette_idx_idc")
                 .count(),
-            64
+            0
         );
 
         let decoded = toy_palette_444_decode_reconstruction(geometry, syntax);

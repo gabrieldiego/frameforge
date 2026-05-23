@@ -27,7 +27,7 @@ module ff_vvc_palette_cabac #(
   localparam int CABAC_BITS_LEFT_LSB = CABAC_NUM_BUFFERED_BYTES_LSB + 8;
   localparam int CABAC_STATE_BITS = CABAC_BITS_LEFT_LSB + 8;
   localparam int PALETTE_MODEL_BITS = 40;
-  localparam int PALETTE_CTX_COUNT = 11;
+  localparam int PALETTE_CTX_COUNT = 18;
   localparam int PALETTE_CTX_SPLIT0 = 0;
   localparam int PALETTE_CTX_SPLIT6 = 1;
   localparam int PALETTE_CTX_SPLIT7 = 2;
@@ -39,6 +39,13 @@ module ff_vvc_palette_cabac #(
   localparam int PALETTE_CTX_SPLIT_QT13 = 8;
   localparam int PALETTE_CTX_SPLIT_QT14 = 9;
   localparam int PALETTE_CTX_PLT_FLAG = 10;
+  localparam int PALETTE_CTX_ROTATION_FLAG = 11;
+  localparam int PALETTE_CTX_RUN_TYPE_FLAG = 12;
+  localparam int PALETTE_CTX_IDX_RUN_0 = 13;
+  localparam int PALETTE_CTX_IDX_RUN_1 = 14;
+  localparam int PALETTE_CTX_IDX_RUN_2 = 15;
+  localparam int PALETTE_CTX_IDX_RUN_3 = 16;
+  localparam int PALETTE_CTX_IDX_RUN_4 = 17;
   localparam logic [3:0] PALETTE_PKT_LEGACY_SINGLE_ENTRY = 4'h0;
   localparam logic [3:0] PALETTE_PKT_CU_START            = 4'h1;
   localparam logic [3:0] PALETTE_PKT_ENTRY               = 4'h2;
@@ -56,7 +63,11 @@ module ff_vvc_palette_cabac #(
   palette_state_t next_palette_state;
   logic [7:0]     current_palette_size_q;
   logic [7:0]     current_entry_count_q;
-  logic [5:0]     current_index_bits_q;
+  logic [7:0]     current_index_count_q;
+  logic [(31 * 8) - 1:0] current_entry_y_q;
+  logic [(31 * 8) - 1:0] current_entry_cb_q;
+  logic [(31 * 8) - 1:0] current_entry_cr_q;
+  logic [(64 * 8) - 1:0] current_indices_q;
 
   assign s_axis_ready = enable;
   assign payload_bit_len = palette_state_q[PALETTE_CABAC_LSB + CABAC_LEN_LSB +: 13];
@@ -85,23 +96,28 @@ module ff_vvc_palette_cabac #(
         end
       end
       PALETTE_PKT_ENTRY: begin
-        next_palette_state = palette_444_encode_entry(palette_state_q, s_axis_data[23:0]);
+        if ((current_entry_count_q + 8'd1) == current_palette_size_q) begin
+          next_palette_state = palette_444_encode_entries_and_escape(
+            palette_state_q,
+            current_entry_count_q,
+            s_axis_data[23:0]
+          );
+        end
       end
       PALETTE_PKT_INDEX: begin
-        next_palette_state = palette_444_encode_index(
-          palette_state_q,
-          s_axis_data[7:0],
-          current_index_bits_q
-        );
+        if ((current_index_count_q + 8'd1) == 8'd64) begin
+          next_palette_state = palette_444_encode_index_map(
+            palette_state_q,
+            current_palette_size_q,
+            current_index_count_q,
+            s_axis_data[7:0]
+          );
+        end
       end
       default: begin
         next_palette_state = palette_state_q;
       end
     endcase
-    if ((s_axis_data[31:28] == PALETTE_PKT_ENTRY) &&
-        ((current_entry_count_q + 8'd1) == current_palette_size_q)) begin
-      next_palette_state = palette_444_encode_palette_escape_flag(next_palette_state);
-    end
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -110,20 +126,32 @@ module ff_vvc_palette_cabac #(
       palette_state_q <= palette_start();
       current_palette_size_q <= 8'd0;
       current_entry_count_q <= 8'd0;
-      current_index_bits_q <= 6'd0;
+      current_index_count_q <= 8'd0;
+      current_entry_y_q <= '0;
+      current_entry_cb_q <= '0;
+      current_entry_cr_q <= '0;
+      current_indices_q <= '0;
     end else if (clear || !enable) begin
       stream_symbol_index_q <= 8'd0;
       palette_state_q <= palette_start();
       current_palette_size_q <= 8'd0;
       current_entry_count_q <= 8'd0;
-      current_index_bits_q <= 6'd0;
+      current_index_count_q <= 8'd0;
+      current_entry_y_q <= '0;
+      current_entry_cb_q <= '0;
+      current_entry_cr_q <= '0;
+      current_indices_q <= '0;
     end else if (s_axis_valid && s_axis_ready) begin
       if (s_axis_last) begin
         palette_state_q <= palette_finish(next_palette_state);
         stream_symbol_index_q <= 8'd0;
         current_palette_size_q <= 8'd0;
         current_entry_count_q <= 8'd0;
-        current_index_bits_q <= 6'd0;
+        current_index_count_q <= 8'd0;
+        current_entry_y_q <= '0;
+        current_entry_cb_q <= '0;
+        current_entry_cr_q <= '0;
+        current_indices_q <= '0;
       end else begin
         palette_state_q <= next_palette_state;
         case (s_axis_data[31:28])
@@ -134,10 +162,21 @@ module ff_vvc_palette_cabac #(
             stream_symbol_index_q <= stream_symbol_index_q + 8'd1;
             current_palette_size_q <= s_axis_data[23:16];
             current_entry_count_q <= 8'd0;
-            current_index_bits_q <= palette_index_bit_count(s_axis_data[23:16]);
+            current_index_count_q <= 8'd0;
+            current_entry_y_q <= '0;
+            current_entry_cb_q <= '0;
+            current_entry_cr_q <= '0;
+            current_indices_q <= '0;
           end
           PALETTE_PKT_ENTRY: begin
+            current_entry_y_q[(current_entry_count_q * 8) +: 8] <= s_axis_data[23:16];
+            current_entry_cb_q[(current_entry_count_q * 8) +: 8] <= s_axis_data[15:8];
+            current_entry_cr_q[(current_entry_count_q * 8) +: 8] <= s_axis_data[7:0];
             current_entry_count_q <= current_entry_count_q + 8'd1;
+          end
+          PALETTE_PKT_INDEX: begin
+            current_indices_q[(current_index_count_q * 8) +: 8] <= s_axis_data[7:0];
+            current_index_count_q <= current_index_count_q + 8'd1;
           end
           default: begin
           end
@@ -231,67 +270,137 @@ module ff_vvc_palette_cabac #(
     end
   endfunction
 
-  function automatic palette_state_t palette_444_encode_entry(
+  function automatic palette_state_t palette_444_encode_entries_and_escape(
     input palette_state_t pst_in,
+    input logic [7:0] entry_count,
     input logic [23:0] symbol
   );
     palette_state_t pst;
     cabac_state_t st;
+    logic [7:0] entry_y;
+    logic [7:0] entry_cb;
+    logic [7:0] entry_cr;
     begin
       pst = pst_in;
       st = pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS];
-      st = cabac_encode_bins_ep(st, {24'd0, symbol[23:16]}, 6'd8);
-      st = cabac_encode_bins_ep(st, {24'd0, symbol[15:8]}, 6'd8);
-      st = cabac_encode_bins_ep(st, {24'd0, symbol[7:0]}, 6'd8);
-      pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS] = st;
-      palette_444_encode_entry = pst;
-    end
-  endfunction
-
-  function automatic palette_state_t palette_444_encode_palette_escape_flag(
-    input palette_state_t pst_in
-  );
-    palette_state_t pst;
-    cabac_state_t st;
-    begin
-      pst = pst_in;
-      st = pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS];
+      // VVC writes palette entries component-major: all Y entries, then Cb,
+      // then Cr. The input symbol stream remains entry-major.
+      for (int entry = 0; entry < 31; entry = entry + 1) begin
+        if (entry < entry_count) begin
+          entry_y = current_entry_y_q[(entry * 8) +: 8];
+          st = cabac_encode_bins_ep(st, {24'd0, entry_y}, 6'd8);
+        end else if (entry == entry_count) begin
+          st = cabac_encode_bins_ep(st, {24'd0, symbol[23:16]}, 6'd8);
+        end
+      end
+      for (int entry = 0; entry < 31; entry = entry + 1) begin
+        if (entry < entry_count) begin
+          entry_cb = current_entry_cb_q[(entry * 8) +: 8];
+          st = cabac_encode_bins_ep(st, {24'd0, entry_cb}, 6'd8);
+        end else if (entry == entry_count) begin
+          st = cabac_encode_bins_ep(st, {24'd0, symbol[15:8]}, 6'd8);
+        end
+      end
+      for (int entry = 0; entry < 31; entry = entry + 1) begin
+        if (entry < entry_count) begin
+          entry_cr = current_entry_cr_q[(entry * 8) +: 8];
+          st = cabac_encode_bins_ep(st, {24'd0, entry_cr}, 6'd8);
+        end else if (entry == entry_count) begin
+          st = cabac_encode_bins_ep(st, {24'd0, symbol[7:0]}, 6'd8);
+        end
+      end
       st = cabac_encode_bin_ep(st, 1'b0); // palette_escape_val_present_flag=0
       pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS] = st;
-      palette_444_encode_palette_escape_flag = pst;
+      palette_444_encode_entries_and_escape = pst;
     end
   endfunction
 
-  function automatic palette_state_t palette_444_encode_index(
+  function automatic palette_state_t palette_444_encode_index_map(
     input palette_state_t pst_in,
-    input logic [7:0] index,
-    input logic [5:0] bit_count
+    input logic [7:0] palette_size,
+    input logic [7:0] index_count,
+    input logic [7:0] final_index
   );
     palette_state_t pst;
     cabac_state_t st;
+    logic [7:0] scan_indices [0:63];
+    logic [15:0] scan_x [0:63];
+    logic [15:0] scan_y [0:63];
+    logic [15:0] x;
+    logic [15:0] y;
+    logic [7:0] current_index;
+    logic [7:0] previous_index;
+    logic [7:0] prev_run_pos;
+    logic [7:0] run_dist;
+    logic identity;
+    logic run_copy_flags [0:15];
+    logic [31:0] max_symbol;
+    logic [31:0] level;
     begin
       pst = pst_in;
-      st = pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS];
-      st = cabac_encode_bins_ep(st, {24'd0, index}, bit_count);
-      pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS] = st;
-      palette_444_encode_index = pst;
-    end
-  endfunction
-
-  function automatic logic [5:0] palette_index_bit_count(input logic [7:0] palette_size);
-    logic [7:0] max_index;
-    begin
-      max_index = palette_size == 8'd0 ? 8'd0 : palette_size - 8'd1;
-      if (max_index <= 8'd1) begin
-        palette_index_bit_count = 6'd1;
-      end else if (max_index <= 8'd3) begin
-        palette_index_bit_count = 6'd2;
-      end else if (max_index <= 8'd7) begin
-        palette_index_bit_count = 6'd3;
-      end else if (max_index <= 8'd15) begin
-        palette_index_bit_count = 6'd4;
+      if (palette_size <= 8'd1) begin
+        palette_444_encode_index_map = pst;
       end else begin
-        palette_index_bit_count = 6'd5;
+        for (int pos = 0; pos < 64; pos = pos + 1) begin
+          y = pos[15:0] >> 3;
+          if (y[0] == 1'b0) begin
+            x = pos[2:0];
+          end else begin
+            x = 16'd7 - {13'd0, pos[2:0]};
+          end
+          scan_x[pos] = x;
+          scan_y[pos] = y;
+          if ((y * 16'd8 + x) == {8'd0, index_count}) begin
+            scan_indices[pos] = final_index;
+          end else begin
+            scan_indices[pos] = current_indices_q[((y * 16'd8 + x) * 8) +: 8];
+          end
+        end
+
+        pst = palette_encode_ctx(pst, PALETTE_CTX_ROTATION_FLAG, 1'b0);
+        prev_run_pos = 8'd0;
+        previous_index = 8'd0;
+
+        for (int min_sub_pos = 0; min_sub_pos < 64; min_sub_pos = min_sub_pos + 16) begin
+          for (int flag_idx = 0; flag_idx < 16; flag_idx = flag_idx + 1) begin
+            run_copy_flags[flag_idx] = 1'b0;
+          end
+
+          for (int cur_pos = min_sub_pos; cur_pos < min_sub_pos + 16; cur_pos = cur_pos + 1) begin
+            current_index = scan_indices[cur_pos];
+            identity = (cur_pos > 0) && (current_index == previous_index);
+            run_copy_flags[cur_pos - min_sub_pos] = identity;
+            if (cur_pos > 0) begin
+              run_dist = cur_pos[7:0] - prev_run_pos - 8'd1;
+              pst = palette_encode_ctx(pst, palette_idx_run_ctx_id(run_dist), identity);
+            end
+            if (!identity || (cur_pos == 0)) begin
+              prev_run_pos = cur_pos[7:0];
+              if ((cur_pos != 0) && (scan_y[cur_pos] != 16'd0)) begin
+                pst = palette_encode_ctx(pst, PALETTE_CTX_RUN_TYPE_FLAG, 1'b0);
+              end
+            end
+            previous_index = current_index;
+          end
+
+          st = pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS];
+          for (int cur_pos = min_sub_pos; cur_pos < min_sub_pos + 16; cur_pos = cur_pos + 1) begin
+            if (!run_copy_flags[cur_pos - min_sub_pos]) begin
+              max_symbol = {24'd0, palette_size} - ((cur_pos > 0) ? 32'd1 : 32'd0);
+              if (max_symbol > 32'd1) begin
+                level = {24'd0, scan_indices[cur_pos]};
+                if (cur_pos > 0) begin
+                  if (level > {24'd0, scan_indices[cur_pos - 1]}) begin
+                    level = level - 32'd1;
+                  end
+                end
+                st = cabac_encode_trunc_bin_ep(st, level, max_symbol);
+              end
+            end
+          end
+          pst[PALETTE_CABAC_LSB +: CABAC_STATE_BITS] = st;
+        end
+        palette_444_encode_index_map = pst;
       end
     end
   endfunction
@@ -387,6 +496,13 @@ module ff_vvc_palette_cabac #(
       pst = palette_init_model(pst, PALETTE_CTX_SPLIT_QT13, 8'd78, 8'd12);
       pst = palette_init_model(pst, PALETTE_CTX_SPLIT_QT14, 8'd182, 8'd8);
       pst = palette_init_model(pst, PALETTE_CTX_PLT_FLAG, 8'd22, 8'd1);
+      pst = palette_init_model(pst, PALETTE_CTX_ROTATION_FLAG, 8'd90, 8'd5);
+      pst = palette_init_model(pst, PALETTE_CTX_RUN_TYPE_FLAG, 8'd90, 8'd9);
+      pst = palette_init_model(pst, PALETTE_CTX_IDX_RUN_0, 8'd106, 8'd9);
+      pst = palette_init_model(pst, PALETTE_CTX_IDX_RUN_1, 8'd182, 8'd6);
+      pst = palette_init_model(pst, PALETTE_CTX_IDX_RUN_2, 8'd198, 8'd9);
+      pst = palette_init_model(pst, PALETTE_CTX_IDX_RUN_3, 8'd202, 8'd10);
+      pst = palette_init_model(pst, PALETTE_CTX_IDX_RUN_4, 8'd234, 8'd5);
       palette_start = pst;
     end
   endfunction
@@ -555,6 +671,22 @@ module ff_vvc_palette_cabac #(
         end else begin
           palette_split_qt_ctx_id = PALETTE_CTX_SPLIT_QT14;
         end
+      end
+    end
+  endfunction
+
+  function automatic int palette_idx_run_ctx_id(input logic [7:0] run_dist);
+    begin
+      if (run_dist == 8'd0) begin
+        palette_idx_run_ctx_id = PALETTE_CTX_IDX_RUN_0;
+      end else if (run_dist == 8'd1) begin
+        palette_idx_run_ctx_id = PALETTE_CTX_IDX_RUN_1;
+      end else if (run_dist == 8'd2) begin
+        palette_idx_run_ctx_id = PALETTE_CTX_IDX_RUN_2;
+      end else if (run_dist == 8'd3) begin
+        palette_idx_run_ctx_id = PALETTE_CTX_IDX_RUN_3;
+      end else begin
+        palette_idx_run_ctx_id = PALETTE_CTX_IDX_RUN_4;
       end
     end
   endfunction
@@ -757,6 +889,42 @@ module ff_vvc_palette_cabac #(
         st = cabac_encode_bins_ep(st, suffix, suffix_length);
       end
       cabac_encode_rem_abs_ep = st;
+    end
+  endfunction
+
+  function automatic cabac_state_t cabac_encode_trunc_bin_ep(
+    input cabac_state_t st_in,
+    input logic [31:0]  symbol,
+    input logic [31:0]  num_symbols
+  );
+    cabac_state_t st;
+    logic [5:0] thresh;
+    logic [31:0] val;
+    logic [31:0] b;
+    begin
+      st = st_in;
+      thresh = floor_log2_32(num_symbols);
+      val = 32'd1 << thresh;
+      b = num_symbols - val;
+      if (symbol < (val - b)) begin
+        st = cabac_encode_bins_ep(st, symbol, thresh);
+      end else begin
+        st = cabac_encode_bins_ep(st, symbol + val - b, thresh + 6'd1);
+      end
+      cabac_encode_trunc_bin_ep = st;
+    end
+  endfunction
+
+  function automatic logic [5:0] floor_log2_32(input logic [31:0] value);
+    logic [5:0] result;
+    begin
+      result = 6'd0;
+      for (int bit_idx = 0; bit_idx < 32; bit_idx = bit_idx + 1) begin
+        if (value[bit_idx]) begin
+          result = bit_idx[5:0];
+        end
+      end
+      floor_log2_32 = result;
     end
   endfunction
 
