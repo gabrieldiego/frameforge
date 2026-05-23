@@ -12,8 +12,6 @@ module ff_vvc_palette_symbolizer #(
   input  logic        rst_n,
   input  logic        clear,
   input  logic        enable,
-  input  logic [15:0] ctu_visible_width,
-  input  logic [15:0] ctu_visible_height,
   input  logic [15:0] ctu_coded_width,
   input  logic [15:0] ctu_coded_height,
   input  logic [MAX_PALETTE_SYMBOLS - 1:0] cu_select_mask,
@@ -47,6 +45,8 @@ module ff_vvc_palette_symbolizer #(
   logic [1:0]  input_plane;
   logic [SAMPLE_BITS - 1:0] input_sample;
   logic [7:0]  anchor_index;
+  logic [7:0]  selected_cu_count_x;
+  logic [7:0]  selected_cu_count_y;
   logic [7:0]  visible_symbol_count;
   logic [7:0]  last_symbol_index;
   logic [7:0]  last_visible_symbol_index;
@@ -59,7 +59,7 @@ module ff_vvc_palette_symbolizer #(
   assign symbol_count =
     enable ? (palette_cu_count_x(ctu_coded_width) * palette_cu_count_y(ctu_coded_height)) : 8'd0;
   assign visible_symbol_count =
-    enable ? (palette_cu_count_x(ctu_visible_width) * palette_cu_count_y(ctu_visible_height)) : 8'd0;
+    enable ? (selected_cu_count_x * selected_cu_count_y) : 8'd0;
   assign s_axis_ready = enable && (!m_axis_valid || m_axis_ready);
   assign input_valid = sample_valid || (s_axis_valid && s_axis_ready);
   assign input_plane = sample_valid ? sample_plane : s_axis_plane;
@@ -71,6 +71,26 @@ module ff_vvc_palette_symbolizer #(
                        (input_plane == PLANE_CR) && (anchor_index == last_visible_symbol_index);
   assign drain_symbol_index = coding_order_symbol_index(drain_index_q);
   assign drain_symbol_selected = cu_select_mask[MAX_PALETTE_SYMBOLS - 1 - drain_index_q];
+
+  always_comb begin
+    logic [31:0] pos;
+    logic [7:0] idx;
+
+    selected_cu_count_x = 8'd0;
+    selected_cu_count_y = 8'd0;
+    for (int i = 0; i < MAX_PALETTE_SYMBOLS; i = i + 1) begin
+      if (cu_select_mask[MAX_PALETTE_SYMBOLS - 1 - i]) begin
+        idx = i;
+        pos = coding_order_position(idx);
+        if (((pos[31:16] / PALETTE_CU_SIZE) + 1) > selected_cu_count_x) begin
+          selected_cu_count_x = ((pos[31:16] / PALETTE_CU_SIZE) + 1);
+        end
+        if (((pos[15:0] / PALETTE_CU_SIZE) + 1) > selected_cu_count_y) begin
+          selected_cu_count_y = ((pos[15:0] / PALETTE_CU_SIZE) + 1);
+        end
+      end
+    end
+  end
 
   always_comb begin
     if (input_plane != tracked_plane_q) begin
@@ -155,7 +175,7 @@ module ff_vvc_palette_symbolizer #(
           drain_index_q <= 8'd0;
         end
         tracked_plane_q <= input_plane;
-        if (sample_x + 16'd1 >= ctu_visible_width) begin
+        if (sample_x + 16'd1 >= selected_sample_width(1'b0)) begin
           tracked_x_q <= 16'd0;
           tracked_y_q <= sample_y + 16'd1;
         end else begin
@@ -172,6 +192,18 @@ module ff_vvc_palette_symbolizer #(
   );
     begin
       is_symbol_anchor_xy = ((x % PALETTE_CU_SIZE) == 0) && ((y % PALETTE_CU_SIZE) == 0);
+    end
+  endfunction
+
+  function automatic logic [15:0] selected_sample_width(input logic unused);
+    begin
+      selected_sample_width = {8'd0, selected_cu_count_x} * PALETTE_CU_SIZE;
+    end
+  endfunction
+
+  function automatic logic [15:0] selected_sample_height(input logic unused);
+    begin
+      selected_sample_height = {8'd0, selected_cu_count_y} * PALETTE_CU_SIZE;
     end
   endfunction
 
@@ -198,7 +230,7 @@ module ff_vvc_palette_symbolizer #(
     logic [15:0] tiles_x;
     logic [15:0] index;
     begin
-      tiles_x = palette_cu_count_x(ctu_visible_width);
+      tiles_x = selected_cu_count_x;
       index = (y / PALETTE_CU_SIZE) * tiles_x + (x / PALETTE_CU_SIZE);
       symbol_index_xy = index[7:0];
     end
@@ -246,8 +278,8 @@ module ff_vvc_palette_symbolizer #(
     logic [15:0] clamped_y;
     begin
       pos = coding_order_position(index);
-      clamped_x = (pos[31:16] < ctu_visible_width) ? pos[31:16] : ctu_visible_width - 16'd1;
-      clamped_y = (pos[15:0] < ctu_visible_height) ? pos[15:0] : ctu_visible_height - 16'd1;
+      clamped_x = (pos[31:16] < selected_sample_width(1'b0)) ? pos[31:16] : selected_sample_width(1'b0) - 16'd1;
+      clamped_y = (pos[15:0] < selected_sample_height(1'b0)) ? pos[15:0] : selected_sample_height(1'b0) - 16'd1;
       coding_order_symbol_index = symbol_index_xy(clamped_x, clamped_y);
     end
   endfunction

@@ -3,16 +3,17 @@ from cocotb.clock import Clock
 from cocotb.triggers import ReadOnly, RisingEdge, Timer
 
 
+VISIBLE_SAMPLES = 64
+
+
 async def reset(dut):
     cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
     dut.rst_n.value = 0
     dut.clear.value = 0
     dut.enable.value = 1
-    dut.ctu_visible_width.value = 8
-    dut.ctu_visible_height.value = 8
     dut.ctu_coded_width.value = 8
     dut.ctu_coded_height.value = 8
-    dut.cu_select_mask.value = (1 << 64) - 1
+    dut.cu_select_mask.value = 1 << 63
     dut.sample_valid.value = 0
     dut.sample_plane.value = 0
     dut.sample.value = 0
@@ -29,7 +30,7 @@ async def reset(dut):
 
 async def send_plane(dut, plane, value, last=False, samples=None):
     if samples is None:
-        samples = int(dut.ctu_visible_width.value) * int(dut.ctu_visible_height.value)
+        samples = VISIBLE_SAMPLES
     for index in range(samples):
         while int(dut.s_axis_ready.value) != 1:
             await RisingEdge(dut.clk)
@@ -93,8 +94,6 @@ async def palette_symbolizer_marks_unselected_cu(dut):
 @cocotb.test()
 async def palette_symbolizer_marks_off_view_right_column_unselected(dut):
     await reset(dut)
-    dut.ctu_visible_width.value = 8
-    dut.ctu_visible_height.value = 16
     dut.ctu_coded_width.value = 16
     dut.ctu_coded_height.value = 16
     # Coding order for a 16x16 CTU is TL, TR, BL, BR. The right column is
@@ -103,9 +102,9 @@ async def palette_symbolizer_marks_off_view_right_column_unselected(dut):
 
     symbols = []
     monitor = cocotb.start_soon(monitor_symbols(dut, symbols, 4))
-    await send_plane(dut, 0, 10)
-    await send_plane(dut, 1, 20)
-    await send_plane(dut, 2, 30, last=True)
+    await send_plane(dut, 0, 10, samples=8 * 16)
+    await send_plane(dut, 1, 20, samples=8 * 16)
+    await send_plane(dut, 2, 30, last=True, samples=8 * 16)
     for _ in range(8):
         if len(symbols) >= 4:
             break
@@ -120,8 +119,6 @@ async def palette_symbolizer_marks_off_view_right_column_unselected(dut):
 @cocotb.test()
 async def palette_symbolizer_marks_off_view_bottom_row_unselected(dut):
     await reset(dut)
-    dut.ctu_visible_width.value = 16
-    dut.ctu_visible_height.value = 8
     dut.ctu_coded_width.value = 16
     dut.ctu_coded_height.value = 16
     # Coding order for a 16x16 CTU is TL, TR, BL, BR. The bottom row is
@@ -130,9 +127,9 @@ async def palette_symbolizer_marks_off_view_bottom_row_unselected(dut):
 
     symbols = []
     monitor = cocotb.start_soon(monitor_symbols(dut, symbols, 4))
-    await send_plane(dut, 0, 10)
-    await send_plane(dut, 1, 20)
-    await send_plane(dut, 2, 30, last=True)
+    await send_plane(dut, 0, 10, samples=16 * 8)
+    await send_plane(dut, 1, 20, samples=16 * 8)
+    await send_plane(dut, 2, 30, last=True, samples=16 * 8)
     for _ in range(8):
         if len(symbols) >= 4:
             break

@@ -10,7 +10,7 @@ module ff_vvc_encoder #(
   // 4:2:0 uses the current transform/residual path. 4:4:4 is routed through
   // the toy palette path so the sampling path is independent of TU size.
   parameter int CHROMA_FORMAT_IDC = 1,
-  parameter bit PALETTE_SKIP_OFF_VIEW_CUS = 1'b0
+  parameter bit PALETTE_SKIP_OFF_VIEW_CUS = 1'b1
 ) (
   input  logic       clk,
   input  logic       rst_n,
@@ -127,9 +127,8 @@ module ff_vvc_encoder #(
         end
       end
     end else begin : gen_palette_code_padded_cus
-      // The current VVC syntax path still codes padded CUs in the cropped
-      // canvas. Enable PALETTE_SKIP_OFF_VIEW_CUS only with matching coding-tree
-      // syntax that omits those CUs.
+      // Compatibility mode for the current VVC syntax path, which still codes
+      // padded CUs in the cropped canvas.
       assign palette_cu_select_mask = {MAX_CTU_PALETTE_SYMBOLS{1'b1}};
     end
   endgenerate
@@ -184,8 +183,6 @@ module ff_vvc_encoder #(
     .rst_n(rst_n),
     .clear(start && !busy),
     .enable(PALETTE_MODE),
-    .ctu_visible_width(visible_width),
-    .ctu_visible_height(visible_height),
     .ctu_coded_width(coding_tree_coded_width),
     .ctu_coded_height(coding_tree_coded_height),
     .cu_select_mask(palette_cu_select_mask),

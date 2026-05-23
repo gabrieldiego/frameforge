@@ -1573,15 +1573,16 @@ fn append_toy_palette_444_16x16_tree(
 ) {
     ctx.encode(cabac, split_ctx, true);
     ctx.encode(cabac, qt_ctx, true);
-    append_toy_palette_444_8x8_cu_with_events(
+    if append_toy_palette_444_8x8_cu_with_events(
         cabac,
         ctx,
         frame,
         origin_x,
         origin_y,
         *predictor_mode,
-    );
-    *predictor_mode = ToyPalettePredictorMode::SignalNewEntryAfterPredictor;
+    ) {
+        *predictor_mode = ToyPalettePredictorMode::SignalNewEntryAfterPredictor;
+    }
     append_toy_palette_444_8x8_cu_with_events(
         cabac,
         ctx,
@@ -1590,7 +1591,7 @@ fn append_toy_palette_444_16x16_tree(
         origin_y,
         ToyPalettePredictorMode::SignalNewEntryAfterPredictor,
     );
-    append_toy_palette_444_8x8_cu_with_events(
+    let _ = append_toy_palette_444_8x8_cu_with_events(
         cabac,
         ctx,
         frame,
@@ -1638,7 +1639,10 @@ fn append_toy_palette_444_8x8_cu_with_events(
     origin_x: u16,
     origin_y: u16,
     predictor_mode: ToyPalettePredictorMode,
-) {
+) -> bool {
+    if !toy_palette_cu_origin_is_visible(frame.geometry, origin_x, origin_y) {
+        return false;
+    }
     ctx.encode(cabac, ToyPaletteCtx::Split0, false);
     ctx.encode(cabac, ToyPaletteCtx::PltFlag, true);
     let syntax = toy_palette_444_single_entry_syntax(
@@ -1648,6 +1652,15 @@ fn append_toy_palette_444_8x8_cu_with_events(
     for token in toy_palette_444_syntax_tokens(syntax, predictor_mode) {
         append_palette_syntax_token_cabac(cabac, token);
     }
+    true
+}
+
+fn toy_palette_cu_origin_is_visible(
+    geometry: ToyVideoGeometry,
+    origin_x: u16,
+    origin_y: u16,
+) -> bool {
+    (origin_x as usize) < geometry.width && (origin_y as usize) < geometry.height
 }
 
 #[derive(Debug, Clone, Copy)]
