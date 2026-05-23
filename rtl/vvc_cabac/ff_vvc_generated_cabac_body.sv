@@ -195,7 +195,8 @@ module ff_vvc_generated_cabac_body #(
       st = encode_ctu_luma_32x32_residual_prefix(st, leaf_idx);
       st = encode_ctu_luma_32x32_residual_scan_prefix(st, leaf_idx);
       st = encode_ctu_luma_32x32_residual_scan_tail(st, leaf_idx);
-      st = encode_32x32_luma_leaf_after_residual_scan_tail_tree(st, rem);
+      st = encode_ctu_luma_32x32_residual_bypass_suffix(st, leaf_idx);
+      st = encode_32x32_luma_leaf_after_residual_bypass_suffix_tree(st, rem);
       encode_ctu_luma_32x32_leaf = st;
     end
   endfunction
@@ -300,6 +301,22 @@ module ff_vvc_generated_cabac_body #(
       st = cabac_encode_bin(st, 1'b1, 9'd166, 1'b1);
       st = cabac_encode_bin(st, 1'b0, 9'd92, 1'b1);
       encode_ctu_luma_32x32_residual_scan_tail = st;
+    end
+  endfunction
+
+  function automatic cabac_state_t encode_ctu_luma_32x32_residual_bypass_suffix(
+    input cabac_state_t st_in,
+    input logic [1:0]   leaf_idx
+  );
+    cabac_state_t st;
+    begin
+      // leaf_idx names the CTU child position for future context derivation.
+      // TODO(vvc): Replace this with named residual bypass syntax
+      // (suffix/remainder/sign bins) from generated coefficient levels.
+      st = cabac_encode_bin_ep(st_in, 1'b1);
+      st = cabac_encode_bin_ep(st, 1'b1);
+      st = cabac_encode_bin_ep(st, 1'b0);
+      encode_ctu_luma_32x32_residual_bypass_suffix = st;
     end
   endfunction
 
@@ -472,21 +489,21 @@ module ff_vvc_generated_cabac_body #(
       st = encode_compact_cabac_word(st, 16'h0113);
       st = encode_compact_cabac_word(st, 16'h029b);
       st = encode_compact_cabac_word(st, 16'h0170);
-      st = encode_32x32_luma_leaf_after_residual_scan_tail_tree(st, rem);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8001);
+      st = encode_compact_cabac_word(st, 16'h8000);
+      st = encode_32x32_luma_leaf_after_residual_bypass_suffix_tree(st, rem);
       encode_32x32_luma_leaf_tree = st;
     end
   endfunction
 
-  function automatic cabac_state_t encode_32x32_luma_leaf_after_residual_scan_tail_tree(
+  function automatic cabac_state_t encode_32x32_luma_leaf_after_residual_bypass_suffix_tree(
     input cabac_state_t st_in,
     input logic [4:0]   rem
   );
     cabac_state_t st;
     begin
       st = st_in;
-      st = encode_compact_cabac_word(st, 16'h8001);
-      st = encode_compact_cabac_word(st, 16'h8001);
-      st = encode_compact_cabac_word(st, 16'h8000);
       st = encode_compact_cabac_word(st, 16'h007d);
       st = encode_compact_cabac_word(st, 16'h011e);
       st = encode_compact_cabac_word(st, 16'h0092);
@@ -828,7 +845,7 @@ module ff_vvc_generated_cabac_body #(
       st = encode_compact_cabac_word(st, 16'h0013);
       st = encode_compact_cabac_word(st, 16'h0234);
       st = encode_compact_cabac_word(st, 16'h0013);
-      encode_32x32_luma_leaf_after_residual_scan_tail_tree = st;
+      encode_32x32_luma_leaf_after_residual_bypass_suffix_tree = st;
     end
   endfunction
 
