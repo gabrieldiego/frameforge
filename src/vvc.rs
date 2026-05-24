@@ -489,9 +489,11 @@ struct Toy4x4ReconstructedLumaBlock {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 enum ToyResidualComponent {
     Luma,
     ChromaCb,
+    ChromaCr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1854,13 +1856,22 @@ enum ToyVvcCabacContext {
     QtCbfY(u8),
     QtCbfCb(u8),
     QtCbfCr(u8),
+    TransformSkipFlag(u8),
+    MtsIdx(u8),
+    LastSigCoeffXPrefix(u8),
+    LastSigCoeffYPrefix(u8),
+    SbCodedFlag(u8),
+    SigCoeffFlag(u8),
+    ParLevelFlag(u8),
+    AbsLevelGtxFlag(u8),
+    CoeffSignFlag(u8),
 }
 
 impl ToyVvcCabacContext {
     fn init_value(self) -> u8 {
         match self {
-            // ITU-T H.266 Tables 59, 60, 72, 75, 76, 79, 81, and 112-114,
-            // I-slice initializationType. See docs/vvc-cabac-subset.md.
+            // ITU-T H.266 CABAC context initialization tables, I-slice
+            // initializationType. See docs/vvc-cabac-subset.md.
             ToyVvcCabacContext::SplitFlag(ctx) => {
                 const I_SLICE_INIT: [u8; 9] = [19, 28, 38, 27, 29, 38, 20, 30, 31];
                 I_SLICE_INIT[ctx as usize]
@@ -1890,6 +1901,58 @@ impl ToyVvcCabacContext {
             }
             ToyVvcCabacContext::QtCbfCr(ctx) => {
                 const I_SLICE_INIT: [u8; 3] = [33, 28, 36];
+                I_SLICE_INIT[ctx as usize]
+            }
+            ToyVvcCabacContext::TransformSkipFlag(ctx) => {
+                const I_SLICE_INIT: [u8; 2] = [25, 9];
+                I_SLICE_INIT[ctx as usize]
+            }
+            ToyVvcCabacContext::MtsIdx(ctx) => {
+                const I_SLICE_INIT: [u8; 4] = [29, 0, 28, 0];
+                I_SLICE_INIT[ctx as usize]
+            }
+            ToyVvcCabacContext::LastSigCoeffXPrefix(ctx) => {
+                const I_SLICE_INIT: [u8; 23] = [
+                    13, 5, 4, 21, 14, 4, 6, 14, 21, 11, 14, 7, 14, 5, 11, 21, 30, 22, 13, 42, 12,
+                    4, 3,
+                ];
+                I_SLICE_INIT[ctx as usize]
+            }
+            ToyVvcCabacContext::LastSigCoeffYPrefix(ctx) => {
+                const I_SLICE_INIT: [u8; 23] = [
+                    13, 5, 4, 6, 13, 11, 14, 6, 5, 3, 14, 22, 6, 4, 3, 6, 22, 29, 20, 34, 12, 4, 3,
+                ];
+                I_SLICE_INIT[ctx as usize]
+            }
+            ToyVvcCabacContext::SbCodedFlag(ctx) => {
+                const I_SLICE_INIT: [u8; 7] = [18, 31, 25, 15, 18, 20, 38];
+                I_SLICE_INIT[ctx as usize]
+            }
+            ToyVvcCabacContext::SigCoeffFlag(ctx) => {
+                const I_SLICE_INIT: [u8; 63] = [
+                    25, 19, 28, 14, 25, 20, 29, 30, 19, 37, 30, 38, 11, 38, 46, 54, 27, 39, 39, 39,
+                    44, 39, 39, 39, 18, 39, 39, 39, 27, 39, 39, 39, 0, 39, 39, 39, 25, 27, 28, 37,
+                    34, 53, 53, 46, 19, 46, 38, 39, 52, 39, 39, 39, 11, 39, 39, 39, 19, 39, 39, 39,
+                    25, 28, 38,
+                ];
+                I_SLICE_INIT[ctx as usize]
+            }
+            ToyVvcCabacContext::ParLevelFlag(ctx) => {
+                const I_SLICE_INIT: [u8; 33] = [
+                    33, 25, 18, 26, 34, 27, 25, 26, 19, 42, 35, 33, 19, 27, 35, 35, 34, 42, 20, 43,
+                    20, 33, 25, 26, 42, 19, 27, 26, 50, 35, 20, 43, 11,
+                ];
+                I_SLICE_INIT[ctx as usize]
+            }
+            ToyVvcCabacContext::AbsLevelGtxFlag(ctx) => {
+                const I_SLICE_INIT: [u8; 32] = [
+                    25, 25, 11, 27, 20, 21, 33, 12, 28, 21, 22, 34, 28, 29, 29, 30, 36, 29, 45, 30,
+                    23, 40, 33, 27, 28, 21, 37, 36, 37, 45, 38, 46,
+                ];
+                I_SLICE_INIT[ctx as usize]
+            }
+            ToyVvcCabacContext::CoeffSignFlag(ctx) => {
+                const I_SLICE_INIT: [u8; 6] = [12, 17, 46, 28, 25, 46];
                 I_SLICE_INIT[ctx as usize]
             }
         }
@@ -1928,6 +1991,56 @@ impl ToyVvcCabacContext {
                 const LOG2_WINDOW: [u8; 3] = [2, 1, 0];
                 LOG2_WINDOW[ctx as usize]
             }
+            ToyVvcCabacContext::TransformSkipFlag(ctx) => {
+                const LOG2_WINDOW: [u8; 2] = [1, 1];
+                LOG2_WINDOW[ctx as usize]
+            }
+            ToyVvcCabacContext::MtsIdx(ctx) => {
+                const LOG2_WINDOW: [u8; 4] = [8, 0, 9, 0];
+                LOG2_WINDOW[ctx as usize]
+            }
+            ToyVvcCabacContext::LastSigCoeffXPrefix(ctx) => {
+                const LOG2_WINDOW: [u8; 23] = [
+                    8, 5, 4, 5, 4, 4, 5, 4, 1, 0, 4, 1, 0, 0, 0, 0, 1, 0, 0, 0, 5, 4, 4,
+                ];
+                LOG2_WINDOW[ctx as usize]
+            }
+            ToyVvcCabacContext::LastSigCoeffYPrefix(ctx) => {
+                const LOG2_WINDOW: [u8; 23] = [
+                    8, 5, 8, 5, 5, 4, 5, 5, 4, 0, 5, 4, 1, 0, 0, 1, 4, 0, 0, 0, 6, 5, 5,
+                ];
+                LOG2_WINDOW[ctx as usize]
+            }
+            ToyVvcCabacContext::SbCodedFlag(ctx) => {
+                const LOG2_WINDOW: [u8; 7] = [8, 5, 5, 8, 5, 8, 8];
+                LOG2_WINDOW[ctx as usize]
+            }
+            ToyVvcCabacContext::SigCoeffFlag(ctx) => {
+                const LOG2_WINDOW: [u8; 63] = [
+                    12, 9, 9, 10, 9, 9, 9, 10, 8, 8, 8, 10, 9, 13, 8, 8, 8, 8, 8, 5, 8, 0, 0, 0, 8,
+                    8, 8, 8, 8, 0, 4, 4, 0, 0, 0, 0, 12, 12, 9, 13, 4, 5, 8, 9, 8, 12, 12, 8, 4, 0,
+                    0, 0, 8, 8, 8, 8, 4, 0, 0, 0, 13, 13, 8,
+                ];
+                LOG2_WINDOW[ctx as usize]
+            }
+            ToyVvcCabacContext::ParLevelFlag(ctx) => {
+                const LOG2_WINDOW: [u8; 33] = [
+                    8, 9, 12, 13, 13, 13, 10, 13, 13, 13, 13, 13, 13, 13, 13, 13, 10, 13, 13, 13,
+                    13, 8, 12, 12, 12, 13, 13, 13, 13, 13, 13, 13, 6,
+                ];
+                LOG2_WINDOW[ctx as usize]
+            }
+            ToyVvcCabacContext::AbsLevelGtxFlag(ctx) => {
+                const LOG2_WINDOW: [u8; 32] = [
+                    9, 5, 10, 13, 13, 10, 9, 10, 13, 13, 13, 9, 10, 10, 10, 13, 8, 9, 10, 10, 13,
+                    8, 8, 9, 12, 12, 10, 5, 9, 9, 9, 13,
+                ];
+                LOG2_WINDOW[ctx as usize]
+            }
+            ToyVvcCabacContext::CoeffSignFlag(ctx) => {
+                const LOG2_WINDOW: [u8; 6] = [1, 4, 4, 5, 8, 8];
+                LOG2_WINDOW[ctx as usize]
+            }
         }
     }
 }
@@ -1944,6 +2057,15 @@ struct ToyVvcCabacContexts {
     qt_cbf_y: [ToyCabacProbModel; 4],
     qt_cbf_cb: [ToyCabacProbModel; 2],
     qt_cbf_cr: [ToyCabacProbModel; 3],
+    transform_skip_flag: [ToyCabacProbModel; 2],
+    mts_idx: [ToyCabacProbModel; 4],
+    last_sig_coeff_x_prefix: [ToyCabacProbModel; 23],
+    last_sig_coeff_y_prefix: [ToyCabacProbModel; 23],
+    sb_coded_flag: [ToyCabacProbModel; 7],
+    sig_coeff_flag: [ToyCabacProbModel; 63],
+    par_level_flag: [ToyCabacProbModel; 33],
+    abs_level_gtx_flag: [ToyCabacProbModel; 32],
+    coeff_sign_flag: [ToyCabacProbModel; 6],
 }
 
 impl ToyVvcCabacContexts {
@@ -2015,6 +2137,69 @@ impl ToyVvcCabacContexts {
                     ToyVvcCabacContext::QtCbfCr(idx as u8).log2_window_size(),
                 )
             }),
+            transform_skip_flag: std::array::from_fn(|idx| {
+                ToyCabacProbModel::from_vtm_init_value(
+                    ToyVvcCabacContext::TransformSkipFlag(idx as u8).init_value(),
+                    Self::DEFAULT_SLICE_QP,
+                    ToyVvcCabacContext::TransformSkipFlag(idx as u8).log2_window_size(),
+                )
+            }),
+            mts_idx: std::array::from_fn(|idx| {
+                ToyCabacProbModel::from_vtm_init_value(
+                    ToyVvcCabacContext::MtsIdx(idx as u8).init_value(),
+                    Self::DEFAULT_SLICE_QP,
+                    ToyVvcCabacContext::MtsIdx(idx as u8).log2_window_size(),
+                )
+            }),
+            last_sig_coeff_x_prefix: std::array::from_fn(|idx| {
+                ToyCabacProbModel::from_vtm_init_value(
+                    ToyVvcCabacContext::LastSigCoeffXPrefix(idx as u8).init_value(),
+                    Self::DEFAULT_SLICE_QP,
+                    ToyVvcCabacContext::LastSigCoeffXPrefix(idx as u8).log2_window_size(),
+                )
+            }),
+            last_sig_coeff_y_prefix: std::array::from_fn(|idx| {
+                ToyCabacProbModel::from_vtm_init_value(
+                    ToyVvcCabacContext::LastSigCoeffYPrefix(idx as u8).init_value(),
+                    Self::DEFAULT_SLICE_QP,
+                    ToyVvcCabacContext::LastSigCoeffYPrefix(idx as u8).log2_window_size(),
+                )
+            }),
+            sb_coded_flag: std::array::from_fn(|idx| {
+                ToyCabacProbModel::from_vtm_init_value(
+                    ToyVvcCabacContext::SbCodedFlag(idx as u8).init_value(),
+                    Self::DEFAULT_SLICE_QP,
+                    ToyVvcCabacContext::SbCodedFlag(idx as u8).log2_window_size(),
+                )
+            }),
+            sig_coeff_flag: std::array::from_fn(|idx| {
+                ToyCabacProbModel::from_vtm_init_value(
+                    ToyVvcCabacContext::SigCoeffFlag(idx as u8).init_value(),
+                    Self::DEFAULT_SLICE_QP,
+                    ToyVvcCabacContext::SigCoeffFlag(idx as u8).log2_window_size(),
+                )
+            }),
+            par_level_flag: std::array::from_fn(|idx| {
+                ToyCabacProbModel::from_vtm_init_value(
+                    ToyVvcCabacContext::ParLevelFlag(idx as u8).init_value(),
+                    Self::DEFAULT_SLICE_QP,
+                    ToyVvcCabacContext::ParLevelFlag(idx as u8).log2_window_size(),
+                )
+            }),
+            abs_level_gtx_flag: std::array::from_fn(|idx| {
+                ToyCabacProbModel::from_vtm_init_value(
+                    ToyVvcCabacContext::AbsLevelGtxFlag(idx as u8).init_value(),
+                    Self::DEFAULT_SLICE_QP,
+                    ToyVvcCabacContext::AbsLevelGtxFlag(idx as u8).log2_window_size(),
+                )
+            }),
+            coeff_sign_flag: std::array::from_fn(|idx| {
+                ToyCabacProbModel::from_vtm_init_value(
+                    ToyVvcCabacContext::CoeffSignFlag(idx as u8).init_value(),
+                    Self::DEFAULT_SLICE_QP,
+                    ToyVvcCabacContext::CoeffSignFlag(idx as u8).log2_window_size(),
+                )
+            }),
         }
     }
 
@@ -2038,7 +2223,119 @@ impl ToyVvcCabacContexts {
             ToyVvcCabacContext::QtCbfY(idx) => self.qt_cbf_y[idx as usize].encode(cabac, bin),
             ToyVvcCabacContext::QtCbfCb(idx) => self.qt_cbf_cb[idx as usize].encode(cabac, bin),
             ToyVvcCabacContext::QtCbfCr(idx) => self.qt_cbf_cr[idx as usize].encode(cabac, bin),
+            ToyVvcCabacContext::TransformSkipFlag(idx) => {
+                self.transform_skip_flag[idx as usize].encode(cabac, bin)
+            }
+            ToyVvcCabacContext::MtsIdx(idx) => self.mts_idx[idx as usize].encode(cabac, bin),
+            ToyVvcCabacContext::LastSigCoeffXPrefix(idx) => {
+                self.last_sig_coeff_x_prefix[idx as usize].encode(cabac, bin)
+            }
+            ToyVvcCabacContext::LastSigCoeffYPrefix(idx) => {
+                self.last_sig_coeff_y_prefix[idx as usize].encode(cabac, bin)
+            }
+            ToyVvcCabacContext::SbCodedFlag(idx) => {
+                self.sb_coded_flag[idx as usize].encode(cabac, bin)
+            }
+            ToyVvcCabacContext::SigCoeffFlag(idx) => {
+                self.sig_coeff_flag[idx as usize].encode(cabac, bin)
+            }
+            ToyVvcCabacContext::ParLevelFlag(idx) => {
+                self.par_level_flag[idx as usize].encode(cabac, bin)
+            }
+            ToyVvcCabacContext::AbsLevelGtxFlag(idx) => {
+                self.abs_level_gtx_flag[idx as usize].encode(cabac, bin)
+            }
+            ToyVvcCabacContext::CoeffSignFlag(idx) => {
+                self.coeff_sign_flag[idx as usize].encode(cabac, bin)
+            }
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+struct VvcResidualCabacOptions {
+    transform_skip_enabled: bool,
+    explicit_mts_intra_enabled: bool,
+    dependent_quantization_enabled: bool,
+    sign_data_hiding_enabled: bool,
+    lfnst_enabled: bool,
+    sbt_enabled: bool,
+}
+
+#[allow(dead_code)]
+impl VvcResidualCabacOptions {
+    fn current_intra_subset() -> Self {
+        Self {
+            // Keep disabled syntax paths labelled. The current parameter sets
+            // infer transform_skip_flag=0 and mts_idx=0 in most paths, but the
+            // encoder can switch these on once the surrounding CU syntax is
+            // fully spec-generated.
+            transform_skip_enabled: false,
+            explicit_mts_intra_enabled: false,
+            dependent_quantization_enabled: false,
+            sign_data_hiding_enabled: false,
+            lfnst_enabled: false,
+            sbt_enabled: false,
+        }
+    }
+}
+
+#[allow(dead_code)]
+struct VvcResidualCabacEncoder<'a> {
+    contexts: &'a mut ToyVvcCabacContexts,
+    options: VvcResidualCabacOptions,
+}
+
+#[allow(dead_code)]
+impl<'a> VvcResidualCabacEncoder<'a> {
+    fn new(contexts: &'a mut ToyVvcCabacContexts, options: VvcResidualCabacOptions) -> Self {
+        Self { contexts, options }
+    }
+
+    fn emit_transform_skip_flag(
+        &mut self,
+        cabac: &mut ToyCabacEncoder,
+        component: ToyResidualComponent,
+        transform_skip: bool,
+    ) {
+        if !self.options.transform_skip_enabled {
+            debug_assert!(!transform_skip);
+            return;
+        }
+
+        let ctx_inc = match component {
+            ToyResidualComponent::Luma => 0,
+            ToyResidualComponent::ChromaCb | ToyResidualComponent::ChromaCr => 1,
+        };
+        self.contexts.encode(
+            cabac,
+            ToyVvcCabacContext::TransformSkipFlag(ctx_inc),
+            transform_skip,
+        );
+    }
+
+    fn emit_mts_idx_zero(&mut self, cabac: &mut ToyCabacEncoder) {
+        if !self.options.explicit_mts_intra_enabled {
+            return;
+        }
+
+        // Table 132 maps mts_idx binIdx 0..3 to ctxInc 0..3. For mts_idx=0
+        // under TR(cMax=4,cRiceParam=0), only the first zero bin is emitted.
+        // Future non-zero MTS indices should extend this with the remaining
+        // truncated-Rice bins instead of bypassing this helper.
+        self.contexts
+            .encode(cabac, ToyVvcCabacContext::MtsIdx(0), false);
+    }
+
+    fn emit_current_unused_tool_placeholders(&self) {
+        // These labels are intentionally kept next to the residual encoder so
+        // later work can wire the corresponding syntax without re-auditing the
+        // current subset assumptions.
+        let _dependent_quantization_path_enabled = self.options.dependent_quantization_enabled;
+        let _sign_data_hiding_path_enabled = self.options.sign_data_hiding_enabled;
+        let _lfnst_path_enabled = self.options.lfnst_enabled;
+        let _sbt_path_enabled = self.options.sbt_enabled;
     }
 }
 
@@ -5336,6 +5633,67 @@ mod tests {
         cabac.start();
         ctx.encode(&mut cabac, ToyVvcCabacContext::SplitFlag(0), true);
         assert!(ctx.split_flag[0].state() > initial_state);
+    }
+
+    #[test]
+    fn toy_vvc_contexts_include_residual_init_tables() {
+        assert_eq!(ToyVvcCabacContext::TransformSkipFlag(0).init_value(), 25);
+        assert_eq!(
+            ToyVvcCabacContext::TransformSkipFlag(0).log2_window_size(),
+            1
+        );
+        assert_eq!(ToyVvcCabacContext::MtsIdx(2).init_value(), 28);
+        assert_eq!(ToyVvcCabacContext::MtsIdx(2).log2_window_size(), 9);
+        assert_eq!(ToyVvcCabacContext::LastSigCoeffXPrefix(20).init_value(), 12);
+        assert_eq!(
+            ToyVvcCabacContext::LastSigCoeffYPrefix(20).log2_window_size(),
+            6
+        );
+        assert_eq!(ToyVvcCabacContext::SbCodedFlag(6).init_value(), 38);
+        assert_eq!(ToyVvcCabacContext::SigCoeffFlag(62).init_value(), 38);
+        assert_eq!(ToyVvcCabacContext::ParLevelFlag(32).init_value(), 11);
+        assert_eq!(ToyVvcCabacContext::AbsLevelGtxFlag(31).init_value(), 46);
+        assert_eq!(ToyVvcCabacContext::CoeffSignFlag(5).log2_window_size(), 8);
+
+        let mut ctx = ToyVvcCabacContexts::new();
+        let initial_state = ctx.transform_skip_flag[0].state();
+        let mut cabac = ToyCabacEncoder::new();
+        cabac.start();
+        ctx.encode(&mut cabac, ToyVvcCabacContext::TransformSkipFlag(0), false);
+        assert_ne!(ctx.transform_skip_flag[0].state(), initial_state);
+    }
+
+    #[test]
+    fn vvc_residual_cabac_encoder_labels_disabled_tool_paths() {
+        let mut contexts = ToyVvcCabacContexts::new();
+        let mut cabac = ToyCabacEncoder::new();
+        cabac.start();
+
+        let mut disabled = VvcResidualCabacEncoder::new(
+            &mut contexts,
+            VvcResidualCabacOptions::current_intra_subset(),
+        );
+        disabled.emit_transform_skip_flag(&mut cabac, ToyResidualComponent::Luma, false);
+        disabled.emit_mts_idx_zero(&mut cabac);
+        disabled.emit_current_unused_tool_placeholders();
+        assert!(cabac.bits.is_empty());
+
+        let mut contexts = ToyVvcCabacContexts::new();
+        let mut cabac = ToyCabacEncoder::new();
+        cabac.start();
+        let mut enabled_options = VvcResidualCabacOptions::current_intra_subset();
+        enabled_options.transform_skip_enabled = true;
+        enabled_options.explicit_mts_intra_enabled = true;
+        let initial_transform_skip_state = contexts.transform_skip_flag[0].state();
+        let initial_mts_state = contexts.mts_idx[0].state();
+        let mut enabled = VvcResidualCabacEncoder::new(&mut contexts, enabled_options);
+        enabled.emit_transform_skip_flag(&mut cabac, ToyResidualComponent::Luma, false);
+        enabled.emit_mts_idx_zero(&mut cabac);
+        assert_ne!(
+            contexts.transform_skip_flag[0].state(),
+            initial_transform_skip_state
+        );
+        assert_ne!(contexts.mts_idx[0].state(), initial_mts_state);
     }
 
     #[test]

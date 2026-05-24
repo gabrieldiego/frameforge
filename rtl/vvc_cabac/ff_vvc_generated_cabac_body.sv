@@ -2131,6 +2131,163 @@ module ff_vvc_generated_cabac_body (
     end
   endfunction
 
+  function automatic logic [7:0] vvc_transform_skip_flag_init(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_transform_skip_flag_init = 8'd25;
+        default: vvc_transform_skip_flag_init = 8'd9;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_transform_skip_flag_log2_window(input logic [3:0] index);
+    begin
+      vvc_transform_skip_flag_log2_window = 4'd1;
+    end
+  endfunction
+
+  function automatic logic [7:0] vvc_mts_idx_init(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_mts_idx_init = 8'd29;
+        4'd1: vvc_mts_idx_init = 8'd0;
+        4'd2: vvc_mts_idx_init = 8'd28;
+        default: vvc_mts_idx_init = 8'd0;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_mts_idx_log2_window(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_mts_idx_log2_window = 4'd8;
+        4'd1: vvc_mts_idx_log2_window = 4'd0;
+        4'd2: vvc_mts_idx_log2_window = 4'd9;
+        default: vvc_mts_idx_log2_window = 4'd0;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [7:0] vvc_last_sig_coeff_x_prefix_init(input logic [4:0] index);
+    begin
+      case (index)
+        5'd0: vvc_last_sig_coeff_x_prefix_init = 8'd13;
+        5'd1: vvc_last_sig_coeff_x_prefix_init = 8'd5;
+        5'd2: vvc_last_sig_coeff_x_prefix_init = 8'd4;
+        5'd3: vvc_last_sig_coeff_x_prefix_init = 8'd21;
+        5'd4: vvc_last_sig_coeff_x_prefix_init = 8'd14;
+        5'd5: vvc_last_sig_coeff_x_prefix_init = 8'd4;
+        5'd6: vvc_last_sig_coeff_x_prefix_init = 8'd6;
+        5'd7: vvc_last_sig_coeff_x_prefix_init = 8'd14;
+        5'd8: vvc_last_sig_coeff_x_prefix_init = 8'd21;
+        5'd9: vvc_last_sig_coeff_x_prefix_init = 8'd11;
+        5'd10: vvc_last_sig_coeff_x_prefix_init = 8'd14;
+        5'd11: vvc_last_sig_coeff_x_prefix_init = 8'd7;
+        5'd12: vvc_last_sig_coeff_x_prefix_init = 8'd14;
+        5'd13: vvc_last_sig_coeff_x_prefix_init = 8'd5;
+        5'd14: vvc_last_sig_coeff_x_prefix_init = 8'd11;
+        5'd15: vvc_last_sig_coeff_x_prefix_init = 8'd21;
+        5'd16: vvc_last_sig_coeff_x_prefix_init = 8'd30;
+        5'd17: vvc_last_sig_coeff_x_prefix_init = 8'd22;
+        5'd18: vvc_last_sig_coeff_x_prefix_init = 8'd13;
+        5'd19: vvc_last_sig_coeff_x_prefix_init = 8'd42;
+        5'd20: vvc_last_sig_coeff_x_prefix_init = 8'd12;
+        5'd21: vvc_last_sig_coeff_x_prefix_init = 8'd4;
+        default: vvc_last_sig_coeff_x_prefix_init = 8'd3;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_last_sig_coeff_x_prefix_log2_window(input logic [4:0] index);
+    begin
+      case (index)
+        5'd0: vvc_last_sig_coeff_x_prefix_log2_window = 4'd8;
+        5'd1: vvc_last_sig_coeff_x_prefix_log2_window = 4'd5;
+        5'd2: vvc_last_sig_coeff_x_prefix_log2_window = 4'd4;
+        5'd3: vvc_last_sig_coeff_x_prefix_log2_window = 4'd5;
+        5'd4: vvc_last_sig_coeff_x_prefix_log2_window = 4'd4;
+        5'd5: vvc_last_sig_coeff_x_prefix_log2_window = 4'd4;
+        5'd6: vvc_last_sig_coeff_x_prefix_log2_window = 4'd5;
+        5'd7: vvc_last_sig_coeff_x_prefix_log2_window = 4'd4;
+        5'd8: vvc_last_sig_coeff_x_prefix_log2_window = 4'd1;
+        5'd9: vvc_last_sig_coeff_x_prefix_log2_window = 4'd0;
+        5'd10: vvc_last_sig_coeff_x_prefix_log2_window = 4'd4;
+        5'd11: vvc_last_sig_coeff_x_prefix_log2_window = 4'd1;
+        5'd12: vvc_last_sig_coeff_x_prefix_log2_window = 4'd0;
+        5'd13: vvc_last_sig_coeff_x_prefix_log2_window = 4'd0;
+        5'd14: vvc_last_sig_coeff_x_prefix_log2_window = 4'd0;
+        5'd15: vvc_last_sig_coeff_x_prefix_log2_window = 4'd0;
+        5'd16: vvc_last_sig_coeff_x_prefix_log2_window = 4'd1;
+        5'd17: vvc_last_sig_coeff_x_prefix_log2_window = 4'd0;
+        5'd18: vvc_last_sig_coeff_x_prefix_log2_window = 4'd0;
+        5'd19: vvc_last_sig_coeff_x_prefix_log2_window = 4'd0;
+        5'd20: vvc_last_sig_coeff_x_prefix_log2_window = 4'd5;
+        5'd21: vvc_last_sig_coeff_x_prefix_log2_window = 4'd4;
+        default: vvc_last_sig_coeff_x_prefix_log2_window = 4'd4;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [7:0] vvc_last_sig_coeff_y_prefix_init(input logic [4:0] index);
+    begin
+      case (index)
+        5'd0: vvc_last_sig_coeff_y_prefix_init = 8'd13;
+        5'd1: vvc_last_sig_coeff_y_prefix_init = 8'd5;
+        5'd2: vvc_last_sig_coeff_y_prefix_init = 8'd4;
+        5'd3: vvc_last_sig_coeff_y_prefix_init = 8'd6;
+        5'd4: vvc_last_sig_coeff_y_prefix_init = 8'd13;
+        5'd5: vvc_last_sig_coeff_y_prefix_init = 8'd11;
+        5'd6: vvc_last_sig_coeff_y_prefix_init = 8'd14;
+        5'd7: vvc_last_sig_coeff_y_prefix_init = 8'd6;
+        5'd8: vvc_last_sig_coeff_y_prefix_init = 8'd5;
+        5'd9: vvc_last_sig_coeff_y_prefix_init = 8'd3;
+        5'd10: vvc_last_sig_coeff_y_prefix_init = 8'd14;
+        5'd11: vvc_last_sig_coeff_y_prefix_init = 8'd22;
+        5'd12: vvc_last_sig_coeff_y_prefix_init = 8'd6;
+        5'd13: vvc_last_sig_coeff_y_prefix_init = 8'd4;
+        5'd14: vvc_last_sig_coeff_y_prefix_init = 8'd3;
+        5'd15: vvc_last_sig_coeff_y_prefix_init = 8'd6;
+        5'd16: vvc_last_sig_coeff_y_prefix_init = 8'd22;
+        5'd17: vvc_last_sig_coeff_y_prefix_init = 8'd29;
+        5'd18: vvc_last_sig_coeff_y_prefix_init = 8'd20;
+        5'd19: vvc_last_sig_coeff_y_prefix_init = 8'd34;
+        5'd20: vvc_last_sig_coeff_y_prefix_init = 8'd12;
+        5'd21: vvc_last_sig_coeff_y_prefix_init = 8'd4;
+        default: vvc_last_sig_coeff_y_prefix_init = 8'd3;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_last_sig_coeff_y_prefix_log2_window(input logic [4:0] index);
+    begin
+      case (index)
+        5'd0: vvc_last_sig_coeff_y_prefix_log2_window = 4'd8;
+        5'd1: vvc_last_sig_coeff_y_prefix_log2_window = 4'd5;
+        5'd2: vvc_last_sig_coeff_y_prefix_log2_window = 4'd8;
+        5'd3: vvc_last_sig_coeff_y_prefix_log2_window = 4'd5;
+        5'd4: vvc_last_sig_coeff_y_prefix_log2_window = 4'd5;
+        5'd5: vvc_last_sig_coeff_y_prefix_log2_window = 4'd4;
+        5'd6: vvc_last_sig_coeff_y_prefix_log2_window = 4'd5;
+        5'd7: vvc_last_sig_coeff_y_prefix_log2_window = 4'd5;
+        5'd8: vvc_last_sig_coeff_y_prefix_log2_window = 4'd4;
+        5'd9: vvc_last_sig_coeff_y_prefix_log2_window = 4'd0;
+        5'd10: vvc_last_sig_coeff_y_prefix_log2_window = 4'd5;
+        5'd11: vvc_last_sig_coeff_y_prefix_log2_window = 4'd4;
+        5'd12: vvc_last_sig_coeff_y_prefix_log2_window = 4'd1;
+        5'd13: vvc_last_sig_coeff_y_prefix_log2_window = 4'd0;
+        5'd14: vvc_last_sig_coeff_y_prefix_log2_window = 4'd0;
+        5'd15: vvc_last_sig_coeff_y_prefix_log2_window = 4'd1;
+        5'd16: vvc_last_sig_coeff_y_prefix_log2_window = 4'd4;
+        5'd17: vvc_last_sig_coeff_y_prefix_log2_window = 4'd0;
+        5'd18: vvc_last_sig_coeff_y_prefix_log2_window = 4'd0;
+        5'd19: vvc_last_sig_coeff_y_prefix_log2_window = 4'd0;
+        5'd20: vvc_last_sig_coeff_y_prefix_log2_window = 4'd6;
+        5'd21: vvc_last_sig_coeff_y_prefix_log2_window = 4'd5;
+        default: vvc_last_sig_coeff_y_prefix_log2_window = 4'd5;
+      endcase
+    end
+  endfunction
+
   function automatic logic [8:0] vvc_ctx_lps(input logic [4:0] index);
     begin
       case (index)
