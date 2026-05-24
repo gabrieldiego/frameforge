@@ -3843,88 +3843,91 @@ fn encode_legacy_trace_cabac_word(cabac: &mut ToyCabacEncoder, word: u16) {
 }
 
 fn encode_16x16_luma_body(cabac: &mut ToyCabacEncoder) {
-    cabac_ctx(cabac, false, 214, false); // split_cu_mode split=1
-    cabac_ctx(cabac, false, 67, true); // split_cu_mode qt=1
+    encode_legacy_trace_cabac_event(cabac, false, 214, false); // split_cu_mode split=1
+    encode_legacy_trace_cabac_event(cabac, false, 67, true); // split_cu_mode qt=1
     cabac.encode_bin_ep(false); // intra_luma_pred_mode[5]
     cabac.encode_bin_ep(true); // intra_luma_pred_mode[4]
     cabac.encode_bin_ep(true); // intra_luma_pred_mode[3]
     cabac.encode_bin_ep(false); // intra_luma_pred_mode[2]
     cabac.encode_bin_ep(true); // intra_luma_pred_mode[1]
     cabac.encode_bin_ep(false); // intra_luma_pred_mode[0]
-    cabac_ctx(cabac, true, 52, true); // split_cu_mode split=1
-    cabac_ctx(cabac, false, 166, true); // split_cu_mode qt=1
-    cabac_ctx(cabac, true, 109, true); // split_cu_mode split=0
-    cabac_ctx(cabac, true, 134, true); // cbf_comp luma=1
-    cabac_ctx(cabac, true, 116, true); // sig_coeff_group_flag
-    cabac_ctx(cabac, true, 142, true); // sig_coeff_group_flag
-    cabac_ctx(cabac, true, 221, false); // last_sig_coeff_x_prefix
-    cabac_ctx(cabac, false, 205, false); // last_sig_coeff_y_prefix
+    encode_legacy_trace_cabac_event(cabac, true, 52, true); // split_cu_mode split=1
+    encode_legacy_trace_cabac_event(cabac, false, 166, true); // split_cu_mode qt=1
+    encode_legacy_trace_cabac_event(cabac, true, 109, true); // split_cu_mode split=0
+    encode_legacy_trace_cabac_event(cabac, true, 134, true); // cbf_comp luma=1
+    encode_legacy_trace_cabac_event(cabac, true, 116, true); // sig_coeff_group_flag
+    encode_legacy_trace_cabac_event(cabac, true, 142, true); // sig_coeff_group_flag
+    encode_legacy_trace_cabac_event(cabac, true, 221, false); // last_sig_coeff_x_prefix
+    encode_legacy_trace_cabac_event(cabac, false, 205, false); // last_sig_coeff_y_prefix
     cabac.encode_bin_ep(false); // last_sig_coeff_suffix
-    cabac_ctx(cabac, false, 39, false); // sig_coeff_flag
-    cabac_ctx(cabac, false, 101, false); // sig_coeff_flag
-    cabac_ctx(cabac, false, 99, false); // sig_coeff_flag
-    cabac_ctx(cabac, true, 4, true); // sig_coeff_flag
-    cabac_ctx(cabac, false, 67, false); // abs_level_gtx_flag
+    encode_legacy_trace_cabac_event(cabac, false, 39, false); // sig_coeff_flag
+    encode_legacy_trace_cabac_event(cabac, false, 101, false); // sig_coeff_flag
+    encode_legacy_trace_cabac_event(cabac, false, 99, false); // sig_coeff_flag
+    encode_legacy_trace_cabac_event(cabac, true, 4, true); // sig_coeff_flag
+    encode_legacy_trace_cabac_event(cabac, false, 67, false); // abs_level_gtx_flag
     cabac.encode_bin_ep(false); // remainder_prefix
     cabac.encode_bin_ep(true); // coeff_sign_flag
-    cabac_ctx(cabac, false, 64, false); // ts_flag=0
-    cabac_ctx(cabac, false, 54, false); // mts_idx=0
+    encode_legacy_trace_cabac_event(cabac, false, 64, false); // ts_flag=0
+    encode_legacy_trace_cabac_event(cabac, false, 54, false); // mts_idx=0
 }
 
 fn encode_16x16_chroma_body(cabac: &mut ToyCabacEncoder) {
-    cabac_ctx(cabac, false, 40, false); // split_cu_mode split=1
-    cabac_ctx(cabac, false, 176, false); // split_cu_mode qt=1
-    cabac_ctx(cabac, false, 103, false); // split_cu_mode split=1
-    cabac_ctx(cabac, false, 130, false); // split_cu_mode qt=1
-    cabac_ctx(cabac, false, 88, false); // split_cu_mode split=1
-    cabac_ctx(cabac, false, 114, false); // split_cu_mode qt=1
-    cabac_ctx(cabac, false, 80, false); // split_cu_mode split=0
-    cabac_ctx(cabac, true, 4, true); // cbf_comp Cb=0
-    cabac_ctx(cabac, false, 53, false); // cbf_comp Cr=1
-    cabac_ctx(cabac, false, 26, false); // sig_coeff_group_flag
-    cabac_ctx(cabac, true, 96, false); // last_sig_coeff_x_prefix
-    cabac_ctx(cabac, false, 112, false); // last_sig_coeff_y_prefix
-    cabac_ctx(cabac, true, 4, true); // sig_coeff_flag
-    cabac_ctx(cabac, false, 72, false); // abs_level_gtx_flag
-    cabac_ctx(cabac, true, 112, true); // sig_coeff_flag
-    cabac_ctx(cabac, false, 72, false); // abs_level_gtx_flag
-    cabac_ctx(cabac, true, 88, true); // sig_coeff_flag
-    cabac_ctx(cabac, false, 84, false); // abs_level_gtx_flag
-    cabac_ctx(cabac, true, 4, true); // sig_coeff_flag
-    cabac_ctx(cabac, false, 206, true); // abs_level_gtx_flag
+    encode_legacy_trace_cabac_event(cabac, false, 40, false); // split_cu_mode split=1
+    encode_legacy_trace_cabac_event(cabac, false, 176, false); // split_cu_mode qt=1
+    encode_legacy_trace_cabac_event(cabac, false, 103, false); // split_cu_mode split=1
+    encode_legacy_trace_cabac_event(cabac, false, 130, false); // split_cu_mode qt=1
+    encode_legacy_trace_cabac_event(cabac, false, 88, false); // split_cu_mode split=1
+    encode_legacy_trace_cabac_event(cabac, false, 114, false); // split_cu_mode qt=1
+    encode_legacy_trace_cabac_event(cabac, false, 80, false); // split_cu_mode split=0
+    encode_legacy_trace_cabac_event(cabac, true, 4, true); // cbf_comp Cb=0
+    encode_legacy_trace_cabac_event(cabac, false, 53, false); // cbf_comp Cr=1
+    encode_legacy_trace_cabac_event(cabac, false, 26, false); // sig_coeff_group_flag
+    encode_legacy_trace_cabac_event(cabac, true, 96, false); // last_sig_coeff_x_prefix
+    encode_legacy_trace_cabac_event(cabac, false, 112, false); // last_sig_coeff_y_prefix
+    encode_legacy_trace_cabac_event(cabac, true, 4, true); // sig_coeff_flag
+    encode_legacy_trace_cabac_event(cabac, false, 72, false); // abs_level_gtx_flag
+    encode_legacy_trace_cabac_event(cabac, true, 112, true); // sig_coeff_flag
+    encode_legacy_trace_cabac_event(cabac, false, 72, false); // abs_level_gtx_flag
+    encode_legacy_trace_cabac_event(cabac, true, 88, true); // sig_coeff_flag
+    encode_legacy_trace_cabac_event(cabac, false, 84, false); // abs_level_gtx_flag
+    encode_legacy_trace_cabac_event(cabac, true, 4, true); // sig_coeff_flag
+    encode_legacy_trace_cabac_event(cabac, false, 206, true); // abs_level_gtx_flag
     cabac.encode_bin_ep(true); // remainder_prefix
     cabac.encode_bin_ep(true); // remainder_prefix
     cabac.encode_bin_ep(true); // remainder_prefix
     cabac.encode_bin_ep(true); // remainder_prefix
     cabac.encode_bin_ep(false); // remainder_suffix
     cabac.encode_bin_ep(true); // coeff_sign_flag
-    cabac_ctx(cabac, true, 160, false); // ts_flag=0
-    cabac_ctx(cabac, true, 29, false); // mts_idx=0
+    encode_legacy_trace_cabac_event(cabac, true, 160, false); // ts_flag=0
+    encode_legacy_trace_cabac_event(cabac, true, 29, false); // mts_idx=0
 
-    cabac_ctx(cabac, true, 172, true); // split_cu_mode split=0 at (4,0)
-    cabac_ctx(cabac, false, 107, false); // cbf_comp Cb(4,0)=0
-    cabac_ctx(cabac, false, 136, false); // cbf_comp Cr(4,0)=0
-    cabac_ctx(cabac, true, 67, false); // mts_idx=0 at (4,0)
-    cabac_ctx(cabac, false, 100, false); // split_cu_mode split=0 at (0,4)
-    cabac_ctx(cabac, false, 124, false); // cbf_comp Cb(0,4)=0
-    cabac_ctx(cabac, false, 160, false); // cbf_comp Cr(0,4)=0
-    cabac_ctx(cabac, false, 20, false); // mts_idx=0 at (0,4)
+    encode_legacy_trace_cabac_event(cabac, true, 172, true); // split_cu_mode split=0 at (4,0)
+    encode_legacy_trace_cabac_event(cabac, false, 107, false); // cbf_comp Cb(4,0)=0
+    encode_legacy_trace_cabac_event(cabac, false, 136, false); // cbf_comp Cr(4,0)=0
+    encode_legacy_trace_cabac_event(cabac, true, 67, false); // mts_idx=0 at (4,0)
+    encode_legacy_trace_cabac_event(cabac, false, 100, false); // split_cu_mode split=0 at (0,4)
+    encode_legacy_trace_cabac_event(cabac, false, 124, false); // cbf_comp Cb(0,4)=0
+    encode_legacy_trace_cabac_event(cabac, false, 160, false); // cbf_comp Cr(0,4)=0
+    encode_legacy_trace_cabac_event(cabac, false, 20, false); // mts_idx=0 at (0,4)
     cabac.encode_bin_ep(true); // alignment before final chroma block
-    cabac_ctx(cabac, true, 169, true); // split_cu_mode split=0 at (4,4)
-    cabac_ctx(cabac, false, 103, false); // cbf_comp Cb(4,4)=0
-    cabac_ctx(cabac, false, 147, false); // cbf_comp Cr(4,4)=0
-    cabac_ctx(cabac, false, 68, false); // mts_idx=0 at (4,4)
-    cabac_ctx(cabac, true, 140, true); // final empty-tu context
-    cabac_ctx(cabac, false, 103, false); // final empty-tu context
-    cabac_ctx(cabac, false, 119, false); // final empty-tu context
-    cabac_ctx(cabac, false, 56, false); // final empty-tu context
-    cabac_ctx(cabac, false, 118, true); // final empty-tu context
-    cabac_ctx(cabac, false, 130, false); // final empty-tu context
-    cabac_ctx(cabac, false, 104, false); // final cbf cleanup
-    cabac_ctx(cabac, false, 81, false); // final cbf cleanup
+    encode_legacy_trace_cabac_event(cabac, true, 169, true); // split_cu_mode split=0 at (4,4)
+    encode_legacy_trace_cabac_event(cabac, false, 103, false); // cbf_comp Cb(4,4)=0
+    encode_legacy_trace_cabac_event(cabac, false, 147, false); // cbf_comp Cr(4,4)=0
+    encode_legacy_trace_cabac_event(cabac, false, 68, false); // mts_idx=0 at (4,4)
+    encode_legacy_trace_cabac_event(cabac, true, 140, true); // final empty-tu context
+    encode_legacy_trace_cabac_event(cabac, false, 103, false); // final empty-tu context
+    encode_legacy_trace_cabac_event(cabac, false, 119, false); // final empty-tu context
+    encode_legacy_trace_cabac_event(cabac, false, 56, false); // final empty-tu context
+    encode_legacy_trace_cabac_event(cabac, false, 118, true); // final empty-tu context
+    encode_legacy_trace_cabac_event(cabac, false, 130, false); // final empty-tu context
+    encode_legacy_trace_cabac_event(cabac, false, 104, false); // final cbf cleanup
+    encode_legacy_trace_cabac_event(cabac, false, 81, false); // final cbf cleanup
 }
 
-fn cabac_ctx(cabac: &mut ToyCabacEncoder, bin: bool, lps: u16, mps: bool) {
+// Legacy direct CABAC event bridge. Unlike encode_legacy_trace_cabac_word(),
+// these call sites already spell out bin/lps/mps, but they are still
+// trace-derived and should be replaced by named context-model syntax emitters.
+fn encode_legacy_trace_cabac_event(cabac: &mut ToyCabacEncoder, bin: bool, lps: u16, mps: bool) {
     cabac.encode_bin(bin, ToyCtxEvent { lps, mps });
 }
 
