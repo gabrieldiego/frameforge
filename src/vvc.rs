@@ -1859,10 +1859,8 @@ enum ToyVvcCabacContext {
 impl ToyVvcCabacContext {
     fn init_value(self) -> u8 {
         match self {
-            // VTM Contexts.cpp, I-slice initialization table. Keeping the
-            // table local to the encoder makes the syntax writer derive CABAC
-            // probability state from the selected syntax context instead of
-            // consuming pre-generated lps/mps pairs.
+            // ITU-T H.266 Tables 59, 60, 72, 75, 76, 79, 81, and 112-114,
+            // I-slice initializationType. See docs/vvc-cabac-subset.md.
             ToyVvcCabacContext::SplitFlag(ctx) => {
                 const I_SLICE_INIT: [u8; 9] = [19, 28, 38, 27, 29, 38, 20, 30, 31];
                 I_SLICE_INIT[ctx as usize]
@@ -1916,8 +1914,8 @@ impl ToyVvcCabacContext {
                 const LOG2_WINDOW: [u8; 2] = [1, 5];
                 LOG2_WINDOW[ctx as usize]
             }
-            ToyVvcCabacContext::CclmModeFlag => 9,
-            ToyVvcCabacContext::IntraChromaPredMode => 9,
+            ToyVvcCabacContext::CclmModeFlag => 4,
+            ToyVvcCabacContext::IntraChromaPredMode => 5,
             ToyVvcCabacContext::QtCbfY(ctx) => {
                 const LOG2_WINDOW: [u8; 4] = [5, 1, 8, 9];
                 LOG2_WINDOW[ctx as usize]

@@ -2008,7 +2008,7 @@ module ff_vvc_generated_cabac_body (
 
   function automatic logic [3:0] vvc_cclm_mode_flag_log2_window();
     begin
-      vvc_cclm_mode_flag_log2_window = 4'd9;
+      vvc_cclm_mode_flag_log2_window = 4'd4;
     end
   endfunction
 
@@ -2020,7 +2020,7 @@ module ff_vvc_generated_cabac_body (
 
   function automatic logic [3:0] vvc_intra_chroma_pred_mode_log2_window();
     begin
-      vvc_intra_chroma_pred_mode_log2_window = 4'd9;
+      vvc_intra_chroma_pred_mode_log2_window = 4'd5;
     end
   endfunction
 
