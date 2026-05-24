@@ -2288,6 +2288,152 @@ module ff_vvc_generated_cabac_body (
     end
   endfunction
 
+  function automatic logic [7:0] vvc_sb_coded_flag_init(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_sb_coded_flag_init = 8'd18;
+        4'd1: vvc_sb_coded_flag_init = 8'd31;
+        4'd2: vvc_sb_coded_flag_init = 8'd25;
+        4'd3: vvc_sb_coded_flag_init = 8'd15;
+        4'd4: vvc_sb_coded_flag_init = 8'd18;
+        4'd5: vvc_sb_coded_flag_init = 8'd20;
+        default: vvc_sb_coded_flag_init = 8'd38;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_sb_coded_flag_log2_window(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_sb_coded_flag_log2_window = 4'd8;
+        4'd1: vvc_sb_coded_flag_log2_window = 4'd5;
+        4'd2: vvc_sb_coded_flag_log2_window = 4'd5;
+        4'd3: vvc_sb_coded_flag_log2_window = 4'd8;
+        4'd4: vvc_sb_coded_flag_log2_window = 4'd5;
+        4'd5: vvc_sb_coded_flag_log2_window = 4'd8;
+        default: vvc_sb_coded_flag_log2_window = 4'd8;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [7:0] vvc_sig_coeff_flag_init(input logic [5:0] index);
+    logic [503:0] lut;
+    begin
+      // Table 123 I-slice ctxIdx 0..62. Future P/B initialization rows should
+      // be separate functions rather than overloading this subset helper.
+      lut = {
+        8'd25, 8'd19, 8'd28, 8'd14, 8'd25, 8'd20, 8'd29, 8'd30,
+        8'd19, 8'd37, 8'd30, 8'd38, 8'd11, 8'd38, 8'd46, 8'd54,
+        8'd27, 8'd39, 8'd39, 8'd39, 8'd44, 8'd39, 8'd39, 8'd39,
+        8'd18, 8'd39, 8'd39, 8'd39, 8'd27, 8'd39, 8'd39, 8'd39,
+        8'd0,  8'd39, 8'd39, 8'd39, 8'd25, 8'd27, 8'd28, 8'd37,
+        8'd34, 8'd53, 8'd53, 8'd46, 8'd19, 8'd46, 8'd38, 8'd39,
+        8'd52, 8'd39, 8'd39, 8'd39, 8'd11, 8'd39, 8'd39, 8'd39,
+        8'd19, 8'd39, 8'd39, 8'd39, 8'd25, 8'd28, 8'd38
+      };
+      vvc_sig_coeff_flag_init = lut[((6'd62 - index) * 8) +: 8];
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_sig_coeff_flag_log2_window(input logic [5:0] index);
+    logic [251:0] lut;
+    begin
+      lut = {
+        4'd12, 4'd9, 4'd9, 4'd10, 4'd9, 4'd9, 4'd9, 4'd10,
+        4'd8,  4'd8, 4'd8, 4'd10, 4'd9, 4'd13, 4'd8, 4'd8,
+        4'd8,  4'd8, 4'd8, 4'd5,  4'd8, 4'd0,  4'd0, 4'd0,
+        4'd8,  4'd8, 4'd8, 4'd8,  4'd8, 4'd0,  4'd4, 4'd4,
+        4'd0,  4'd0, 4'd0, 4'd0,  4'd12,4'd12, 4'd9, 4'd13,
+        4'd4,  4'd5, 4'd8, 4'd9,  4'd8, 4'd12, 4'd12,4'd8,
+        4'd4,  4'd0, 4'd0, 4'd0,  4'd8, 4'd8,  4'd8, 4'd8,
+        4'd4,  4'd0, 4'd0, 4'd0,  4'd13,4'd13, 4'd8
+      };
+      vvc_sig_coeff_flag_log2_window = lut[((6'd62 - index) * 4) +: 4];
+    end
+  endfunction
+
+  function automatic logic [7:0] vvc_par_level_flag_init(input logic [5:0] index);
+    logic [263:0] lut;
+    begin
+      // Table 124 I-slice ctxIdx 0..32.
+      lut = {
+        8'd33, 8'd25, 8'd18, 8'd26, 8'd34, 8'd27, 8'd25, 8'd26,
+        8'd19, 8'd42, 8'd35, 8'd33, 8'd19, 8'd27, 8'd35, 8'd35,
+        8'd34, 8'd42, 8'd20, 8'd43, 8'd20, 8'd33, 8'd25, 8'd26,
+        8'd42, 8'd19, 8'd27, 8'd26, 8'd50, 8'd35, 8'd20, 8'd43,
+        8'd11
+      };
+      vvc_par_level_flag_init = lut[((6'd32 - index) * 8) +: 8];
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_par_level_flag_log2_window(input logic [5:0] index);
+    logic [131:0] lut;
+    begin
+      lut = {
+        4'd8,  4'd9,  4'd12, 4'd13, 4'd13, 4'd13, 4'd10, 4'd13,
+        4'd13, 4'd13, 4'd13, 4'd13, 4'd13, 4'd13, 4'd13, 4'd13,
+        4'd10, 4'd13, 4'd13, 4'd13, 4'd13, 4'd8,  4'd12, 4'd12,
+        4'd12, 4'd13, 4'd13, 4'd13, 4'd13, 4'd13, 4'd13, 4'd13,
+        4'd6
+      };
+      vvc_par_level_flag_log2_window = lut[((6'd32 - index) * 4) +: 4];
+    end
+  endfunction
+
+  function automatic logic [7:0] vvc_abs_level_gtx_flag_init(input logic [5:0] index);
+    logic [255:0] lut;
+    begin
+      // Table 125 I-slice ctxIdx 0..31 currently cached for the residual path.
+      lut = {
+        8'd25, 8'd25, 8'd11, 8'd27, 8'd20, 8'd21, 8'd33, 8'd12,
+        8'd28, 8'd21, 8'd22, 8'd34, 8'd28, 8'd29, 8'd29, 8'd30,
+        8'd36, 8'd29, 8'd45, 8'd30, 8'd23, 8'd40, 8'd33, 8'd27,
+        8'd28, 8'd21, 8'd37, 8'd36, 8'd37, 8'd45, 8'd38, 8'd46
+      };
+      vvc_abs_level_gtx_flag_init = lut[((6'd31 - index) * 8) +: 8];
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_abs_level_gtx_flag_log2_window(input logic [5:0] index);
+    logic [127:0] lut;
+    begin
+      lut = {
+        4'd9,  4'd5, 4'd10, 4'd13, 4'd13, 4'd10, 4'd9, 4'd10,
+        4'd13, 4'd13,4'd13, 4'd9,  4'd10, 4'd10, 4'd10,4'd13,
+        4'd8,  4'd9, 4'd10, 4'd10, 4'd13, 4'd8,  4'd8, 4'd9,
+        4'd12, 4'd12,4'd10, 4'd5,  4'd9,  4'd9,  4'd9, 4'd13
+      };
+      vvc_abs_level_gtx_flag_log2_window = lut[((6'd31 - index) * 4) +: 4];
+    end
+  endfunction
+
+  function automatic logic [7:0] vvc_coeff_sign_flag_init(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_coeff_sign_flag_init = 8'd12;
+        4'd1: vvc_coeff_sign_flag_init = 8'd17;
+        4'd2: vvc_coeff_sign_flag_init = 8'd46;
+        4'd3: vvc_coeff_sign_flag_init = 8'd28;
+        4'd4: vvc_coeff_sign_flag_init = 8'd25;
+        default: vvc_coeff_sign_flag_init = 8'd46;
+      endcase
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_coeff_sign_flag_log2_window(input logic [3:0] index);
+    begin
+      case (index)
+        4'd0: vvc_coeff_sign_flag_log2_window = 4'd1;
+        4'd1: vvc_coeff_sign_flag_log2_window = 4'd4;
+        4'd2: vvc_coeff_sign_flag_log2_window = 4'd4;
+        4'd3: vvc_coeff_sign_flag_log2_window = 4'd5;
+        4'd4: vvc_coeff_sign_flag_log2_window = 4'd8;
+        default: vvc_coeff_sign_flag_log2_window = 4'd8;
+      endcase
+    end
+  endfunction
+
   function automatic logic [8:0] vvc_ctx_lps(input logic [4:0] index);
     begin
       case (index)
