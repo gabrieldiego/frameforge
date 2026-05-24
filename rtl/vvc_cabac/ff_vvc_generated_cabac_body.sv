@@ -1500,6 +1500,38 @@ module ff_vvc_generated_cabac_body (
     end
   endfunction
 
+  function automatic logic [5:0] vvc_last_sig_coeff_prefix_ctx(
+    input logic       is_luma,
+    input logic [2:0] log2_tb_size,
+    input logic [5:0] bin_idx
+  );
+    logic [5:0] offset;
+    logic [2:0] shift;
+    begin
+      // VVC 9.3.4.2.4 derives ctxInc for last_sig_coeff_x_prefix and
+      // last_sig_coeff_y_prefix from binIdx, component, and transform block
+      // size. See docs/vvc-cabac-subset.md.
+      if (is_luma) begin
+        case (log2_tb_size)
+          3'd1: offset = 6'd0;
+          3'd2: offset = 6'd0;
+          3'd3: offset = 6'd3;
+          3'd4: offset = 6'd6;
+          3'd5: offset = 6'd10;
+          default: offset = 6'd15;
+        endcase
+        shift = (log2_tb_size + 3'd1) >> 2;
+      end else begin
+        offset = 6'd20;
+        shift = ((log2_tb_size << 1) >> 3);
+        if (shift > 3'd2) begin
+          shift = 3'd2;
+        end
+      end
+      vvc_last_sig_coeff_prefix_ctx = (bin_idx >> shift) + offset;
+    end
+  endfunction
+
   function automatic logic vvc_prob_model_mps(input vvc_prob_model_t model);
     logic [7:0] state;
     begin

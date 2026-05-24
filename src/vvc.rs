@@ -3055,6 +3055,32 @@ impl VvcQtSplitCtxInput {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+struct VvcLastSigCoeffPrefixCtxInput {
+    is_luma: bool,
+    log2_tb_size: u8,
+    bin_idx: u8,
+}
+
+#[allow(dead_code)]
+impl VvcLastSigCoeffPrefixCtxInput {
+    fn ctx_inc(self) -> u8 {
+        // VVC 9.3.4.2.4 derives ctxInc for last_sig_coeff_x_prefix and
+        // last_sig_coeff_y_prefix from binIdx, component, and transform block
+        // size. See docs/vvc-cabac-subset.md.
+        if self.is_luma {
+            const OFFSET_Y: [u8; 6] = [0, 0, 3, 6, 10, 15];
+            let offset = OFFSET_Y[(self.log2_tb_size - 1) as usize];
+            let shift = (self.log2_tb_size + 1) >> 2;
+            (self.bin_idx >> shift) + offset
+        } else {
+            let shift = ((2 * self.log2_tb_size) >> 3).min(2);
+            (self.bin_idx >> shift) + 20
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VvcCtuCabacOp {
     QtSplit { node: VvcCodingTreeNode },
     LumaLeaf { node: VvcCodingTreeNode },
@@ -5332,6 +5358,37 @@ mod tests {
             }
             .split_qt_flag_ctx(),
             5
+        );
+    }
+
+    #[test]
+    fn vvc_last_sig_prefix_context_uses_spec_geometry_formula() {
+        assert_eq!(
+            VvcLastSigCoeffPrefixCtxInput {
+                is_luma: true,
+                log2_tb_size: 2,
+                bin_idx: 0,
+            }
+            .ctx_inc(),
+            0
+        );
+        assert_eq!(
+            VvcLastSigCoeffPrefixCtxInput {
+                is_luma: true,
+                log2_tb_size: 4,
+                bin_idx: 3,
+            }
+            .ctx_inc(),
+            7
+        );
+        assert_eq!(
+            VvcLastSigCoeffPrefixCtxInput {
+                is_luma: false,
+                log2_tb_size: 3,
+                bin_idx: 2,
+            }
+            .ctx_inc(),
+            22
         );
     }
 

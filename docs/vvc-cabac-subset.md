@@ -15,6 +15,7 @@ used by the software and RTL implementations.
 | Tables 59-60 | 420 | 406 |
 | Tables 72, 75, 76, 79, 81 | 422-424 | 408-410 |
 | Tables 112-114 | 431-432 | 417-418 |
+| Tables 118-126 | 432-436 | 418-422 |
 | Table 127 subset | 439 | 425 |
 | Table 132 subset | 450 | 436 |
 | Table 133 subset | 454 | 440 |
@@ -153,6 +154,133 @@ From Table 132:
 For the current subset, `intra_bdpcm_chroma_flag` is not enabled, so
 `tu_cb_coded_flag` uses ctxInc `0`, and `tu_cr_coded_flag` uses ctxInc equal to
 the previously coded Cb coded flag for the colocated chroma TU.
+
+## Residual Coding Tables To Replace Trace Bodies
+
+These rows are the next target for replacing legacy trace-derived residual CABAC
+words. They are cached here before implementation because the PDF-to-text output
+for the large residual tables is easy to misread.
+
+### Table 98: `mts_idx`
+
+For I slices, Table 51 maps `mts_idx` to ctxIdx `0..3`.
+
+| ctxIdx | 0 | 1 | 2 | 3 |
+| --- | ---: | ---: | ---: | ---: |
+| initValue | 29 | 0 | 28 | 0 |
+| shiftIdx | 8 | 0 | 9 | 0 |
+
+Table 132 maps `mts_idx` binIdx `0..3` to ctxInc `0..3`.
+
+### Table 118: `transform_skip_flag`
+
+For I slices, Table 51 maps `transform_skip_flag` to ctxIdx `0..1`.
+
+| ctxIdx | 0 | 1 |
+| --- | ---: | ---: |
+| initValue | 25 | 9 |
+| shiftIdx | 1 | 1 |
+
+Table 132 maps binIdx `0` to ctxInc `0` for luma and `1` for chroma.
+
+### Tables 120-121: last significant coefficient prefixes
+
+For I slices, Table 51 maps both `last_sig_coeff_x_prefix` and
+`last_sig_coeff_y_prefix` to ctxIdx `0..22`.
+
+`last_sig_coeff_x_prefix`:
+
+| ctxIdx | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| initValue | 13 | 5 | 4 | 21 | 14 | 4 | 6 | 14 | 21 | 11 | 14 | 7 | 14 | 5 | 11 | 21 | 30 | 22 | 13 | 42 | 12 | 4 | 3 |
+| shiftIdx | 8 | 5 | 4 | 5 | 4 | 4 | 5 | 4 | 1 | 0 | 4 | 1 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 5 | 4 | 4 |
+
+`last_sig_coeff_y_prefix`:
+
+| ctxIdx | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| initValue | 13 | 5 | 4 | 6 | 13 | 11 | 14 | 6 | 5 | 3 | 14 | 22 | 6 | 4 | 3 | 6 | 22 | 29 | 20 | 34 | 12 | 4 | 3 |
+| shiftIdx | 8 | 5 | 8 | 5 | 5 | 4 | 5 | 5 | 4 | 0 | 5 | 4 | 1 | 0 | 0 | 1 | 4 | 0 | 0 | 0 | 6 | 5 | 5 |
+
+Clause 9.3.4.2.4 derives ctxInc from `binIdx`, component, and transform block
+size:
+
+```text
+if cIdx == 0:
+  ctxOffset = offsetY[log2TbSize - 1]
+  ctxShift = (log2TbSize + 1) >> 2
+  offsetY = {0, 0, 3, 6, 10, 15}
+else:
+  ctxOffset = 20
+  ctxShift = Clip3(0, 2, (2 * log2TbSize) >> 3)
+
+ctxInc = (binIdx >> ctxShift) + ctxOffset
+```
+
+For the current 4x4 luma transform subset, `log2TbSize = 2`, so
+`ctxOffset = 0`, `ctxShift = 0`, and the prefix bins use ctxInc equal to
+`binIdx`.
+
+### Tables 122-126: coefficient flags
+
+For I slices, Table 51 maps:
+
+| Syntax element | I-slice ctxIdx range |
+| --- | --- |
+| `sb_coded_flag` | `0..6` |
+| `sig_coeff_flag` | `0..62` |
+| `par_level_flag` | `0..32` |
+| `abs_level_gtx_flag` | `0..71` |
+| `coeff_sign_flag` | `0..5` |
+
+`sb_coded_flag`:
+
+| ctxIdx | 0 | 1 | 2 | 3 | 4 | 5 | 6 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| initValue | 18 | 31 | 25 | 15 | 18 | 20 | 38 |
+| shiftIdx | 8 | 5 | 5 | 8 | 5 | 8 | 8 |
+
+`sig_coeff_flag`, I-slice subset:
+
+| ctxIdx | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| initValue | 25 | 19 | 28 | 14 | 25 | 20 | 29 | 30 | 19 | 37 | 30 | 38 | 11 | 38 | 46 | 54 |
+| shiftIdx | 12 | 9 | 9 | 10 | 9 | 9 | 9 | 10 | 8 | 8 | 8 | 10 | 9 | 13 | 8 | 8 |
+
+| ctxIdx | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 | 31 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| initValue | 27 | 39 | 39 | 39 | 44 | 39 | 39 | 39 | 18 | 39 | 39 | 39 | 27 | 39 | 39 | 39 |
+| shiftIdx | 8 | 8 | 8 | 5 | 8 | 0 | 0 | 0 | 8 | 8 | 8 | 8 | 8 | 0 | 4 | 4 |
+
+| ctxIdx | 32 | 33 | 34 | 35 | 36 | 37 | 38 | 39 | 40 | 41 | 42 | 43 | 44 | 45 | 46 | 47 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| initValue | 0 | 39 | 39 | 39 | 25 | 27 | 28 | 37 | 34 | 53 | 53 | 46 | 19 | 46 | 38 | 39 |
+| shiftIdx | 0 | 0 | 0 | 0 | 12 | 12 | 9 | 13 | 4 | 5 | 8 | 9 | 8 | 12 | 12 | 8 |
+
+| ctxIdx | 48 | 49 | 50 | 51 | 52 | 53 | 54 | 55 | 56 | 57 | 58 | 59 | 60 | 61 | 62 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| initValue | 52 | 39 | 39 | 39 | 11 | 39 | 39 | 39 | 19 | 39 | 39 | 39 | 25 | 28 | 38 |
+| shiftIdx | 4 | 0 | 0 | 0 | 8 | 8 | 8 | 8 | 4 | 0 | 0 | 0 | 13 | 13 | 8 |
+
+`abs_level_gtx_flag`, first I-slice coefficient-set subset currently needed by
+the trace replacement work:
+
+| ctxIdx | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| initValue | 25 | 25 | 11 | 27 | 20 | 21 | 33 | 12 | 28 | 21 | 22 | 34 | 28 | 29 | 29 | 30 |
+| shiftIdx | 9 | 5 | 10 | 13 | 13 | 10 | 9 | 10 | 13 | 13 | 13 | 9 | 10 | 10 | 10 | 13 |
+
+| ctxIdx | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 | 31 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| initValue | 36 | 29 | 45 | 30 | 23 | 40 | 33 | 27 | 28 | 21 | 37 | 36 | 37 | 45 | 38 | 46 |
+| shiftIdx | 8 | 9 | 10 | 10 | 13 | 8 | 8 | 9 | 12 | 12 | 10 | 5 | 9 | 9 | 9 | 13 |
+
+`coeff_sign_flag`:
+
+| ctxIdx | 0 | 1 | 2 | 3 | 4 | 5 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| initValue | 12 | 17 | 46 | 28 | 25 | 46 |
+| shiftIdx | 1 | 4 | 4 | 5 | 8 | 8 |
 
 ## Left/Above Context Derivation
 
