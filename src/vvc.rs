@@ -3973,6 +3973,13 @@ impl VvcResidualPass1State {
 
 #[allow(dead_code)]
 impl VvcResidualCabacSymbolStream {
+    fn from_quantized_luma_4x4_dc(block: Toy4x4QuantizedTransformBlock) -> Self {
+        Self::luma_4x4_dc_only(
+            block.abs_remainder,
+            block.reconstructed_dc_coeff < 0 && block.abs_remainder != 0,
+        )
+    }
+
     fn luma_4x4_dc_only(abs_level: u8, negative: bool) -> Self {
         // This is the first generated residual subset: one 4x4 luma TU with
         // only the DC coefficient significant. AC coefficient scan syntax will
@@ -6511,6 +6518,40 @@ mod tests {
                 y: 0,
                 significant: false
             }
+        );
+    }
+
+    #[test]
+    fn vvc_residual_symbol_stream_can_be_derived_from_quantized_luma_block() {
+        let black = quantize_toy_4x4_luma_dc(transform_toy_4x4_luma([0; 16]));
+        let stream = VvcResidualCabacSymbolStream::from_quantized_luma_4x4_dc(black);
+        assert_eq!(stream.pass1_state.abs_level_pass1_at(0, 0), 3);
+        assert!(stream
+            .symbols
+            .contains(&VvcResidualCabacSymbol::AbsRemainder {
+                x: 0,
+                y: 0,
+                value: 14,
+                rice_param: 0
+            }));
+        assert_eq!(
+            stream.symbols.last(),
+            Some(&VvcResidualCabacSymbol::CoeffSignFlag {
+                x: 0,
+                y: 0,
+                negative: true
+            })
+        );
+
+        let white = quantize_toy_4x4_luma_dc(transform_toy_4x4_luma([255; 16]));
+        let white_stream = VvcResidualCabacSymbolStream::from_quantized_luma_4x4_dc(white);
+        assert_eq!(
+            white_stream.symbols.last(),
+            Some(&VvcResidualCabacSymbol::SigCoeffFlag {
+                x: 0,
+                y: 0,
+                significant: false
+            })
         );
     }
 
