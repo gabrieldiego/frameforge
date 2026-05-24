@@ -1945,9 +1945,11 @@ impl ToyVvcCabacContext {
                 I_SLICE_INIT[ctx as usize]
             }
             ToyVvcCabacContext::AbsLevelGtxFlag(ctx) => {
-                const I_SLICE_INIT: [u8; 32] = [
+                const I_SLICE_INIT: [u8; 72] = [
                     25, 25, 11, 27, 20, 21, 33, 12, 28, 21, 22, 34, 28, 29, 29, 30, 36, 29, 45, 30,
-                    23, 40, 33, 27, 28, 21, 37, 36, 37, 45, 38, 46,
+                    23, 40, 33, 27, 28, 21, 37, 36, 37, 45, 38, 46, 25, 1, 40, 25, 33, 11, 17, 25,
+                    25, 18, 4, 17, 33, 26, 19, 13, 33, 19, 20, 28, 22, 40, 9, 25, 18, 26, 35, 25,
+                    26, 35, 28, 37, 11, 5, 5, 14, 10, 3, 3, 3,
                 ];
                 I_SLICE_INIT[ctx as usize]
             }
@@ -2031,9 +2033,11 @@ impl ToyVvcCabacContext {
                 LOG2_WINDOW[ctx as usize]
             }
             ToyVvcCabacContext::AbsLevelGtxFlag(ctx) => {
-                const LOG2_WINDOW: [u8; 32] = [
+                const LOG2_WINDOW: [u8; 72] = [
                     9, 5, 10, 13, 13, 10, 9, 10, 13, 13, 13, 9, 10, 10, 10, 13, 8, 9, 10, 10, 13,
-                    8, 8, 9, 12, 12, 10, 5, 9, 9, 9, 13,
+                    8, 8, 9, 12, 12, 10, 5, 9, 9, 9, 13, 1, 5, 9, 9, 9, 6, 5, 9, 10, 10, 9, 9, 9,
+                    9, 9, 9, 6, 8, 9, 9, 10, 1, 5, 8, 8, 9, 6, 6, 9, 8, 8, 9, 4, 2, 1, 6, 1, 1, 1,
+                    1,
                 ];
                 LOG2_WINDOW[ctx as usize]
             }
@@ -2064,7 +2068,7 @@ struct ToyVvcCabacContexts {
     sb_coded_flag: [ToyCabacProbModel; 7],
     sig_coeff_flag: [ToyCabacProbModel; 63],
     par_level_flag: [ToyCabacProbModel; 33],
-    abs_level_gtx_flag: [ToyCabacProbModel; 32],
+    abs_level_gtx_flag: [ToyCabacProbModel; 72],
     coeff_sign_flag: [ToyCabacProbModel; 6],
 }
 
@@ -3388,6 +3392,372 @@ impl VvcLastSigCoeffPrefixCtxInput {
             let shift = ((2 * self.log2_tb_size) >> 3).min(2);
             (self.bin_idx >> shift) + 20
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+struct VvcResidualCtxConfig {
+    component: ToyResidualComponent,
+    log2_zo_tb_width: u8,
+    log2_zo_tb_height: u8,
+    q_state: u8,
+    transform_skip: bool,
+    ts_residual_coding_disabled: bool,
+    bdpcm: bool,
+    last_significant_x: u8,
+    last_significant_y: u8,
+}
+
+#[allow(dead_code)]
+impl VvcResidualCtxConfig {
+    fn luma_4x4_subset(last_significant_x: u8, last_significant_y: u8) -> Self {
+        Self {
+            component: ToyResidualComponent::Luma,
+            log2_zo_tb_width: 2,
+            log2_zo_tb_height: 2,
+            q_state: 0,
+            transform_skip: false,
+            ts_residual_coding_disabled: true,
+            bdpcm: false,
+            last_significant_x,
+            last_significant_y,
+        }
+    }
+
+    fn is_luma(self) -> bool {
+        self.component == ToyResidualComponent::Luma
+    }
+
+    fn transform_skip_residual_enabled(self) -> bool {
+        self.transform_skip && !self.ts_residual_coding_disabled
+    }
+
+    fn tb_width(self) -> usize {
+        1usize << self.log2_zo_tb_width
+    }
+
+    fn tb_height(self) -> usize {
+        1usize << self.log2_zo_tb_height
+    }
+
+    fn coefficient_count(self) -> usize {
+        self.tb_width() * self.tb_height()
+    }
+
+    fn coefficient_index(self, x: u8, y: u8) -> usize {
+        assert!((x as usize) < self.tb_width());
+        assert!((y as usize) < self.tb_height());
+        y as usize * self.tb_width() + x as usize
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+struct VvcResidualPass1State {
+    config: VvcResidualCtxConfig,
+    sig_coeff: Vec<bool>,
+    abs_level_pass1: Vec<u8>,
+    coeff_sign_level: Vec<i8>,
+    sb_coded: Vec<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+struct VvcResidualLocalStats {
+    loc_num_sig: u8,
+    loc_sum_abs_pass1: u8,
+}
+
+#[allow(dead_code)]
+impl VvcResidualPass1State {
+    fn new(config: VvcResidualCtxConfig) -> Self {
+        Self {
+            config,
+            sig_coeff: vec![false; config.coefficient_count()],
+            abs_level_pass1: vec![0; config.coefficient_count()],
+            coeff_sign_level: vec![0; config.coefficient_count()],
+            sb_coded: vec![false; config.subblock_count()],
+        }
+    }
+
+    fn set_pass1_coeff(&mut self, x: u8, y: u8, abs_level_pass1: u8, negative: bool) {
+        let index = self.config.coefficient_index(x, y);
+        self.sig_coeff[index] = abs_level_pass1 != 0;
+        self.abs_level_pass1[index] = abs_level_pass1;
+        self.coeff_sign_level[index] = if abs_level_pass1 == 0 {
+            0
+        } else if negative {
+            -1
+        } else {
+            1
+        };
+    }
+
+    fn set_sb_coded(&mut self, x_s: u8, y_s: u8, coded: bool) {
+        let index = self.config.subblock_index(x_s, y_s);
+        self.sb_coded[index] = coded;
+    }
+
+    fn sb_coded_flag_ctx_inc(&self, x_s: u8, y_s: u8) -> u8 {
+        // VVC 9.3.4.2.6. Keep transform-skip and regular residual paths
+        // separate because future screen-content tools will use both.
+        let mut csbf_ctx = 0;
+        if self.config.transform_skip_residual_enabled() {
+            if x_s > 0 && self.sb_coded_at(x_s - 1, y_s) {
+                csbf_ctx += 1;
+            }
+            if y_s > 0 && self.sb_coded_at(x_s, y_s - 1) {
+                csbf_ctx += 1;
+            }
+            4 + csbf_ctx
+        } else {
+            if (x_s as usize) + 1 < self.config.subblocks_wide() && self.sb_coded_at(x_s + 1, y_s) {
+                csbf_ctx += 1;
+            }
+            if (y_s as usize) + 1 < self.config.subblocks_high() && self.sb_coded_at(x_s, y_s + 1) {
+                csbf_ctx += 1;
+            }
+            if self.config.is_luma() {
+                csbf_ctx.min(1)
+            } else {
+                2 + csbf_ctx.min(1)
+            }
+        }
+    }
+
+    fn sig_coeff_flag_ctx_inc(&self, x: u8, y: u8) -> u8 {
+        // VVC 9.3.4.2.8. QState is kept explicit even though the current
+        // subset initializes it to zero for the simple residual path.
+        let stats = self.local_stats(x, y);
+        if self.config.transform_skip_residual_enabled() {
+            60 + stats.loc_num_sig
+        } else {
+            let d = x + y;
+            let sum_bucket = ((stats.loc_sum_abs_pass1 + 1) >> 1).min(3);
+            let q_bucket = 12 * self.config.q_state.saturating_sub(1);
+            if self.config.is_luma() {
+                q_bucket
+                    + sum_bucket
+                    + if d < 2 {
+                        8
+                    } else if d < 5 {
+                        4
+                    } else {
+                        0
+                    }
+            } else {
+                36 + (8 * self.config.q_state.saturating_sub(1))
+                    + sum_bucket
+                    + if d < 2 { 4 } else { 0 }
+            }
+        }
+    }
+
+    fn par_level_flag_ctx_inc(&self, x: u8, y: u8) -> u8 {
+        self.par_or_abs_level_ctx_inc(x, y, false, 0)
+    }
+
+    fn abs_level_gtx_flag_ctx_inc(&self, x: u8, y: u8, gtx_idx: u8) -> u8 {
+        self.par_or_abs_level_ctx_inc(x, y, true, gtx_idx)
+    }
+
+    fn coeff_sign_flag_ts_ctx_inc(&self, x: u8, y: u8) -> u8 {
+        // VVC 9.3.4.2.10 is used only for transform-skip sign contexts.
+        // Regular residual sign bins remain bypass-coded in the current path.
+        debug_assert!(self.config.transform_skip_residual_enabled());
+        let left_sign = if x == 0 {
+            0
+        } else {
+            self.coeff_sign_level_at(x - 1, y)
+        };
+        let above_sign = if y == 0 {
+            0
+        } else {
+            self.coeff_sign_level_at(x, y - 1)
+        };
+        if (left_sign == 0 && above_sign == 0) || left_sign == -above_sign {
+            if self.config.bdpcm {
+                3
+            } else {
+                0
+            }
+        } else if left_sign >= 0 && above_sign >= 0 {
+            if self.config.bdpcm {
+                4
+            } else {
+                1
+            }
+        } else if self.config.bdpcm {
+            5
+        } else {
+            2
+        }
+    }
+
+    fn local_stats(&self, x: u8, y: u8) -> VvcResidualLocalStats {
+        // VVC 9.3.4.2.7. The regular transform path looks forward in raster
+        // coordinates because coefficients are scanned in reverse order.
+        let mut loc_num_sig = 0;
+        let mut loc_sum_abs_pass1 = 0;
+        if self.config.transform_skip_residual_enabled() {
+            if x > 0 {
+                self.accumulate_local(x - 1, y, &mut loc_num_sig, &mut loc_sum_abs_pass1);
+            }
+            if y > 0 {
+                self.accumulate_local(x, y - 1, &mut loc_num_sig, &mut loc_sum_abs_pass1);
+            }
+        } else {
+            if (x as usize) + 1 < self.config.tb_width() {
+                self.accumulate_local(x + 1, y, &mut loc_num_sig, &mut loc_sum_abs_pass1);
+                if (x as usize) + 2 < self.config.tb_width() {
+                    self.accumulate_local(x + 2, y, &mut loc_num_sig, &mut loc_sum_abs_pass1);
+                }
+                if (y as usize) + 1 < self.config.tb_height() {
+                    self.accumulate_local(x + 1, y + 1, &mut loc_num_sig, &mut loc_sum_abs_pass1);
+                }
+            }
+            if (y as usize) + 1 < self.config.tb_height() {
+                self.accumulate_local(x, y + 1, &mut loc_num_sig, &mut loc_sum_abs_pass1);
+                if (y as usize) + 2 < self.config.tb_height() {
+                    self.accumulate_local(x, y + 2, &mut loc_num_sig, &mut loc_sum_abs_pass1);
+                }
+            }
+        }
+        VvcResidualLocalStats {
+            loc_num_sig,
+            loc_sum_abs_pass1,
+        }
+    }
+
+    fn par_or_abs_level_ctx_inc(&self, x: u8, y: u8, abs_level_gtx: bool, gtx_idx: u8) -> u8 {
+        // VVC 9.3.4.2.9. Only abs_level_gtx_flag[n][0] is wired to the cached
+        // context table today; gtx_idx > 0 is labelled here for the upcoming
+        // larger residual-level implementation.
+        if self.config.transform_skip_residual_enabled() {
+            if !abs_level_gtx {
+                return 32;
+            }
+            if gtx_idx > 0 {
+                return 67 + gtx_idx;
+            }
+            if self.config.bdpcm {
+                return 67;
+            }
+            return 64
+                + if x > 0 && self.sig_coeff_at(x - 1, y) {
+                    1
+                } else {
+                    0
+                }
+                + if y > 0 && self.sig_coeff_at(x, y - 1) {
+                    1
+                } else {
+                    0
+                };
+        }
+
+        let base = if x == self.config.last_significant_x && y == self.config.last_significant_y {
+            if self.config.is_luma() {
+                0
+            } else {
+                21
+            }
+        } else {
+            let stats = self.local_stats(x, y);
+            let ctx_offset = stats
+                .loc_sum_abs_pass1
+                .saturating_sub(stats.loc_num_sig)
+                .min(4);
+            let d = x + y;
+            if self.config.is_luma() {
+                1 + ctx_offset
+                    + if d == 0 {
+                        15
+                    } else if d < 3 {
+                        10
+                    } else if d < 10 {
+                        5
+                    } else {
+                        0
+                    }
+            } else {
+                22 + ctx_offset + if d == 0 { 5 } else { 0 }
+            }
+        };
+        base + if abs_level_gtx && gtx_idx == 1 { 32 } else { 0 }
+    }
+
+    fn accumulate_local(&self, x: u8, y: u8, loc_num_sig: &mut u8, loc_sum_abs_pass1: &mut u8) {
+        if self.sig_coeff_at(x, y) {
+            *loc_num_sig += 1;
+        }
+        *loc_sum_abs_pass1 = loc_sum_abs_pass1.saturating_add(self.abs_level_pass1_at(x, y));
+    }
+
+    fn sig_coeff_at(&self, x: u8, y: u8) -> bool {
+        self.sig_coeff[self.config.coefficient_index(x, y)]
+    }
+
+    fn abs_level_pass1_at(&self, x: u8, y: u8) -> u8 {
+        self.abs_level_pass1[self.config.coefficient_index(x, y)]
+    }
+
+    fn coeff_sign_level_at(&self, x: u8, y: u8) -> i8 {
+        self.coeff_sign_level[self.config.coefficient_index(x, y)]
+    }
+
+    fn sb_coded_at(&self, x_s: u8, y_s: u8) -> bool {
+        self.sb_coded[self.config.subblock_index(x_s, y_s)]
+    }
+}
+
+#[allow(dead_code)]
+impl VvcResidualCtxConfig {
+    fn log2_sb_width(self) -> u8 {
+        let mut log2_sb_width = if self.log2_zo_tb_width.min(self.log2_zo_tb_height) < 2 {
+            1
+        } else {
+            2
+        };
+        if self.log2_zo_tb_width < 2 && self.is_luma() {
+            log2_sb_width = self.log2_zo_tb_width;
+        } else if self.log2_zo_tb_height < 2 && self.is_luma() {
+            log2_sb_width = 4 - self.log2_zo_tb_height;
+        }
+        log2_sb_width
+    }
+
+    fn log2_sb_height(self) -> u8 {
+        let mut log2_sb_height = if self.log2_zo_tb_width.min(self.log2_zo_tb_height) < 2 {
+            1
+        } else {
+            2
+        };
+        if self.log2_zo_tb_width < 2 && self.is_luma() {
+            log2_sb_height = 4 - self.log2_zo_tb_width;
+        } else if self.log2_zo_tb_height < 2 && self.is_luma() {
+            log2_sb_height = self.log2_zo_tb_height;
+        }
+        log2_sb_height
+    }
+
+    fn subblocks_wide(self) -> usize {
+        1usize << (self.log2_zo_tb_width - self.log2_sb_width())
+    }
+
+    fn subblocks_high(self) -> usize {
+        1usize << (self.log2_zo_tb_height - self.log2_sb_height())
+    }
+
+    fn subblock_count(self) -> usize {
+        self.subblocks_wide() * self.subblocks_high()
+    }
+
+    fn subblock_index(self, x_s: u8, y_s: u8) -> usize {
+        assert!((x_s as usize) < self.subblocks_wide());
+        assert!((y_s as usize) < self.subblocks_high());
+        y_s as usize * self.subblocks_wide() + x_s as usize
     }
 }
 
@@ -5653,6 +6023,11 @@ mod tests {
         assert_eq!(ToyVvcCabacContext::SigCoeffFlag(62).init_value(), 38);
         assert_eq!(ToyVvcCabacContext::ParLevelFlag(32).init_value(), 11);
         assert_eq!(ToyVvcCabacContext::AbsLevelGtxFlag(31).init_value(), 46);
+        assert_eq!(ToyVvcCabacContext::AbsLevelGtxFlag(71).init_value(), 3);
+        assert_eq!(
+            ToyVvcCabacContext::AbsLevelGtxFlag(71).log2_window_size(),
+            1
+        );
         assert_eq!(ToyVvcCabacContext::CoeffSignFlag(5).log2_window_size(), 8);
 
         let mut ctx = ToyVvcCabacContexts::new();
@@ -5769,6 +6144,83 @@ mod tests {
             .ctx_inc(),
             22
         );
+    }
+
+    #[test]
+    fn vvc_residual_sb_coded_context_keeps_regular_and_ts_paths_labelled() {
+        let regular = VvcResidualPass1State::new(VvcResidualCtxConfig::luma_4x4_subset(3, 3));
+        assert_eq!(regular.sb_coded_flag_ctx_inc(0, 0), 0);
+
+        let mut chroma_config = VvcResidualCtxConfig::luma_4x4_subset(3, 3);
+        chroma_config.component = ToyResidualComponent::ChromaCb;
+        let chroma = VvcResidualPass1State::new(chroma_config);
+        assert_eq!(chroma.sb_coded_flag_ctx_inc(0, 0), 2);
+
+        let mut ts_config = VvcResidualCtxConfig::luma_4x4_subset(3, 3);
+        ts_config.transform_skip = true;
+        ts_config.ts_residual_coding_disabled = false;
+        let mut transform_skip = VvcResidualPass1State::new(ts_config);
+        transform_skip.set_sb_coded(0, 0, true);
+        assert_eq!(transform_skip.sb_coded_flag_ctx_inc(1, 0), 5);
+    }
+
+    #[test]
+    fn vvc_residual_sig_coeff_context_uses_pass1_neighbour_state() {
+        let mut state = VvcResidualPass1State::new(VvcResidualCtxConfig::luma_4x4_subset(3, 3));
+        assert_eq!(state.sig_coeff_flag_ctx_inc(0, 0), 8);
+        assert_eq!(state.sig_coeff_flag_ctx_inc(2, 1), 4);
+
+        state.set_pass1_coeff(1, 0, 3, false);
+        state.set_pass1_coeff(0, 1, 1, true);
+        let stats = state.local_stats(0, 0);
+        assert_eq!(
+            stats,
+            VvcResidualLocalStats {
+                loc_num_sig: 2,
+                loc_sum_abs_pass1: 4
+            }
+        );
+        assert_eq!(state.sig_coeff_flag_ctx_inc(0, 0), 10);
+
+        let mut chroma_config = VvcResidualCtxConfig::luma_4x4_subset(3, 3);
+        chroma_config.component = ToyResidualComponent::ChromaCr;
+        let chroma = VvcResidualPass1State::new(chroma_config);
+        assert_eq!(chroma.sig_coeff_flag_ctx_inc(0, 0), 40);
+    }
+
+    #[test]
+    fn vvc_residual_level_contexts_follow_last_significant_position() {
+        let mut state = VvcResidualPass1State::new(VvcResidualCtxConfig::luma_4x4_subset(3, 3));
+        assert_eq!(state.par_level_flag_ctx_inc(3, 3), 0);
+        assert_eq!(state.abs_level_gtx_flag_ctx_inc(3, 3, 0), 0);
+        assert_eq!(state.abs_level_gtx_flag_ctx_inc(3, 3, 1), 32);
+        assert_eq!(state.par_level_flag_ctx_inc(0, 0), 16);
+
+        state.set_pass1_coeff(1, 0, 3, false);
+        state.set_pass1_coeff(0, 1, 2, false);
+        assert_eq!(state.par_level_flag_ctx_inc(0, 0), 19);
+
+        let mut chroma_config = VvcResidualCtxConfig::luma_4x4_subset(1, 1);
+        chroma_config.component = ToyResidualComponent::ChromaCb;
+        let chroma = VvcResidualPass1State::new(chroma_config);
+        assert_eq!(chroma.par_level_flag_ctx_inc(1, 1), 21);
+        assert_eq!(chroma.par_level_flag_ctx_inc(0, 0), 27);
+    }
+
+    #[test]
+    fn vvc_residual_transform_skip_sign_context_is_separate_from_bypass_signs() {
+        let mut config = VvcResidualCtxConfig::luma_4x4_subset(3, 3);
+        config.transform_skip = true;
+        config.ts_residual_coding_disabled = false;
+        let mut state = VvcResidualPass1State::new(config);
+        assert_eq!(state.coeff_sign_flag_ts_ctx_inc(0, 0), 0);
+
+        state.set_pass1_coeff(0, 0, 1, false);
+        state.set_pass1_coeff(1, 0, 1, false);
+        assert_eq!(state.coeff_sign_flag_ts_ctx_inc(1, 1), 1);
+
+        state.set_pass1_coeff(0, 1, 1, true);
+        assert_eq!(state.coeff_sign_flag_ts_ctx_inc(1, 1), 0);
     }
 
     #[test]

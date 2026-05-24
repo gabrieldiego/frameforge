@@ -2382,29 +2382,39 @@ module ff_vvc_generated_cabac_body (
   endfunction
 
   function automatic logic [7:0] vvc_abs_level_gtx_flag_init(input logic [5:0] index);
-    logic [255:0] lut;
+    logic [575:0] lut;
     begin
-      // Table 125 I-slice ctxIdx 0..31 currently cached for the residual path.
+      // Table 125 I-slice ctxIdx 0..71 currently cached for the residual path.
       lut = {
         8'd25, 8'd25, 8'd11, 8'd27, 8'd20, 8'd21, 8'd33, 8'd12,
         8'd28, 8'd21, 8'd22, 8'd34, 8'd28, 8'd29, 8'd29, 8'd30,
         8'd36, 8'd29, 8'd45, 8'd30, 8'd23, 8'd40, 8'd33, 8'd27,
-        8'd28, 8'd21, 8'd37, 8'd36, 8'd37, 8'd45, 8'd38, 8'd46
+        8'd28, 8'd21, 8'd37, 8'd36, 8'd37, 8'd45, 8'd38, 8'd46,
+        8'd25, 8'd1,  8'd40, 8'd25, 8'd33, 8'd11, 8'd17, 8'd25,
+        8'd25, 8'd18, 8'd4,  8'd17, 8'd33, 8'd26, 8'd19, 8'd13,
+        8'd33, 8'd19, 8'd20, 8'd28, 8'd22, 8'd40, 8'd9,  8'd25,
+        8'd18, 8'd26, 8'd35, 8'd25, 8'd26, 8'd35, 8'd28, 8'd37,
+        8'd11, 8'd5,  8'd5,  8'd14, 8'd10, 8'd3,  8'd3,  8'd3
       };
-      vvc_abs_level_gtx_flag_init = lut[((6'd31 - index) * 8) +: 8];
+      vvc_abs_level_gtx_flag_init = lut[((7'd71 - {1'b0, index}) * 8) +: 8];
     end
   endfunction
 
   function automatic logic [3:0] vvc_abs_level_gtx_flag_log2_window(input logic [5:0] index);
-    logic [127:0] lut;
+    logic [287:0] lut;
     begin
       lut = {
         4'd9,  4'd5, 4'd10, 4'd13, 4'd13, 4'd10, 4'd9, 4'd10,
         4'd13, 4'd13,4'd13, 4'd9,  4'd10, 4'd10, 4'd10,4'd13,
         4'd8,  4'd9, 4'd10, 4'd10, 4'd13, 4'd8,  4'd8, 4'd9,
-        4'd12, 4'd12,4'd10, 4'd5,  4'd9,  4'd9,  4'd9, 4'd13
+        4'd12, 4'd12,4'd10, 4'd5,  4'd9,  4'd9,  4'd9, 4'd13,
+        4'd1,  4'd5, 4'd9,  4'd9,  4'd9,  4'd6,  4'd5, 4'd9,
+        4'd10, 4'd10,4'd9,  4'd9,  4'd9,  4'd9,  4'd9, 4'd9,
+        4'd6,  4'd8, 4'd9,  4'd9,  4'd10, 4'd1,  4'd5, 4'd8,
+        4'd8,  4'd9, 4'd6,  4'd6,  4'd9,  4'd8,  4'd8, 4'd9,
+        4'd4,  4'd2, 4'd1,  4'd6,  4'd1,  4'd1,  4'd1, 4'd1
       };
-      vvc_abs_level_gtx_flag_log2_window = lut[((6'd31 - index) * 4) +: 4];
+      vvc_abs_level_gtx_flag_log2_window = lut[((7'd71 - {1'b0, index}) * 4) +: 4];
     end
   endfunction
 
@@ -2431,6 +2441,171 @@ module ff_vvc_generated_cabac_body (
         4'd4: vvc_coeff_sign_flag_log2_window = 4'd8;
         default: vvc_coeff_sign_flag_log2_window = 4'd8;
       endcase
+    end
+  endfunction
+
+  function automatic logic vvc_residual_is_luma(input logic [1:0] component);
+    begin
+      vvc_residual_is_luma = (component == 2'd0);
+    end
+  endfunction
+
+  function automatic logic vvc_residual_ts_enabled(
+    input logic transform_skip,
+    input logic ts_residual_coding_disabled
+  );
+    begin
+      vvc_residual_ts_enabled = transform_skip && !ts_residual_coding_disabled;
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_residual_log2_sb_width(
+    input logic [3:0] log2_zo_tb_width,
+    input logic [3:0] log2_zo_tb_height,
+    input logic [1:0] component
+  );
+    logic [3:0] base_width;
+    begin
+      base_width = ((log2_zo_tb_width < 4'd2) || (log2_zo_tb_height < 4'd2)) ? 4'd1 : 4'd2;
+      if ((log2_zo_tb_width < 4'd2) && vvc_residual_is_luma(component)) begin
+        vvc_residual_log2_sb_width = log2_zo_tb_width;
+      end else if ((log2_zo_tb_height < 4'd2) && vvc_residual_is_luma(component)) begin
+        vvc_residual_log2_sb_width = 4'd4 - log2_zo_tb_height;
+      end else begin
+        vvc_residual_log2_sb_width = base_width;
+      end
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_residual_log2_sb_height(
+    input logic [3:0] log2_zo_tb_width,
+    input logic [3:0] log2_zo_tb_height,
+    input logic [1:0] component
+  );
+    logic [3:0] base_height;
+    begin
+      base_height = ((log2_zo_tb_width < 4'd2) || (log2_zo_tb_height < 4'd2)) ? 4'd1 : 4'd2;
+      if ((log2_zo_tb_width < 4'd2) && vvc_residual_is_luma(component)) begin
+        vvc_residual_log2_sb_height = 4'd4 - log2_zo_tb_width;
+      end else if ((log2_zo_tb_height < 4'd2) && vvc_residual_is_luma(component)) begin
+        vvc_residual_log2_sb_height = log2_zo_tb_height;
+      end else begin
+        vvc_residual_log2_sb_height = base_height;
+      end
+    end
+  endfunction
+
+  function automatic logic [3:0] vvc_residual_sb_coded_ctx_inc(
+    input logic [1:0] component,
+    input logic       transform_skip_residual_enabled,
+    input logic [1:0] csbf_ctx
+  );
+    begin
+      if (transform_skip_residual_enabled) begin
+        vvc_residual_sb_coded_ctx_inc = 4'd4 + {2'd0, csbf_ctx};
+      end else if (vvc_residual_is_luma(component)) begin
+        vvc_residual_sb_coded_ctx_inc = {3'd0, |csbf_ctx};
+      end else begin
+        vvc_residual_sb_coded_ctx_inc = 4'd2 + {3'd0, |csbf_ctx};
+      end
+    end
+  endfunction
+
+  function automatic logic [5:0] vvc_residual_sig_coeff_ctx_inc(
+    input logic [1:0] component,
+    input logic       transform_skip_residual_enabled,
+    input logic [2:0] q_state,
+    input logic [5:0] x_c,
+    input logic [5:0] y_c,
+    input logic [2:0] loc_num_sig,
+    input logic [5:0] loc_sum_abs_pass1
+  );
+    logic [5:0] d;
+    logic [5:0] sum_bucket;
+    logic [5:0] q_bucket_luma;
+    logic [5:0] q_bucket_chroma;
+    begin
+      d = x_c + y_c;
+      sum_bucket = (((loc_sum_abs_pass1 + 6'd1) >> 1) > 6'd3) ? 6'd3 : ((loc_sum_abs_pass1 + 6'd1) >> 1);
+      q_bucket_luma = (q_state > 3'd0) ? (6'd12 * {3'd0, (q_state - 3'd1)}) : 6'd0;
+      q_bucket_chroma = (q_state > 3'd0) ? (6'd8 * {3'd0, (q_state - 3'd1)}) : 6'd0;
+      if (transform_skip_residual_enabled) begin
+        vvc_residual_sig_coeff_ctx_inc = 6'd60 + {3'd0, loc_num_sig};
+      end else if (vvc_residual_is_luma(component)) begin
+        vvc_residual_sig_coeff_ctx_inc =
+          q_bucket_luma + sum_bucket + ((d < 6'd2) ? 6'd8 : ((d < 6'd5) ? 6'd4 : 6'd0));
+      end else begin
+        vvc_residual_sig_coeff_ctx_inc =
+          6'd36 + q_bucket_chroma + sum_bucket + ((d < 6'd2) ? 6'd4 : 6'd0);
+      end
+    end
+  endfunction
+
+  function automatic logic [6:0] vvc_residual_par_abs_level_ctx_inc(
+    input logic [1:0] component,
+    input logic       transform_skip_residual_enabled,
+    input logic       bdpcm,
+    input logic       abs_level_gtx,
+    input logic [2:0] gtx_idx,
+    input logic [5:0] x_c,
+    input logic [5:0] y_c,
+    input logic [5:0] last_x,
+    input logic [5:0] last_y,
+    input logic       left_sig,
+    input logic       above_sig,
+    input logic [2:0] loc_num_sig,
+    input logic [5:0] loc_sum_abs_pass1
+  );
+    logic [5:0] d;
+    logic [6:0] ctx_offset;
+    logic [6:0] base_ctx;
+    begin
+      d = x_c + y_c;
+      if (transform_skip_residual_enabled) begin
+        if (!abs_level_gtx) begin
+          vvc_residual_par_abs_level_ctx_inc = 7'd32;
+        end else if (gtx_idx > 3'd0) begin
+          vvc_residual_par_abs_level_ctx_inc = 7'd67 + {4'd0, gtx_idx};
+        end else if (bdpcm) begin
+          vvc_residual_par_abs_level_ctx_inc = 7'd67;
+        end else begin
+          vvc_residual_par_abs_level_ctx_inc = 7'd64 + {6'd0, left_sig} + {6'd0, above_sig};
+        end
+      end else begin
+        if ((x_c == last_x) && (y_c == last_y)) begin
+          base_ctx = vvc_residual_is_luma(component) ? 7'd0 : 7'd21;
+        end else begin
+          ctx_offset = (loc_sum_abs_pass1 > {3'd0, loc_num_sig}) ?
+            ({1'd0, loc_sum_abs_pass1} - {4'd0, loc_num_sig}) : 7'd0;
+          if (ctx_offset > 7'd4) begin
+            ctx_offset = 7'd4;
+          end
+          if (vvc_residual_is_luma(component)) begin
+            base_ctx = 7'd1 + ctx_offset +
+              ((d == 6'd0) ? 7'd15 : ((d < 6'd3) ? 7'd10 : ((d < 6'd10) ? 7'd5 : 7'd0)));
+          end else begin
+            base_ctx = 7'd22 + ctx_offset + ((d == 6'd0) ? 7'd5 : 7'd0);
+          end
+        end
+        vvc_residual_par_abs_level_ctx_inc = base_ctx +
+          ((abs_level_gtx && (gtx_idx == 3'd1)) ? 7'd32 : 7'd0);
+      end
+    end
+  endfunction
+
+  function automatic logic [2:0] vvc_residual_coeff_sign_ts_ctx_inc(
+    input logic       bdpcm,
+    input logic signed [1:0] left_sign,
+    input logic signed [1:0] above_sign
+  );
+    begin
+      if (((left_sign == 2'sd0) && (above_sign == 2'sd0)) || (left_sign == -above_sign)) begin
+        vvc_residual_coeff_sign_ts_ctx_inc = bdpcm ? 3'd3 : 3'd0;
+      end else if ((left_sign >= 2'sd0) && (above_sign >= 2'sd0)) begin
+        vvc_residual_coeff_sign_ts_ctx_inc = bdpcm ? 3'd4 : 3'd1;
+      end else begin
+        vvc_residual_coeff_sign_ts_ctx_inc = bdpcm ? 3'd5 : 3'd2;
+      end
     end
   endfunction
 

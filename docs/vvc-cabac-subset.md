@@ -263,7 +263,8 @@ For I slices, Table 51 maps:
 | shiftIdx | 4 | 0 | 0 | 0 | 8 | 8 | 8 | 8 | 4 | 0 | 0 | 0 | 13 | 13 | 8 |
 
 `abs_level_gtx_flag`, first I-slice coefficient-set subset currently needed by
-the trace replacement work:
+the trace replacement work. The software/RTL tables cache ctxIdx `0..71`; only
+`0..31` are expanded below until the remaining rows are needed in docs:
 
 | ctxIdx | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
