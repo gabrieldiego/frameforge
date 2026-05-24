@@ -2297,6 +2297,61 @@ impl<'a> VvcResidualCabacEncoder<'a> {
         Self { contexts, options }
     }
 
+    fn emit_residual_symbol(
+        &mut self,
+        cabac: &mut ToyCabacEncoder,
+        state: &VvcResidualPass1State,
+        symbol: VvcResidualCabacSymbol,
+    ) {
+        match symbol {
+            VvcResidualCabacSymbol::LastSigCoeffXPrefix { bin_idx, bin } => {
+                self.emit_last_sig_coeff_prefix_bin(
+                    cabac,
+                    state.config.component,
+                    true,
+                    state.config.log2_zo_tb_width,
+                    bin_idx,
+                    bin,
+                );
+            }
+            VvcResidualCabacSymbol::LastSigCoeffYPrefix { bin_idx, bin } => {
+                self.emit_last_sig_coeff_prefix_bin(
+                    cabac,
+                    state.config.component,
+                    false,
+                    state.config.log2_zo_tb_height,
+                    bin_idx,
+                    bin,
+                );
+            }
+            VvcResidualCabacSymbol::SbCodedFlag { x_s, y_s, coded } => {
+                self.emit_sb_coded_flag(cabac, state, x_s, y_s, coded);
+            }
+            VvcResidualCabacSymbol::SigCoeffFlag { x, y, significant } => {
+                self.emit_sig_coeff_flag(cabac, state, x, y, significant);
+            }
+            VvcResidualCabacSymbol::ParLevelFlag { x, y, par_level } => {
+                self.emit_par_level_flag(cabac, state, x, y, par_level);
+            }
+            VvcResidualCabacSymbol::AbsLevelGtxFlag {
+                x,
+                y,
+                gtx_idx,
+                greater_than,
+            } => {
+                self.emit_abs_level_gtx_flag(cabac, state, x, y, gtx_idx, greater_than);
+            }
+            VvcResidualCabacSymbol::AbsRemainder {
+                value, rice_param, ..
+            } => {
+                cabac.encode_rem_abs_ep(value, u32::from(rice_param));
+            }
+            VvcResidualCabacSymbol::CoeffSignFlag { x, y, negative } => {
+                self.emit_coeff_sign_flag(cabac, state, x, y, negative);
+            }
+        }
+    }
+
     fn emit_last_sig_coeff_prefixes_4x4(
         &mut self,
         cabac: &mut ToyCabacEncoder,
@@ -3620,6 +3675,59 @@ struct VvcResidualLocalStats {
     loc_sum_abs_pass1: u8,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+enum VvcResidualCabacSymbol {
+    LastSigCoeffXPrefix {
+        bin_idx: u8,
+        bin: bool,
+    },
+    LastSigCoeffYPrefix {
+        bin_idx: u8,
+        bin: bool,
+    },
+    SbCodedFlag {
+        x_s: u8,
+        y_s: u8,
+        coded: bool,
+    },
+    SigCoeffFlag {
+        x: u8,
+        y: u8,
+        significant: bool,
+    },
+    ParLevelFlag {
+        x: u8,
+        y: u8,
+        par_level: bool,
+    },
+    AbsLevelGtxFlag {
+        x: u8,
+        y: u8,
+        gtx_idx: u8,
+        greater_than: bool,
+    },
+    AbsRemainder {
+        x: u8,
+        y: u8,
+        value: u32,
+        rice_param: u8,
+    },
+    CoeffSignFlag {
+        x: u8,
+        y: u8,
+        negative: bool,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+struct VvcResidualCabacSymbolStream {
+    config: VvcResidualCtxConfig,
+    pass1_state: VvcResidualPass1State,
+    symbols: Vec<VvcResidualCabacSymbol>,
+}
+
 #[allow(dead_code)]
 impl VvcResidualPass1State {
     fn new(config: VvcResidualCtxConfig) -> Self {
@@ -3860,6 +3968,79 @@ impl VvcResidualPass1State {
 
     fn sb_coded_at(&self, x_s: u8, y_s: u8) -> bool {
         self.sb_coded[self.config.subblock_index(x_s, y_s)]
+    }
+}
+
+#[allow(dead_code)]
+impl VvcResidualCabacSymbolStream {
+    fn luma_4x4_dc_only(abs_level: u8, negative: bool) -> Self {
+        // This is the first generated residual subset: one 4x4 luma TU with
+        // only the DC coefficient significant. AC coefficient scan syntax will
+        // extend this stream instead of reintroducing trace words.
+        let config = VvcResidualCtxConfig::luma_4x4_subset(0, 0);
+        let mut pass1_state = VvcResidualPass1State::new(config);
+        pass1_state.set_sb_coded(0, 0, abs_level != 0);
+        pass1_state.set_pass1_coeff(0, 0, abs_level.min(3), negative);
+
+        let mut symbols = vec![
+            VvcResidualCabacSymbol::LastSigCoeffXPrefix {
+                bin_idx: 0,
+                bin: false,
+            },
+            VvcResidualCabacSymbol::LastSigCoeffYPrefix {
+                bin_idx: 0,
+                bin: false,
+            },
+            VvcResidualCabacSymbol::SigCoeffFlag {
+                x: 0,
+                y: 0,
+                significant: abs_level != 0,
+            },
+        ];
+
+        if abs_level != 0 {
+            // VVC residual coding derives the first pass level from
+            // sig_coeff_flag, par_level_flag, and abs_level_gtx_flag bins.
+            // Keep the current subset conservative: level 1 emits both false,
+            // larger levels are represented through abs_remainder bypass bins.
+            symbols.push(VvcResidualCabacSymbol::ParLevelFlag {
+                x: 0,
+                y: 0,
+                par_level: false,
+            });
+            symbols.push(VvcResidualCabacSymbol::AbsLevelGtxFlag {
+                x: 0,
+                y: 0,
+                gtx_idx: 0,
+                greater_than: abs_level > 1,
+            });
+            if abs_level > 1 {
+                symbols.push(VvcResidualCabacSymbol::AbsRemainder {
+                    x: 0,
+                    y: 0,
+                    value: u32::from(abs_level - 2),
+                    rice_param: 0,
+                });
+            }
+            symbols.push(VvcResidualCabacSymbol::CoeffSignFlag {
+                x: 0,
+                y: 0,
+                negative,
+            });
+        }
+
+        Self {
+            config,
+            pass1_state,
+            symbols,
+        }
+    }
+
+    fn emit(&self, encoder: &mut VvcResidualCabacEncoder<'_>, cabac: &mut ToyCabacEncoder) {
+        debug_assert_eq!(self.config, self.pass1_state.config);
+        for symbol in &self.symbols {
+            encoder.emit_residual_symbol(cabac, &self.pass1_state, *symbol);
+        }
     }
 }
 
@@ -6273,6 +6454,85 @@ mod tests {
         residual.emit_coeff_sign_flag(&mut cabac, &state, 0, 0, true);
 
         assert_ne!(contexts.coeff_sign_flag[0].state(), initial_sign0);
+    }
+
+    #[test]
+    fn vvc_residual_symbol_stream_names_dc_only_luma_subset() {
+        let stream = VvcResidualCabacSymbolStream::luma_4x4_dc_only(3, true);
+        assert_eq!(stream.config.last_significant_x, 0);
+        assert_eq!(stream.config.last_significant_y, 0);
+        assert_eq!(
+            stream.symbols,
+            vec![
+                VvcResidualCabacSymbol::LastSigCoeffXPrefix {
+                    bin_idx: 0,
+                    bin: false
+                },
+                VvcResidualCabacSymbol::LastSigCoeffYPrefix {
+                    bin_idx: 0,
+                    bin: false
+                },
+                VvcResidualCabacSymbol::SigCoeffFlag {
+                    x: 0,
+                    y: 0,
+                    significant: true
+                },
+                VvcResidualCabacSymbol::ParLevelFlag {
+                    x: 0,
+                    y: 0,
+                    par_level: false
+                },
+                VvcResidualCabacSymbol::AbsLevelGtxFlag {
+                    x: 0,
+                    y: 0,
+                    gtx_idx: 0,
+                    greater_than: true
+                },
+                VvcResidualCabacSymbol::AbsRemainder {
+                    x: 0,
+                    y: 0,
+                    value: 1,
+                    rice_param: 0
+                },
+                VvcResidualCabacSymbol::CoeffSignFlag {
+                    x: 0,
+                    y: 0,
+                    negative: true
+                },
+            ]
+        );
+
+        let zero = VvcResidualCabacSymbolStream::luma_4x4_dc_only(0, false);
+        assert_eq!(zero.symbols.len(), 3);
+        assert_eq!(
+            zero.symbols[2],
+            VvcResidualCabacSymbol::SigCoeffFlag {
+                x: 0,
+                y: 0,
+                significant: false
+            }
+        );
+    }
+
+    #[test]
+    fn vvc_residual_symbol_stream_emits_through_context_models() {
+        let stream = VvcResidualCabacSymbolStream::luma_4x4_dc_only(2, true);
+        let mut contexts = ToyVvcCabacContexts::new();
+        let initial_last_x0 = contexts.last_sig_coeff_x_prefix[0].state();
+        let initial_sig8 = contexts.sig_coeff_flag[8].state();
+        let initial_abs0 = contexts.abs_level_gtx_flag[0].state();
+
+        let mut cabac = ToyCabacEncoder::new();
+        cabac.start();
+        let mut residual = VvcResidualCabacEncoder::new(
+            &mut contexts,
+            VvcResidualCabacOptions::current_intra_subset(),
+        );
+        stream.emit(&mut residual, &mut cabac);
+
+        assert_ne!(contexts.last_sig_coeff_x_prefix[0].state(), initial_last_x0);
+        assert_ne!(contexts.sig_coeff_flag[8].state(), initial_sig8);
+        assert_ne!(contexts.abs_level_gtx_flag[0].state(), initial_abs0);
     }
 
     #[test]
