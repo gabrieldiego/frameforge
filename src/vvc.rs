@@ -2297,6 +2297,157 @@ impl<'a> VvcResidualCabacEncoder<'a> {
         Self { contexts, options }
     }
 
+    fn emit_last_sig_coeff_prefixes_4x4(
+        &mut self,
+        cabac: &mut ToyCabacEncoder,
+        component: ToyResidualComponent,
+        last_x: u8,
+        last_y: u8,
+    ) {
+        // For a 4x4 TB, Log2ZoTbWidth/Height are 2 and prefix values 0..3
+        // represent coordinates directly. Larger TBs need the suffix mapping
+        // from residual_coding() before this helper can be generalized.
+        debug_assert!(last_x < 4);
+        debug_assert!(last_y < 4);
+        self.emit_last_sig_coeff_prefix(cabac, component, true, 2, last_x);
+        self.emit_last_sig_coeff_prefix(cabac, component, false, 2, last_y);
+    }
+
+    fn emit_last_sig_coeff_prefix(
+        &mut self,
+        cabac: &mut ToyCabacEncoder,
+        component: ToyResidualComponent,
+        x_prefix: bool,
+        log2_tb_size: u8,
+        prefix: u8,
+    ) {
+        let cmax = (log2_tb_size << 1) - 1;
+        debug_assert!(prefix <= cmax);
+        for bin_idx in 0..prefix {
+            self.emit_last_sig_coeff_prefix_bin(
+                cabac,
+                component,
+                x_prefix,
+                log2_tb_size,
+                bin_idx,
+                true,
+            );
+        }
+        if prefix < cmax {
+            self.emit_last_sig_coeff_prefix_bin(
+                cabac,
+                component,
+                x_prefix,
+                log2_tb_size,
+                prefix,
+                false,
+            );
+        }
+    }
+
+    fn emit_last_sig_coeff_prefix_bin(
+        &mut self,
+        cabac: &mut ToyCabacEncoder,
+        component: ToyResidualComponent,
+        x_prefix: bool,
+        log2_tb_size: u8,
+        bin_idx: u8,
+        bin: bool,
+    ) {
+        let ctx_inc = VvcLastSigCoeffPrefixCtxInput {
+            is_luma: component == ToyResidualComponent::Luma,
+            log2_tb_size,
+            bin_idx,
+        }
+        .ctx_inc();
+        let ctx = if x_prefix {
+            ToyVvcCabacContext::LastSigCoeffXPrefix(ctx_inc)
+        } else {
+            ToyVvcCabacContext::LastSigCoeffYPrefix(ctx_inc)
+        };
+        self.contexts.encode(cabac, ctx, bin);
+    }
+
+    fn emit_sb_coded_flag(
+        &mut self,
+        cabac: &mut ToyCabacEncoder,
+        state: &VvcResidualPass1State,
+        x_s: u8,
+        y_s: u8,
+        coded: bool,
+    ) {
+        let ctx_inc = state.sb_coded_flag_ctx_inc(x_s, y_s);
+        self.contexts
+            .encode(cabac, ToyVvcCabacContext::SbCodedFlag(ctx_inc), coded);
+    }
+
+    fn emit_sig_coeff_flag(
+        &mut self,
+        cabac: &mut ToyCabacEncoder,
+        state: &VvcResidualPass1State,
+        x: u8,
+        y: u8,
+        significant: bool,
+    ) {
+        let ctx_inc = state.sig_coeff_flag_ctx_inc(x, y);
+        self.contexts.encode(
+            cabac,
+            ToyVvcCabacContext::SigCoeffFlag(ctx_inc),
+            significant,
+        );
+    }
+
+    fn emit_par_level_flag(
+        &mut self,
+        cabac: &mut ToyCabacEncoder,
+        state: &VvcResidualPass1State,
+        x: u8,
+        y: u8,
+        par_level: bool,
+    ) {
+        let ctx_inc = state.par_level_flag_ctx_inc(x, y);
+        self.contexts
+            .encode(cabac, ToyVvcCabacContext::ParLevelFlag(ctx_inc), par_level);
+    }
+
+    fn emit_abs_level_gtx_flag(
+        &mut self,
+        cabac: &mut ToyCabacEncoder,
+        state: &VvcResidualPass1State,
+        x: u8,
+        y: u8,
+        gtx_idx: u8,
+        greater_than: bool,
+    ) {
+        let ctx_inc = state.abs_level_gtx_flag_ctx_inc(x, y, gtx_idx);
+        debug_assert!(
+            ctx_inc < 72,
+            "cached abs_level_gtx_flag table currently covers ctxInc 0..71"
+        );
+        self.contexts.encode(
+            cabac,
+            ToyVvcCabacContext::AbsLevelGtxFlag(ctx_inc),
+            greater_than,
+        );
+    }
+
+    fn emit_coeff_sign_flag(
+        &mut self,
+        cabac: &mut ToyCabacEncoder,
+        state: &VvcResidualPass1State,
+        x: u8,
+        y: u8,
+        negative: bool,
+    ) {
+        if state.config.transform_skip_residual_enabled() {
+            let ctx_inc = state.coeff_sign_flag_ts_ctx_inc(x, y);
+            self.contexts
+                .encode(cabac, ToyVvcCabacContext::CoeffSignFlag(ctx_inc), negative);
+        } else {
+            cabac.encode_bin_ep(negative);
+        }
+    }
+
     fn emit_transform_skip_flag(
         &mut self,
         cabac: &mut ToyCabacEncoder,
@@ -6069,6 +6220,59 @@ mod tests {
             initial_transform_skip_state
         );
         assert_ne!(contexts.mts_idx[0].state(), initial_mts_state);
+    }
+
+    #[test]
+    fn vvc_residual_cabac_encoder_emits_named_4x4_coefficient_bins() {
+        let mut contexts = ToyVvcCabacContexts::new();
+        let initial_last_x0 = contexts.last_sig_coeff_x_prefix[0].state();
+        let initial_last_y0 = contexts.last_sig_coeff_y_prefix[0].state();
+        let initial_sig8 = contexts.sig_coeff_flag[8].state();
+        let initial_par0 = contexts.par_level_flag[0].state();
+        let initial_abs32 = contexts.abs_level_gtx_flag[32].state();
+        let initial_sign0 = contexts.coeff_sign_flag[0].state();
+
+        let mut cabac = ToyCabacEncoder::new();
+        cabac.start();
+        let state = VvcResidualPass1State::new(VvcResidualCtxConfig::luma_4x4_subset(3, 3));
+        let mut residual = VvcResidualCabacEncoder::new(
+            &mut contexts,
+            VvcResidualCabacOptions::current_intra_subset(),
+        );
+
+        residual.emit_last_sig_coeff_prefixes_4x4(&mut cabac, ToyResidualComponent::Luma, 3, 0);
+        residual.emit_sb_coded_flag(&mut cabac, &state, 0, 0, true);
+        residual.emit_sig_coeff_flag(&mut cabac, &state, 0, 0, true);
+        residual.emit_par_level_flag(&mut cabac, &state, 3, 3, false);
+        residual.emit_abs_level_gtx_flag(&mut cabac, &state, 3, 3, 1, false);
+        residual.emit_coeff_sign_flag(&mut cabac, &state, 3, 3, true);
+
+        assert_ne!(contexts.last_sig_coeff_x_prefix[0].state(), initial_last_x0);
+        assert_ne!(contexts.last_sig_coeff_y_prefix[0].state(), initial_last_y0);
+        assert_ne!(contexts.sig_coeff_flag[8].state(), initial_sig8);
+        assert_ne!(contexts.par_level_flag[0].state(), initial_par0);
+        assert_ne!(contexts.abs_level_gtx_flag[32].state(), initial_abs32);
+        assert_eq!(contexts.coeff_sign_flag[0].state(), initial_sign0);
+    }
+
+    #[test]
+    fn vvc_residual_cabac_encoder_context_codes_transform_skip_signs() {
+        let mut config = VvcResidualCtxConfig::luma_4x4_subset(3, 3);
+        config.transform_skip = true;
+        config.ts_residual_coding_disabled = false;
+        let state = VvcResidualPass1State::new(config);
+
+        let mut contexts = ToyVvcCabacContexts::new();
+        let initial_sign0 = contexts.coeff_sign_flag[0].state();
+        let mut cabac = ToyCabacEncoder::new();
+        cabac.start();
+        let mut residual = VvcResidualCabacEncoder::new(
+            &mut contexts,
+            VvcResidualCabacOptions::current_intra_subset(),
+        );
+        residual.emit_coeff_sign_flag(&mut cabac, &state, 0, 0, true);
+
+        assert_ne!(contexts.coeff_sign_flag[0].state(), initial_sign0);
     }
 
     #[test]
