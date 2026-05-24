@@ -30,4 +30,5 @@ async def coding_tree_scheduler_selects_local_body_kind(dut):
     await check_geometry(dut, 32, 16, 32, 32, 0)
     await check_geometry(dut, 16, 32, 32, 32, 0)
     await check_geometry(dut, 64, 64, 64, 64, 0)
-    await check_geometry(dut, 64, 32, 64, 32, 1)
+    await check_geometry(dut, 64, 32, 64, 32, 0)
+    await check_geometry(dut, 32, 64, 32, 64, 0)

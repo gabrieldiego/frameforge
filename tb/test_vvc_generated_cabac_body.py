@@ -99,3 +99,20 @@ async def cabac_body_generates_64x64_partition_payload(dut):
     assert int(dut.stream_bit_count.value) > 0
     assert int(dut.stream_byte_count.value) > 0
     assert await stream_cabac_bytes(dut) != b""
+
+
+@cocotb.test()
+async def cabac_body_generates_rectangular_64_sample_partition_payloads(dut):
+    for width, height in [(64, 32), (32, 64)]:
+        await reset_dut(dut)
+        dut.body_kind.value = BODY_GENERATED
+        dut.coded_width.value = width
+        dut.coded_height.value = height
+        dut.luma_rem.value = 16
+        dut.chroma_rem.value = 6
+        await Timer(1, unit="ns")
+
+        assert int(dut.supported.value) == 1
+        assert int(dut.stream_bit_count.value) > 0
+        assert int(dut.stream_byte_count.value) > 0
+        assert await stream_cabac_bytes(dut) != b""

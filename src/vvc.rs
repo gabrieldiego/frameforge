@@ -615,6 +615,8 @@ struct Toy32x32GeneratedParams {
 struct Toy64x64PartitionParams {
     root_width: usize,
     root_height: usize,
+    visible_width: usize,
+    visible_height: usize,
     luma_leaf_count: usize,
     chroma_tu_count: usize,
 }
@@ -633,6 +635,7 @@ enum ToyCodingTreeStep {
     },
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToyLumaPartitionStep {
     QuadSplit {
@@ -3029,6 +3032,7 @@ fn toy_coding_tree_plan_with_config(
     steps
 }
 
+#[cfg(test)]
 fn toy_luma_partition_plan(geometry: ToyVideoGeometry) -> Vec<ToyLumaPartitionStep> {
     let coded = geometry.coded();
     let mut steps = Vec::new();
@@ -3046,6 +3050,7 @@ fn toy_luma_partition_plan(geometry: ToyVideoGeometry) -> Vec<ToyLumaPartitionSt
     steps
 }
 
+#[cfg(test)]
 fn append_toy_luma_partition(
     steps: &mut Vec<ToyLumaPartitionStep>,
     x: usize,
@@ -3267,6 +3272,9 @@ fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Ve
             return toy_64x64_partition_cabac_bits(params);
         }
         _ => {
+            if let Some(params) = toy_64x64_partition_params(geometry, color) {
+                return toy_64x64_partition_cabac_bits(params);
+            }
             return toy_capacity_tu_grid_bits(color);
         }
     }
@@ -3342,21 +3350,26 @@ fn toy_64x64_partition_params(
     _color: Toy4x4QuantizedColor,
 ) -> Option<Toy64x64PartitionParams> {
     let coded = geometry.coded();
-    if coded.width != 64 || coded.height != 64 {
+    if coded.width > 64 || coded.height > 64 || coded.width < 32 || coded.height < 32 {
+        return None;
+    }
+    if coded.width != 64 && coded.height != 64 {
         return None;
     }
 
-    let luma_leaf_count = toy_luma_partition_plan(geometry)
-        .iter()
-        .filter(|step| matches!(step, ToyLumaPartitionStep::Leaf { .. }))
+    let luma_leaf_count = [(0usize, 0usize), (32, 0), (0, 32), (32, 32)]
+        .into_iter()
+        .filter(|(x, y)| *x < coded.width && *y < coded.height)
         .count();
     let chroma_tu_count = toy_coding_tree_plan(geometry)
         .iter()
         .filter(|step| matches!(step, ToyCodingTreeStep::ChromaTransformUnit { .. }))
         .count();
     Some(Toy64x64PartitionParams {
-        root_width: coded.width,
-        root_height: coded.height,
+        root_width: 64,
+        root_height: 64,
+        visible_width: coded.width,
+        visible_height: coded.height,
         luma_leaf_count,
         chroma_tu_count,
     })
@@ -3398,7 +3411,9 @@ fn toy_32x32_generated_cabac_bits(params: Toy32x32GeneratedParams) -> Vec<bool> 
 fn toy_64x64_partition_cabac_bits(params: Toy64x64PartitionParams) -> Vec<bool> {
     debug_assert_eq!(params.root_width, 64);
     debug_assert_eq!(params.root_height, 64);
-    debug_assert_eq!(params.luma_leaf_count, 4);
+    debug_assert!(params.visible_width == 64 || params.visible_height == 64);
+    debug_assert!(params.visible_width >= 32 && params.visible_height >= 32);
+    debug_assert!(matches!(params.luma_leaf_count, 2 | 4));
 
     let mut cabac = ToyCabacEncoder::new();
     cabac.start();
@@ -4121,9 +4136,14 @@ impl VvcCtuCabacOp {
         );
         let mut ops = Vec::with_capacity(params.luma_leaf_count + 2);
         ops.push(Self::QtSplit { node: root });
-        for child_idx in 0..params.luma_leaf_count {
+        for child_idx in 0..4 {
+            let child = root.qt_child(child_idx);
+            if child.x as usize >= params.visible_width || child.y as usize >= params.visible_height
+            {
+                continue;
+            }
             ops.push(Self::LumaLeaf {
-                node: root.qt_child(child_idx as u8),
+                node: child,
             });
         }
         ops.push(Self::ChromaTree { node: chroma });
@@ -4174,8 +4194,6 @@ impl VvcCtuCabacGenerator {
     }
 
     fn emit_luma_leaf_split(&mut self, cabac: &mut ToyCabacEncoder, node: VvcCodingTreeNode) {
-        debug_assert_eq!(node.width, 32);
-        debug_assert_eq!(node.height, 32);
         debug_assert_eq!(node.cqt_depth, 1);
         debug_assert_eq!(node.mtt_depth, 0);
         debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
@@ -4224,8 +4242,6 @@ impl VvcCtuCabacGenerator {
     }
 
     fn emit_chroma_leaf_split(&mut self, cabac: &mut ToyCabacEncoder, node: VvcCodingTreeNode) {
-        debug_assert_eq!(node.width, 32);
-        debug_assert_eq!(node.height, 32);
         debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
         let split_ctx =
             VvcSplitCtxInput::chroma_root_without_smaller_neighbours().split_cu_flag_ctx();
@@ -6314,8 +6330,44 @@ mod tests {
             Some(Toy64x64PartitionParams {
                 root_width: 64,
                 root_height: 64,
+                visible_width: 64,
+                visible_height: 64,
                 luma_leaf_count: 4,
                 chroma_tu_count: 64
+            })
+        );
+        assert_eq!(
+            toy_64x64_partition_params(
+                ToyVideoGeometry {
+                    width: 64,
+                    height: 32
+                },
+                black
+            ),
+            Some(Toy64x64PartitionParams {
+                root_width: 64,
+                root_height: 64,
+                visible_width: 64,
+                visible_height: 32,
+                luma_leaf_count: 2,
+                chroma_tu_count: 32
+            })
+        );
+        assert_eq!(
+            toy_64x64_partition_params(
+                ToyVideoGeometry {
+                    width: 32,
+                    height: 64
+                },
+                black
+            ),
+            Some(Toy64x64PartitionParams {
+                root_width: 64,
+                root_height: 64,
+                visible_width: 32,
+                visible_height: 64,
+                luma_leaf_count: 2,
+                chroma_tu_count: 32
             })
         );
         assert_eq!(
@@ -6733,6 +6785,8 @@ mod tests {
         let params = Toy64x64PartitionParams {
             root_width: 64,
             root_height: 64,
+            visible_width: 64,
+            visible_height: 64,
             luma_leaf_count: 4,
             chroma_tu_count: 64,
         };
@@ -6752,6 +6806,34 @@ mod tests {
                 },
                 VvcCtuCabacOp::LumaLeaf {
                     node: root.qt_child(3)
+                },
+                VvcCtuCabacOp::ChromaTree {
+                    node: VvcCodingTreeNode::root(32, 32, VvcTreeType::DualTreeChroma)
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn vvc_ctu_cabac_generator_names_rectangular_64_sample_operation_sequence() {
+        let params = Toy64x64PartitionParams {
+            root_width: 64,
+            root_height: 64,
+            visible_width: 64,
+            visible_height: 32,
+            luma_leaf_count: 2,
+            chroma_tu_count: 32,
+        };
+        let root = VvcCodingTreeNode::root(64, 64, VvcTreeType::DualTreeLuma);
+        assert_eq!(
+            VvcCtuCabacOp::yuv420_ctu_partition(params),
+            vec![
+                VvcCtuCabacOp::QtSplit { node: root },
+                VvcCtuCabacOp::LumaLeaf {
+                    node: root.qt_child(0)
+                },
+                VvcCtuCabacOp::LumaLeaf {
+                    node: root.qt_child(1)
                 },
                 VvcCtuCabacOp::ChromaTree {
                     node: VvcCodingTreeNode::root(32, 32, VvcTreeType::DualTreeChroma)
@@ -6781,6 +6863,46 @@ mod tests {
         }
         manual.encode_bin_trm(true);
         assert_eq!(via_body, manual.finish());
+    }
+
+    #[test]
+    fn vvc_ctu_cabac_generator_handles_rectangular_64_sample_bodies() {
+        let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
+        for geometry in [
+            ToyVideoGeometry {
+                width: 64,
+                height: 32,
+            },
+            ToyVideoGeometry {
+                width: 32,
+                height: 64,
+            },
+        ] {
+            let params = toy_64x64_partition_params(geometry, black).expect("rectangular params");
+            let bits = toy_64x64_partition_cabac_bits(params);
+            assert!(!bits.is_empty());
+        }
+    }
+
+    #[test]
+    fn toy_cabac_bits_uses_partition_generator_for_rectangular_64_sample_bodies() {
+        let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
+        for geometry in [
+            ToyVideoGeometry {
+                width: 64,
+                height: 32,
+            },
+            ToyVideoGeometry {
+                width: 32,
+                height: 64,
+            },
+        ] {
+            let params = toy_64x64_partition_params(geometry, black).expect("rectangular params");
+            assert_eq!(
+                toy_cabac_bits(geometry, black),
+                toy_64x64_partition_cabac_bits(params)
+            );
+        }
     }
 
     #[test]
