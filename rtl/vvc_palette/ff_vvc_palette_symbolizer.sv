@@ -15,9 +15,6 @@ module ff_vvc_palette_symbolizer #(
   input  logic [15:0] ctu_coded_width,
   input  logic [15:0] ctu_coded_height,
   input  logic [MAX_PALETTE_SYMBOLS - 1:0] cu_select_mask,
-  input  logic        sample_valid,
-  input  logic [1:0]  sample_plane,
-  input  logic [SAMPLE_BITS - 1:0] sample,
   input  logic        s_axis_valid,
   output logic        s_axis_ready,
   input  logic [1:0]  s_axis_plane,
@@ -86,10 +83,10 @@ module ff_vvc_palette_symbolizer #(
   assign visible_symbol_count =
     enable ? (selected_cu_count_x * selected_cu_count_y) : 8'd0;
   assign s_axis_ready = enable && (!m_axis_valid || m_axis_ready);
-  assign input_valid = sample_valid || (s_axis_valid && s_axis_ready);
+  assign input_valid = s_axis_valid && s_axis_ready;
   assign input_last = s_axis_last && s_axis_valid && s_axis_ready;
-  assign input_plane = sample_valid ? sample_plane : s_axis_plane;
-  assign input_sample = sample_valid ? sample : s_axis_sample;
+  assign input_plane = s_axis_plane;
+  assign input_sample = s_axis_sample;
   assign anchor_index = symbol_index_xy(sample_x, sample_y);
   assign last_symbol_index = symbol_count == 8'd0 ? 8'd0 : symbol_count - 8'd1;
   assign selected_width = {8'd0, selected_cu_count_x} * PALETTE_CU_SIZE;

@@ -493,12 +493,6 @@ async def collect_stream(dut, frames):
     assert int(dut.sampled_v.value) == samples[v_sample_index()]
     assert int(dut.luma_samples_q.value) == packed_rtl_luma_value(data)
     assert int(dut.luma_samples_1_q.value) == packed_second_rtl_luma_value(data)
-    assert int(dut.quant_luma_ac_tokens_q.value) == int.from_bytes(
-        quant_ac_tokens(first_residual_luma_block(data)), "big"
-    )
-    assert int(dut.quant_luma_ac_tokens_1_q.value) == int.from_bytes(
-        quant_ac_tokens(second_residual_luma_block(data)), "big"
-    )
     observed = bytearray()
     if dut.m_axis_valid.value == 1:
         observed.append(int(dut.m_axis_data.value))
@@ -551,12 +545,6 @@ async def drain_sampled_color(dut, frames, y, u, v):
     assert int(dut.sampled_v.value) == samples[v_sample_index()]
     assert int(dut.luma_samples_q.value) == packed_rtl_luma_value(data)
     assert int(dut.luma_samples_1_q.value) == packed_second_rtl_luma_value(data)
-    assert int(dut.quant_luma_ac_tokens_q.value) == int.from_bytes(
-        quant_ac_tokens(first_residual_luma_block(data)), "big"
-    )
-    assert int(dut.quant_luma_ac_tokens_1_q.value) == int.from_bytes(
-        quant_ac_tokens(second_residual_luma_block(data)), "big"
-    )
 
 
 @cocotb.test()

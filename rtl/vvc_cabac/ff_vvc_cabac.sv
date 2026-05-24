@@ -30,7 +30,7 @@ module ff_vvc_cabac #(
   input  logic [31:0] s_axis_data,
   input  logic        s_axis_last,
 
-  // Registered byte stream for the completed CABAC payload.
+  // CABAC byte stream.
   input  logic        m_axis_ready,
   output logic        m_axis_valid,
   output logic [7:0]  m_axis_data,
@@ -51,9 +51,7 @@ module ff_vvc_cabac #(
   logic palette_m_axis_last;
   logic [12:0] palette_stream_bit_count;
   logic [12:0] palette_stream_byte_count;
-  logic [7:0] symbol_kind_q;
-  logic [31:0] symbol_data_q;
-  logic symbol_last_q;
+  logic unused_generated_symbol_inputs;
   logic palette_s_axis_ready;
 
   assign s_axis_ready = mode_palette_444 ? palette_s_axis_ready : enable;
@@ -114,18 +112,10 @@ module ff_vvc_cabac #(
     end
   end
 
-  // Keep the symbol stream visible to lint/simulation until the current
-  // parameter-driven generators are replaced by real symbol consumers.
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      symbol_kind_q <= 8'd0;
-      symbol_data_q <= 32'd0;
-      symbol_last_q <= 1'b0;
-    end else if (s_axis_valid && s_axis_ready) begin
-      symbol_kind_q <= s_axis_kind;
-      symbol_data_q <= s_axis_data;
-      symbol_last_q <= s_axis_last;
-    end
-  end
+  // Generated CABAC is still parameter-driven; keep the symbol-side inputs
+  // electrically consumed until that path becomes a real symbol streamer.
+  assign unused_generated_symbol_inputs =
+    (!mode_palette_444) && s_axis_valid && s_axis_ready &&
+    (|s_axis_kind || |s_axis_data || s_axis_last);
 
 endmodule

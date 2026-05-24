@@ -62,21 +62,13 @@ module ff_vvc_encoder #(
   logic [INPUT_COUNT_BITS - 1:0] input_len_q;
   logic       input_active_q;
   logic [(SAMPLE_BITS * MAX_LUMA_SAMPLES) - 1:0] luma_frame_q;
-  logic [(SAMPLE_BITS * MAX_CHROMA_PLANE_SAMPLES) - 1:0] cb_frame_q;
-  logic [(SAMPLE_BITS * MAX_CHROMA_PLANE_SAMPLES) - 1:0] cr_frame_q;
   logic [(SAMPLE_BITS * TOY_RESIDUAL_LUMA_SAMPLES) - 1:0] luma_samples_q;
   logic [(SAMPLE_BITS * TOY_RESIDUAL_LUMA_SAMPLES) - 1:0] luma_samples_1_q;
-  logic [(SAMPLE_BITS * 16) - 1:0] cb_samples_q;
-  logic [(SAMPLE_BITS * 16) - 1:0] cr_samples_q;
   logic [4:0] quant_luma_rem_q;
   logic [4:0] quant_luma_rem_1_q;
   logic [4:0] quant_chroma_rem_q;
-  logic [119:0] quant_luma_ac_tokens_q;
-  logic [119:0] quant_luma_ac_tokens_1_q;
   logic [4:0] residual_quant_luma_rem;
   logic [4:0] residual_quant_luma_rem_1;
-  logic [119:0] residual_quant_luma_ac_tokens;
-  logic [119:0] residual_quant_luma_ac_tokens_1;
   logic [7:0] residual_recon_luma_sample;
   logic [7:0] residual_recon_luma_sample_1;
   logic [15:0] coding_tree_coded_width;
@@ -211,9 +203,6 @@ module ff_vvc_encoder #(
     .ctu_coded_width(coding_tree_coded_width),
     .ctu_coded_height(coding_tree_coded_height),
     .cu_select_mask(palette_cu_select_mask),
-    .sample_valid(palette_sample_valid),
-    .sample_plane(palette_sample_plane),
-    .sample(s_axis_data),
     .s_axis_valid(palette_sample_valid),
     .s_axis_ready(),
     .s_axis_plane(palette_sample_plane),
@@ -277,7 +266,7 @@ module ff_vvc_encoder #(
     .m_axis_last(),
     .luma_samples(luma_samples_q),
     .quant_luma_rem(residual_quant_luma_rem),
-    .quant_luma_ac_tokens(residual_quant_luma_ac_tokens),
+    .quant_luma_ac_tokens(),
     .recon_luma_sample(residual_recon_luma_sample)
   );
 
@@ -300,7 +289,7 @@ module ff_vvc_encoder #(
     .m_axis_last(),
     .luma_samples(luma_samples_1_q),
     .quant_luma_rem(residual_quant_luma_rem_1),
-    .quant_luma_ac_tokens(residual_quant_luma_ac_tokens_1),
+    .quant_luma_ac_tokens(),
     .recon_luma_sample(residual_recon_luma_sample_1)
   );
 
@@ -318,17 +307,11 @@ module ff_vvc_encoder #(
       sampled_u <= '0;
       sampled_v <= '0;
       luma_frame_q <= '0;
-      cb_frame_q <= '0;
-      cr_frame_q <= '0;
       luma_samples_q <= '0;
       luma_samples_1_q <= '0;
-      cb_samples_q <= '0;
-      cr_samples_q <= '0;
       quant_luma_rem_q <= 5'd16;
       quant_luma_rem_1_q <= 5'd16;
       quant_chroma_rem_q <= 5'd6;
-      quant_luma_ac_tokens_q <= {15{8'h40}};
-      quant_luma_ac_tokens_1_q <= {15{8'h40}};
       m_axis_valid <= 1'b0;
       m_axis_data  <= '0;
       m_axis_last  <= 1'b0;
@@ -368,17 +351,11 @@ module ff_vvc_encoder #(
         input_error    <= 1'b0;
         sampled_color_valid <= 1'b0;
         luma_frame_q <= '0;
-        cb_frame_q <= '0;
-        cr_frame_q <= '0;
         luma_samples_q <= '0;
         luma_samples_1_q <= '0;
-        cb_samples_q <= '0;
-        cr_samples_q <= '0;
         quant_luma_rem_q <= 5'd16;
         quant_luma_rem_1_q <= 5'd16;
         quant_chroma_rem_q <= 5'd6;
-        quant_luma_ac_tokens_q <= {15{8'h40}};
-        quant_luma_ac_tokens_1_q <= {15{8'h40}};
         m_axis_valid   <= 1'b0;
         m_axis_last    <= 1'b0;
         index_q        <= '0;
@@ -416,29 +393,15 @@ module ff_vvc_encoder #(
         if (input_count_q < luma_samples()) begin
           luma_frame_q[(MAX_LUMA_SAMPLES - 1 - input_count_q) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
         end
-        if (PALETTE_MODE && input_count_q >= luma_samples() && input_count_q < luma_samples() + chroma_plane_samples()) begin
-          cb_frame_q[(MAX_CHROMA_PLANE_SAMPLES - 1 - (input_count_q - luma_samples())) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
-        end
-        if (PALETTE_MODE && input_count_q >= v_sample_index() && input_count_q < v_sample_index() + chroma_plane_samples()) begin
-          cr_frame_q[(MAX_CHROMA_PLANE_SAMPLES - 1 - (input_count_q - v_sample_index())) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
-        end
         if (is_residual_luma_sample(input_count_q)) begin
           luma_samples_q[(15 - residual_luma_sample_index(input_count_q)) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
         end
         if (is_second_residual_luma_sample(input_count_q)) begin
           luma_samples_1_q[(15 - second_residual_luma_sample_index(input_count_q)) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
         end
-        if (PALETTE_MODE && input_count_q >= luma_samples() && input_count_q < luma_samples() + 10'd16) begin
-          cb_samples_q[(15 - (input_count_q - luma_samples())) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
-        end
-        if (PALETTE_MODE && input_count_q >= v_sample_index() && input_count_q < v_sample_index() + 10'd16) begin
-          cr_samples_q[(15 - (input_count_q - v_sample_index())) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
-        end
         if (input_count_q == luma_samples()) begin
           quant_luma_rem_q <= residual_quant_luma_rem;
-          quant_luma_ac_tokens_q <= residual_quant_luma_ac_tokens;
           quant_luma_rem_1_q <= residual_quant_luma_rem_1;
-          quant_luma_ac_tokens_1_q <= residual_quant_luma_ac_tokens_1;
         end
         if (input_count_q == luma_samples()) begin
           sampled_u <= s_axis_data;
@@ -1027,21 +990,9 @@ module ff_vvc_encoder #(
     end
   endfunction
 
-  function automatic logic [119:0] quant_luma_ac_tokens();
-    begin
-      quant_luma_ac_tokens = quant_luma_ac_tokens_q;
-    end
-  endfunction
-
   function automatic logic [4:0] quant_luma_rem_1();
     begin
       quant_luma_rem_1 = quant_luma_rem_1_q;
-    end
-  endfunction
-
-  function automatic logic [119:0] quant_luma_ac_tokens_1();
-    begin
-      quant_luma_ac_tokens_1 = quant_luma_ac_tokens_1_q;
     end
   endfunction
 
