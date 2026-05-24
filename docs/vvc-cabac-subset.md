@@ -309,4 +309,6 @@ ctxInc = (condL && availableL) + (condA && availableA) + ctxSetIdx * 3
 ```
 
 The current single-CTU subset usually has no available left/above neighbours,
-so `availableL = availableA = false`.
+so `availableL = availableA = false`. Keep these as separately named inputs in
+code rather than folding them into `condL` / `condA`; multi-CTU slices will need
+to compute neighbour availability independently from the condition values.

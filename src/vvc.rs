@@ -2963,8 +2963,10 @@ impl VvcCodingTreeNode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct VvcSplitCtxInput {
-    left_condition: bool,
-    above_condition: bool,
+    available_left: bool,
+    available_above: bool,
+    condition_left: bool,
+    condition_above: bool,
     allow_bt_vertical: bool,
     allow_bt_horizontal: bool,
     allow_tt_vertical: bool,
@@ -2975,8 +2977,10 @@ struct VvcSplitCtxInput {
 impl VvcSplitCtxInput {
     fn qt_only_root() -> Self {
         Self {
-            left_condition: false,
-            above_condition: false,
+            available_left: false,
+            available_above: false,
+            condition_left: false,
+            condition_above: false,
             allow_bt_vertical: false,
             allow_bt_horizontal: false,
             allow_tt_vertical: false,
@@ -2987,8 +2991,10 @@ impl VvcSplitCtxInput {
 
     fn full_child_without_smaller_neighbours() -> Self {
         Self {
-            left_condition: false,
-            above_condition: false,
+            available_left: false,
+            available_above: false,
+            condition_left: false,
+            condition_above: false,
             allow_bt_vertical: true,
             allow_bt_horizontal: true,
             allow_tt_vertical: true,
@@ -2999,8 +3005,10 @@ impl VvcSplitCtxInput {
 
     fn chroma_root_without_smaller_neighbours() -> Self {
         Self {
-            left_condition: false,
-            above_condition: false,
+            available_left: false,
+            available_above: false,
+            condition_left: false,
+            condition_above: false,
             allow_bt_vertical: true,
             allow_bt_horizontal: true,
             allow_tt_vertical: true,
@@ -3022,13 +3030,17 @@ impl VvcSplitCtxInput {
             + (2 * u8::from(self.allow_qt));
         debug_assert!(split_alternatives > 0);
         let ctx_set_idx = (split_alternatives - 1) / 2;
-        u8::from(self.left_condition) + u8::from(self.above_condition) + (3 * ctx_set_idx)
+        u8::from(self.condition_left && self.available_left)
+            + u8::from(self.condition_above && self.available_above)
+            + (3 * ctx_set_idx)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 struct VvcQtSplitCtxInput {
+    available_left: bool,
+    available_above: bool,
     left_deeper_qt: bool,
     above_deeper_qt: bool,
     cqt_depth: u8,
@@ -3038,6 +3050,8 @@ struct VvcQtSplitCtxInput {
 impl VvcQtSplitCtxInput {
     fn from_node_without_deeper_neighbours(node: VvcCodingTreeNode) -> Self {
         Self {
+            available_left: false,
+            available_above: false,
             left_deeper_qt: false,
             above_deeper_qt: false,
             cqt_depth: node.cqt_depth,
@@ -3046,10 +3060,10 @@ impl VvcQtSplitCtxInput {
 
     fn split_qt_flag_ctx(self) -> u8 {
         // VVC 9.3.4.2.2 derives ctxInc for split_qt_flag as:
-        //   condL + condA + ctxSetIdx * 3
+        //   (condL && availableL) + (condA && availableA) + ctxSetIdx * 3
         // where ctxSetIdx is cqtDepth >= 2.
-        u8::from(self.left_deeper_qt)
-            + u8::from(self.above_deeper_qt)
+        u8::from(self.left_deeper_qt && self.available_left)
+            + u8::from(self.above_deeper_qt && self.available_above)
             + (3 * u8::from(self.cqt_depth >= 2))
     }
 }
@@ -5333,8 +5347,10 @@ mod tests {
         );
         assert_eq!(
             VvcSplitCtxInput {
-                left_condition: true,
-                above_condition: true,
+                available_left: true,
+                available_above: true,
+                condition_left: true,
+                condition_above: true,
                 allow_bt_vertical: true,
                 allow_bt_horizontal: true,
                 allow_tt_vertical: true,
@@ -5355,6 +5371,8 @@ mod tests {
         );
         assert_eq!(
             VvcQtSplitCtxInput {
+                available_left: true,
+                available_above: true,
                 left_deeper_qt: true,
                 above_deeper_qt: true,
                 cqt_depth: 2,

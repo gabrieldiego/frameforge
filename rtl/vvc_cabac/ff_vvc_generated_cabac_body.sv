@@ -1429,8 +1429,10 @@ module ff_vvc_generated_cabac_body (
   endfunction
 
   function automatic logic [3:0] vvc_split_cu_flag_ctx(
-    input logic left_condition,
-    input logic above_condition,
+    input logic available_left,
+    input logic available_above,
+    input logic condition_left,
+    input logic condition_above,
     input logic allow_bt_vertical,
     input logic allow_bt_horizontal,
     input logic allow_tt_vertical,
@@ -1441,7 +1443,7 @@ module ff_vvc_generated_cabac_body (
     logic [3:0] ctx_set_idx;
     begin
       // VVC 9.3.4.2.2 derives ctxInc for split_cu_flag as:
-      // condL + condA + ctxSetIdx * 3.
+      // (condL && availableL) + (condA && availableA) + ctxSetIdx * 3.
       split_alternatives =
         {3'd0, allow_bt_vertical} +
         {3'd0, allow_bt_horizontal} +
@@ -1450,13 +1452,16 @@ module ff_vvc_generated_cabac_body (
         ({3'd0, allow_qt} << 1);
       ctx_set_idx = (split_alternatives - 4'd1) >> 1;
       vvc_split_cu_flag_ctx =
-        {3'd0, left_condition} + {3'd0, above_condition} + (ctx_set_idx * 4'd3);
+        {3'd0, condition_left && available_left} +
+        {3'd0, condition_above && available_above} +
+        (ctx_set_idx * 4'd3);
     end
   endfunction
 
   function automatic logic [3:0] vvc_split_cu_ctx_qt_only_root();
     begin
       vvc_split_cu_ctx_qt_only_root = vvc_split_cu_flag_ctx(
+        1'b0, 1'b0,
         1'b0, 1'b0,
         1'b0, 1'b0,
         1'b0, 1'b0,
@@ -1469,6 +1474,7 @@ module ff_vvc_generated_cabac_body (
     begin
       vvc_split_cu_ctx_full_child_no_neighbours = vvc_split_cu_flag_ctx(
         1'b0, 1'b0,
+        1'b0, 1'b0,
         1'b1, 1'b1,
         1'b1, 1'b1,
         1'b1
@@ -1480,6 +1486,7 @@ module ff_vvc_generated_cabac_body (
     begin
       vvc_split_cu_ctx_chroma_root_no_neighbours = vvc_split_cu_flag_ctx(
         1'b0, 1'b0,
+        1'b0, 1'b0,
         1'b1, 1'b1,
         1'b1, 1'b1,
         1'b0
@@ -1488,15 +1495,20 @@ module ff_vvc_generated_cabac_body (
   endfunction
 
   function automatic logic [3:0] vvc_split_qt_flag_ctx(
+    input logic available_left,
+    input logic available_above,
     input logic left_deeper_qt,
     input logic above_deeper_qt,
     input logic [2:0] cqt_depth
   );
     begin
       // VVC 9.3.4.2.2 derives ctxInc for split_qt_flag as:
-      // condL + condA + ctxSetIdx * 3, where ctxSetIdx is cqtDepth >= 2.
+      // (condL && availableL) + (condA && availableA) + ctxSetIdx * 3,
+      // where ctxSetIdx is cqtDepth >= 2.
       vvc_split_qt_flag_ctx =
-        {3'd0, left_deeper_qt} + {3'd0, above_deeper_qt} + (cqt_depth >= 3'd2 ? 4'd3 : 4'd0);
+        {3'd0, left_deeper_qt && available_left} +
+        {3'd0, above_deeper_qt && available_above} +
+        (cqt_depth >= 3'd2 ? 4'd3 : 4'd0);
     end
   endfunction
 
