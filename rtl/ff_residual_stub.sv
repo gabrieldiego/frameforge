@@ -30,7 +30,7 @@ module ff_residual_stub #(
   logic [(SAMPLE_BITS * LUMA_SAMPLE_COUNT) - 1:0] stream_samples_q;
   logic [4:0] stream_sample_count_q;
   logic stream_result_valid_q;
-  logic [2:0] stream_packet_index_q;
+  logic [3:0] stream_packet_index_q;
   logic [4:0] stream_quant_luma_rem;
   logic [119:0] stream_quant_luma_ac_tokens;
   logic [7:0] stream_recon_luma_sample;
@@ -53,7 +53,7 @@ module ff_residual_stub #(
       stream_samples_q <= '0;
       stream_sample_count_q <= 5'd0;
       stream_result_valid_q <= 1'b0;
-      stream_packet_index_q <= 3'd0;
+      stream_packet_index_q <= 4'd0;
       m_axis_valid <= 1'b0;
       m_axis_kind <= 8'd0;
       m_axis_data <= 32'd0;
@@ -62,7 +62,7 @@ module ff_residual_stub #(
       stream_samples_q <= '0;
       stream_sample_count_q <= 5'd0;
       stream_result_valid_q <= 1'b0;
-      stream_packet_index_q <= 3'd0;
+      stream_packet_index_q <= 4'd0;
       m_axis_valid <= 1'b0;
       m_axis_kind <= 8'd0;
       m_axis_data <= 32'd0;
@@ -73,7 +73,7 @@ module ff_residual_stub #(
           s_axis_sample;
         if (s_axis_last || stream_sample_count_q == LUMA_SAMPLE_COUNT - 1) begin
           stream_result_valid_q <= 1'b1;
-          stream_packet_index_q <= 3'd0;
+          stream_packet_index_q <= 4'd0;
           stream_sample_count_q <= 5'd0;
         end else begin
           stream_sample_count_q <= stream_sample_count_q + 5'd1;
@@ -83,11 +83,11 @@ module ff_residual_stub #(
       if (stream_result_valid_q && (!m_axis_valid || m_axis_ready)) begin
         m_axis_valid <= 1'b1;
         {m_axis_kind, m_axis_data, m_axis_last} <= residual_packet(stream_packet_index_q);
-        if (stream_packet_index_q == 3'd5) begin
+        if (stream_packet_index_q == residual_last_packet_index(stream_quant_luma_rem)) begin
           stream_result_valid_q <= 1'b0;
-          stream_packet_index_q <= 3'd0;
+          stream_packet_index_q <= 4'd0;
         end else begin
-          stream_packet_index_q <= stream_packet_index_q + 3'd1;
+          stream_packet_index_q <= stream_packet_index_q + 4'd1;
         end
       end else if (m_axis_valid && m_axis_ready) begin
         m_axis_valid <= 1'b0;
@@ -98,16 +98,50 @@ module ff_residual_stub #(
     end
   end
 
-  function automatic logic [40:0] residual_packet(input logic [2:0] index);
+  function automatic logic [40:0] residual_packet(input logic [3:0] index);
+    logic [4:0] rem;
+    logic signed [9:0] recon_dc;
+    logic negative;
     begin
+      rem = stream_quant_luma_rem;
+      recon_dc = reconstructed_dc_coeff_from_rem(rem);
+      negative = (rem != 5'd0) && (recon_dc < 10'sd0);
       case (index)
-        3'd0: residual_packet = {8'd1, 27'd0, stream_quant_luma_rem, 1'b0};
-        3'd1: residual_packet = {8'd2, stream_quant_luma_ac_tokens[119:88], 1'b0};
-        3'd2: residual_packet = {8'd3, stream_quant_luma_ac_tokens[87:56], 1'b0};
-        3'd3: residual_packet = {8'd4, stream_quant_luma_ac_tokens[55:24], 1'b0};
-        3'd4: residual_packet = {8'd5, stream_quant_luma_ac_tokens[23:0], 8'd0, 1'b0};
-        default: residual_packet = {8'd6, 24'd0, stream_recon_luma_sample, 1'b1};
+        4'd0: residual_packet = {8'd1, 27'd0, rem, 1'b0};
+        4'd1: residual_packet = {8'd2, stream_quant_luma_ac_tokens[119:88], 1'b0};
+        4'd2: residual_packet = {8'd3, stream_quant_luma_ac_tokens[87:56], 1'b0};
+        4'd3: residual_packet = {8'd4, stream_quant_luma_ac_tokens[55:24], 1'b0};
+        4'd4: residual_packet = {8'd5, stream_quant_luma_ac_tokens[23:0], 8'd0, 1'b0};
+        4'd5: residual_packet = {8'd6, 24'd0, stream_recon_luma_sample, 1'b0};
+        // Named residual CABAC symbol stream. Data packing is deliberately
+        // simple for cocotb/software comparison: low bits hold fields named
+        // by the packet kind rather than a final encoded payload.
+        4'd6: residual_packet = {8'd7, 31'd0, 1'b0, 1'b0}; // last_sig_coeff_x_prefix binIdx=0 bin=0
+        4'd7: residual_packet = {8'd8, 31'd0, 1'b0, 1'b0}; // last_sig_coeff_y_prefix binIdx=0 bin=0
+        4'd8: residual_packet = {8'd9, 27'd0, 2'd0, 2'd0, rem != 5'd0, residual_last_packet_index(rem) == 4'd8};
+        4'd9: residual_packet = {8'd10, 27'd0, 2'd0, 2'd0, 1'b0, 1'b0}; // par_level_flag
+        4'd10: residual_packet = {8'd11, 28'd0, 3'd0, rem > 5'd1, 1'b0}; // abs_level_gtx_flag[0]
+        4'd11: residual_packet = {8'd12, 24'd0, 3'd0, residual_abs_remainder_value(rem), 1'b0};
+        default: residual_packet = {8'd13, 27'd0, 2'd0, 2'd0, negative, 1'b1}; // coeff_sign_flag
       endcase
+    end
+  endfunction
+
+  function automatic logic [3:0] residual_last_packet_index(input logic [4:0] rem);
+    begin
+      if (rem == 5'd0) begin
+        residual_last_packet_index = 4'd8;
+      end else if (rem <= 5'd1) begin
+        residual_last_packet_index = 4'd10;
+      end else begin
+        residual_last_packet_index = 4'd12;
+      end
+    end
+  endfunction
+
+  function automatic logic [4:0] residual_abs_remainder_value(input logic [4:0] rem);
+    begin
+      residual_abs_remainder_value = (rem > 5'd1) ? (rem - 5'd2) : 5'd0;
     end
   endfunction
 
