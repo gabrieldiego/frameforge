@@ -8,7 +8,8 @@ module ff_vvc_generated_cabac_body (
   input  logic [15:0]  coded_width,
   input  logic [15:0]  coded_height,
   input  logic [4:0]   luma_rem,
-  input  logic [4:0]   chroma_rem,
+  input  logic [4:0]   cb_rem,
+  input  logic [4:0]   cr_rem,
   input  logic         m_axis_ready,
   output logic         m_axis_valid,
   output logic [7:0]   m_axis_data,
@@ -81,6 +82,18 @@ module ff_vvc_generated_cabac_body (
 
   typedef struct packed {
     vvc_prob_model_t split_ctx;
+    vvc_prob_model_t split_ctx6;
+    vvc_prob_model_t split_qt_ctx;
+    vvc_prob_model_t multi_ref_line_ctx;
+    vvc_prob_model_t intra_mpm_ctx;
+    vvc_prob_model_t intra_planar_ctx;
+    vvc_prob_model_t qt_cbf_y_ctx;
+    vvc_prob_model_t mts_idx_ctx;
+    cabac_writer_state_t st;
+  } cabac_luma_partition_step_t;
+
+  typedef struct packed {
+    vvc_prob_model_t split_ctx;
     vvc_prob_model_t cclm_mode_ctx;
     vvc_prob_model_t intra_chroma_pred_ctx;
     vvc_prob_model_t qt_cbf_cb_ctx;
@@ -88,6 +101,22 @@ module ff_vvc_generated_cabac_body (
     vvc_prob_model_t mts_idx_ctx;
     cabac_writer_state_t st;
   } cabac_chroma_leaf_step_t;
+
+  typedef struct packed {
+    vvc_prob_model_t split_ctx0;
+    vvc_prob_model_t split_ctx6;
+    vvc_prob_model_t split_ctx7;
+    vvc_prob_model_t split_qt_ctx0;
+    vvc_prob_model_t split_qt_ctx3;
+    vvc_prob_model_t mtt_vertical_ctx3;
+    vvc_prob_model_t mtt_binary_ctx3;
+    vvc_prob_model_t cclm_mode_ctx;
+    vvc_prob_model_t intra_chroma_pred_ctx;
+    vvc_prob_model_t qt_cbf_cb_ctx;
+    vvc_prob_model_t qt_cbf_cr_ctx;
+    vvc_prob_model_t mts_idx_ctx;
+    cabac_writer_state_t st;
+  } cabac_chroma_partition_step_t;
 
   logic [12:0] generated_bit_count;
   logic [12:0] stream_byte_count_q;
@@ -99,7 +128,7 @@ module ff_vvc_generated_cabac_body (
   assign stream_bit_count = generated_bit_count;
 
   always @* begin
-    generated_bit_count = current_bit_count_for_inputs(coded_width, coded_height, luma_rem, chroma_rem);
+    generated_bit_count = current_bit_count_for_inputs(coded_width, coded_height, luma_rem, cb_rem, cr_rem);
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -141,12 +170,13 @@ module ff_vvc_generated_cabac_body (
     input logic [15:0] width,
     input logic [15:0] height,
     input logic [4:0]  rem,
-    input logic [4:0]  c_rem
+    input logic [4:0]  cb_rem_in,
+    input logic [4:0]  cr_rem_in
   );
     cabac_writer_state_t st;
     begin
       if (body_kind == BODY_GENERATED) begin
-        st = encode_generated_state(width, height, rem, c_rem, 13'h1fff);
+        st = encode_generated_state(width, height, rem, cb_rem_in, cr_rem_in, 13'h1fff);
         current_bit_count_for_inputs = st.stream.bit_count;
       end else begin
         current_bit_count_for_inputs = 13'd0;
@@ -158,7 +188,7 @@ module ff_vvc_generated_cabac_body (
     cabac_writer_state_t st;
     begin
       if (body_kind == BODY_GENERATED) begin
-        st = encode_generated_state(coded_width, coded_height, luma_rem, chroma_rem, byte_index);
+        st = encode_generated_state(coded_width, coded_height, luma_rem, cb_rem, cr_rem, byte_index);
         current_stream_byte = cabac_state_stream_byte(st, byte_index);
       end else begin
         current_stream_byte = 8'd0;
@@ -191,53 +221,51 @@ module ff_vvc_generated_cabac_body (
     input logic [15:0] width,
     input logic [15:0] height,
     input logic [4:0]  rem,
-    input logic [4:0]  c_rem,
+    input logic [4:0]  cb_rem_in,
+    input logic [4:0]  cr_rem_in,
     input logic [12:0] probe_byte_index
   );
     begin
       if ((width == 16'd8) && (height == 16'd8)) begin
-        encode_generated_state = encode_8x8_state(rem, c_rem, probe_byte_index);
-      end else if (((width == 16'd64) && (height == 16'd32)) ||
-                   ((width == 16'd32) && (height == 16'd64))) begin
-        encode_generated_state = encode_64x64_state(width, height, rem, c_rem, probe_byte_index);
-      end else if ((width == 16'd64) && (height == 16'd64)) begin
-        encode_generated_state = encode_64x64_state(width, height, rem, c_rem, probe_byte_index);
+        encode_generated_state = encode_8x8_state(rem, cb_rem_in, cr_rem_in, probe_byte_index);
       end else begin
-        encode_generated_state = '0;
+        encode_generated_state = encode_ctu_state(width, height, rem, cb_rem_in, cr_rem_in, probe_byte_index);
       end
     end
   endfunction
 
   function automatic cabac_writer_state_t encode_8x8_state(
     input logic [4:0] rem,
-    input logic [4:0] c_rem,
+    input logic [4:0] cb_rem_in,
+    input logic [4:0] cr_rem_in,
     input logic [12:0] probe_byte_index
   );
     cabac_writer_state_t st;
     begin
       st = cabac_start(probe_byte_index);
       st = encode_8x8_luma_tree(st, rem);
-      st = encode_4x4_chroma_tree(st, c_rem);
+      st = encode_4x4_chroma_tree(st, cb_rem_in, cr_rem_in);
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);
       encode_8x8_state = st;
     end
   endfunction
 
-  function automatic cabac_writer_state_t encode_64x64_state(
+  function automatic cabac_writer_state_t encode_ctu_state(
     input logic [15:0] coded_width,
     input logic [15:0] coded_height,
     input logic [4:0] rem,
-    input logic [4:0] c_rem,
+    input logic [4:0] cb_rem_in,
+    input logic [4:0] cr_rem_in,
     input logic [12:0] probe_byte_index
   );
     cabac_writer_state_t st;
     begin
       st = cabac_start(probe_byte_index);
-      st = encode_partitioned_ctu_tree(st, coded_width, coded_height, rem, c_rem);
+      st = encode_partitioned_ctu_tree(st, coded_width, coded_height, rem, cb_rem_in, cr_rem_in);
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);
-      encode_64x64_state = st;
+      encode_ctu_state = st;
     end
   endfunction
 
@@ -246,7 +274,8 @@ module ff_vvc_generated_cabac_body (
     input logic [15:0]  visible_width,
     input logic [15:0]  visible_height,
     input logic [4:0]   rem,
-    input logic [4:0]   c_rem
+    input logic [4:0]   cb_rem_in,
+    input logic [4:0]   cr_rem_in
   );
     cabac_writer_state_t st;
     logic [7:0] child_width;
@@ -267,6 +296,8 @@ module ff_vvc_generated_cabac_body (
     logic grand_above_deeper;
     logic special_tt_grandchild;
     logic special_vertical_grandchild;
+    logic is_wide_half_ctu;
+    logic is_tall_half_ctu;
     vvc_prob_model_t split_root_ctx;
     vvc_prob_model_t split_child_ctx;
     vvc_prob_model_t split_child_one_neighbour_ctx;
@@ -276,6 +307,8 @@ module ff_vvc_generated_cabac_body (
     vvc_prob_model_t split_bt_leaf_ctx;
     vvc_prob_model_t split_ctx3;
     vvc_prob_model_t split_ctx4;
+    vvc_prob_model_t split_ctx6;
+    vvc_prob_model_t split_ctx7;
     vvc_prob_model_t split_chroma_ctx;
     vvc_prob_model_t split_qt_ctx;
     vvc_prob_model_t split_qt_one_neighbour_ctx;
@@ -339,6 +372,8 @@ module ff_vvc_generated_cabac_body (
       );
       split_ctx3 = vvc_prob_model_init(vvc_split_flag_init(4'd3), vvc_split_flag_log2_window(4'd3), 32);
       split_ctx4 = vvc_prob_model_init(vvc_split_flag_init(4'd4), vvc_split_flag_log2_window(4'd4), 32);
+      split_ctx6 = vvc_prob_model_init(vvc_split_flag_init(4'd6), vvc_split_flag_log2_window(4'd6), 32);
+      split_ctx7 = vvc_prob_model_init(vvc_split_flag_init(4'd7), vvc_split_flag_log2_window(4'd7), 32);
       split_chroma_ctx = vvc_prob_model_init(
         vvc_split_flag_init(vvc_split_cu_ctx_chroma_root_no_neighbours()),
         vvc_split_flag_log2_window(vvc_split_cu_ctx_chroma_root_no_neighbours()),
@@ -368,9 +403,32 @@ module ff_vvc_generated_cabac_body (
       // The 64x64 root QT split is inferred for this single-CTU subset. VTM
       // logs split_cu_mode() for it, but the first consumed CABAC bin belongs
       // to the visible 32x32 child.
-      if (((visible_width == 16'd64) && (visible_height == 16'd32)) ||
-          ((visible_width == 16'd32) && (visible_height == 16'd64))) begin
-        if (visible_width == 16'd32) begin
+      is_wide_half_ctu = (visible_width == 16'd64) && (visible_height == 16'd32);
+      is_tall_half_ctu = (visible_width == 16'd32) && (visible_height == 16'd64);
+
+      if ((visible_width <= 16'd32) && (visible_height <= 16'd32)) begin
+        // Pictures at or below 32x32 are coded as their actual visible root,
+        // not as a hidden 64x64 canvas. VTM derives SplitFlag context 6 for
+        // this root leaf in the current intra subset.
+        {split_ctx6, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, st} =
+          encode_ctu_luma_leaf(
+            st,
+            split_ctx6,
+            multi_ref_line_ctx,
+            intra_mpm_ctx,
+            intra_planar_ctx,
+            qt_cbf_y_ctx,
+            mts_idx_ctx,
+            rem,
+            8'd0,
+            8'd0,
+            visible_width[7:0],
+            visible_height[7:0],
+            3'd0,
+            3'd0
+          );
+      end else if (is_wide_half_ctu || is_tall_half_ctu) begin
+        if (is_tall_half_ctu) begin
           mtt_binary_ctx = vvc_prob_model_init(vvc_mtt_split_cu_binary_flag_init(4'd1), vvc_mtt_split_cu_binary_flag_log2_window(4'd1), 32);
         end
         for (child_yi = 0; child_yi < 2; child_yi = child_yi + 1) begin
@@ -393,11 +451,9 @@ module ff_vvc_generated_cabac_body (
                   grand_y = child_y + ((grand_yi == 1) ? 8'd16 : 8'd0);
                   grand_left_deeper = grand_x != 8'd0;
                   grand_above_deeper = grand_y != 8'd0;
-                  special_tt_grandchild = (visible_width == 16'd64) && (visible_height == 16'd32) &&
-                                          (child_xi == 1) && (child_yi == 0) &&
+                  special_tt_grandchild = is_wide_half_ctu && (child_xi == 1) && (child_yi == 0) &&
                                           (grand_xi == 1) && (grand_yi == 0);
-                  special_vertical_grandchild = (visible_width == 16'd64) && (visible_height == 16'd32) &&
-                                                (child_xi == 1) && (child_yi == 0) &&
+                  special_vertical_grandchild = is_wide_half_ctu && (child_xi == 1) && (child_yi == 0) &&
                                                 (grand_xi == 1) && (grand_yi == 1);
                   if (grand_left_deeper && grand_above_deeper) begin
                     {split_child_two_neighbour_ctx, st} =
@@ -470,8 +526,7 @@ module ff_vvc_generated_cabac_body (
                       for (leaf_xi = 0; leaf_xi < 2; leaf_xi = leaf_xi + 1) begin
                         leaf_x = grand_x + ((leaf_xi == 1) ? 8'd8 : 8'd0);
                         leaf_y = grand_y + ((leaf_yi == 1) ? 8'd8 : 8'd0);
-                        if ((visible_width == 16'd32) && (visible_height == 16'd64) &&
-                            (child_yi == 1) && (grand_xi == 0) && (grand_yi == 0) &&
+                        if (is_tall_half_ctu && (child_yi == 1) && (grand_xi == 0) && (grand_yi == 0) &&
                             (leaf_xi == 1) && (leaf_yi == 0)) begin
                           {split_bt_two_neighbour_ctx, st} =
                             cabac_encode_vvc_model_bin(st, split_bt_two_neighbour_ctx, 1'b1);
@@ -480,8 +535,7 @@ module ff_vvc_generated_cabac_body (
                             encode_ctu_luma_leaf(st, split_mtt_one_neighbour_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, rem, leaf_x, leaf_y, 8'd4, 8'd8, 3'd3, 3'd1);
                           {split_root_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, st} =
                             encode_ctu_luma_leaf(st, split_root_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, rem, leaf_x + 8'd4, leaf_y, 8'd4, 8'd8, 3'd3, 3'd1);
-                        end else if ((visible_width == 16'd32) && (visible_height == 16'd64) &&
-                            (child_yi == 1) && (grand_xi == 0) && (grand_yi == 0) &&
+                        end else if (is_tall_half_ctu && (child_yi == 1) && (grand_xi == 0) && (grand_yi == 0) &&
                             (leaf_xi == 1) && (leaf_yi == 1)) begin
                           {split_mtt_one_neighbour_ctx, st} =
                             cabac_encode_vvc_model_bin(st, split_mtt_one_neighbour_ctx, 1'b1);
@@ -493,8 +547,7 @@ module ff_vvc_generated_cabac_body (
                             encode_ctu_luma_leaf(st, split_root_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, rem, leaf_x, leaf_y + 8'd4, 8'd4, 8'd4, 3'd4, 3'd0);
                           {split_mtt_one_neighbour_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, st} =
                             encode_ctu_luma_leaf(st, split_mtt_one_neighbour_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, rem, leaf_x + 8'd4, leaf_y, 8'd4, 8'd8, 3'd3, 3'd1);
-                        end else if ((visible_width == 16'd32) && (visible_height == 16'd64) &&
-                            (child_yi == 1) && (grand_xi == 1) && (grand_yi == 0) &&
+                        end else if (is_tall_half_ctu && (child_yi == 1) && (grand_xi == 1) && (grand_yi == 0) &&
                             (leaf_xi == 0) && (leaf_yi == 0)) begin
                           {split_mtt_one_neighbour_ctx, st} =
                             cabac_encode_vvc_model_bin(st, split_mtt_one_neighbour_ctx, 1'b1);
@@ -503,13 +556,11 @@ module ff_vvc_generated_cabac_body (
                             encode_ctu_luma_leaf(st, split_root_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, rem, leaf_x, leaf_y, 8'd4, 8'd8, 3'd3, 3'd1);
                           {split_root_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, st} =
                             encode_ctu_luma_leaf(st, split_root_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, rem, leaf_x + 8'd4, leaf_y, 8'd4, 8'd8, 3'd3, 3'd1);
-                        end else if ((visible_width == 16'd32) && (visible_height == 16'd64) &&
-                            (child_yi == 1) && (grand_xi == 1) && (grand_yi == 0) &&
+                        end else if (is_tall_half_ctu && (child_yi == 1) && (grand_xi == 1) && (grand_yi == 0) &&
                             (leaf_xi == 0) && (leaf_yi == 1)) begin
                           {split_mtt_one_neighbour_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, st} =
                             encode_ctu_luma_leaf(st, split_mtt_one_neighbour_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, rem, leaf_x, leaf_y, 8'd8, 8'd8, 3'd3, 3'd0);
-                        end else if ((visible_width == 16'd32) && (visible_height == 16'd64) &&
-                            (child_yi == 1) && (grand_xi == 0) && (grand_yi == 1) &&
+                        end else if (is_tall_half_ctu && (child_yi == 1) && (grand_xi == 0) && (grand_yi == 1) &&
                             (leaf_xi == 1) && (leaf_yi == 0)) begin
                           {split_bt_two_neighbour_ctx, st} =
                             cabac_encode_vvc_model_bin(st, split_bt_two_neighbour_ctx, 1'b1);
@@ -518,8 +569,7 @@ module ff_vvc_generated_cabac_body (
                             encode_ctu_luma_leaf(st, split_mtt_one_neighbour_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, rem, leaf_x, leaf_y, 8'd4, 8'd8, 3'd3, 3'd1);
                           {split_root_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, st} =
                             encode_ctu_luma_leaf(st, split_root_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, rem, leaf_x + 8'd4, leaf_y, 8'd4, 8'd8, 3'd3, 3'd1);
-                        end else if ((visible_width == 16'd32) && (visible_height == 16'd64) &&
-                            (child_yi == 1) && (grand_xi == 1) && (grand_yi == 1) &&
+                        end else if (is_tall_half_ctu && (child_yi == 1) && (grand_xi == 1) && (grand_yi == 1) &&
                             (leaf_xi == 0) && (leaf_yi == 0)) begin
                           {split_root_ctx, st} = cabac_encode_vvc_model_bin(st, split_root_ctx, 1'b1);
                           {mtt_vertical_ctx, st} = cabac_encode_vvc_model_bin(st, mtt_vertical_ctx, 1'b1);
@@ -527,13 +577,11 @@ module ff_vvc_generated_cabac_body (
                             encode_ctu_luma_leaf(st, split_root_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, rem, leaf_x, leaf_y, 8'd4, 8'd8, 3'd3, 3'd1);
                           {split_root_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, st} =
                             encode_ctu_luma_leaf(st, split_root_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, rem, leaf_x + 8'd4, leaf_y, 8'd4, 8'd8, 3'd3, 3'd1);
-                        end else if ((visible_width == 16'd32) && (visible_height == 16'd64) &&
-                            (child_yi == 1) && (grand_xi == 1) && (grand_yi == 1) &&
+                        end else if (is_tall_half_ctu && (child_yi == 1) && (grand_xi == 1) && (grand_yi == 1) &&
                             (leaf_xi == 1) && (leaf_yi == 0)) begin
                           {split_root_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, st} =
                             encode_ctu_luma_leaf(st, split_root_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, rem, leaf_x, leaf_y, 8'd8, 8'd8, 3'd3, 3'd0);
-                        end else if ((visible_width == 16'd32) && (visible_height == 16'd64) &&
-                            (child_yi == 1) && (grand_xi == 0) && (grand_yi == 1) &&
+                        end else if (is_tall_half_ctu && (child_yi == 1) && (grand_xi == 0) && (grand_yi == 1) &&
                             (leaf_xi == 1) && (leaf_yi == 1)) begin
                           {split_mtt_one_neighbour_ctx, st} =
                             cabac_encode_vvc_model_bin(st, split_mtt_one_neighbour_ctx, 1'b1);
@@ -651,12 +699,41 @@ module ff_vvc_generated_cabac_body (
             encode_ctu_luma_leaf(st, split_child_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, rem, child_width, child_height, child_width, child_height, 3'd1, 3'd0);
         end
       end
-      if (((visible_width == 16'd64) && (visible_height == 16'd32)) ||
-          ((visible_width == 16'd32) && (visible_height == 16'd64))) begin
-        if ((visible_width == 16'd64) && (visible_height == 16'd32)) begin
+      if ((visible_width <= 16'd32) && (visible_height <= 16'd32)) begin
+        intra_chroma_pred_ctx = vvc_prob_model_init(vvc_intra_chroma_pred_mode_init(4'd1), vvc_intra_chroma_pred_mode_log2_window(4'd1), 32);
+        {split_root_ctx, split_ctx6, split_ctx7, split_qt_ctx, split_qt_deep_ctx,
+         mtt_vertical_ctx3, mtt_binary_ctx, cclm_mode_ctx, intra_chroma_pred_ctx,
+         qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, st} =
+          encode_ctu_chroma_visible_qt_subtree(
+            st,
+            split_root_ctx,
+            split_ctx6,
+            split_ctx7,
+            split_qt_ctx,
+            split_qt_deep_ctx,
+            mtt_vertical_ctx3,
+            mtt_binary_ctx,
+            cclm_mode_ctx,
+            intra_chroma_pred_ctx,
+            qt_cbf_cb_ctx,
+            qt_cbf_cr_ctx,
+            mts_idx_ctx,
+            cb_rem_in,
+            cr_rem_in,
+            8'd0,
+            8'd0,
+            8'd32,
+            8'd32,
+            visible_width[8:1],
+            visible_height[8:1],
+            8'd4,
+            3'd0
+          );
+      end else if (is_wide_half_ctu || is_tall_half_ctu) begin
+        if (is_wide_half_ctu) begin
           {split_qt_ctx, st} = cabac_encode_vvc_model_bin(st, split_qt_ctx, 1'b0);
           {split_root_ctx, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, st} =
-            encode_ctu_chroma_leaf_with_cclm(st, split_root_ctx, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, c_rem, 1'b1, 1'b1, 8'd0, 8'd0, child_width, child_height >> 1, 3'd1, 3'd1);
+            encode_ctu_chroma_leaf_with_cclm(st, split_root_ctx, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, cb_rem_in, cr_rem_in, 1'b1, 1'b1, 8'd0, 8'd0, child_width, child_height >> 1, 3'd1, 3'd1);
 	        end else begin
 	          {split_qt_ctx, st} = cabac_encode_vvc_model_bin(st, split_qt_ctx, 1'b0);
 	          {split_root_ctx, st} = cabac_encode_vvc_model_bin(st, split_root_ctx, 1'b1);
@@ -664,15 +741,141 @@ module ff_vvc_generated_cabac_body (
 	          qt_cbf_cb_ctx = vvc_prob_model_init(vvc_qt_cbf_cb_init(4'd1), vvc_qt_cbf_cb_log2_window(4'd1), 32);
 	          intra_chroma_pred_ctx = vvc_prob_model_init(vvc_intra_chroma_pred_mode_init(4'd1), vvc_intra_chroma_pred_mode_log2_window(4'd1), 32);
 	          {split_ctx3, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, st} =
-	            encode_ctu_chroma_leaf_without_cclm(st, split_ctx3, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, c_rem, 8'd0, 8'd0, child_width, child_height >> 1, 3'd1, 3'd1);
+	            encode_ctu_chroma_leaf_without_cclm(st, split_ctx3, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, cb_rem_in, cr_rem_in, 8'd0, 8'd0, child_width, child_height >> 1, 3'd1, 3'd1);
 	          {split_ctx3, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, st} =
-	            encode_ctu_chroma_leaf_without_cclm(st, split_ctx3, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, c_rem, 8'd0, child_height >> 1, child_width, child_height >> 1, 3'd1, 3'd1);
+	            encode_ctu_chroma_leaf_without_cclm(st, split_ctx3, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, cb_rem_in, cr_rem_in, 8'd0, child_height >> 1, child_width, child_height >> 1, 3'd1, 3'd1);
 	        end
       end else begin
         {split_ctx3, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, st} =
-          encode_ctu_chroma_leaf(st, split_ctx3, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, c_rem, 8'd0, 8'd0, child_width, child_height, 3'd1, 3'd0);
+          encode_ctu_chroma_leaf(st, split_ctx3, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, cb_rem_in, cr_rem_in, 8'd0, 8'd0, child_width, child_height, 3'd1, 3'd0);
       end
       encode_partitioned_ctu_tree = st;
+    end
+  endfunction
+
+  function automatic cabac_luma_partition_step_t encode_ctu_visible_qt_luma_subtree(
+    input cabac_writer_state_t st_in,
+    input vvc_prob_model_t split_ctx_in,
+    input vvc_prob_model_t split_ctx6_in,
+    input vvc_prob_model_t split_qt_ctx_in,
+    input vvc_prob_model_t multi_ref_line_ctx_in,
+    input vvc_prob_model_t intra_mpm_ctx_in,
+    input vvc_prob_model_t intra_planar_ctx_in,
+    input vvc_prob_model_t qt_cbf_y_ctx_in,
+    input vvc_prob_model_t mts_idx_ctx_in,
+    input logic [4:0]   rem,
+    input logic [7:0]   cb_x,
+    input logic [7:0]   cb_y,
+    input logic [7:0]   cb_width,
+    input logic [7:0]   cb_height,
+    input logic [7:0]   visible_width,
+    input logic [7:0]   visible_height,
+    input logic [7:0]   max_leaf_size,
+    input logic [2:0]   cqt_depth
+  );
+    cabac_writer_state_t st;
+    vvc_prob_model_t split_ctx;
+    vvc_prob_model_t split_ctx6;
+    vvc_prob_model_t split_qt_ctx;
+    vvc_prob_model_t multi_ref_line_ctx;
+    vvc_prob_model_t intra_mpm_ctx;
+    vvc_prob_model_t intra_planar_ctx;
+    vvc_prob_model_t qt_cbf_y_ctx;
+    vvc_prob_model_t mts_idx_ctx;
+    logic [7:0] child_width;
+    logic [7:0] child_height;
+    logic [7:0] child_x;
+    logic [7:0] child_y;
+    integer child_xi;
+    integer child_yi;
+    begin
+      st = st_in;
+      split_ctx = split_ctx_in;
+      split_ctx6 = split_ctx6_in;
+      split_qt_ctx = split_qt_ctx_in;
+      multi_ref_line_ctx = multi_ref_line_ctx_in;
+      intra_mpm_ctx = intra_mpm_ctx_in;
+      intra_planar_ctx = intra_planar_ctx_in;
+      qt_cbf_y_ctx = qt_cbf_y_ctx_in;
+      mts_idx_ctx = mts_idx_ctx_in;
+
+      if ((cb_x >= visible_width) || (cb_y >= visible_height)) begin
+        // Off-picture CTU quadrants are inferred from picture bounds and do not
+        // carry coding_tree bins. Neighbour availability is kept explicit for
+        // future multi-CTU slices.
+      end else if (((cb_x + cb_width) <= visible_width) &&
+                   ((cb_y + cb_height) <= visible_height) &&
+                   (cb_width <= max_leaf_size) &&
+                   (cb_height <= max_leaf_size)) begin
+        {split_ctx6, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, st} =
+          encode_ctu_luma_leaf(st, split_ctx6, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, rem, cb_x, cb_y, cb_width, cb_height, cqt_depth, 3'd0);
+      end else if (((cb_x + cb_width) > visible_width) ||
+                   ((cb_y + cb_height) > visible_height)) begin
+        child_width = cb_width >> 1;
+        child_height = cb_height >> 1;
+        for (child_yi = 0; child_yi < 2; child_yi = child_yi + 1) begin
+          for (child_xi = 0; child_xi < 2; child_xi = child_xi + 1) begin
+            child_x = cb_x + ((child_xi == 1) ? child_width : 8'd0);
+            child_y = cb_y + ((child_yi == 1) ? child_height : 8'd0);
+            {split_ctx, split_ctx6, split_qt_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, st} =
+              encode_ctu_visible_qt_luma_subtree(
+                st,
+                split_ctx,
+                split_ctx6,
+                split_qt_ctx,
+                multi_ref_line_ctx,
+                intra_mpm_ctx,
+                intra_planar_ctx,
+                qt_cbf_y_ctx,
+                mts_idx_ctx,
+                rem,
+                child_x,
+                child_y,
+                child_width,
+                child_height,
+                visible_width,
+                visible_height,
+                max_leaf_size,
+                cqt_depth + 3'd1
+              );
+          end
+        end
+      end else begin
+        {split_ctx, st} = cabac_encode_vvc_model_bin(st, split_ctx, 1'b1);
+        {split_qt_ctx, st} = cabac_encode_vvc_model_bin(st, split_qt_ctx, 1'b1);
+        child_width = cb_width >> 1;
+        child_height = cb_height >> 1;
+        for (child_yi = 0; child_yi < 2; child_yi = child_yi + 1) begin
+          for (child_xi = 0; child_xi < 2; child_xi = child_xi + 1) begin
+            child_x = cb_x + ((child_xi == 1) ? child_width : 8'd0);
+            child_y = cb_y + ((child_yi == 1) ? child_height : 8'd0);
+            {split_ctx, split_ctx6, split_qt_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, st} =
+              encode_ctu_visible_qt_luma_subtree(
+                st,
+                split_ctx,
+                split_ctx6,
+                split_qt_ctx,
+                multi_ref_line_ctx,
+                intra_mpm_ctx,
+                intra_planar_ctx,
+                qt_cbf_y_ctx,
+                mts_idx_ctx,
+                rem,
+                child_x,
+                child_y,
+                child_width,
+                child_height,
+                visible_width,
+                visible_height,
+                max_leaf_size,
+                cqt_depth + 3'd1
+              );
+          end
+        end
+      end
+
+      encode_ctu_visible_qt_luma_subtree =
+        {split_ctx, split_ctx6, split_qt_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, st};
     end
   endfunction
 
@@ -860,6 +1063,171 @@ module ff_vvc_generated_cabac_body (
     end
   endfunction
 
+  function automatic cabac_chroma_partition_step_t encode_ctu_chroma_visible_qt_subtree(
+    input cabac_writer_state_t st_in,
+    input vvc_prob_model_t split_ctx0_in,
+    input vvc_prob_model_t split_ctx6_in,
+    input vvc_prob_model_t split_ctx7_in,
+    input vvc_prob_model_t split_qt_ctx0_in,
+    input vvc_prob_model_t split_qt_ctx3_in,
+    input vvc_prob_model_t mtt_vertical_ctx3_in,
+    input vvc_prob_model_t mtt_binary_ctx3_in,
+    input vvc_prob_model_t cclm_mode_ctx_in,
+    input vvc_prob_model_t intra_chroma_pred_ctx_in,
+    input vvc_prob_model_t qt_cbf_cb_ctx_in,
+    input vvc_prob_model_t qt_cbf_cr_ctx_in,
+    input vvc_prob_model_t mts_idx_ctx_in,
+    input logic [4:0]   cb_rem_in,
+    input logic [4:0]   cr_rem_in,
+    input logic [7:0]   cb_x,
+    input logic [7:0]   cb_y,
+    input logic [7:0]   cb_width,
+    input logic [7:0]   cb_height,
+    input logic [7:0]   visible_width,
+    input logic [7:0]   visible_height,
+    input logic [7:0]   stop_size,
+    input logic [2:0]   cqt_depth
+  );
+    cabac_writer_state_t st;
+    vvc_prob_model_t split_ctx0;
+    vvc_prob_model_t split_ctx6;
+    vvc_prob_model_t split_ctx7;
+    vvc_prob_model_t split_qt_ctx0;
+    vvc_prob_model_t split_qt_ctx3;
+    vvc_prob_model_t mtt_vertical_ctx3;
+    vvc_prob_model_t mtt_binary_ctx3;
+    vvc_prob_model_t cclm_mode_ctx;
+    vvc_prob_model_t intra_chroma_pred_ctx;
+    vvc_prob_model_t qt_cbf_cb_ctx;
+    vvc_prob_model_t qt_cbf_cr_ctx;
+    vvc_prob_model_t mts_idx_ctx;
+    logic [7:0] child_width;
+    logic [7:0] child_height;
+    logic [7:0] child_x;
+    logic [7:0] child_y;
+    logic [2:0] child_cqt_depth;
+    logic use_deeper_split_ctx;
+    integer child_xi;
+    integer child_yi;
+    begin
+      st = st_in;
+      split_ctx0 = split_ctx0_in;
+      split_ctx6 = split_ctx6_in;
+      split_ctx7 = split_ctx7_in;
+      split_qt_ctx0 = split_qt_ctx0_in;
+      split_qt_ctx3 = split_qt_ctx3_in;
+      mtt_vertical_ctx3 = mtt_vertical_ctx3_in;
+      mtt_binary_ctx3 = mtt_binary_ctx3_in;
+      cclm_mode_ctx = cclm_mode_ctx_in;
+      intra_chroma_pred_ctx = intra_chroma_pred_ctx_in;
+      qt_cbf_cb_ctx = qt_cbf_cb_ctx_in;
+      qt_cbf_cr_ctx = qt_cbf_cr_ctx_in;
+      mts_idx_ctx = mts_idx_ctx_in;
+      if ((cb_x >= visible_width) || (cb_y >= visible_height)) begin
+      end else if (((cb_x + cb_width) <= visible_width) &&
+                   ((cb_y + cb_height) <= visible_height) &&
+                   (cb_width <= stop_size) &&
+                   (cb_height <= stop_size)) begin
+        {split_ctx0, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, st} =
+          encode_ctu_chroma_transform_only_leaf(st, split_ctx0, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, cb_rem_in, cr_rem_in, cb_x, cb_y, cb_width, cb_height, cqt_depth, 3'd0);
+      end else if (((cb_x + cb_width) > visible_width) ||
+                   ((cb_y + cb_height) > visible_height)) begin
+        child_width = cb_width >> 1;
+        child_height = cb_height >> 1;
+        for (child_yi = 0; child_yi < 2; child_yi = child_yi + 1) begin
+          for (child_xi = 0; child_xi < 2; child_xi = child_xi + 1) begin
+            child_x = cb_x + ((child_xi == 1) ? child_width : 8'd0);
+            child_y = cb_y + ((child_yi == 1) ? child_height : 8'd0);
+            child_cqt_depth = cqt_depth + 3'd1;
+            {split_ctx0, split_ctx6, split_ctx7, split_qt_ctx0, split_qt_ctx3,
+             mtt_vertical_ctx3, mtt_binary_ctx3, cclm_mode_ctx, intra_chroma_pred_ctx,
+             qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, st} =
+              encode_ctu_chroma_visible_qt_subtree(
+                st,
+                split_ctx0,
+                split_ctx6,
+                split_ctx7,
+                split_qt_ctx0,
+                split_qt_ctx3,
+                mtt_vertical_ctx3,
+                mtt_binary_ctx3,
+                cclm_mode_ctx,
+                intra_chroma_pred_ctx,
+                qt_cbf_cb_ctx,
+                qt_cbf_cr_ctx,
+                mts_idx_ctx,
+                cb_rem_in,
+                cr_rem_in,
+                child_x,
+                child_y,
+                child_width,
+                child_height,
+                visible_width,
+                visible_height,
+                stop_size,
+                child_cqt_depth
+              );
+          end
+        end
+      end else begin
+        if (cqt_depth == 3'd0) begin
+          {split_ctx0, st} = cabac_encode_vvc_model_bin(st, split_ctx0, 1'b1);
+        end else if (cb_y >= 8'd8) begin
+          {split_ctx7, st} = cabac_encode_vvc_model_bin(st, split_ctx7, 1'b1);
+        end else begin
+          {split_ctx6, st} = cabac_encode_vvc_model_bin(st, split_ctx6, 1'b1);
+        end
+        if (cqt_depth >= 3'd2) begin
+          {split_qt_ctx3, st} = cabac_encode_vvc_model_bin(st, split_qt_ctx3, 1'b1);
+        end else begin
+          {split_qt_ctx0, st} = cabac_encode_vvc_model_bin(st, split_qt_ctx0, 1'b1);
+        end
+        child_width = cb_width >> 1;
+        child_height = cb_height >> 1;
+        for (child_yi = 0; child_yi < 2; child_yi = child_yi + 1) begin
+          for (child_xi = 0; child_xi < 2; child_xi = child_xi + 1) begin
+            child_x = cb_x + ((child_xi == 1) ? child_width : 8'd0);
+            child_y = cb_y + ((child_yi == 1) ? child_height : 8'd0);
+            child_cqt_depth = cqt_depth + 3'd1;
+            {split_ctx0, split_ctx6, split_ctx7, split_qt_ctx0, split_qt_ctx3,
+             mtt_vertical_ctx3, mtt_binary_ctx3, cclm_mode_ctx, intra_chroma_pred_ctx,
+             qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, st} =
+              encode_ctu_chroma_visible_qt_subtree(
+                st,
+                split_ctx0,
+                split_ctx6,
+                split_ctx7,
+                split_qt_ctx0,
+                split_qt_ctx3,
+                mtt_vertical_ctx3,
+                mtt_binary_ctx3,
+                cclm_mode_ctx,
+                intra_chroma_pred_ctx,
+                qt_cbf_cb_ctx,
+                qt_cbf_cr_ctx,
+                mts_idx_ctx,
+                cb_rem_in,
+                cr_rem_in,
+                child_x,
+                child_y,
+                child_width,
+                child_height,
+                visible_width,
+                visible_height,
+                stop_size,
+                child_cqt_depth
+              );
+          end
+        end
+      end
+
+      encode_ctu_chroma_visible_qt_subtree =
+        {split_ctx0, split_ctx6, split_ctx7, split_qt_ctx0, split_qt_ctx3,
+         mtt_vertical_ctx3, mtt_binary_ctx3, cclm_mode_ctx, intra_chroma_pred_ctx,
+         qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, st};
+    end
+  endfunction
+
   function automatic cabac_chroma_leaf_step_t encode_ctu_chroma_leaf(
     input cabac_writer_state_t st_in,
     input vvc_prob_model_t split_ctx_in,
@@ -868,7 +1236,8 @@ module ff_vvc_generated_cabac_body (
     input vvc_prob_model_t qt_cbf_cb_ctx_in,
     input vvc_prob_model_t qt_cbf_cr_ctx_in,
     input vvc_prob_model_t mts_idx_ctx_in,
-    input logic [4:0]   c_rem,
+    input logic [4:0]   cb_rem_in,
+    input logic [4:0]   cr_rem_in,
     input logic [7:0]   cb_x,
     input logic [7:0]   cb_y,
     input logic [7:0]   cb_width,
@@ -909,7 +1278,8 @@ module ff_vvc_generated_cabac_body (
     input vvc_prob_model_t qt_cbf_cb_ctx_in,
     input vvc_prob_model_t qt_cbf_cr_ctx_in,
     input vvc_prob_model_t mts_idx_ctx_in,
-    input logic [4:0]   c_rem,
+    input logic [4:0]   cb_rem_in,
+    input logic [4:0]   cr_rem_in,
     input logic         cclm_mode,
     input logic         use_cbf_cb_ctx1,
     input logic [7:0]   cb_x,
@@ -950,7 +1320,8 @@ module ff_vvc_generated_cabac_body (
 	    input vvc_prob_model_t qt_cbf_cb_ctx_in,
 	    input vvc_prob_model_t qt_cbf_cr_ctx_in,
 	    input vvc_prob_model_t mts_idx_ctx_in,
-	    input logic [4:0]   c_rem,
+	    input logic [4:0]   cb_rem_in,
+	    input logic [4:0]   cr_rem_in,
 	    input logic [7:0]   cb_x,
 	    input logic [7:0]   cb_y,
 	    input logic [7:0]   cb_width,
@@ -977,6 +1348,41 @@ module ff_vvc_generated_cabac_body (
 	      {qt_cbf_cr_ctx, st} = cabac_encode_vvc_model_bin(st, qt_cbf_cr_ctx_in, 1'b0);
 	      mts_idx_ctx = mts_idx_ctx_in;
 	      encode_ctu_chroma_leaf_without_cclm = {split_ctx, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, st};
+	    end
+	  endfunction
+
+	  function automatic cabac_chroma_leaf_step_t encode_ctu_chroma_transform_only_leaf(
+	    input cabac_writer_state_t st_in,
+	    input vvc_prob_model_t split_ctx_in,
+	    input vvc_prob_model_t cclm_mode_ctx_in,
+	    input vvc_prob_model_t intra_chroma_pred_ctx_in,
+	    input vvc_prob_model_t qt_cbf_cb_ctx_in,
+	    input vvc_prob_model_t qt_cbf_cr_ctx_in,
+	    input vvc_prob_model_t mts_idx_ctx_in,
+	    input logic [4:0]   cb_rem_in,
+	    input logic [4:0]   cr_rem_in,
+	    input logic [7:0]   cb_x,
+	    input logic [7:0]   cb_y,
+	    input logic [7:0]   cb_width,
+	    input logic [7:0]   cb_height,
+	    input logic [2:0]   cqt_depth,
+	    input logic [2:0]   mtt_depth
+	  );
+	    cabac_writer_state_t st;
+	    vvc_prob_model_t split_ctx;
+	    vvc_prob_model_t qt_cbf_cb_ctx;
+	    vvc_prob_model_t qt_cbf_cr_ctx;
+	    vvc_prob_model_t mts_idx_ctx;
+	    vvc_prob_model_t cclm_mode_ctx;
+	    vvc_prob_model_t intra_chroma_pred_ctx;
+	    begin
+	      {split_ctx, st} = cabac_encode_vvc_model_bin(st_in, split_ctx_in, 1'b0);
+	      cclm_mode_ctx = cclm_mode_ctx_in;
+	      intra_chroma_pred_ctx = intra_chroma_pred_ctx_in;
+	      {qt_cbf_cb_ctx, st} = cabac_encode_vvc_model_bin(st, qt_cbf_cb_ctx_in, 1'b0);
+	      {qt_cbf_cr_ctx, st} = cabac_encode_vvc_model_bin(st, qt_cbf_cr_ctx_in, 1'b0);
+	      mts_idx_ctx = mts_idx_ctx_in;
+	      encode_ctu_chroma_transform_only_leaf = {split_ctx, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, st};
 	    end
 	  endfunction
 
@@ -1116,14 +1522,17 @@ module ff_vvc_generated_cabac_body (
 
   function automatic cabac_writer_state_t encode_4x4_chroma_tree(
     input cabac_writer_state_t st_in,
-    input logic [4:0]   c_rem
+    input logic [4:0]   cb_rem_in,
+    input logic [4:0]   cr_rem_in
   );
     cabac_writer_state_t st;
     begin
       st = st_in;
       st = cabac_encode_ctx_bins(st, 5'd16, 8'b0000_0101, 4'd3);
-      st = cabac_encode_rem_abs_ep(st, c_rem, 3'd0);
+      st = cabac_encode_rem_abs_ep(st, cb_rem_in, 3'd0);
       st = cabac_encode_bin_ep(st, 1'b1);
+      // TODO(vvc): emit the Cr residual path for the mapped 8x8 subset using
+      // cr_rem_in once this legacy small-frame path is folded into CTU syntax.
       encode_4x4_chroma_tree = st;
     end
   endfunction

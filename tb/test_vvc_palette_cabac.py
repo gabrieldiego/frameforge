@@ -238,7 +238,8 @@ async def palette_cabac_matches_software_boundary_dump(dut):
             dut.mode_palette_444.value = 1
             dut.body_kind.value = 0
             dut.luma_rem.value = 0
-            dut.chroma_rem.value = 0
+            dut.cb_rem.value = 0
+            dut.cr_rem.value = 0
         dut.s_axis_valid.value = 0
         if hasattr(dut, "s_axis_kind"):
             dut.s_axis_kind.value = 0
@@ -264,7 +265,8 @@ async def palette_cabac_matches_software_boundary_dump(dut):
         dut.mode_palette_444.value = 1
         dut.body_kind.value = 0
         dut.luma_rem.value = 0
-        dut.chroma_rem.value = 0
+        dut.cb_rem.value = 0
+        dut.cr_rem.value = 0
         dut.m_axis_ready.value = 1
     dut.coded_width.value = reference["width"]
     dut.coded_height.value = reference["height"]
@@ -305,7 +307,8 @@ async def palette_cabac_matches_multicolor_lossless_symbols(dut):
             dut.mode_palette_444.value = 1
             dut.body_kind.value = 0
             dut.luma_rem.value = 0
-            dut.chroma_rem.value = 0
+            dut.cb_rem.value = 0
+            dut.cr_rem.value = 0
         dut.s_axis_valid.value = 0
         if hasattr(dut, "s_axis_kind"):
             dut.s_axis_kind.value = 0
@@ -330,7 +333,8 @@ async def palette_cabac_matches_multicolor_lossless_symbols(dut):
         dut.mode_palette_444.value = 1
         dut.body_kind.value = 0
         dut.luma_rem.value = 0
-        dut.chroma_rem.value = 0
+        dut.cb_rem.value = 0
+        dut.cr_rem.value = 0
         dut.m_axis_ready.value = 1
     dut.coded_width.value = reference["width"]
     dut.coded_height.value = reference["height"]

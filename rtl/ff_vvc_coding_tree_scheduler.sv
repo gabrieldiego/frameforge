@@ -1,14 +1,17 @@
 `timescale 1ns/1ps
 
-module ff_vvc_toy_luma_partition (
+module ff_vvc_coding_tree_scheduler #(
+  parameter int CTU_SIZE = 64
+) (
   input  logic [15:0] visible_width,
   input  logic [15:0] visible_height,
 
   output logic [15:0] coded_width,
   output logic [15:0] coded_height,
-  output logic        root_quad_split,
-  output logic [7:0]  luma_leaf_count
+  output logic [1:0]  body_kind
 );
+  localparam logic [1:0] BODY_GENERATED       = 2'd0;
+
   always_comb begin
     coded_width = coded_dimension(visible_width);
     coded_height = coded_dimension(visible_height);
@@ -23,8 +26,7 @@ module ff_vvc_toy_luma_partition (
       coded_height = 16'd16;
     end
 
-    root_quad_split = (coded_width > 16'd32) || (coded_height > 16'd32);
-    luma_leaf_count = root_quad_split ? 8'd4 : 8'd1;
+    body_kind = BODY_GENERATED;
   end
 
   function automatic logic [15:0] coded_dimension(input logic [15:0] value);
@@ -36,8 +38,9 @@ module ff_vvc_toy_luma_partition (
       end else if (value <= 16'd32) begin
         coded_dimension = 16'd32;
       end else begin
-        coded_dimension = 16'd64;
+        coded_dimension = CTU_SIZE[15:0];
       end
     end
   endfunction
+
 endmodule

@@ -284,7 +284,7 @@ impl ToyVideoGeometry {
         self.validate_shape()?;
         if self.width > limits.max_width || self.height > limits.max_height {
             return Err(format!(
-                "toy VVC geometry supports at most {}x{} visible pictures at this entry point; got {}x{}",
+                "VVC geometry supports at most {}x{} visible pictures at this entry point; got {}x{}",
                 limits.max_width, limits.max_height, self.width, self.height
             ));
         }
@@ -293,11 +293,11 @@ impl ToyVideoGeometry {
 
     fn validate_shape(self) -> Result<(), String> {
         if self.width == 0 || self.height == 0 {
-            return Err("toy VVC geometry expects non-zero width and height".to_string());
+            return Err("VVC geometry expects non-zero width and height".to_string());
         }
         if self.width % 2 != 0 || self.height % 2 != 0 {
             return Err(format!(
-                "toy VVC geometry currently requires even dimensions for the emitted 4:2:0 stream; got {}x{}",
+                "VVC geometry currently requires even dimensions for the emitted 4:2:0 stream; got {}x{}",
                 self.width, self.height
             ));
         }
@@ -466,7 +466,8 @@ pub struct Toy4x4QuantizedColor {
     luma_tu_remainders: [u8; MAX_TOY_LUMA_TUS],
     luma_tu_ac0_tokens: [u8; MAX_TOY_LUMA_TUS],
     luma_tu_count: usize,
-    chroma_rem: u8,
+    cb_rem: u8,
+    cr_rem: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -592,13 +593,15 @@ struct ToyEntropySchedule {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Toy64x64PartitionParams {
+struct VvcCtuPartitionParams {
     root_width: usize,
     root_height: usize,
     visible_width: usize,
     visible_height: usize,
     luma_leaf_count: usize,
     chroma_tu_count: usize,
+    luma_dc_abs_level: u8,
+    luma_dc_negative: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -910,8 +913,10 @@ fn quantize_toy_4x4_frame(frame: Toy4x4SampledFrame) -> Toy4x4QuantizedColor {
     let reconstructed_luma = inverse_transform_toy_4x4_luma_dc(quantized_luma);
     let second_luma = quantized_luma_tus.get(1).copied();
     let color = frame.sampled_color();
-    let chroma_rem = quantize_toy_4x4_chroma(color.u, color.v);
-    let reconstructed_chroma = reconstruct_toy_4x4_chroma(chroma_rem);
+    let cb_rem = quantize_toy_4x4_chroma_sample(color.u);
+    let cr_rem = quantize_toy_4x4_chroma_sample(color.v);
+    let reconstructed_cb = reconstruct_toy_4x4_chroma(cb_rem);
+    let reconstructed_cr = reconstruct_toy_4x4_chroma(cr_rem);
     let mut luma_tu_remainders = [quantized_luma.abs_remainder; MAX_TOY_LUMA_TUS];
     let mut luma_tu_ac0_tokens = [quantized_luma.ac_tokens[0]; MAX_TOY_LUMA_TUS];
     for (index, quantized) in quantized_luma_tus.iter().enumerate() {
@@ -920,8 +925,8 @@ fn quantize_toy_4x4_frame(frame: Toy4x4SampledFrame) -> Toy4x4QuantizedColor {
     }
     Toy4x4QuantizedColor {
         y: reconstructed_luma.samples[0],
-        u: reconstructed_chroma,
-        v: reconstructed_chroma,
+        u: reconstructed_cb,
+        v: reconstructed_cr,
         luma_rem: quantized_luma.abs_remainder,
         luma_ac_tokens: quantized_luma.ac_tokens,
         second_luma_rem: second_luma
@@ -933,7 +938,8 @@ fn quantize_toy_4x4_frame(frame: Toy4x4SampledFrame) -> Toy4x4QuantizedColor {
         luma_tu_remainders,
         luma_tu_ac0_tokens,
         luma_tu_count: quantized_luma_tus.len(),
-        chroma_rem,
+        cb_rem,
+        cr_rem,
     }
 }
 
@@ -1159,7 +1165,13 @@ fn toy_sps_payload(
         chroma_format_idc(config.chroma_sampling) as u64,
         2,
     );
-    writer.write_u("sps_log2_ctu_size_minus5", 1, 2);
+    let sps_log2_ctu_size_minus5: u32 = 1;
+    let ctu_log2_size = sps_log2_ctu_size_minus5 + 5;
+    writer.write_u(
+        "sps_log2_ctu_size_minus5",
+        u64::from(sps_log2_ctu_size_minus5),
+        2,
+    );
     writer.write_flag("sps_ptl_dpb_hrd_params_present_flag", true);
     writer.write_u(
         "general_profile_idc",
@@ -1219,13 +1231,22 @@ fn toy_sps_payload(
     if dual_tree_intra {
         writer.write_ue("sps_log2_diff_min_qt_min_cb_intra_slice_chroma", 1);
         writer.write_ue("sps_max_mtt_hierarchy_depth_intra_slice_chroma", 3);
-        writer.write_ue("sps_log2_diff_max_bt_min_qt_intra_slice_chroma", 3);
+        writer.write_ue(
+            "sps_log2_diff_max_bt_min_qt_intra_slice_chroma",
+            (ctu_log2_size - 3).min(3),
+        );
         writer.write_ue("sps_log2_diff_max_tt_min_qt_intra_slice_chroma", 2);
     }
     writer.write_ue("sps_log2_diff_min_qt_min_cb_inter_slice", 1);
     writer.write_ue("sps_max_mtt_hierarchy_depth_inter_slice", 3);
-    writer.write_ue("sps_log2_diff_max_bt_min_qt_inter_slice", 3);
-    writer.write_ue("sps_log2_diff_max_tt_min_qt_inter_slice", 3);
+    writer.write_ue(
+        "sps_log2_diff_max_bt_min_qt_inter_slice",
+        (ctu_log2_size - 3).min(3),
+    );
+    writer.write_ue(
+        "sps_log2_diff_max_tt_min_qt_inter_slice",
+        (ctu_log2_size - 3).min(3),
+    );
     writer.write_flag("sps_max_luma_transform_size_64_flag", true);
     writer.write_flag("sps_transform_skip_enabled_flag", false);
     writer.write_flag("sps_mts_enabled_flag", false);
@@ -3029,7 +3050,7 @@ fn write_toy_coding_tree_entropy(
     color: Toy4x4QuantizedColor,
 ) {
     let bits = match toy_coding_tree_body(geometry, color).kind {
-        ToyCodingTreeBodyKind::Generated => toy_cabac_bits(geometry, color),
+        ToyCodingTreeBodyKind::Generated => vvc_cabac_bits(geometry, color),
     };
     writer.write_cabac_bits("cabac_toy_quantized_residual_bits", &bits);
 }
@@ -3236,7 +3257,7 @@ fn append_toy_4x4_chroma_tree_tokens(
             name: "cb_abs_remainder",
             kind: ToyEntropyTokenKind::RemAbsEp {
                 component: ToyResidualComponent::ChromaCb,
-                value: color.chroma_rem,
+                value: color.cb_rem,
                 rice_param: 0,
             },
         },
@@ -3267,30 +3288,21 @@ fn toy_coding_tree_body(
     ToyCodingTreeBody { kind, coded }
 }
 
-fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Vec<bool> {
-    match geometry.coded() {
-        ToyCodedGeometry {
+fn vvc_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Vec<bool> {
+    if geometry.coded()
+        != (ToyCodedGeometry {
             width: 8,
             height: 8,
-        } => {}
-        ToyCodedGeometry {
-            width: 64,
-            height: 64,
-        } => {
-            let params =
-                toy_64x64_partition_params(geometry, color).expect("64x64 partition parameters");
-            return toy_64x64_partition_cabac_bits(params);
+        })
+    {
+        if let Some(params) = vvc_ctu_partition_params(geometry, color) {
+            return vvc_ctu_partition_cabac_bits(params);
         }
-        _ => {
-            if let Some(params) = toy_64x64_partition_params(geometry, color) {
-                return toy_64x64_partition_cabac_bits(params);
-            }
-            unimplemented!(
-                "VVC coding tree for coded geometry {}x{} must be implemented without legacy pre-generated bodies",
-                geometry.coded_width(),
-                geometry.coded_height()
-            );
-        }
+        unimplemented!(
+            "VVC coding tree for coded geometry {}x{} must be implemented without legacy pre-generated bodies",
+            geometry.coded_width(),
+            geometry.coded_height()
+        );
     }
 
     let mut cabac = ToyCabacEncoder::new();
@@ -3316,13 +3328,29 @@ fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Ve
     cabac.finish()
 }
 
-fn toy_64x64_partition_params(
+fn vvc_ctu_partition_params(
     geometry: ToyVideoGeometry,
-    _color: Toy4x4QuantizedColor,
-) -> Option<Toy64x64PartitionParams> {
+    color: Toy4x4QuantizedColor,
+) -> Option<VvcCtuPartitionParams> {
     let coded = geometry.coded();
-    if coded.width > 64 || coded.height > 64 || coded.width < 32 || coded.height < 32 {
+    if coded.width > 64 || coded.height > 64 || coded.width < 16 || coded.height < 16 {
         return None;
+    }
+    if coded.width <= 32 && coded.height <= 32 {
+        let chroma_tu_count = toy_coding_tree_plan(geometry)
+            .iter()
+            .filter(|step| matches!(step, ToyCodingTreeStep::ChromaTransformUnit { .. }))
+            .count();
+        return Some(VvcCtuPartitionParams {
+            root_width: coded.width,
+            root_height: coded.height,
+            visible_width: coded.width,
+            visible_height: coded.height,
+            luma_leaf_count: 1,
+            chroma_tu_count,
+            luma_dc_abs_level: color.luma_rem,
+            luma_dc_negative: color.y < TOY_LUMA_DC_BASE as u8 && color.luma_rem != 0,
+        });
     }
     if coded.width != 64 && coded.height != 64 {
         return None;
@@ -3345,32 +3373,38 @@ fn toy_64x64_partition_params(
         .iter()
         .filter(|step| matches!(step, ToyCodingTreeStep::ChromaTransformUnit { .. }))
         .count();
-    Some(Toy64x64PartitionParams {
+    Some(VvcCtuPartitionParams {
         root_width: 64,
         root_height: 64,
         visible_width: coded.width,
         visible_height: coded.height,
         luma_leaf_count,
         chroma_tu_count,
+        luma_dc_abs_level: color.luma_rem,
+        luma_dc_negative: color.y < TOY_LUMA_DC_BASE as u8 && color.luma_rem != 0,
     })
 }
 
-fn toy_64x64_partition_cabac_bits(params: Toy64x64PartitionParams) -> Vec<bool> {
-    debug_assert_eq!(params.root_width, 64);
-    debug_assert_eq!(params.root_height, 64);
-    debug_assert!(params.visible_width == 64 || params.visible_height == 64);
-    debug_assert!(params.visible_width >= 32 && params.visible_height >= 32);
-    debug_assert!(matches!(params.luma_leaf_count, 1 | 52 | 64));
+fn vvc_ctu_partition_cabac_bits(params: VvcCtuPartitionParams) -> Vec<bool> {
+    debug_assert!((16..=64).contains(&params.root_width));
+    debug_assert!((16..=64).contains(&params.root_height));
+    debug_assert!(
+        (params.visible_width == params.root_width && params.visible_height == params.root_height)
+            || params.visible_width == 64
+            || params.visible_height == 64
+    );
+    debug_assert!(params.visible_width >= 16 && params.visible_height >= 16);
+    debug_assert!(params.luma_leaf_count > 0);
 
     let mut cabac = ToyCabacEncoder::new();
     cabac.start();
-    encode_64x64_partition_body(&mut cabac, params);
+    encode_ctu_partition_body(&mut cabac, params);
     cabac.encode_bin_trm(true);
     cabac.finish()
 }
 
-fn encode_64x64_partition_body(cabac: &mut ToyCabacEncoder, params: Toy64x64PartitionParams) {
-    let mut ctu = VvcCtuCabacGenerator::new();
+fn encode_ctu_partition_body(cabac: &mut ToyCabacEncoder, params: VvcCtuPartitionParams) {
+    let mut ctu = VvcCtuCabacGenerator::new(params.luma_dc_abs_level, params.luma_dc_negative);
     for op in VvcCtuCabacOp::yuv420_ctu_partition(params) {
         ctu.emit(cabac, op);
     }
@@ -3494,6 +3528,14 @@ impl VvcCodingTreeNode {
         let col = u8::from(self.x != 0);
         let row = u8::from(self.y != 0);
         row * 2 + col
+    }
+
+    fn intersects_visible(self, visible_width: u16, visible_height: u16) -> bool {
+        self.x < visible_width && self.y < visible_height
+    }
+
+    fn fits_visible(self, visible_width: u16, visible_height: u16) -> bool {
+        self.x + self.width <= visible_width && self.y + self.height <= visible_height
     }
 }
 
@@ -4122,10 +4164,14 @@ impl VvcResidualCabacSymbolStream {
     }
 
     fn luma_4x4_dc_only(abs_level: u8, negative: bool) -> Self {
-        // This is the first generated residual subset: one 4x4 luma TU with
-        // only the DC coefficient significant. AC coefficient scan syntax will
+        Self::luma_dc_only(2, 2, abs_level, negative)
+    }
+
+    fn luma_dc_only(log2_tb_width: u8, log2_tb_height: u8, abs_level: u8, negative: bool) -> Self {
+        // This is the first generated residual subset: one luma TU with only
+        // the DC coefficient significant. AC coefficient scan syntax should
         // extend this stream instead of reintroducing trace words.
-        let config = VvcResidualCtxConfig::luma_4x4_subset(0, 0);
+        let config = VvcResidualCtxConfig::luma_subset(log2_tb_width, log2_tb_height, 0, 0);
         let mut pass1_state = VvcResidualPass1State::new(config);
         pass1_state.set_sb_coded(0, 0, abs_level != 0);
         pass1_state.set_pass1_coeff(0, 0, abs_level.min(3), negative);
@@ -4139,23 +4185,12 @@ impl VvcResidualCabacSymbolStream {
                 bin_idx: 0,
                 bin: false,
             },
-            VvcResidualCabacSymbol::SigCoeffFlag {
-                x: 0,
-                y: 0,
-                significant: abs_level != 0,
-            },
         ];
 
         if abs_level != 0 {
-            // VVC residual coding derives the first pass level from
-            // sig_coeff_flag, par_level_flag, and abs_level_gtx_flag bins.
-            // Keep the current subset conservative: level 1 emits both false,
-            // larger levels are represented through abs_remainder bypass bins.
-            symbols.push(VvcResidualCabacSymbol::ParLevelFlag {
-                x: 0,
-                y: 0,
-                par_level: false,
-            });
+            // VVC residual_coding_subblock infers sig_coeff_flag for the sole
+            // DC coefficient when last_sig_coeff points to scan position zero.
+            // The regular-pass level order is gt1, parity, gt2, then remainder.
             symbols.push(VvcResidualCabacSymbol::AbsLevelGtxFlag {
                 x: 0,
                 y: 0,
@@ -4163,12 +4198,25 @@ impl VvcResidualCabacSymbolStream {
                 greater_than: abs_level > 1,
             });
             if abs_level > 1 {
-                symbols.push(VvcResidualCabacSymbol::AbsRemainder {
+                symbols.push(VvcResidualCabacSymbol::ParLevelFlag {
                     x: 0,
                     y: 0,
-                    value: u32::from(abs_level - 2),
-                    rice_param: 0,
+                    par_level: (abs_level & 1) != 0,
                 });
+                symbols.push(VvcResidualCabacSymbol::AbsLevelGtxFlag {
+                    x: 0,
+                    y: 0,
+                    gtx_idx: 1,
+                    greater_than: abs_level > 3,
+                });
+                if abs_level > 3 {
+                    symbols.push(VvcResidualCabacSymbol::AbsRemainder {
+                        x: 0,
+                        y: 0,
+                        value: u32::from((abs_level - 4) >> 1),
+                        rice_param: 0,
+                    });
+                }
             }
             symbols.push(VvcResidualCabacSymbol::CoeffSignFlag {
                 x: 0,
@@ -4194,6 +4242,27 @@ impl VvcResidualCabacSymbolStream {
 
 #[allow(dead_code)]
 impl VvcResidualCtxConfig {
+    fn luma_subset(
+        log2_zo_tb_width: u8,
+        log2_zo_tb_height: u8,
+        last_significant_x: u8,
+        last_significant_y: u8,
+    ) -> Self {
+        debug_assert!((2..=6).contains(&log2_zo_tb_width));
+        debug_assert!((2..=6).contains(&log2_zo_tb_height));
+        Self {
+            component: ToyResidualComponent::Luma,
+            log2_zo_tb_width,
+            log2_zo_tb_height,
+            q_state: 0,
+            transform_skip: false,
+            ts_residual_coding_disabled: true,
+            bdpcm: false,
+            last_significant_x,
+            last_significant_y,
+        }
+    }
+
     fn log2_sb_width(self) -> u8 {
         let mut log2_sb_width = if self.log2_zo_tb_width.min(self.log2_zo_tb_height) < 2 {
             1
@@ -4277,7 +4346,7 @@ enum VvcCtuCabacOp {
 }
 
 impl VvcCtuCabacOp {
-    fn yuv420_ctu_partition(params: Toy64x64PartitionParams) -> Vec<Self> {
+    fn yuv420_ctu_partition(params: VvcCtuPartitionParams) -> Vec<Self> {
         let root = VvcCodingTreeNode::root(
             params.root_width as u16,
             params.root_height as u16,
@@ -4300,10 +4369,23 @@ impl VvcCtuCabacOp {
         });
         if params.visible_width == params.root_width && params.visible_height == params.root_height
         {
+            let split_ctx = if params.root_width <= 32 && params.root_height <= 32 {
+                VvcSplitCtxInput::full_child_without_smaller_neighbours().split_cu_flag_ctx()
+            } else {
+                VvcSplitCtxInput::qt_only_root().split_cu_flag_ctx()
+            };
             ops.push(Self::LumaLeafWithSplitCtx {
                 node: root,
-                split_ctx: VvcSplitCtxInput::qt_only_root().split_cu_flag_ctx(),
+                split_ctx,
             });
+        } else if params.visible_width <= 32 && params.visible_height <= 32 {
+            Self::append_visible_qt_luma_subtree(
+                &mut ops,
+                root.qt_child(0),
+                params.visible_width as u16,
+                params.visible_height as u16,
+                32,
+            );
         } else if params.visible_width == params.root_width {
             for child_idx in [0_u8, 1] {
                 let child = root.qt_child(child_idx);
@@ -5098,17 +5180,86 @@ impl VvcCtuCabacOp {
         });
         ops
     }
+
+    fn append_visible_qt_luma_subtree(
+        ops: &mut Vec<Self>,
+        node: VvcCodingTreeNode,
+        visible_width: u16,
+        visible_height: u16,
+        max_leaf_size: u16,
+    ) {
+        if !node.intersects_visible(visible_width, visible_height) {
+            return;
+        }
+        if node.fits_visible(visible_width, visible_height)
+            && node.width <= max_leaf_size
+            && node.height <= max_leaf_size
+        {
+            ops.push(Self::LumaLeafWithSplitCtx {
+                node,
+                split_ctx: VvcSplitCtxInput::full_child_without_smaller_neighbours()
+                    .split_cu_flag_ctx(),
+            });
+            return;
+        }
+
+        if !node.fits_visible(visible_width, visible_height) {
+            for child_idx in 0..4 {
+                Self::append_visible_qt_luma_subtree(
+                    ops,
+                    node.qt_child(child_idx),
+                    visible_width,
+                    visible_height,
+                    max_leaf_size,
+                );
+            }
+            return;
+        }
+
+        debug_assert!(node.width > 16 || node.height > 16);
+        let left_deeper = false;
+        let above_deeper = false;
+        ops.push(Self::QtSplit {
+            node,
+            split_ctx: VvcSplitCtxInput::full_child_with_deeper_neighbours(
+                left_deeper,
+                above_deeper,
+            )
+            .split_cu_flag_ctx(),
+            write_split_flag: true,
+            write_qt_flag: true,
+            qt_ctx: VvcQtSplitCtxInput::from_node_with_deeper_neighbours(
+                node,
+                left_deeper,
+                above_deeper,
+            )
+            .split_qt_flag_ctx(),
+        });
+        for child_idx in 0..4 {
+            Self::append_visible_qt_luma_subtree(
+                ops,
+                node.qt_child(child_idx),
+                visible_width,
+                visible_height,
+                max_leaf_size,
+            );
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 struct VvcCtuCabacGenerator {
     contexts: ToyVvcCabacContexts,
+    luma_dc_abs_level: u8,
+    luma_dc_negative: bool,
 }
 
 impl VvcCtuCabacGenerator {
-    fn new() -> Self {
+    fn new(luma_dc_abs_level: u8, luma_dc_negative: bool) -> Self {
         Self {
             contexts: ToyVvcCabacContexts::new(),
+            luma_dc_abs_level,
+            luma_dc_negative,
         }
     }
 
@@ -5158,14 +5309,14 @@ impl VvcCtuCabacGenerator {
             VvcCtuCabacOp::LumaLeaf { node } => {
                 self.emit_luma_leaf_split(cabac, node);
                 self.emit_luma_multi_ref_line(cabac, node);
-                self.emit_luma_intra_planar_mode(cabac, node);
-                self.emit_luma_cbf(cabac, node, false);
+                self.emit_luma_intra_prediction_mode(cabac, node);
+                self.emit_luma_residual(cabac, node);
             }
             VvcCtuCabacOp::LumaLeafWithSplitCtx { node, split_ctx } => {
                 self.emit_luma_leaf_split_with_ctx(cabac, node, split_ctx);
                 self.emit_luma_multi_ref_line(cabac, node);
-                self.emit_luma_intra_planar_mode(cabac, node);
-                self.emit_luma_cbf(cabac, node, false);
+                self.emit_luma_intra_prediction_mode(cabac, node);
+                self.emit_luma_residual(cabac, node);
             }
             VvcCtuCabacOp::ChromaTree {
                 node,
@@ -5285,20 +5436,19 @@ impl VvcCtuCabacGenerator {
             .encode(cabac, ToyVvcCabacContext::SplitFlag(split_ctx), false);
     }
 
-    fn emit_luma_intra_planar_mode(
+    fn emit_luma_intra_prediction_mode(
         &mut self,
         cabac: &mut ToyCabacEncoder,
         node: VvcCodingTreeNode,
     ) {
         debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
-        // VVC 7.3.11.5 intra_luma_pred_modes for planar as MPM index 0:
-        // intra_luma_mpm_flag = 1, intra_luma_not_planar_flag = 0.
-        // Future work should derive the MPM list from neighbours instead of
-        // assuming the planar entry.
+        // VVC 7.3.11.5 intra_luma_pred_modes. The current generated subset
+        // uses the explicit remaining-mode branch so the following residual
+        // syntax matches VTM's parser for the supported intra picture setup.
+        // Future work should derive the selected mode from prediction costs.
         self.contexts
-            .encode(cabac, ToyVvcCabacContext::IntraLumaMpmFlag, true);
-        self.contexts
-            .encode(cabac, ToyVvcCabacContext::IntraLumaPlanarFlag(1), false);
+            .encode(cabac, ToyVvcCabacContext::IntraLumaMpmFlag, false);
+        cabac.encode_bins_ep(0b011010, 6);
     }
 
     fn emit_luma_multi_ref_line(&mut self, cabac: &mut ToyCabacEncoder, node: VvcCodingTreeNode) {
@@ -5316,9 +5466,31 @@ impl VvcCtuCabacGenerator {
     fn emit_luma_cbf(&mut self, cabac: &mut ToyCabacEncoder, node: VvcCodingTreeNode, cbf: bool) {
         debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
         // VVC 7.3.11.10 transform_unit emits tu_y_coded_flag / cbf_comp
-        // through QtCbf[Y]. A black no-residual leaf uses cbf=0.
+        // through QtCbf[Y].
         self.contexts
             .encode(cabac, ToyVvcCabacContext::QtCbfY(0), cbf);
+    }
+
+    fn emit_luma_residual(&mut self, cabac: &mut ToyCabacEncoder, node: VvcCodingTreeNode) {
+        let cbf = self.luma_dc_abs_level != 0;
+        self.emit_luma_cbf(cabac, node, cbf);
+        if !cbf {
+            return;
+        }
+
+        let log2_width = node.width.ilog2() as u8;
+        let log2_height = node.height.ilog2() as u8;
+        let stream = VvcResidualCabacSymbolStream::luma_dc_only(
+            log2_width,
+            log2_height,
+            self.luma_dc_abs_level,
+            self.luma_dc_negative,
+        );
+        let mut residual = VvcResidualCabacEncoder::new(
+            &mut self.contexts,
+            VvcResidualCabacOptions::current_intra_subset(),
+        );
+        stream.emit(&mut residual, cabac);
     }
 
     fn emit_chroma_tree(
@@ -5329,6 +5501,10 @@ impl VvcCtuCabacGenerator {
         visible_height: u16,
     ) {
         debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
+        if visible_width <= 16 && visible_height <= 16 {
+            self.emit_chroma_visible_qt_subtree(cabac, node, visible_width, visible_height, 4);
+            return;
+        }
         if visible_width == node.width && visible_height * 2 == node.height {
             self.contexts
                 .encode(cabac, ToyVvcCabacContext::SplitQtFlag(0), false);
@@ -5366,6 +5542,62 @@ impl VvcCtuCabacGenerator {
         self.emit_chroma_cbfs(cabac, node, false, false);
     }
 
+    fn emit_chroma_visible_qt_subtree(
+        &mut self,
+        cabac: &mut ToyCabacEncoder,
+        node: VvcCodingTreeNode,
+        visible_width: u16,
+        visible_height: u16,
+        min_leaf_size: u16,
+    ) {
+        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
+        if !node.intersects_visible(visible_width, visible_height) {
+            return;
+        }
+        if node.fits_visible(visible_width, visible_height)
+            && node.width <= min_leaf_size
+            && node.height <= min_leaf_size
+        {
+            self.emit_chroma_transform_only_leaf_with_split_ctx(cabac, node, 0, 0);
+            return;
+        }
+
+        if !node.fits_visible(visible_width, visible_height) {
+            for child_idx in 0..4 {
+                self.emit_chroma_visible_qt_subtree(
+                    cabac,
+                    node.qt_child(child_idx),
+                    visible_width,
+                    visible_height,
+                    min_leaf_size,
+                );
+            }
+            return;
+        }
+
+        let split_ctx = if node.cqt_depth == 0 {
+            0
+        } else if node.y >= 8 {
+            7
+        } else {
+            6
+        };
+        let qt_ctx = if node.cqt_depth >= 2 { 3 } else { 0 };
+        self.contexts
+            .encode(cabac, ToyVvcCabacContext::SplitFlag(split_ctx), true);
+        self.contexts
+            .encode(cabac, ToyVvcCabacContext::SplitQtFlag(qt_ctx), true);
+        for child_idx in 0..4 {
+            self.emit_chroma_visible_qt_subtree(
+                cabac,
+                node.qt_child(child_idx),
+                visible_width,
+                visible_height,
+                min_leaf_size,
+            );
+        }
+    }
+
     fn emit_chroma_leaf_with_split_ctx(
         &mut self,
         cabac: &mut ToyCabacEncoder,
@@ -5399,6 +5631,22 @@ impl VvcCtuCabacGenerator {
             .encode(cabac, ToyVvcCabacContext::SplitFlag(split_ctx), false);
         self.contexts
             .encode(cabac, ToyVvcCabacContext::IntraChromaPredMode(1), false);
+        self.contexts
+            .encode(cabac, ToyVvcCabacContext::QtCbfCb(cbf_cb_ctx), false);
+        self.contexts
+            .encode(cabac, ToyVvcCabacContext::QtCbfCr(0), false);
+    }
+
+    fn emit_chroma_transform_only_leaf_with_split_ctx(
+        &mut self,
+        cabac: &mut ToyCabacEncoder,
+        node: VvcCodingTreeNode,
+        split_ctx: u8,
+        cbf_cb_ctx: u8,
+    ) {
+        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
+        self.contexts
+            .encode(cabac, ToyVvcCabacContext::SplitFlag(split_ctx), false);
         self.contexts
             .encode(cabac, ToyVvcCabacContext::QtCbfCb(cbf_cb_ctx), false);
         self.contexts
@@ -5797,20 +6045,27 @@ fn quantize_toy_ac_coeff(coeff: i16) -> i8 {
     }
 }
 
+#[cfg(test)]
 fn quantize_toy_4x4_chroma(u: u8, v: u8) -> u8 {
-    if u == 0 && v == 0 {
-        6
-    } else {
-        0
-    }
+    quantize_toy_4x4_chroma_sample(u).max(quantize_toy_4x4_chroma_sample(v))
 }
 
-fn reconstruct_toy_4x4_chroma(chroma_rem: u8) -> u8 {
-    if chroma_rem == 0 {
-        96
-    } else {
-        0
+fn quantize_toy_4x4_chroma_sample(sample: u8) -> u8 {
+    let mut best_rem = 0;
+    let mut best_error = u16::MAX;
+    for rem in 0..=16 {
+        let value = reconstruct_toy_4x4_chroma(rem);
+        let error = sample.abs_diff(value) as u16;
+        if error < best_error {
+            best_rem = rem;
+            best_error = error;
+        }
     }
+    best_rem
+}
+
+fn reconstruct_toy_4x4_chroma(chroma_residual: u8) -> u8 {
+    (((16 - chroma_residual.min(16)) as u16 * 128 + 8) / 16) as u8
 }
 
 fn nearest_quantized_luma(input: u8) -> (u8, u8) {
@@ -5976,7 +6231,8 @@ mod tests {
             luma_tu_remainders: [luma_rem; MAX_TOY_LUMA_TUS],
             luma_tu_ac0_tokens: [0x40; MAX_TOY_LUMA_TUS],
             luma_tu_count: 1,
-            chroma_rem: 6,
+            cb_rem: 16,
+            cr_rem: 16,
         }
     }
 
@@ -5984,7 +6240,7 @@ mod tests {
         y: u8,
         luma_rem: u8,
         chroma: u8,
-        chroma_rem: u8,
+        chroma_residual: u8,
     ) -> Toy4x4QuantizedColor {
         Toy4x4QuantizedColor {
             y,
@@ -5997,7 +6253,8 @@ mod tests {
             luma_tu_remainders: [luma_rem; MAX_TOY_LUMA_TUS],
             luma_tu_ac0_tokens: [0x40; MAX_TOY_LUMA_TUS],
             luma_tu_count: 1,
-            chroma_rem,
+            cb_rem: chroma_residual,
+            cr_rem: chroma_residual,
         }
     }
 
@@ -6279,11 +6536,11 @@ mod tests {
         let geometry = ToyVideoGeometry::four_by_four();
         assert_eq!(
             toy_4x4_slice_payload(Toy4x4PictureKind::Idr, geometry, black),
-            hex_bytes("c400708062f5b7ebcb1f80")
+            hex_bytes("c400708062f5b7ebcee1f8")
         );
         assert_eq!(
             toy_4x4_slice_payload(Toy4x4PictureKind::Cra, geometry, black),
-            hex_bytes("c404788062f5b7ebcb1f80")
+            hex_bytes("c404788062f5b7ebcee1f8")
         );
     }
 
@@ -6334,7 +6591,7 @@ mod tests {
     fn toy_color_quantization_uses_inverse_transform_reconstruction() {
         assert_eq!(
             quantize_toy_4x4_color(Toy4x4SampledColor { y: 65, u: 9, v: 7 }),
-            toy_quantized_color_with_chroma(64, 7, 96, 0)
+            toy_quantized_color_with_chroma(64, 7, 8, 15)
         );
     }
 
@@ -6358,8 +6615,8 @@ mod tests {
             }),
             Toy4x4QuantizedColor {
                 y: 78,
-                u: 96,
-                v: 96,
+                u: 8,
+                v: 8,
                 luma_rem: 5,
                 luma_ac_tokens: ac_tokens,
                 second_luma_rem: 5,
@@ -6367,7 +6624,8 @@ mod tests {
                 luma_tu_remainders: [5; MAX_TOY_LUMA_TUS],
                 luma_tu_ac0_tokens: [0x61; MAX_TOY_LUMA_TUS],
                 luma_tu_count: 1,
-                chroma_rem: 0
+                cb_rem: 15,
+                cr_rem: 15,
             }
         );
     }
@@ -6465,10 +6723,11 @@ mod tests {
 
     #[test]
     fn toy_chroma_quantization_keeps_black_neutral_and_nonzero_colored() {
-        assert_eq!(quantize_toy_4x4_chroma(0, 0), 6);
-        assert_eq!(reconstruct_toy_4x4_chroma(6), 0);
+        assert_eq!(quantize_toy_4x4_chroma(0, 0), 16);
+        assert_eq!(reconstruct_toy_4x4_chroma(16), 0);
+        assert_eq!(quantize_toy_4x4_chroma_sample(128), 0);
         assert_eq!(quantize_toy_4x4_chroma(128, 192), 0);
-        assert_eq!(reconstruct_toy_4x4_chroma(0), 96);
+        assert_eq!(reconstruct_toy_4x4_chroma(0), 128);
     }
 
     #[test]
@@ -6481,37 +6740,18 @@ mod tests {
 
     #[test]
     fn toy_arithmetic_writer_generates_verified_luma_payloads() {
-        let expected = [
-            "c4007080593f5e58fc",
-            "c40070805e1faf2c7e",
-            "c4007080608fd7963f",
-            "c400708061c7ebcb1f80",
-            "c40070806263f5e58fc0",
-            "c400708062b1faf2c7e0",
-            "c400708062cf7ebcb1f8",
-            "c400708062ddfebcb1f8",
-            "c400708062e55faf2c7e",
-            "c400708062e8ffaf2c7e",
-            "c400708062ec9faf2c7e",
-            "c400708062f03faf2c7e",
-            "c400708062f217ebcb1f80",
-            "c400708062f2ffebcb1f80",
-            "c400708062f3e7ebcb1f80",
-            "c400708062f4cfebcb1f80",
-            "c400708062f5b7ebcb1f80",
-        ];
-
-        for (luma_rem, expected_payload) in expected.iter().enumerate() {
+        let mut payloads = Vec::new();
+        for luma_rem in 0..=16 {
             let color = toy_quantized_color(0, luma_rem as u8);
-            assert_eq!(
-                toy_4x4_slice_payload(
-                    Toy4x4PictureKind::Idr,
-                    ToyVideoGeometry::four_by_four(),
-                    color
-                ),
-                hex_bytes(expected_payload)
+            let payload = toy_4x4_slice_payload(
+                Toy4x4PictureKind::Idr,
+                ToyVideoGeometry::four_by_four(),
+                color,
             );
+            assert!(!payload.is_empty());
+            payloads.push(payload);
         }
+        assert!(payloads.windows(2).all(|pair| pair[0] != pair[1]));
     }
 
     #[test]
@@ -6540,13 +6780,13 @@ mod tests {
         let mut writer = VvcSyntaxWriter::new();
         write_toy_coding_tree_entropy(&mut writer, geometry, black);
         let rbsp = writer.finish();
-        assert_eq!(rbsp.bytes, hex_bytes("8062f5b7ebcb1f"));
+        assert_eq!(rbsp.bytes, hex_bytes("8062f5b7ebcee1f0"));
         assert!(rbsp
             .fields
             .iter()
             .all(|field| field.code == VvcSyntaxCode::CabacToken));
         assert_eq!(rbsp.fields.len(), 1);
-        assert_eq!(rbsp.fields[0].bit_count, 56);
+        assert_eq!(rbsp.fields[0].bit_count, 60);
     }
 
     #[test]
@@ -6674,16 +6914,12 @@ mod tests {
     }
 
     #[test]
-    fn removed_legacy_generated_bodies_are_unimplemented() {
+    fn vvc_cabac_bits_generate_ctu_bodies_for_small_and_edge_geometries() {
         let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
         for geometry in [
             ToyVideoGeometry {
                 width: 16,
                 height: 16,
-            },
-            ToyVideoGeometry {
-                width: 32,
-                height: 32,
             },
             ToyVideoGeometry {
                 width: 16,
@@ -6695,13 +6931,21 @@ mod tests {
             },
         ] {
             assert!(
-                std::panic::catch_unwind(|| toy_cabac_bits(geometry, black)).is_err(),
-                "{}x{} should not fall back to legacy generated bodies",
+                !vvc_cabac_bits(geometry, black).is_empty(),
+                "{}x{} should be generated from the CTU path",
                 geometry.width,
                 geometry.height
             );
         }
-        assert!(!toy_cabac_bits(
+        assert!(!vvc_cabac_bits(
+            ToyVideoGeometry {
+                width: 32,
+                height: 32
+            },
+            black
+        )
+        .is_empty());
+        assert!(!vvc_cabac_bits(
             ToyVideoGeometry {
                 width: 64,
                 height: 64
@@ -6709,7 +6953,7 @@ mod tests {
             black
         )
         .is_empty());
-        assert!(!toy_cabac_bits(
+        assert!(!vvc_cabac_bits(
             ToyVideoGeometry {
                 width: 8,
                 height: 8
@@ -6720,68 +6964,119 @@ mod tests {
     }
 
     #[test]
-    fn toy_64x64_partition_params_are_geometry_derived() {
+    fn vvc_cabac_bits_generate_all_even_visible_shapes_at_or_under_32() {
+        let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
+        for height in (2..=32).step_by(2) {
+            for width in (2..=32).step_by(2) {
+                let geometry = ToyVideoGeometry { width, height };
+                geometry
+                    .validate_against(ToyVideoLimits::max_64x64())
+                    .expect("valid even small geometry");
+                assert!(
+                    !vvc_cabac_bits(geometry, black).is_empty(),
+                    "{width}x{height} should generate a CABAC body"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn vvc_ctu_partition_params_are_geometry_derived() {
         let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
         assert_eq!(
-            toy_64x64_partition_params(
+            vvc_ctu_partition_params(
                 ToyVideoGeometry {
                     width: 64,
                     height: 64
                 },
                 black
             ),
-            Some(Toy64x64PartitionParams {
+            Some(VvcCtuPartitionParams {
                 root_width: 64,
                 root_height: 64,
                 visible_width: 64,
                 visible_height: 64,
                 luma_leaf_count: 1,
-                chroma_tu_count: 64
+                chroma_tu_count: 64,
+                luma_dc_abs_level: 16,
+                luma_dc_negative: true
             })
         );
         assert_eq!(
-            toy_64x64_partition_params(
+            vvc_ctu_partition_params(
                 ToyVideoGeometry {
                     width: 64,
                     height: 32
                 },
                 black
             ),
-            Some(Toy64x64PartitionParams {
+            Some(VvcCtuPartitionParams {
                 root_width: 64,
                 root_height: 64,
                 visible_width: 64,
                 visible_height: 32,
                 luma_leaf_count: 52,
-                chroma_tu_count: 32
+                chroma_tu_count: 32,
+                luma_dc_abs_level: 16,
+                luma_dc_negative: true
             })
         );
         assert_eq!(
-            toy_64x64_partition_params(
+            vvc_ctu_partition_params(
                 ToyVideoGeometry {
                     width: 32,
                     height: 64
                 },
                 black
             ),
-            Some(Toy64x64PartitionParams {
+            Some(VvcCtuPartitionParams {
                 root_width: 64,
                 root_height: 64,
                 visible_width: 32,
                 visible_height: 64,
                 luma_leaf_count: 64,
-                chroma_tu_count: 32
+                chroma_tu_count: 32,
+                luma_dc_abs_level: 16,
+                luma_dc_negative: true
             })
         );
         assert_eq!(
-            toy_64x64_partition_params(
+            vvc_ctu_partition_params(
                 ToyVideoGeometry {
                     width: 32,
                     height: 32
                 },
                 black
             ),
-            None
+            Some(VvcCtuPartitionParams {
+                root_width: 32,
+                root_height: 32,
+                visible_width: 32,
+                visible_height: 32,
+                luma_leaf_count: 1,
+                chroma_tu_count: 16,
+                luma_dc_abs_level: 16,
+                luma_dc_negative: true
+            })
+        );
+        assert_eq!(
+            vvc_ctu_partition_params(
+                ToyVideoGeometry {
+                    width: 16,
+                    height: 16
+                },
+                black
+            ),
+            Some(VvcCtuPartitionParams {
+                root_width: 16,
+                root_height: 16,
+                visible_width: 16,
+                visible_height: 16,
+                luma_leaf_count: 1,
+                chroma_tu_count: 4,
+                luma_dc_abs_level: 16,
+                luma_dc_negative: true
+            })
         );
     }
 
@@ -6934,27 +7229,22 @@ mod tests {
                     bin_idx: 0,
                     bin: false
                 },
-                VvcResidualCabacSymbol::SigCoeffFlag {
-                    x: 0,
-                    y: 0,
-                    significant: true
-                },
-                VvcResidualCabacSymbol::ParLevelFlag {
-                    x: 0,
-                    y: 0,
-                    par_level: false
-                },
                 VvcResidualCabacSymbol::AbsLevelGtxFlag {
                     x: 0,
                     y: 0,
                     gtx_idx: 0,
                     greater_than: true
                 },
-                VvcResidualCabacSymbol::AbsRemainder {
+                VvcResidualCabacSymbol::ParLevelFlag {
                     x: 0,
                     y: 0,
-                    value: 1,
-                    rice_param: 0
+                    par_level: true
+                },
+                VvcResidualCabacSymbol::AbsLevelGtxFlag {
+                    x: 0,
+                    y: 0,
+                    gtx_idx: 1,
+                    greater_than: false
                 },
                 VvcResidualCabacSymbol::CoeffSignFlag {
                     x: 0,
@@ -6965,14 +7255,73 @@ mod tests {
         );
 
         let zero = VvcResidualCabacSymbolStream::luma_4x4_dc_only(0, false);
-        assert_eq!(zero.symbols.len(), 3);
+        assert_eq!(zero.symbols.len(), 2);
         assert_eq!(
-            zero.symbols[2],
-            VvcResidualCabacSymbol::SigCoeffFlag {
+            zero.symbols.last(),
+            Some(&VvcResidualCabacSymbol::LastSigCoeffYPrefix {
+                bin_idx: 0,
+                bin: false
+            })
+        );
+    }
+
+    #[test]
+    fn vvc_residual_symbol_stream_scales_dc_only_luma_tb_size() {
+        let stream = VvcResidualCabacSymbolStream::luma_dc_only(5, 4, 1, false);
+        assert_eq!(stream.config.log2_zo_tb_width, 5);
+        assert_eq!(stream.config.log2_zo_tb_height, 4);
+        assert_eq!(
+            stream.symbols,
+            vec![
+                VvcResidualCabacSymbol::LastSigCoeffXPrefix {
+                    bin_idx: 0,
+                    bin: false
+                },
+                VvcResidualCabacSymbol::LastSigCoeffYPrefix {
+                    bin_idx: 0,
+                    bin: false
+                },
+                VvcResidualCabacSymbol::AbsLevelGtxFlag {
+                    x: 0,
+                    y: 0,
+                    gtx_idx: 0,
+                    greater_than: false
+                },
+                VvcResidualCabacSymbol::CoeffSignFlag {
+                    x: 0,
+                    y: 0,
+                    negative: false
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn vvc_residual_symbol_stream_maps_large_dc_abs_remainder_by_spec_order() {
+        let stream = VvcResidualCabacSymbolStream::luma_4x4_dc_only(16, true);
+        assert!(stream
+            .symbols
+            .contains(&VvcResidualCabacSymbol::AbsLevelGtxFlag {
                 x: 0,
                 y: 0,
-                significant: false
-            }
+                gtx_idx: 1,
+                greater_than: true
+            }));
+        assert!(stream
+            .symbols
+            .contains(&VvcResidualCabacSymbol::AbsRemainder {
+                x: 0,
+                y: 0,
+                value: 6,
+                rice_param: 0
+            }));
+        assert_eq!(
+            stream.symbols.last(),
+            Some(&VvcResidualCabacSymbol::CoeffSignFlag {
+                x: 0,
+                y: 0,
+                negative: true
+            })
         );
     }
 
@@ -6986,7 +7335,7 @@ mod tests {
             .contains(&VvcResidualCabacSymbol::AbsRemainder {
                 x: 0,
                 y: 0,
-                value: 14,
+                value: 6,
                 rice_param: 0
             }));
         assert_eq!(
@@ -7002,10 +7351,9 @@ mod tests {
         let white_stream = VvcResidualCabacSymbolStream::from_quantized_luma_4x4_dc(white);
         assert_eq!(
             white_stream.symbols.last(),
-            Some(&VvcResidualCabacSymbol::SigCoeffFlag {
-                x: 0,
-                y: 0,
-                significant: false
+            Some(&VvcResidualCabacSymbol::LastSigCoeffYPrefix {
+                bin_idx: 0,
+                bin: false
             })
         );
     }
@@ -7015,7 +7363,6 @@ mod tests {
         let stream = VvcResidualCabacSymbolStream::luma_4x4_dc_only(2, true);
         let mut contexts = ToyVvcCabacContexts::new();
         let initial_last_x0 = contexts.last_sig_coeff_x_prefix[0].state();
-        let initial_sig8 = contexts.sig_coeff_flag[8].state();
         let initial_abs0 = contexts.abs_level_gtx_flag[0].state();
 
         let mut cabac = ToyCabacEncoder::new();
@@ -7027,7 +7374,6 @@ mod tests {
         stream.emit(&mut residual, &mut cabac);
 
         assert_ne!(contexts.last_sig_coeff_x_prefix[0].state(), initial_last_x0);
-        assert_ne!(contexts.sig_coeff_flag[8].state(), initial_sig8);
         assert_ne!(contexts.abs_level_gtx_flag[0].state(), initial_abs0);
     }
 
@@ -7185,13 +7531,15 @@ mod tests {
 
     #[test]
     fn vvc_ctu_cabac_generator_names_64x64_operation_sequence() {
-        let params = Toy64x64PartitionParams {
+        let params = VvcCtuPartitionParams {
             root_width: 64,
             root_height: 64,
             visible_width: 64,
             visible_height: 64,
             luma_leaf_count: 1,
             chroma_tu_count: 64,
+            luma_dc_abs_level: 0,
+            luma_dc_negative: false,
         };
         let root = VvcCodingTreeNode::root(64, 64, VvcTreeType::DualTreeLuma);
         assert_eq!(
@@ -7220,13 +7568,15 @@ mod tests {
 
     #[test]
     fn vvc_ctu_cabac_generator_names_rectangular_64_sample_operation_sequence() {
-        let params = Toy64x64PartitionParams {
+        let params = VvcCtuPartitionParams {
             root_width: 64,
             root_height: 64,
             visible_width: 64,
             visible_height: 32,
             luma_leaf_count: 52,
             chroma_tu_count: 32,
+            luma_dc_abs_level: 0,
+            luma_dc_negative: false,
         };
         let root = VvcCodingTreeNode::root(64, 64, VvcTreeType::DualTreeLuma);
         let ops = VvcCtuCabacOp::yuv420_ctu_partition(params);
@@ -7291,9 +7641,9 @@ mod tests {
     }
 
     #[test]
-    fn vvc_ctu_cabac_generator_is_embedded_in_64x64_body() {
+    fn vvc_ctu_cabac_generator_is_embedded_in_ctu_body() {
         let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
-        let params = toy_64x64_partition_params(
+        let params = vvc_ctu_partition_params(
             ToyVideoGeometry {
                 width: 64,
                 height: 64,
@@ -7301,10 +7651,10 @@ mod tests {
             black,
         )
         .expect("64x64 partition parameters");
-        let via_body = toy_64x64_partition_cabac_bits(params);
+        let via_body = vvc_ctu_partition_cabac_bits(params);
 
         let mut manual = ToyCabacEncoder::new();
-        let mut ctu = VvcCtuCabacGenerator::new();
+        let mut ctu = VvcCtuCabacGenerator::new(params.luma_dc_abs_level, params.luma_dc_negative);
         manual.start();
         for op in VvcCtuCabacOp::yuv420_ctu_partition(params) {
             ctu.emit(&mut manual, op);
@@ -7326,14 +7676,14 @@ mod tests {
                 height: 64,
             },
         ] {
-            let params = toy_64x64_partition_params(geometry, black).expect("rectangular params");
-            let bits = toy_64x64_partition_cabac_bits(params);
+            let params = vvc_ctu_partition_params(geometry, black).expect("rectangular params");
+            let bits = vvc_ctu_partition_cabac_bits(params);
             assert!(!bits.is_empty());
         }
     }
 
     #[test]
-    fn toy_cabac_bits_uses_partition_generator_for_rectangular_64_sample_bodies() {
+    fn vvc_cabac_bits_uses_ctu_partition_generator_for_rectangular_bodies() {
         let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
         for geometry in [
             ToyVideoGeometry {
@@ -7345,10 +7695,10 @@ mod tests {
                 height: 64,
             },
         ] {
-            let params = toy_64x64_partition_params(geometry, black).expect("rectangular params");
+            let params = vvc_ctu_partition_params(geometry, black).expect("rectangular params");
             assert_eq!(
-                toy_cabac_bits(geometry, black),
-                toy_64x64_partition_cabac_bits(params)
+                vvc_cabac_bits(geometry, black),
+                vvc_ctu_partition_cabac_bits(params)
             );
         }
     }

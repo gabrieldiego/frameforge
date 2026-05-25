@@ -16,7 +16,8 @@ module ff_vvc_cabac #(
   input  logic [15:0] coded_width,
   input  logic [15:0] coded_height,
   input  logic [4:0]  luma_rem,
-  input  logic [4:0]  chroma_rem,
+  input  logic [4:0]  cb_rem,
+  input  logic [4:0]  cr_rem,
   input  logic [7:0]  symbol_count,
 
   // Symbol stream boundary for future sequential CABAC. The current clean-room
@@ -66,7 +67,8 @@ module ff_vvc_cabac #(
     .coded_width(coded_width),
     .coded_height(coded_height),
     .luma_rem(luma_rem),
-    .chroma_rem(chroma_rem),
+    .cb_rem(cb_rem),
+    .cr_rem(cr_rem),
     .m_axis_ready(mode_palette_444 || m_axis_ready),
     .m_axis_valid(generated_m_axis_valid),
     .m_axis_data(generated_m_axis_data),

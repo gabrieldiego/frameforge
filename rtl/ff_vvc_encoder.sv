@@ -8,7 +8,7 @@ module ff_vvc_encoder #(
   parameter int SOURCE_SAMPLE_BITS = SAMPLE_BITS,
   // VVC chroma_format_idc values: 1=4:2:0, 2=4:2:2, 3=4:4:4.
   // 4:2:0 uses the current transform/residual path. 4:4:4 is routed through
-  // the toy palette path so the sampling path is independent of TU size.
+  // the palette path so the sampling path is independent of TU size.
   parameter int CHROMA_FORMAT_IDC = 1,
   parameter bit PALETTE_SKIP_OFF_VIEW_CUS = 1'b1
 ) (
@@ -66,7 +66,8 @@ module ff_vvc_encoder #(
   logic [(SAMPLE_BITS * TOY_RESIDUAL_LUMA_SAMPLES) - 1:0] luma_samples_1_q;
   logic [4:0] quant_luma_rem_q;
   logic [4:0] quant_luma_rem_1_q;
-  logic [4:0] quant_chroma_rem_q;
+  logic [4:0] quant_cb_rem_q;
+  logic [4:0] quant_cr_rem_q;
   logic [4:0] residual_quant_luma_rem;
   logic [4:0] residual_quant_luma_rem_1;
   logic [7:0] residual_recon_luma_sample;
@@ -146,7 +147,7 @@ module ff_vvc_encoder #(
     end
   endgenerate
 
-  ff_vvc_toy_coding_tree_scheduler #(
+  ff_vvc_coding_tree_scheduler #(
     .CTU_SIZE(CTU_SIZE)
   ) coding_tree_scheduler (
     .visible_width(visible_width),
@@ -224,7 +225,8 @@ module ff_vvc_encoder #(
     .coded_width(coding_tree_coded_width),
     .coded_height(coding_tree_coded_height),
     .luma_rem(quant_luma_rem_q),
-    .chroma_rem(quant_chroma_rem_q),
+    .cb_rem(quant_cb_rem_q),
+    .cr_rem(quant_cr_rem_q),
     .symbol_count(palette_symbol_count),
     .s_axis_valid(palette_stream_valid),
     .s_axis_ready(palette_stream_ready),
@@ -303,7 +305,8 @@ module ff_vvc_encoder #(
       luma_samples_1_q <= '0;
       quant_luma_rem_q <= 5'd16;
       quant_luma_rem_1_q <= 5'd16;
-      quant_chroma_rem_q <= 5'd6;
+      quant_cb_rem_q <= 5'd16;
+      quant_cr_rem_q <= 5'd16;
       m_axis_valid <= 1'b0;
       m_axis_data  <= '0;
       m_axis_last  <= 1'b0;
@@ -347,7 +350,8 @@ module ff_vvc_encoder #(
         luma_samples_1_q <= '0;
         quant_luma_rem_q <= 5'd16;
         quant_luma_rem_1_q <= 5'd16;
-        quant_chroma_rem_q <= 5'd6;
+        quant_cb_rem_q <= 5'd16;
+        quant_cr_rem_q <= 5'd16;
         m_axis_valid   <= 1'b0;
         m_axis_last    <= 1'b0;
         index_q        <= '0;
@@ -400,7 +404,8 @@ module ff_vvc_encoder #(
         end
         if (input_count_q == v_sample_index()) begin
           sampled_v <= s_axis_data;
-          quant_chroma_rem_q <= quant_chroma_rem_from_samples(sampled_u, s_axis_data);
+          quant_cb_rem_q <= quant_chroma_sample_remainder_from_sample(sampled_u);
+          quant_cr_rem_q <= quant_chroma_sample_remainder_from_sample(s_axis_data);
         end
 
         if (input_count_q == input_len_q - 1'b1) begin
@@ -976,24 +981,25 @@ module ff_vvc_encoder #(
     end
   endfunction
 
-  function automatic logic [4:0] quant_chroma_rem();
-    begin
-      quant_chroma_rem = quant_chroma_rem_q;
-    end
-  endfunction
-
   function automatic logic [4:0] quant_luma_rem_1();
     begin
       quant_luma_rem_1 = quant_luma_rem_1_q;
     end
   endfunction
 
-  function automatic logic [4:0] quant_chroma_rem_from_samples(
-    input logic [SAMPLE_BITS - 1:0] u,
-    input logic [SAMPLE_BITS - 1:0] v
-  );
+  function automatic logic [4:0] quant_chroma_sample_remainder_from_sample(input logic [SAMPLE_BITS - 1:0] sample);
     begin
-      quant_chroma_rem_from_samples = (sample_to_8bit(u) == 8'd0 && sample_to_8bit(v) == 8'd0) ? 5'd6 : 5'd0;
+      quant_chroma_sample_remainder_from_sample = quant_chroma_sample_remainder_from_8bit(sample_to_8bit(sample));
+    end
+  endfunction
+
+  function automatic logic [4:0] quant_chroma_sample_remainder_from_8bit(input logic [7:0] sample);
+    logic [8:0] clamped_sample;
+    logic [8:0] quantized_level;
+    begin
+      clamped_sample = (sample > 8'd128) ? 9'd128 : {1'b0, sample};
+      quantized_level = (clamped_sample + 9'd4) >> 3;
+      quant_chroma_sample_remainder_from_8bit = 5'd16 - quantized_level[4:0];
     end
   endfunction
 
