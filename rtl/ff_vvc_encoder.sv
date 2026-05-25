@@ -74,9 +74,6 @@ module ff_vvc_encoder #(
   logic [15:0] coding_tree_coded_width;
   logic [15:0] coding_tree_coded_height;
   logic [1:0]  coding_tree_body_kind;
-  logic        coding_tree_uses_capacity_tu_grid;
-  logic [12:0] coding_tree_luma_tu_count;
-  logic [12:0] coding_tree_capacity_tu_grid_bit_len;
   logic        cabac_supported;
   logic        cabac_enable;
   logic [7:0]  palette_symbol_count;
@@ -157,10 +154,7 @@ module ff_vvc_encoder #(
     .visible_height(visible_height),
     .coded_width(coding_tree_coded_width),
     .coded_height(coding_tree_coded_height),
-    .body_kind(coding_tree_body_kind),
-    .uses_capacity_tu_grid(coding_tree_uses_capacity_tu_grid),
-    .luma_tu_count(coding_tree_luma_tu_count),
-    .capacity_tu_grid_bit_len(coding_tree_capacity_tu_grid_bit_len)
+    .body_kind(coding_tree_body_kind)
   );
 
   generate
@@ -437,20 +431,24 @@ module ff_vvc_encoder #(
       end else if (pending_output_q && !PALETTE_MODE &&
                    (generated_out_state_q == GENERATED_OUT_IDLE)) begin
         pending_output_q <= 1'b0;
-        generated_out_state_q <= GENERATED_OUT_PREAMBLE;
-        generated_out_index_q <= 13'd0;
-        generated_slice_cra_q <= 1'b0;
-        generated_hold_valid_q <= 1'b0;
-        generated_hold_byte_q <= 8'd0;
-        generated_tail_extra_q <= 1'b0;
-        generated_zero_count_q <= 2'd0;
-        generated_epb_pending_q <= 1'b0;
-        generated_epb_byte_q <= 8'd0;
-        generated_epb_stream_last_q <= 1'b0;
-        generated_epb_slice_last_q <= 1'b0;
-        m_axis_valid <= 1'b0;
-        m_axis_data <= 8'd0;
-        m_axis_last <= 1'b0;
+        if (!cabac_supported) begin
+          input_error <= 1'b1;
+        end else begin
+          generated_out_state_q <= GENERATED_OUT_PREAMBLE;
+          generated_out_index_q <= 13'd0;
+          generated_slice_cra_q <= 1'b0;
+          generated_hold_valid_q <= 1'b0;
+          generated_hold_byte_q <= 8'd0;
+          generated_tail_extra_q <= 1'b0;
+          generated_zero_count_q <= 2'd0;
+          generated_epb_pending_q <= 1'b0;
+          generated_epb_byte_q <= 8'd0;
+          generated_epb_stream_last_q <= 1'b0;
+          generated_epb_slice_last_q <= 1'b0;
+          m_axis_valid <= 1'b0;
+          m_axis_data <= 8'd0;
+          m_axis_last <= 1'b0;
+        end
       end else if (m_axis_valid && m_axis_ready) begin
         if (index_q == stream_len_q) begin
           m_axis_valid <= 1'b0;
@@ -571,29 +569,12 @@ module ff_vvc_encoder #(
             end else begin
               m_axis_valid <= 1'b0;
               m_axis_last <= 1'b0;
-              if (uses_capacity_tu_grid()) begin
-                generated_out_index_q <= 13'd3;
-              end else begin
-                cabac_start_q <= 1'b1;
-              end
+              cabac_start_q <= 1'b1;
               generated_out_state_q <= GENERATED_OUT_CABAC;
             end
           end
           GENERATED_OUT_CABAC: begin
-            if (uses_capacity_tu_grid()) begin
-              if (generated_out_index_q < slice_payload_len()) begin
-                emit_generated_raw_byte(
-                  slice_payload_byte(generated_out_index_q, generated_slice_cra_q),
-                  generated_stream_last_slice() && (generated_out_index_q == (slice_payload_len() - 13'd1)),
-                  generated_out_index_q == (slice_payload_len() - 13'd1)
-                );
-                if (generated_out_index_q != (slice_payload_len() - 13'd1)) begin
-                  generated_out_index_q <= generated_out_index_q + 13'd1;
-                end
-              end else begin
-                emit_generated_raw_byte(8'h80, generated_stream_last_slice(), 1'b1);
-              end
-            end else if (cabac_stream_valid) begin
+            if (cabac_stream_valid) begin
               if (generated_hold_valid_q) begin
                 emit_generated_raw_byte(generated_hold_byte_q, 1'b0, 1'b0);
               end else begin
@@ -1666,73 +1647,13 @@ module ff_vvc_encoder #(
 
   function automatic logic [12:0] slice_body_bit_len();
     begin
-      if (uses_capacity_tu_grid()) begin
-        slice_body_bit_len = capacity_tu_grid_bit_len();
-      end else begin
-        slice_body_bit_len = 13'd0;
-      end
+      slice_body_bit_len = 13'd0;
     end
   endfunction
 
   function automatic logic slice_body_bit(input logic [12:0] bit_index);
     begin
-      if (uses_capacity_tu_grid()) begin
-        slice_body_bit = capacity_tu_grid_bit(bit_index);
-      end else begin
-        slice_body_bit = 1'b0;
-      end
-    end
-  endfunction
-
-  function automatic logic uses_capacity_tu_grid();
-    begin
-      uses_capacity_tu_grid = coding_tree_uses_capacity_tu_grid;
-    end
-  endfunction
-
-  function automatic logic [12:0] luma_tu_count();
-    begin
-      luma_tu_count = coding_tree_luma_tu_count;
-    end
-  endfunction
-
-  function automatic logic [12:0] capacity_tu_grid_bit_len();
-    begin
-      capacity_tu_grid_bit_len = coding_tree_capacity_tu_grid_bit_len;
-    end
-  endfunction
-
-  function automatic logic capacity_tu_grid_bit(input logic [12:0] bit_index);
-    logic [12:0] tu;
-    logic [12:0] tu_payload_bit;
-    logic [15:0] count_bits;
-    logic [4:0] rem;
-    logic [7:0] ac0;
-    begin
-      if (bit_index < 13'd16) begin
-        count_bits = {3'd0, luma_tu_count()};
-        capacity_tu_grid_bit = count_bits[13'd15 - bit_index];
-      end else begin
-        tu_payload_bit = bit_index - 13'd16;
-        tu = tu_payload_bit / 13'd13;
-        rem = quant_luma_rem_for_tu(tu);
-        ac0 = quant_luma_ac0_for_tu(tu);
-        case (tu_payload_bit % 13'd13)
-          13'd0: capacity_tu_grid_bit = rem[4];
-          13'd1: capacity_tu_grid_bit = rem[3];
-          13'd2: capacity_tu_grid_bit = rem[2];
-          13'd3: capacity_tu_grid_bit = rem[1];
-          13'd4: capacity_tu_grid_bit = rem[0];
-          13'd5: capacity_tu_grid_bit = ac0[7];
-          13'd6: capacity_tu_grid_bit = ac0[6];
-          13'd7: capacity_tu_grid_bit = ac0[5];
-          13'd8: capacity_tu_grid_bit = ac0[4];
-          13'd9: capacity_tu_grid_bit = ac0[3];
-          13'd10: capacity_tu_grid_bit = ac0[2];
-          13'd11: capacity_tu_grid_bit = ac0[1];
-          default: capacity_tu_grid_bit = ac0[0];
-        endcase
-      end
+      slice_body_bit = 1'b0;
     end
   endfunction
 

@@ -511,10 +511,6 @@ enum ToyEntropyTokenKind {
         component: ToyResidualComponent,
         negative: bool,
     },
-    AcTokenEp {
-        component: ToyResidualComponent,
-        token: u8,
-    },
     Terminate,
 }
 
@@ -527,7 +523,6 @@ struct ToyEntropyToken {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToyEntropyScheduleKind {
     VtmMapped8x8,
-    GeneratedTuGrid,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -594,21 +589,6 @@ struct ToyPalette444TileEntry {
 struct ToyEntropySchedule {
     kind: ToyEntropyScheduleKind,
     tokens: Vec<ToyEntropyToken>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Toy16x16GeneratedParams {
-    luma_cb_width: usize,
-    luma_cb_height: usize,
-    chroma_tu_count: usize,
-    luma_rem: u8,
-    chroma_rem: u8,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Toy32x32GeneratedParams {
-    luma_cb_width: usize,
-    luma_cb_height: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3054,16 +3034,7 @@ fn write_toy_coding_tree_entropy(
     writer.write_cabac_bits("cabac_toy_quantized_residual_bits", &bits);
 }
 
-fn toy_capacity_tu_grid_bits(color: Toy4x4QuantizedColor) -> Vec<bool> {
-    let mut bits = Vec::new();
-    append_fixed_bits(&mut bits, color.luma_tu_count as u64, 16);
-    for tu_index in 0..color.luma_tu_count {
-        append_fixed_bits(&mut bits, color.luma_tu_remainders[tu_index] as u64, 5);
-        append_fixed_bits(&mut bits, color.luma_tu_ac0_tokens[tu_index] as u64, 8);
-    }
-    bits
-}
-
+#[cfg(test)]
 fn append_fixed_bits(bits: &mut Vec<bool>, value: u64, bit_count: u8) {
     for bit in (0..bit_count).rev() {
         bits.push(((value >> bit) & 1) != 0);
@@ -3082,18 +3053,15 @@ fn toy_entropy_schedule(
     color: Toy4x4QuantizedColor,
 ) -> ToyEntropySchedule {
     let _syntax_plan = toy_coding_tree_plan(geometry);
-    let kind = if toy_entropy_tokens_mapped_to_vtm_geometry(geometry) {
-        ToyEntropyScheduleKind::VtmMapped8x8
-    } else {
-        ToyEntropyScheduleKind::GeneratedTuGrid
-    };
+    assert!(
+        toy_entropy_tokens_mapped_to_vtm_geometry(geometry),
+        "non-8x8 entropy schedules require generated VVC syntax, not legacy token grids"
+    );
+    let kind = ToyEntropyScheduleKind::VtmMapped8x8;
 
     ToyEntropySchedule {
         kind,
-        tokens: match kind {
-            ToyEntropyScheduleKind::VtmMapped8x8 => toy_8x8_mapped_entropy_tokens(color),
-            ToyEntropyScheduleKind::GeneratedTuGrid => toy_generated_tu_grid_entropy_tokens(color),
-        },
+        tokens: toy_8x8_mapped_entropy_tokens(color),
     }
 }
 
@@ -3194,44 +3162,6 @@ fn toy_8x8_mapped_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<ToyEntropyT
         name: "end_of_slice_segment_flag",
         kind: ToyEntropyTokenKind::Terminate,
     });
-    tokens
-}
-
-fn toy_generated_tu_grid_entropy_tokens(color: Toy4x4QuantizedColor) -> Vec<ToyEntropyToken> {
-    let mut tokens = toy_8x8_mapped_entropy_tokens(color);
-    tokens.insert(
-        tokens.len() - 1,
-        ToyEntropyToken {
-            name: "luma_first_ac_token",
-            kind: ToyEntropyTokenKind::AcTokenEp {
-                component: ToyResidualComponent::Luma,
-                token: color.luma_ac_tokens[0],
-            },
-        },
-    );
-    for tu_index in 1..color.luma_tu_count {
-        tokens.insert(
-            tokens.len() - 1,
-            ToyEntropyToken {
-                name: "luma_grid_abs_remainder",
-                kind: ToyEntropyTokenKind::RemAbsEp {
-                    component: ToyResidualComponent::Luma,
-                    value: color.luma_tu_remainders[tu_index],
-                    rice_param: 0,
-                },
-            },
-        );
-        tokens.insert(
-            tokens.len() - 1,
-            ToyEntropyToken {
-                name: "luma_grid_ac_token",
-                kind: ToyEntropyTokenKind::AcTokenEp {
-                    component: ToyResidualComponent::Luma,
-                    token: color.luma_tu_ac0_tokens[tu_index],
-                },
-            },
-        );
-    }
     tokens
 }
 
@@ -3344,22 +3274,6 @@ fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Ve
             height: 8,
         } => {}
         ToyCodedGeometry {
-            width: 16,
-            height: 16,
-        } => {
-            return toy_16x16_generated_cabac_bits(
-                toy_16x16_generated_params(geometry, color).expect("16x16 generated parameters"),
-            );
-        }
-        ToyCodedGeometry {
-            width: 32,
-            height: 32,
-        } => {
-            return toy_32x32_generated_cabac_bits(
-                toy_32x32_generated_params(geometry, color).expect("32x32 generated parameters"),
-            );
-        }
-        ToyCodedGeometry {
             width: 64,
             height: 64,
         } => {
@@ -3371,7 +3285,11 @@ fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Ve
             if let Some(params) = toy_64x64_partition_params(geometry, color) {
                 return toy_64x64_partition_cabac_bits(params);
             }
-            return toy_capacity_tu_grid_bits(color);
+            unimplemented!(
+                "VVC coding tree for coded geometry {}x{} must be implemented without legacy pre-generated bodies",
+                geometry.coded_width(),
+                geometry.coded_height()
+            );
         }
     }
 
@@ -3390,55 +3308,12 @@ fn toy_cabac_bits(geometry: ToyVideoGeometry, color: Toy4x4QuantizedColor) -> Ve
             ToyEntropyTokenKind::SignEp { negative, .. } => {
                 cabac.encode_bin_ep(negative);
             }
-            ToyEntropyTokenKind::AcTokenEp { token, .. } => {
-                cabac.encode_bins_ep(token as u32, 8);
-            }
             ToyEntropyTokenKind::Terminate => {
                 cabac.encode_bin_trm(true);
             }
         }
     }
     cabac.finish()
-}
-
-fn toy_16x16_generated_params(
-    geometry: ToyVideoGeometry,
-    _color: Toy4x4QuantizedColor,
-) -> Option<Toy16x16GeneratedParams> {
-    let plan = toy_coding_tree_plan(geometry);
-    let luma_cb = first_luma_transform_unit(&plan)?;
-    let chroma_tu_count = plan
-        .iter()
-        .filter(|step| matches!(step, ToyCodingTreeStep::ChromaTransformUnit { .. }))
-        .count();
-    if luma_cb == (16, 16) && chroma_tu_count == 4 {
-        return Some(Toy16x16GeneratedParams {
-            luma_cb_width: luma_cb.0,
-            luma_cb_height: luma_cb.1,
-            chroma_tu_count,
-            // TODO(vvc): Replace the generated body with generated
-            // geometry syntax plus residual coding. Until then, this path is
-            // a compliant 16x16 coding-tree body whose reconstruction is
-            // defined by the current generated body, not by the input residual tokens.
-            luma_rem: 16,
-            chroma_rem: 6,
-        });
-    }
-    None
-}
-
-fn toy_32x32_generated_params(
-    geometry: ToyVideoGeometry,
-    _color: Toy4x4QuantizedColor,
-) -> Option<Toy32x32GeneratedParams> {
-    let coded = geometry.coded();
-    if coded.width == 32 && coded.height == 32 {
-        return Some(Toy32x32GeneratedParams {
-            luma_cb_width: coded.width,
-            luma_cb_height: coded.height,
-        });
-    }
-    None
 }
 
 fn toy_64x64_partition_params(
@@ -3478,39 +3353,6 @@ fn toy_64x64_partition_params(
         luma_leaf_count,
         chroma_tu_count,
     })
-}
-
-fn first_luma_transform_unit(plan: &[ToyCodingTreeStep]) -> Option<(usize, usize)> {
-    plan.iter().find_map(|step| match *step {
-        ToyCodingTreeStep::LumaTransformUnit { width, height } => Some((width, height)),
-        ToyCodingTreeStep::ChromaTransformUnit { .. } => None,
-    })
-}
-
-fn toy_16x16_generated_cabac_bits(params: Toy16x16GeneratedParams) -> Vec<bool> {
-    debug_assert_eq!(params.luma_cb_width, 16);
-    debug_assert_eq!(params.luma_cb_height, 16);
-    debug_assert_eq!(params.chroma_tu_count, 4);
-    debug_assert_eq!(params.luma_rem, 16);
-    debug_assert_eq!(params.chroma_rem, 6);
-
-    let mut cabac = ToyCabacEncoder::new();
-    cabac.start();
-    encode_16x16_luma_body(&mut cabac);
-    encode_16x16_chroma_body(&mut cabac);
-    cabac.encode_bin_trm(true);
-    cabac.finish()
-}
-
-fn toy_32x32_generated_cabac_bits(params: Toy32x32GeneratedParams) -> Vec<bool> {
-    debug_assert_eq!(params.luma_cb_width, 32);
-    debug_assert_eq!(params.luma_cb_height, 32);
-    let mut cabac = ToyCabacEncoder::new();
-    cabac.start();
-    encode_32x32_luma_body(&mut cabac);
-    encode_32x32_chroma_body(&mut cabac);
-    cabac.encode_bin_trm(true);
-    cabac.finish()
 }
 
 fn toy_64x64_partition_cabac_bits(params: Toy64x64PartitionParams) -> Vec<bool> {
@@ -3600,6 +3442,7 @@ impl VvcCodingTreeNode {
         }
     }
 
+    #[allow(dead_code)]
     fn tt_child(self, vertical: bool, child_idx: u8) -> Self {
         debug_assert!(child_idx < 3);
         let quarter_width = self.width / 4;
@@ -5596,698 +5439,6 @@ impl VvcCtuCabacGenerator {
     }
 }
 
-fn encode_32x32_luma_body(cabac: &mut ToyCabacEncoder) {
-    encode_32x32_luma_body_inner(cabac, true, true, true, true, true, true, true, true, true);
-}
-
-#[allow(dead_code)]
-fn encode_32x32_luma_leaf_after_residual_bypass_suffix_body(cabac: &mut ToyCabacEncoder) {
-    encode_32x32_luma_body_inner(
-        cabac, false, false, false, false, false, false, false, false, false,
-    );
-}
-
-fn encode_32x32_luma_body_inner(
-    cabac: &mut ToyCabacEncoder,
-    include_standalone_root: bool,
-    include_leaf_split: bool,
-    include_intra_mode_prefix: bool,
-    include_intra_mode_context_prefix: bool,
-    include_luma_cbf: bool,
-    include_residual_prefix: bool,
-    include_residual_scan_prefix: bool,
-    include_residual_scan_tail: bool,
-    include_residual_bypass_suffix: bool,
-) {
-    if include_standalone_root {
-        encode_legacy_trace_cabac_word(cabac, 0x035a);
-        encode_legacy_trace_cabac_word(cabac, 0x010f);
-    }
-    if include_leaf_split {
-        encode_legacy_trace_cabac_word(cabac, 0x0377);
-    }
-    if include_intra_mode_prefix {
-        encode_legacy_trace_cabac_word(cabac, 0x8000);
-    }
-    if include_intra_mode_context_prefix {
-        encode_legacy_trace_cabac_word(cabac, 0x0163);
-    }
-    if include_luma_cbf {
-        encode_legacy_trace_cabac_word(cabac, 0x020b);
-    }
-    if include_residual_prefix {
-        encode_legacy_trace_cabac_word(cabac, 0x0153);
-        encode_legacy_trace_cabac_word(cabac, 0x0153);
-    }
-    if include_residual_scan_prefix {
-        encode_legacy_trace_cabac_word(cabac, 0x00f3);
-        encode_legacy_trace_cabac_word(cabac, 0x020b);
-        encode_legacy_trace_cabac_word(cabac, 0x0133);
-        encode_legacy_trace_cabac_word(cabac, 0x02ca);
-    }
-    if include_residual_scan_tail {
-        encode_legacy_trace_cabac_word(cabac, 0x0233);
-        encode_legacy_trace_cabac_word(cabac, 0x0153);
-        encode_legacy_trace_cabac_word(cabac, 0x01ab);
-        encode_legacy_trace_cabac_word(cabac, 0x0113);
-        encode_legacy_trace_cabac_word(cabac, 0x029b);
-        encode_legacy_trace_cabac_word(cabac, 0x0170);
-    }
-    if include_residual_bypass_suffix {
-        encode_legacy_trace_cabac_word(cabac, 0x8001);
-        encode_legacy_trace_cabac_word(cabac, 0x8001);
-        encode_legacy_trace_cabac_word(cabac, 0x8000);
-    }
-    encode_legacy_trace_cabac_word(cabac, 0x007d);
-    encode_legacy_trace_cabac_word(cabac, 0x011e);
-    encode_legacy_trace_cabac_word(cabac, 0x0092);
-    encode_legacy_trace_cabac_word(cabac, 0x008a);
-    encode_legacy_trace_cabac_word(cabac, 0x01b1);
-    encode_legacy_trace_cabac_word(cabac, 0x0196);
-    encode_legacy_trace_cabac_word(cabac, 0x00c7);
-    encode_legacy_trace_cabac_word(cabac, 0x0102);
-    encode_legacy_trace_cabac_word(cabac, 0x0116);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x0146);
-    encode_legacy_trace_cabac_word(cabac, 0x0203);
-    encode_legacy_trace_cabac_word(cabac, 0x010e);
-    encode_legacy_trace_cabac_word(cabac, 0x0394);
-    encode_legacy_trace_cabac_word(cabac, 0x009e);
-    encode_legacy_trace_cabac_word(cabac, 0x0337);
-    encode_legacy_trace_cabac_word(cabac, 0x0092);
-    encode_legacy_trace_cabac_word(cabac, 0x008b);
-    encode_legacy_trace_cabac_word(cabac, 0x007e);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x0062);
-    encode_legacy_trace_cabac_word(cabac, 0x022f);
-    encode_legacy_trace_cabac_word(cabac, 0x0061);
-    encode_legacy_trace_cabac_word(cabac, 0x008a);
-    encode_legacy_trace_cabac_word(cabac, 0x0012);
-    encode_legacy_trace_cabac_word(cabac, 0x0077);
-    encode_legacy_trace_cabac_word(cabac, 0x00a2);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x00e1);
-    encode_legacy_trace_cabac_word(cabac, 0x0129);
-    encode_legacy_trace_cabac_word(cabac, 0x005a);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x00b1);
-    encode_legacy_trace_cabac_word(cabac, 0x007e);
-    encode_legacy_trace_cabac_word(cabac, 0x013d);
-    encode_legacy_trace_cabac_word(cabac, 0x008e);
-    encode_legacy_trace_cabac_word(cabac, 0x00b1);
-    encode_legacy_trace_cabac_word(cabac, 0x00aa);
-    encode_legacy_trace_cabac_word(cabac, 0x0179);
-    encode_legacy_trace_cabac_word(cabac, 0x0096);
-    encode_legacy_trace_cabac_word(cabac, 0x01ca);
-    encode_legacy_trace_cabac_word(cabac, 0x025e);
-    encode_legacy_trace_cabac_word(cabac, 0x017a);
-    encode_legacy_trace_cabac_word(cabac, 0x02cb);
-    encode_legacy_trace_cabac_word(cabac, 0x00ba);
-    encode_legacy_trace_cabac_word(cabac, 0x00fb);
-    encode_legacy_trace_cabac_word(cabac, 0x007e);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x0076);
-    encode_legacy_trace_cabac_word(cabac, 0x017a);
-    encode_legacy_trace_cabac_word(cabac, 0x008b);
-    encode_legacy_trace_cabac_word(cabac, 0x007e);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x0062);
-    encode_legacy_trace_cabac_word(cabac, 0x020b);
-    encode_legacy_trace_cabac_word(cabac, 0x0062);
-    encode_legacy_trace_cabac_word(cabac, 0x01b4);
-    encode_legacy_trace_cabac_word(cabac, 0x02cf);
-    encode_legacy_trace_cabac_word(cabac, 0x0052);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x0162);
-    encode_legacy_trace_cabac_word(cabac, 0x0073);
-    encode_legacy_trace_cabac_word(cabac, 0x00d7);
-    encode_legacy_trace_cabac_word(cabac, 0x005a);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x0042);
-    encode_legacy_trace_cabac_word(cabac, 0x01c3);
-    encode_legacy_trace_cabac_word(cabac, 0x0046);
-    encode_legacy_trace_cabac_word(cabac, 0x0141);
-    encode_legacy_trace_cabac_word(cabac, 0x004e);
-    encode_legacy_trace_cabac_word(cabac, 0x006b);
-    encode_legacy_trace_cabac_word(cabac, 0x0042);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x01d2);
-    encode_legacy_trace_cabac_word(cabac, 0x01f1);
-    encode_legacy_trace_cabac_word(cabac, 0x006a);
-    encode_legacy_trace_cabac_word(cabac, 0x02e8);
-    encode_legacy_trace_cabac_word(cabac, 0x01f4);
-    encode_legacy_trace_cabac_word(cabac, 0x02e3);
-    encode_legacy_trace_cabac_word(cabac, 0x020a);
-    encode_legacy_trace_cabac_word(cabac, 0x006b);
-    encode_legacy_trace_cabac_word(cabac, 0x004e);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x004e);
-    encode_legacy_trace_cabac_word(cabac, 0x01ac);
-    encode_legacy_trace_cabac_word(cabac, 0x007b);
-    encode_legacy_trace_cabac_word(cabac, 0x00e9);
-    encode_legacy_trace_cabac_word(cabac, 0x009d);
-    encode_legacy_trace_cabac_word(cabac, 0x0022);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x00d5);
-    encode_legacy_trace_cabac_word(cabac, 0x00c6);
-    encode_legacy_trace_cabac_word(cabac, 0x0026);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x024f);
-    encode_legacy_trace_cabac_word(cabac, 0x024e);
-    encode_legacy_trace_cabac_word(cabac, 0x00b2);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x0083);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x005e);
-    encode_legacy_trace_cabac_word(cabac, 0x024e);
-    encode_legacy_trace_cabac_word(cabac, 0x00a3);
-    encode_legacy_trace_cabac_word(cabac, 0x004a);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x0046);
-    encode_legacy_trace_cabac_word(cabac, 0x02cf);
-    encode_legacy_trace_cabac_word(cabac, 0x004e);
-    encode_legacy_trace_cabac_word(cabac, 0x02e8);
-    encode_legacy_trace_cabac_word(cabac, 0x0223);
-    encode_legacy_trace_cabac_word(cabac, 0x0321);
-    encode_legacy_trace_cabac_word(cabac, 0x01c2);
-    encode_legacy_trace_cabac_word(cabac, 0x00b2);
-    encode_legacy_trace_cabac_word(cabac, 0x035b);
-    encode_legacy_trace_cabac_word(cabac, 0x0032);
-    encode_legacy_trace_cabac_word(cabac, 0x0053);
-    encode_legacy_trace_cabac_word(cabac, 0x004e);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x004a);
-    encode_legacy_trace_cabac_word(cabac, 0x0267);
-    encode_legacy_trace_cabac_word(cabac, 0x0209);
-    encode_legacy_trace_cabac_word(cabac, 0x0132);
-    encode_legacy_trace_cabac_word(cabac, 0x00d6);
-    encode_legacy_trace_cabac_word(cabac, 0x005b);
-    encode_legacy_trace_cabac_word(cabac, 0x0036);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x0032);
-    encode_legacy_trace_cabac_word(cabac, 0x0173);
-    encode_legacy_trace_cabac_word(cabac, 0x027c);
-    encode_legacy_trace_cabac_word(cabac, 0x019f);
-    encode_legacy_trace_cabac_word(cabac, 0x014a);
-    encode_legacy_trace_cabac_word(cabac, 0x0027);
-    encode_legacy_trace_cabac_word(cabac, 0x01f1);
-    encode_legacy_trace_cabac_word(cabac, 0x01b6);
-    encode_legacy_trace_cabac_word(cabac, 0x008a);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x0053);
-    encode_legacy_trace_cabac_word(cabac, 0x01b6);
-    encode_legacy_trace_cabac_word(cabac, 0x0083);
-    encode_legacy_trace_cabac_word(cabac, 0x0046);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x0042);
-    encode_legacy_trace_cabac_word(cabac, 0x0263);
-    encode_legacy_trace_cabac_word(cabac, 0x004a);
-    encode_legacy_trace_cabac_word(cabac, 0x02b4);
-    encode_legacy_trace_cabac_word(cabac, 0x01a2);
-    encode_legacy_trace_cabac_word(cabac, 0x033b);
-    encode_legacy_trace_cabac_word(cabac, 0x0032);
-    encode_legacy_trace_cabac_word(cabac, 0x0053);
-    encode_legacy_trace_cabac_word(cabac, 0x004e);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x004a);
-    encode_legacy_trace_cabac_word(cabac, 0x0242);
-    encode_legacy_trace_cabac_word(cabac, 0x005b);
-    encode_legacy_trace_cabac_word(cabac, 0x0032);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x0032);
-    encode_legacy_trace_cabac_word(cabac, 0x0142);
-    encode_legacy_trace_cabac_word(cabac, 0x0027);
-    encode_legacy_trace_cabac_word(cabac, 0x0102);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x00c2);
-    encode_legacy_trace_cabac_word(cabac, 0x0304);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x005b);
-    encode_legacy_trace_cabac_word(cabac, 0x0027);
-    encode_legacy_trace_cabac_word(cabac, 0x028d);
-    encode_legacy_trace_cabac_word(cabac, 0x0165);
-    encode_legacy_trace_cabac_word(cabac, 0x00c2);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x01e7);
-    encode_legacy_trace_cabac_word(cabac, 0x01f5);
-    encode_legacy_trace_cabac_word(cabac, 0x013e);
-    encode_legacy_trace_cabac_word(cabac, 0x0230);
-    encode_legacy_trace_cabac_word(cabac, 0x0023);
-    encode_legacy_trace_cabac_word(cabac, 0x0123);
-    encode_legacy_trace_cabac_word(cabac, 0x029a);
-    encode_legacy_trace_cabac_word(cabac, 0x0242);
-    encode_legacy_trace_cabac_word(cabac, 0x01c8);
-    encode_legacy_trace_cabac_word(cabac, 0x002f);
-    encode_legacy_trace_cabac_word(cabac, 0x0298);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x0167);
-    encode_legacy_trace_cabac_word(cabac, 0x0306);
-    encode_legacy_trace_cabac_word(cabac, 0x0142);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x0193);
-    encode_legacy_trace_cabac_word(cabac, 0x01e6);
-    encode_legacy_trace_cabac_word(cabac, 0x01b2);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x0201);
-    encode_legacy_trace_cabac_word(cabac, 0x0142);
-    encode_legacy_trace_cabac_word(cabac, 0x007e);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x01d2);
-    encode_legacy_trace_cabac_word(cabac, 0x0253);
-    encode_legacy_trace_cabac_word(cabac, 0x01f3);
-    encode_legacy_trace_cabac_word(cabac, 0x0281);
-    encode_legacy_trace_cabac_word(cabac, 0x017a);
-    encode_legacy_trace_cabac_word(cabac, 0x0297);
-    encode_legacy_trace_cabac_word(cabac, 0x01b3);
-    encode_legacy_trace_cabac_word(cabac, 0x01f5);
-    encode_legacy_trace_cabac_word(cabac, 0x011e);
-    encode_legacy_trace_cabac_word(cabac, 0x002b);
-    encode_legacy_trace_cabac_word(cabac, 0x0337);
-    encode_legacy_trace_cabac_word(cabac, 0x01fe);
-    encode_legacy_trace_cabac_word(cabac, 0x006a);
-    encode_legacy_trace_cabac_word(cabac, 0x0170);
-    encode_legacy_trace_cabac_word(cabac, 0x0027);
-    encode_legacy_trace_cabac_word(cabac, 0x0173);
-    encode_legacy_trace_cabac_word(cabac, 0x01b2);
-    encode_legacy_trace_cabac_word(cabac, 0x0156);
-    encode_legacy_trace_cabac_word(cabac, 0x017f);
-    encode_legacy_trace_cabac_word(cabac, 0x0173);
-    encode_legacy_trace_cabac_word(cabac, 0x01b1);
-    encode_legacy_trace_cabac_word(cabac, 0x01c9);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x0067);
-    encode_legacy_trace_cabac_word(cabac, 0x02e8);
-    encode_legacy_trace_cabac_word(cabac, 0x028c);
-    encode_legacy_trace_cabac_word(cabac, 0x0268);
-    encode_legacy_trace_cabac_word(cabac, 0x023c);
-    encode_legacy_trace_cabac_word(cabac, 0x0132);
-    encode_legacy_trace_cabac_word(cabac, 0x0335);
-    encode_legacy_trace_cabac_word(cabac, 0x011a);
-    encode_legacy_trace_cabac_word(cabac, 0x0063);
-    encode_legacy_trace_cabac_word(cabac, 0x01c1);
-    encode_legacy_trace_cabac_word(cabac, 0x019a);
-    encode_legacy_trace_cabac_word(cabac, 0x0076);
-    encode_legacy_trace_cabac_word(cabac, 0x0155);
-    encode_legacy_trace_cabac_word(cabac, 0x00ee);
-    encode_legacy_trace_cabac_word(cabac, 0x0142);
-    encode_legacy_trace_cabac_word(cabac, 0x02f8);
-    encode_legacy_trace_cabac_word(cabac, 0x0208);
-    encode_legacy_trace_cabac_word(cabac, 0x0141);
-    encode_legacy_trace_cabac_word(cabac, 0x00da);
-    encode_legacy_trace_cabac_word(cabac, 0x0093);
-    encode_legacy_trace_cabac_word(cabac, 0x012a);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x024e);
-    encode_legacy_trace_cabac_word(cabac, 0x0375);
-    encode_legacy_trace_cabac_word(cabac, 0x00fa);
-    encode_legacy_trace_cabac_word(cabac, 0x01f7);
-    encode_legacy_trace_cabac_word(cabac, 0x011e);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x002b);
-    encode_legacy_trace_cabac_word(cabac, 0x0337);
-    encode_legacy_trace_cabac_word(cabac, 0x020a);
-    encode_legacy_trace_cabac_word(cabac, 0x006a);
-    encode_legacy_trace_cabac_word(cabac, 0x01c3);
-    encode_legacy_trace_cabac_word(cabac, 0x015b);
-    encode_legacy_trace_cabac_word(cabac, 0x01c2);
-    encode_legacy_trace_cabac_word(cabac, 0x018e);
-    encode_legacy_trace_cabac_word(cabac, 0x002f);
-    encode_legacy_trace_cabac_word(cabac, 0x031f);
-    encode_legacy_trace_cabac_word(cabac, 0x022d);
-    encode_legacy_trace_cabac_word(cabac, 0x0062);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x01d3);
-    encode_legacy_trace_cabac_word(cabac, 0x0281);
-    encode_legacy_trace_cabac_word(cabac, 0x017a);
-    encode_legacy_trace_cabac_word(cabac, 0x017c);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x0234);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-}
-fn encode_32x32_chroma_body(cabac: &mut ToyCabacEncoder) {
-    encode_legacy_trace_cabac_word(cabac, 0x0103);
-    encode_legacy_trace_cabac_word(cabac, 0x02ce);
-    encode_legacy_trace_cabac_word(cabac, 0x020e);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x015b);
-    encode_legacy_trace_cabac_word(cabac, 0x01b2);
-    encode_legacy_trace_cabac_word(cabac, 0x0166);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x031f);
-    encode_legacy_trace_cabac_word(cabac, 0x01ae);
-    encode_legacy_trace_cabac_word(cabac, 0x00d5);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x031f);
-    encode_legacy_trace_cabac_word(cabac, 0x01fe);
-    encode_legacy_trace_cabac_word(cabac, 0x005a);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x00fb);
-    encode_legacy_trace_cabac_word(cabac, 0x0306);
-    encode_legacy_trace_cabac_word(cabac, 0x01f3);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x00e3);
-    encode_legacy_trace_cabac_word(cabac, 0x02ce);
-    encode_legacy_trace_cabac_word(cabac, 0x0377);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x00e0);
-    encode_legacy_trace_cabac_word(cabac, 0x010f);
-    encode_legacy_trace_cabac_word(cabac, 0x012c);
-    encode_legacy_trace_cabac_word(cabac, 0x00b0);
-    encode_legacy_trace_cabac_word(cabac, 0x00ef);
-    encode_legacy_trace_cabac_word(cabac, 0x00a3);
-    encode_legacy_trace_cabac_word(cabac, 0x0359);
-    encode_legacy_trace_cabac_word(cabac, 0x01cb);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x01e5);
-    encode_legacy_trace_cabac_word(cabac, 0x02c2);
-    encode_legacy_trace_cabac_word(cabac, 0x023e);
-    encode_legacy_trace_cabac_word(cabac, 0x012b);
-    encode_legacy_trace_cabac_word(cabac, 0x0181);
-    encode_legacy_trace_cabac_word(cabac, 0x02e1);
-    encode_legacy_trace_cabac_word(cabac, 0x0147);
-    encode_legacy_trace_cabac_word(cabac, 0x0192);
-    encode_legacy_trace_cabac_word(cabac, 0x0223);
-    encode_legacy_trace_cabac_word(cabac, 0x0295);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x01f1);
-    encode_legacy_trace_cabac_word(cabac, 0x03b3);
-    encode_legacy_trace_cabac_word(cabac, 0x01c2);
-    encode_legacy_trace_cabac_word(cabac, 0x01c2);
-    encode_legacy_trace_cabac_word(cabac, 0x0221);
-    encode_legacy_trace_cabac_word(cabac, 0x01c1);
-    encode_legacy_trace_cabac_word(cabac, 0x0242);
-    encode_legacy_trace_cabac_word(cabac, 0x005a);
-    encode_legacy_trace_cabac_word(cabac, 0x0143);
-    encode_legacy_trace_cabac_word(cabac, 0x00ea);
-    encode_legacy_trace_cabac_word(cabac, 0x0013);
-    encode_legacy_trace_cabac_word(cabac, 0x00c6);
-    encode_legacy_trace_cabac_word(cabac, 0x00c7);
-    encode_legacy_trace_cabac_word(cabac, 0x0338);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x0221);
-    encode_legacy_trace_cabac_word(cabac, 0x01a1);
-    encode_legacy_trace_cabac_word(cabac, 0x0219);
-    encode_legacy_trace_cabac_word(cabac, 0x0181);
-    encode_legacy_trace_cabac_word(cabac, 0x011a);
-    encode_legacy_trace_cabac_word(cabac, 0x021a);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x006a);
-    encode_legacy_trace_cabac_word(cabac, 0x018e);
-    encode_legacy_trace_cabac_word(cabac, 0x0295);
-    encode_legacy_trace_cabac_word(cabac, 0x00b2);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x0062);
-    encode_legacy_trace_cabac_word(cabac, 0x0062);
-    encode_legacy_trace_cabac_word(cabac, 0x009e);
-    encode_legacy_trace_cabac_word(cabac, 0x0092);
-    encode_legacy_trace_cabac_word(cabac, 0x008a);
-    encode_legacy_trace_cabac_word(cabac, 0x007e);
-    encode_legacy_trace_cabac_word(cabac, 0x0075);
-    encode_legacy_trace_cabac_word(cabac, 0x00f1);
-    encode_legacy_trace_cabac_word(cabac, 0x00a6);
-    encode_legacy_trace_cabac_word(cabac, 0x0012);
-    encode_legacy_trace_cabac_word(cabac, 0x0282);
-    encode_legacy_trace_cabac_word(cabac, 0x0072);
-    encode_legacy_trace_cabac_word(cabac, 0x02c2);
-    encode_legacy_trace_cabac_word(cabac, 0x01ae);
-    encode_legacy_trace_cabac_word(cabac, 0x024e);
-    encode_legacy_trace_cabac_word(cabac, 0x0172);
-    encode_legacy_trace_cabac_word(cabac, 0x01f6);
-    encode_legacy_trace_cabac_word(cabac, 0x022e);
-    encode_legacy_trace_cabac_word(cabac, 0x0166);
-    encode_legacy_trace_cabac_word(cabac, 0x01f2);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x0252);
-    encode_legacy_trace_cabac_word(cabac, 0x027b);
-    encode_legacy_trace_cabac_word(cabac, 0x01c2);
-    encode_legacy_trace_cabac_word(cabac, 0x029a);
-    encode_legacy_trace_cabac_word(cabac, 0x010e);
-    encode_legacy_trace_cabac_word(cabac, 0x0223);
-    encode_legacy_trace_cabac_word(cabac, 0x0202);
-    encode_legacy_trace_cabac_word(cabac, 0x010c);
-    encode_legacy_trace_cabac_word(cabac, 0x0200);
-    encode_legacy_trace_cabac_word(cabac, 0x0163);
-    encode_legacy_trace_cabac_word(cabac, 0x01de);
-    encode_legacy_trace_cabac_word(cabac, 0x029a);
-    encode_legacy_trace_cabac_word(cabac, 0x0092);
-    encode_legacy_trace_cabac_word(cabac, 0x0226);
-    encode_legacy_trace_cabac_word(cabac, 0x018f);
-    encode_legacy_trace_cabac_word(cabac, 0x0296);
-    encode_legacy_trace_cabac_word(cabac, 0x01ad);
-    encode_legacy_trace_cabac_word(cabac, 0x02cc);
-    encode_legacy_trace_cabac_word(cabac, 0x024f);
-    encode_legacy_trace_cabac_word(cabac, 0x02ea);
-    encode_legacy_trace_cabac_word(cabac, 0x0305);
-    encode_legacy_trace_cabac_word(cabac, 0x01d9);
-    encode_legacy_trace_cabac_word(cabac, 0x0146);
-    encode_legacy_trace_cabac_word(cabac, 0x0072);
-    encode_legacy_trace_cabac_word(cabac, 0x019f);
-    encode_legacy_trace_cabac_word(cabac, 0x00b1);
-    encode_legacy_trace_cabac_word(cabac, 0x007e);
-    encode_legacy_trace_cabac_word(cabac, 0x0012);
-    encode_legacy_trace_cabac_word(cabac, 0x00c7);
-    encode_legacy_trace_cabac_word(cabac, 0x00d2);
-    encode_legacy_trace_cabac_word(cabac, 0x0117);
-    encode_legacy_trace_cabac_word(cabac, 0x019f);
-    encode_legacy_trace_cabac_word(cabac, 0x01b1);
-    encode_legacy_trace_cabac_word(cabac, 0x017d);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8001);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x01b1);
-    encode_legacy_trace_cabac_word(cabac, 0x01e7);
-    encode_legacy_trace_cabac_word(cabac, 0x019e);
-    encode_legacy_trace_cabac_word(cabac, 0x02b6);
-    encode_legacy_trace_cabac_word(cabac, 0x00e2);
-    encode_legacy_trace_cabac_word(cabac, 0x01c8);
-    encode_legacy_trace_cabac_word(cabac, 0x0209);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x8000);
-    encode_legacy_trace_cabac_word(cabac, 0x0192);
-    encode_legacy_trace_cabac_word(cabac, 0x008a);
-}
-// Legacy trace-shaped bridge. Each word carries the already-derived CABAC
-// state transition from an older decoder trace. Replace call sites with named
-// syntax emitters backed by docs/vvc-cabac-subset.md.
-fn encode_legacy_trace_cabac_word(cabac: &mut ToyCabacEncoder, word: u16) {
-    if (word & 0x8000) != 0 {
-        cabac.encode_bin_ep((word & 1) != 0);
-    } else {
-        cabac.encode_bin(
-            (word & 1) != 0,
-            ToyCtxEvent {
-                lps: word >> 2,
-                mps: ((word & 0x0002) != 0) == ((word & 1) != 0),
-            },
-        );
-    }
-}
-
-fn encode_16x16_luma_body(cabac: &mut ToyCabacEncoder) {
-    encode_legacy_trace_cabac_event(cabac, false, 214, false); // split_cu_mode split=1
-    encode_legacy_trace_cabac_event(cabac, false, 67, true); // split_cu_mode qt=1
-    cabac.encode_bin_ep(false); // intra_luma_pred_mode[5]
-    cabac.encode_bin_ep(true); // intra_luma_pred_mode[4]
-    cabac.encode_bin_ep(true); // intra_luma_pred_mode[3]
-    cabac.encode_bin_ep(false); // intra_luma_pred_mode[2]
-    cabac.encode_bin_ep(true); // intra_luma_pred_mode[1]
-    cabac.encode_bin_ep(false); // intra_luma_pred_mode[0]
-    encode_legacy_trace_cabac_event(cabac, true, 52, true); // split_cu_mode split=1
-    encode_legacy_trace_cabac_event(cabac, false, 166, true); // split_cu_mode qt=1
-    encode_legacy_trace_cabac_event(cabac, true, 109, true); // split_cu_mode split=0
-    encode_legacy_trace_cabac_event(cabac, true, 134, true); // cbf_comp luma=1
-    encode_legacy_trace_cabac_event(cabac, true, 116, true); // sig_coeff_group_flag
-    encode_legacy_trace_cabac_event(cabac, true, 142, true); // sig_coeff_group_flag
-    encode_legacy_trace_cabac_event(cabac, true, 221, false); // last_sig_coeff_x_prefix
-    encode_legacy_trace_cabac_event(cabac, false, 205, false); // last_sig_coeff_y_prefix
-    cabac.encode_bin_ep(false); // last_sig_coeff_suffix
-    encode_legacy_trace_cabac_event(cabac, false, 39, false); // sig_coeff_flag
-    encode_legacy_trace_cabac_event(cabac, false, 101, false); // sig_coeff_flag
-    encode_legacy_trace_cabac_event(cabac, false, 99, false); // sig_coeff_flag
-    encode_legacy_trace_cabac_event(cabac, true, 4, true); // sig_coeff_flag
-    encode_legacy_trace_cabac_event(cabac, false, 67, false); // abs_level_gtx_flag
-    cabac.encode_bin_ep(false); // remainder_prefix
-    cabac.encode_bin_ep(true); // coeff_sign_flag
-    encode_legacy_trace_cabac_event(cabac, false, 64, false); // ts_flag=0
-    encode_legacy_trace_cabac_event(cabac, false, 54, false); // mts_idx=0
-}
-
-fn encode_16x16_chroma_body(cabac: &mut ToyCabacEncoder) {
-    encode_legacy_trace_cabac_event(cabac, false, 40, false); // split_cu_mode split=1
-    encode_legacy_trace_cabac_event(cabac, false, 176, false); // split_cu_mode qt=1
-    encode_legacy_trace_cabac_event(cabac, false, 103, false); // split_cu_mode split=1
-    encode_legacy_trace_cabac_event(cabac, false, 130, false); // split_cu_mode qt=1
-    encode_legacy_trace_cabac_event(cabac, false, 88, false); // split_cu_mode split=1
-    encode_legacy_trace_cabac_event(cabac, false, 114, false); // split_cu_mode qt=1
-    encode_legacy_trace_cabac_event(cabac, false, 80, false); // split_cu_mode split=0
-    encode_legacy_trace_cabac_event(cabac, true, 4, true); // cbf_comp Cb=0
-    encode_legacy_trace_cabac_event(cabac, false, 53, false); // cbf_comp Cr=1
-    encode_legacy_trace_cabac_event(cabac, false, 26, false); // sig_coeff_group_flag
-    encode_legacy_trace_cabac_event(cabac, true, 96, false); // last_sig_coeff_x_prefix
-    encode_legacy_trace_cabac_event(cabac, false, 112, false); // last_sig_coeff_y_prefix
-    encode_legacy_trace_cabac_event(cabac, true, 4, true); // sig_coeff_flag
-    encode_legacy_trace_cabac_event(cabac, false, 72, false); // abs_level_gtx_flag
-    encode_legacy_trace_cabac_event(cabac, true, 112, true); // sig_coeff_flag
-    encode_legacy_trace_cabac_event(cabac, false, 72, false); // abs_level_gtx_flag
-    encode_legacy_trace_cabac_event(cabac, true, 88, true); // sig_coeff_flag
-    encode_legacy_trace_cabac_event(cabac, false, 84, false); // abs_level_gtx_flag
-    encode_legacy_trace_cabac_event(cabac, true, 4, true); // sig_coeff_flag
-    encode_legacy_trace_cabac_event(cabac, false, 206, true); // abs_level_gtx_flag
-    cabac.encode_bin_ep(true); // remainder_prefix
-    cabac.encode_bin_ep(true); // remainder_prefix
-    cabac.encode_bin_ep(true); // remainder_prefix
-    cabac.encode_bin_ep(true); // remainder_prefix
-    cabac.encode_bin_ep(false); // remainder_suffix
-    cabac.encode_bin_ep(true); // coeff_sign_flag
-    encode_legacy_trace_cabac_event(cabac, true, 160, false); // ts_flag=0
-    encode_legacy_trace_cabac_event(cabac, true, 29, false); // mts_idx=0
-
-    encode_legacy_trace_cabac_event(cabac, true, 172, true); // split_cu_mode split=0 at (4,0)
-    encode_legacy_trace_cabac_event(cabac, false, 107, false); // cbf_comp Cb(4,0)=0
-    encode_legacy_trace_cabac_event(cabac, false, 136, false); // cbf_comp Cr(4,0)=0
-    encode_legacy_trace_cabac_event(cabac, true, 67, false); // mts_idx=0 at (4,0)
-    encode_legacy_trace_cabac_event(cabac, false, 100, false); // split_cu_mode split=0 at (0,4)
-    encode_legacy_trace_cabac_event(cabac, false, 124, false); // cbf_comp Cb(0,4)=0
-    encode_legacy_trace_cabac_event(cabac, false, 160, false); // cbf_comp Cr(0,4)=0
-    encode_legacy_trace_cabac_event(cabac, false, 20, false); // mts_idx=0 at (0,4)
-    cabac.encode_bin_ep(true); // alignment before final chroma block
-    encode_legacy_trace_cabac_event(cabac, true, 169, true); // split_cu_mode split=0 at (4,4)
-    encode_legacy_trace_cabac_event(cabac, false, 103, false); // cbf_comp Cb(4,4)=0
-    encode_legacy_trace_cabac_event(cabac, false, 147, false); // cbf_comp Cr(4,4)=0
-    encode_legacy_trace_cabac_event(cabac, false, 68, false); // mts_idx=0 at (4,4)
-    encode_legacy_trace_cabac_event(cabac, true, 140, true); // final empty-tu context
-    encode_legacy_trace_cabac_event(cabac, false, 103, false); // final empty-tu context
-    encode_legacy_trace_cabac_event(cabac, false, 119, false); // final empty-tu context
-    encode_legacy_trace_cabac_event(cabac, false, 56, false); // final empty-tu context
-    encode_legacy_trace_cabac_event(cabac, false, 118, true); // final empty-tu context
-    encode_legacy_trace_cabac_event(cabac, false, 130, false); // final empty-tu context
-    encode_legacy_trace_cabac_event(cabac, false, 104, false); // final cbf cleanup
-    encode_legacy_trace_cabac_event(cabac, false, 81, false); // final cbf cleanup
-}
-
-// Legacy direct CABAC event bridge. Unlike encode_legacy_trace_cabac_word(),
-// these call sites already spell out bin/lps/mps, but they are still
-// trace-derived and should be replaced by named context-model syntax emitters.
-fn encode_legacy_trace_cabac_event(cabac: &mut ToyCabacEncoder, bin: bool, lps: u16, mps: bool) {
-    cabac.encode_bin(bin, ToyCtxEvent { lps, mps });
-}
-
 #[derive(Debug, Clone, Copy)]
 struct ToyCtxEvent {
     lps: u16,
@@ -7290,7 +6441,7 @@ mod tests {
     }
 
     #[test]
-    fn toy_frame_quantization_builds_full_64x64_luma_tu_grid() {
+    fn toy_frame_quantization_builds_full_64x64_luma_tu_metadata() {
         let frame = Toy4x4SampledFrame {
             geometry: ToyVideoGeometry {
                 width: 64,
@@ -7310,7 +6461,6 @@ mod tests {
         assert!(color.luma_tu_remainders[..color.luma_tu_count]
             .iter()
             .all(|rem| *rem == 7));
-        assert_eq!(toy_capacity_tu_grid_bits(color).len(), 16 + (256 * (5 + 8)));
     }
 
     #[test]
@@ -7400,7 +6550,7 @@ mod tests {
     }
 
     #[test]
-    fn toy_entropy_schedule_marks_vtm_mapped_and_generated_tu_grid_paths() {
+    fn toy_entropy_schedule_supports_only_mapped_8x8_path() {
         let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
         let mapped = toy_entropy_schedule(
             ToyVideoGeometry {
@@ -7411,23 +6561,14 @@ mod tests {
         );
         assert_eq!(mapped.kind, ToyEntropyScheduleKind::VtmMapped8x8);
         assert_eq!(mapped.tokens.len(), 11);
-
-        let generated = toy_entropy_schedule(
+        assert!(std::panic::catch_unwind(|| toy_entropy_schedule(
             ToyVideoGeometry {
                 width: 64,
                 height: 64,
             },
             black,
-        );
-        assert_eq!(generated.kind, ToyEntropyScheduleKind::GeneratedTuGrid);
-        assert_eq!(generated.tokens.len(), mapped.tokens.len() + 1);
-        assert_eq!(
-            generated.tokens[generated.tokens.len() - 2].kind,
-            ToyEntropyTokenKind::AcTokenEp {
-                component: ToyResidualComponent::Luma,
-                token: 0x40
-            }
-        );
+        ))
+        .is_err());
     }
 
     #[test]
@@ -7533,108 +6674,49 @@ mod tests {
     }
 
     #[test]
-    fn toy_16x16_body_is_parameter_selected() {
+    fn removed_legacy_generated_bodies_are_unimplemented() {
         let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
-        let geometry = ToyVideoGeometry {
-            width: 16,
-            height: 16,
-        };
-        let params = toy_16x16_generated_params(geometry, black).expect("16x16 is supported");
-        assert_eq!(
-            params,
-            Toy16x16GeneratedParams {
-                luma_cb_width: 16,
-                luma_cb_height: 16,
-                chroma_tu_count: 4,
-                luma_rem: 16,
-                chroma_rem: 6
-            }
-        );
-        assert!(!toy_16x16_generated_cabac_bits(params).is_empty());
-
-        let nonzero = quantize_toy_4x4_color(Toy4x4SampledColor {
-            y: 64,
-            u: 128,
-            v: 192,
-        });
-        assert_eq!(toy_16x16_generated_params(geometry, nonzero), Some(params));
-    }
-
-    #[test]
-    fn toy_16x16_generated_selection_uses_coding_tree_geometry() {
-        let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
-        assert_eq!(
-            first_luma_transform_unit(&toy_coding_tree_plan(ToyVideoGeometry {
-                width: 16,
-                height: 16
-            })),
-            Some((16, 16))
-        );
-        assert!(toy_16x16_generated_params(
+        for geometry in [
             ToyVideoGeometry {
                 width: 16,
-                height: 16
+                height: 16,
+            },
+            ToyVideoGeometry {
+                width: 32,
+                height: 32,
+            },
+            ToyVideoGeometry {
+                width: 16,
+                height: 64,
+            },
+            ToyVideoGeometry {
+                width: 64,
+                height: 16,
+            },
+        ] {
+            assert!(
+                std::panic::catch_unwind(|| toy_cabac_bits(geometry, black)).is_err(),
+                "{}x{} should not fall back to legacy generated bodies",
+                geometry.width,
+                geometry.height
+            );
+        }
+        assert!(!toy_cabac_bits(
+            ToyVideoGeometry {
+                width: 64,
+                height: 64
             },
             black
         )
-        .is_some());
-        assert_eq!(
-            first_luma_transform_unit(&toy_coding_tree_plan(ToyVideoGeometry {
+        .is_empty());
+        assert!(!toy_cabac_bits(
+            ToyVideoGeometry {
                 width: 8,
                 height: 8
-            })),
-            Some((8, 8))
-        );
-        assert_eq!(
-            toy_16x16_generated_params(
-                ToyVideoGeometry {
-                    width: 8,
-                    height: 8
-                },
-                black
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn toy_32x32_generated_selection_uses_coded_geometry() {
-        let black = quantize_toy_4x4_color(Toy4x4SampledColor { y: 0, u: 0, v: 0 });
-        let params = Toy32x32GeneratedParams {
-            luma_cb_width: 32,
-            luma_cb_height: 32,
-        };
-        assert_eq!(
-            toy_32x32_generated_params(
-                ToyVideoGeometry {
-                    width: 32,
-                    height: 32
-                },
-                black
-            ),
-            Some(params)
-        );
-        assert_eq!(
-            toy_32x32_generated_params(
-                ToyVideoGeometry {
-                    width: 32,
-                    height: 16
-                },
-                black
-            ),
-            Some(params)
-        );
-        assert_eq!(
-            toy_32x32_generated_params(
-                ToyVideoGeometry {
-                    width: 16,
-                    height: 32
-                },
-                black
-            ),
-            Some(params)
-        );
-        assert!(!toy_32x32_generated_cabac_bits(params).is_empty());
+            },
+            black
+        )
+        .is_empty());
     }
 
     #[test]

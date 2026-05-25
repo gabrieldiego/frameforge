@@ -8,10 +8,7 @@ module ff_vvc_toy_coding_tree_scheduler #(
 
   output logic [15:0] coded_width,
   output logic [15:0] coded_height,
-  output logic [1:0]  body_kind,
-  output logic        uses_capacity_tu_grid,
-  output logic [12:0] luma_tu_count,
-  output logic [12:0] capacity_tu_grid_bit_len
+  output logic [1:0]  body_kind
 );
   localparam logic [1:0] BODY_GENERATED       = 2'd0;
 
@@ -30,10 +27,6 @@ module ff_vvc_toy_coding_tree_scheduler #(
     end
 
     body_kind = BODY_GENERATED;
-
-    uses_capacity_tu_grid = !supports_generated_body(coded_width, coded_height);
-    luma_tu_count = ((visible_width + 16'd3) >> 2) * ((visible_height + 16'd3) >> 2);
-    capacity_tu_grid_bit_len = 13'd16 + (luma_tu_count * 13'd13);
   end
 
   function automatic logic [15:0] coded_dimension(input logic [15:0] value);
@@ -57,8 +50,6 @@ module ff_vvc_toy_coding_tree_scheduler #(
     begin
       supports_generated_body =
         ((width == 16'd8) && (height == 16'd8)) ||
-        ((width == 16'd16) && (height == 16'd16)) ||
-        ((width == 16'd32) && (height == 16'd32)) ||
         ((width == CTU_SIZE[15:0]) && (height == 16'd32)) ||
         ((width == 16'd32) && (height == CTU_SIZE[15:0])) ||
         ((width == CTU_SIZE[15:0]) && (height == CTU_SIZE[15:0]));

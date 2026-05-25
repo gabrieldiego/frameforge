@@ -51,38 +51,19 @@ async def cabac_body_generates_8x8_black_payload(dut):
 
 
 @cocotb.test()
-async def cabac_body_generates_16x16_generated_payload(dut):
-    await reset_dut(dut)
-    dut.body_kind.value = BODY_GENERATED
-    dut.coded_width.value = 16
-    dut.coded_height.value = 16
-    dut.luma_rem.value = 16
-    dut.chroma_rem.value = 6
-    await Timer(1, unit="ns")
+async def legacy_generated_payloads_are_not_supported(dut):
+    for width, height in [(16, 16), (32, 32), (16, 64), (64, 16)]:
+        await reset_dut(dut)
+        dut.body_kind.value = BODY_GENERATED
+        dut.coded_width.value = width
+        dut.coded_height.value = height
+        dut.luma_rem.value = 16
+        dut.chroma_rem.value = 6
+        await Timer(1, unit="ns")
 
-    assert int(dut.supported.value) == 1
-    assert int(dut.stream_bit_count.value) > 56
-    assert int(dut.stream_byte_count.value) > 0
-    assert await stream_cabac_bytes(dut) != b""
-
-
-@cocotb.test()
-async def cabac_body_generates_32x32_block_payload(dut):
-    await reset_dut(dut)
-    dut.body_kind.value = BODY_GENERATED
-    dut.coded_width.value = 32
-    dut.coded_height.value = 32
-    dut.luma_rem.value = 16
-    dut.chroma_rem.value = 6
-    await Timer(1, unit="ns")
-
-    assert int(dut.supported.value) == 1
-    bit_len = int(dut.stream_bit_count.value)
-    payload = await stream_cabac_bytes(dut)
-    assert bit_len == 403
-    assert payload.hex() == (
-        "0040820410208104082041020810408204102081040820410208104082041020810408204102081040820410208104082047c0"
-    )
+        assert int(dut.supported.value) == 0
+        assert int(dut.stream_bit_count.value) == 0
+        assert int(dut.stream_byte_count.value) == 0
 
 
 @cocotb.test()
