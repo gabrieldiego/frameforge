@@ -19,8 +19,6 @@ module ff_vvc_cabac #(
   input  logic [4:0]  chroma_rem,
   input  logic [7:0]  symbol_count,
 
-  output logic        supported,
-
   // Symbol stream boundary for future sequential CABAC. The current clean-room
   // body generators still use the parameter inputs above, but upstream blocks
   // should converge on this symbol-in/byte-out contract.
@@ -40,7 +38,6 @@ module ff_vvc_cabac #(
 );
   localparam logic [1:0] BODY_GENERATED = 2'd0;
 
-  logic generated_supported;
   logic generated_m_axis_valid;
   logic [7:0] generated_m_axis_data;
   logic generated_m_axis_last;
@@ -70,7 +67,6 @@ module ff_vvc_cabac #(
     .coded_height(coded_height),
     .luma_rem(luma_rem),
     .chroma_rem(chroma_rem),
-    .supported(generated_supported),
     .m_axis_ready(mode_palette_444 || m_axis_ready),
     .m_axis_valid(generated_m_axis_valid),
     .m_axis_data(generated_m_axis_data),
@@ -101,16 +97,6 @@ module ff_vvc_cabac #(
     .stream_bit_count(palette_stream_bit_count),
     .stream_byte_count(palette_stream_byte_count)
   );
-
-  always @* begin
-    if (!enable) begin
-      supported = 1'b0;
-    end else if (mode_palette_444) begin
-      supported = 1'b1;
-    end else begin
-      supported = generated_supported;
-    end
-  end
 
   // Generated CABAC is still parameter-driven; keep the symbol-side inputs
   // electrically consumed until that path becomes a real symbol streamer.

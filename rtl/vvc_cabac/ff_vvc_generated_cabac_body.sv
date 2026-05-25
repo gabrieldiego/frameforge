@@ -9,7 +9,6 @@ module ff_vvc_generated_cabac_body (
   input  logic [15:0]  coded_height,
   input  logic [4:0]   luma_rem,
   input  logic [4:0]   chroma_rem,
-  output logic         supported,
   input  logic         m_axis_ready,
   output logic         m_axis_valid,
   output logic [7:0]   m_axis_data,
@@ -100,8 +99,6 @@ module ff_vvc_generated_cabac_body (
   assign stream_bit_count = generated_bit_count;
 
   always @* begin
-    supported =
-      (body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height);
     generated_bit_count = current_bit_count_for_inputs(coded_width, coded_height, luma_rem, chroma_rem);
   end
 
@@ -114,7 +111,7 @@ module ff_vvc_generated_cabac_body (
       m_axis_data <= 8'd0;
       m_axis_last <= 1'b0;
     end else begin
-      if (start && supported) begin
+      if (start && (generated_bit_count != 13'd0)) begin
         stream_byte_count_q <= (generated_bit_count + 13'd7) >> 3;
         stream_byte_index_q <= 13'd0;
         stream_active_q <= ((generated_bit_count + 13'd7) >> 3) != 13'd0;
@@ -148,7 +145,7 @@ module ff_vvc_generated_cabac_body (
   );
     cabac_writer_state_t st;
     begin
-      if ((body_kind == BODY_GENERATED) && supports_generated_body(width, height)) begin
+      if (body_kind == BODY_GENERATED) begin
         st = encode_generated_state(width, height, rem, c_rem, 13'h1fff);
         current_bit_count_for_inputs = st.stream.bit_count;
       end else begin
@@ -160,7 +157,7 @@ module ff_vvc_generated_cabac_body (
   function automatic logic [7:0] current_stream_byte(input logic [12:0] byte_index);
     cabac_writer_state_t st;
     begin
-      if ((body_kind == BODY_GENERATED) && supports_generated_body(coded_width, coded_height)) begin
+      if (body_kind == BODY_GENERATED) begin
         st = encode_generated_state(coded_width, coded_height, luma_rem, chroma_rem, byte_index);
         current_stream_byte = cabac_state_stream_byte(st, byte_index);
       end else begin
@@ -187,19 +184,6 @@ module ff_vvc_generated_cabac_body (
       end else begin
         cabac_state_stream_byte = 8'd0;
       end
-    end
-  endfunction
-
-  function automatic logic supports_generated_body(
-    input logic [15:0] width,
-    input logic [15:0] height
-  );
-    begin
-      supports_generated_body =
-        ((width == 16'd8) && (height == 16'd8)) ||
-        ((width == 16'd64) && (height == 16'd32)) ||
-        ((width == 16'd32) && (height == 16'd64)) ||
-        ((width == 16'd64) && (height == 16'd64));
     end
   endfunction
 

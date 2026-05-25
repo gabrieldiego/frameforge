@@ -44,14 +44,13 @@ async def cabac_body_generates_8x8_black_payload(dut):
     dut.chroma_rem.value = 6
     await Timer(1, unit="ns")
 
-    assert int(dut.supported.value) == 1
     assert int(dut.stream_bit_count.value) == 56
     assert int(dut.stream_byte_count.value) == 7
     assert (await stream_cabac_bytes(dut)).hex() == "8062f5b7ebcb1f"
 
 
 @cocotb.test()
-async def legacy_generated_payloads_are_not_supported(dut):
+async def legacy_generated_payloads_have_no_remaining_fallback_body(dut):
     for width, height in [(16, 16), (32, 32), (16, 64), (64, 16)]:
         await reset_dut(dut)
         dut.body_kind.value = BODY_GENERATED
@@ -61,7 +60,6 @@ async def legacy_generated_payloads_are_not_supported(dut):
         dut.chroma_rem.value = 6
         await Timer(1, unit="ns")
 
-        assert int(dut.supported.value) == 0
         assert int(dut.stream_bit_count.value) == 0
         assert int(dut.stream_byte_count.value) == 0
 
@@ -76,7 +74,6 @@ async def cabac_body_generates_64x64_partition_payload(dut):
     dut.chroma_rem.value = 6
     await Timer(1, unit="ns")
 
-    assert int(dut.supported.value) == 1
     assert int(dut.stream_bit_count.value) > 0
     assert int(dut.stream_byte_count.value) > 0
     assert await stream_cabac_bytes(dut) != b""
@@ -93,7 +90,6 @@ async def cabac_body_generates_rectangular_64_sample_partition_payloads(dut):
         dut.chroma_rem.value = 6
         await Timer(1, unit="ns")
 
-        assert int(dut.supported.value) == 1
         assert int(dut.stream_bit_count.value) > 0
         assert int(dut.stream_byte_count.value) > 0
         assert await stream_cabac_bytes(dut) != b""

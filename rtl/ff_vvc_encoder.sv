@@ -74,7 +74,6 @@ module ff_vvc_encoder #(
   logic [15:0] coding_tree_coded_width;
   logic [15:0] coding_tree_coded_height;
   logic [1:0]  coding_tree_body_kind;
-  logic        cabac_supported;
   logic        cabac_enable;
   logic [7:0]  palette_symbol_count;
   logic [MAX_CTU_PALETTE_SYMBOLS - 1:0] palette_cu_select_mask;
@@ -227,7 +226,6 @@ module ff_vvc_encoder #(
     .luma_rem(quant_luma_rem_q),
     .chroma_rem(quant_chroma_rem_q),
     .symbol_count(palette_symbol_count),
-    .supported(cabac_supported),
     .s_axis_valid(palette_stream_valid),
     .s_axis_ready(palette_stream_ready),
     .s_axis_kind(8'd1),
@@ -431,24 +429,20 @@ module ff_vvc_encoder #(
       end else if (pending_output_q && !PALETTE_MODE &&
                    (generated_out_state_q == GENERATED_OUT_IDLE)) begin
         pending_output_q <= 1'b0;
-        if (!cabac_supported) begin
-          input_error <= 1'b1;
-        end else begin
-          generated_out_state_q <= GENERATED_OUT_PREAMBLE;
-          generated_out_index_q <= 13'd0;
-          generated_slice_cra_q <= 1'b0;
-          generated_hold_valid_q <= 1'b0;
-          generated_hold_byte_q <= 8'd0;
-          generated_tail_extra_q <= 1'b0;
-          generated_zero_count_q <= 2'd0;
-          generated_epb_pending_q <= 1'b0;
-          generated_epb_byte_q <= 8'd0;
-          generated_epb_stream_last_q <= 1'b0;
-          generated_epb_slice_last_q <= 1'b0;
-          m_axis_valid <= 1'b0;
-          m_axis_data <= 8'd0;
-          m_axis_last <= 1'b0;
-        end
+        generated_out_state_q <= GENERATED_OUT_PREAMBLE;
+        generated_out_index_q <= 13'd0;
+        generated_slice_cra_q <= 1'b0;
+        generated_hold_valid_q <= 1'b0;
+        generated_hold_byte_q <= 8'd0;
+        generated_tail_extra_q <= 1'b0;
+        generated_zero_count_q <= 2'd0;
+        generated_epb_pending_q <= 1'b0;
+        generated_epb_byte_q <= 8'd0;
+        generated_epb_stream_last_q <= 1'b0;
+        generated_epb_slice_last_q <= 1'b0;
+        m_axis_valid <= 1'b0;
+        m_axis_data <= 8'd0;
+        m_axis_last <= 1'b0;
       end else if (m_axis_valid && m_axis_ready) begin
         if (index_q == stream_len_q) begin
           m_axis_valid <= 1'b0;

@@ -43,17 +43,4 @@ module ff_vvc_toy_coding_tree_scheduler #(
     end
   endfunction
 
-  function automatic logic supports_generated_body(
-    input logic [15:0] width,
-    input logic [15:0] height
-  );
-    begin
-      supports_generated_body =
-        ((width == 16'd8) && (height == 16'd8)) ||
-        ((width == CTU_SIZE[15:0]) && (height == 16'd32)) ||
-        ((width == 16'd32) && (height == CTU_SIZE[15:0])) ||
-        ((width == CTU_SIZE[15:0]) && (height == CTU_SIZE[15:0]));
-    end
-  endfunction
-
 endmodule
