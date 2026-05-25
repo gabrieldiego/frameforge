@@ -569,14 +569,31 @@ module ff_vvc_encoder #(
               end
               generated_out_index_q <= generated_out_index_q + 13'd1;
             end else begin
-              cabac_start_q <= 1'b1;
               m_axis_valid <= 1'b0;
               m_axis_last <= 1'b0;
+              if (uses_capacity_tu_grid()) begin
+                generated_out_index_q <= 13'd3;
+              end else begin
+                cabac_start_q <= 1'b1;
+              end
               generated_out_state_q <= GENERATED_OUT_CABAC;
             end
           end
           GENERATED_OUT_CABAC: begin
-            if (cabac_stream_valid) begin
+            if (uses_capacity_tu_grid()) begin
+              if (generated_out_index_q < slice_payload_len()) begin
+                emit_generated_raw_byte(
+                  slice_payload_byte(generated_out_index_q, generated_slice_cra_q),
+                  generated_stream_last_slice() && (generated_out_index_q == (slice_payload_len() - 13'd1)),
+                  generated_out_index_q == (slice_payload_len() - 13'd1)
+                );
+                if (generated_out_index_q != (slice_payload_len() - 13'd1)) begin
+                  generated_out_index_q <= generated_out_index_q + 13'd1;
+                end
+              end else begin
+                emit_generated_raw_byte(8'h80, generated_stream_last_slice(), 1'b1);
+              end
+            end else if (cabac_stream_valid) begin
               if (generated_hold_valid_q) begin
                 emit_generated_raw_byte(generated_hold_byte_q, 1'b0, 1'b0);
               end else begin
