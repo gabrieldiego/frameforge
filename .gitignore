@@ -7,6 +7,8 @@
 /verification/reference/vtm/
 /verification/reference/build/
 /verification/generated/
+/synth/out/
+/.tools/
 *.vcd
 *.fst
 *.ffbs

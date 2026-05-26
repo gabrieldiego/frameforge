@@ -98,6 +98,33 @@ TOOLS = (
         required=False,
         alternate_paths=(".venv/bin/cocotb-config",),
     ),
+    Tool(
+        name="Yosys",
+        command="yosys",
+        required_for="open-source RTL synthesis smoke checks",
+        ubuntu="python3 scripts/install_synth_env.py",
+        required=False,
+        alternate_paths=(".tools/oss-cad-suite/bin/yosys",),
+    ),
+    Tool(
+        name="yosys-config",
+        command="yosys-config",
+        required_for="locating Yosys simulation libraries for post-synthesis smoke tests",
+        ubuntu="python3 scripts/install_synth_env.py",
+        required=False,
+        alternate_paths=(".tools/oss-cad-suite/bin/yosys-config",),
+    ),
+    Tool(
+        name="Vivado",
+        command="vivado",
+        required_for="optional vendor synthesis and timing on Zynq-7000",
+        ubuntu=(
+            "# Optional: install AMD Vivado manually, then add it to PATH.\n"
+            "  # The free Standard/WebPACK flow supports small Zynq-7000 parts such as XC7Z010.\n"
+            "  # See docs/synthesis.md for why this is not downloaded automatically."
+        ),
+        required=False,
+    ),
 )
 
 
