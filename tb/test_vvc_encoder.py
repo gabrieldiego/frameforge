@@ -432,6 +432,7 @@ async def collect_stream(dut, frames):
     dut.frame_count.value = frames
     dut.visible_width.value = rtl_visible_width()
     dut.visible_height.value = rtl_visible_height()
+    dut.chroma_format_idc.value = rtl_chroma_format_idc()
     dut.s_axis_valid.value = 0
     dut.s_axis_data.value = 0
     dut.s_axis_last.value = 0
@@ -479,6 +480,7 @@ async def drain_sampled_color(dut, frames, y, u, v):
     dut.frame_count.value = frames
     dut.visible_width.value = rtl_visible_width()
     dut.visible_height.value = rtl_visible_height()
+    dut.chroma_format_idc.value = rtl_chroma_format_idc()
     dut.s_axis_valid.value = 0
     dut.s_axis_data.value = 0
     dut.s_axis_last.value = 0

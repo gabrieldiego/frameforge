@@ -5,11 +5,7 @@ module ff_vvc_encoder #(
   parameter int MAX_VISIBLE_HEIGHT = 64,
   parameter int CTU_SIZE = 64,
   parameter int SAMPLE_BITS = 8,
-  parameter int SOURCE_SAMPLE_BITS = SAMPLE_BITS,
-  // VVC chroma_format_idc values: 1=4:2:0, 2=4:2:2, 3=4:4:4.
-  // 4:2:0 uses the current transform/residual path. 4:4:4 is routed through
-  // the palette path so the sampling path is independent of TU size.
-  parameter int CHROMA_FORMAT_IDC = 1
+  parameter int SOURCE_SAMPLE_BITS = SAMPLE_BITS
 ) (
   input  logic       clk,
   input  logic       rst_n,
@@ -17,6 +13,8 @@ module ff_vvc_encoder #(
   input  logic [1:0] frame_count,
   input  logic [15:0] visible_width,
   input  logic [15:0] visible_height,
+  // VVC chroma_format_idc values: 1=4:2:0, 2=4:2:2, 3=4:4:4.
+  input  logic [1:0] chroma_format_idc,
   output logic       busy,
 
   input  logic       s_axis_valid,
@@ -47,7 +45,6 @@ module ff_vvc_encoder #(
   localparam int MAX_CTU_PALETTE_SYMBOLS =
     ((CTU_SIZE + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE) *
     ((CTU_SIZE + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE);
-  localparam bit PALETTE_MODE = (CHROMA_FORMAT_IDC == 3);
   localparam logic [1:0] PALETTE_OUT_IDLE     = 2'd0;
   localparam logic [1:0] PALETTE_OUT_PREAMBLE = 2'd1;
   localparam logic [1:0] PALETTE_OUT_CABAC    = 2'd2;
@@ -79,6 +76,8 @@ module ff_vvc_encoder #(
   logic        cabac_enable;
   logic [7:0]  palette_symbol_count;
   logic [MAX_CTU_PALETTE_SYMBOLS - 1:0] ctu_cu_active_mask;
+  logic [MAX_CTU_PALETTE_SYMBOLS - 1:0] ctu_cu_palette_mask;
+  logic [MAX_CTU_PALETTE_SYMBOLS - 1:0] ctu_cu_residual_mask;
   logic        palette_sample_valid;
   logic [1:0]  palette_sample_plane;
   logic        palette_stream_valid;
@@ -120,13 +119,26 @@ module ff_vvc_encoder #(
   logic [7:0]  generated_epb_byte_q;
   logic        generated_epb_stream_last_q;
   logic        generated_epb_slice_last_q;
+  logic        ctu_has_palette_cu;
+
+  // Current subset policy: 4:4:4 input selects palette for every visible CU.
+  // This is deliberately represented as a CU mask so later mixed
+  // palette/residual decisions can be made per CU without changing the
+  // palette and residual block interfaces.
+  assign ctu_cu_palette_mask = (chroma_format_idc == 2'd3) ? ctu_cu_active_mask : '0;
+  assign ctu_cu_residual_mask = ctu_cu_active_mask & ~ctu_cu_palette_mask;
+
+  // The output/CABAC mux is still slice-wide. For the current subset, a 4:4:4
+  // picture has all active CUs in palette mode; future mixed slices should
+  // replace this with a CU-mode symbol stream instead of a whole-slice mux.
+  assign ctu_has_palette_cu = |ctu_cu_palette_mask;
 
   assign busy = input_active_q || pending_output_q || m_axis_valid || (index_q != 0) ||
                 (palette_out_state_q != PALETTE_OUT_IDLE) ||
                 (generated_out_state_q != GENERATED_OUT_IDLE);
   assign cabac_enable = 1'b1;
   assign cabac_stream_ready =
-    PALETTE_MODE
+    ctu_has_palette_cu
       ? ((palette_out_state_q == PALETTE_OUT_CABAC) && !palette_epb_pending_q &&
          (!m_axis_valid || m_axis_ready))
       : ((generated_out_state_q == GENERATED_OUT_CABAC) && !generated_epb_pending_q &&
@@ -152,28 +164,22 @@ module ff_vvc_encoder #(
     .body_kind(coding_tree_body_kind)
   );
 
-  generate
-    if (PALETTE_MODE) begin : gen_palette_sample_route
-      always @* begin
-        palette_sample_valid = 1'b0;
-        palette_sample_plane = 2'd0;
-        if (input_active_q && s_axis_valid && (input_count_q < frame_samples())) begin
-          palette_sample_valid = 1'b1;
-          palette_sample_plane = palette_plane_for_input(input_count_q);
-        end
-      end
-    end else begin : gen_no_palette_sample_route
-      assign palette_sample_valid = 1'b0;
-      assign palette_sample_plane = 2'd0;
+  always @* begin
+    palette_sample_valid = 1'b0;
+    palette_sample_plane = 2'd0;
+    if (ctu_has_palette_cu && input_active_q && s_axis_valid &&
+        (input_count_q < frame_samples())) begin
+      palette_sample_valid = 1'b1;
+      palette_sample_plane = palette_plane_for_input(input_count_q);
     end
-  endgenerate
+  end
 
   always @* begin
-    residual_sample_valid = input_active_q && s_axis_valid && s_axis_ready &&
+    residual_sample_valid = !ctu_has_palette_cu && input_active_q && s_axis_valid && s_axis_ready &&
                             is_residual_luma_sample(input_count_q);
     residual_sample_last = residual_sample_valid &&
                            (residual_luma_sample_index(input_count_q) == 4'd15);
-    residual_sample_1_valid = input_active_q && s_axis_valid && s_axis_ready &&
+    residual_sample_1_valid = !ctu_has_palette_cu && input_active_q && s_axis_valid && s_axis_ready &&
                               is_second_residual_luma_sample(input_count_q);
     residual_sample_1_last = residual_sample_1_valid &&
                              (second_residual_luma_sample_index(input_count_q) == 4'd15);
@@ -188,10 +194,10 @@ module ff_vvc_encoder #(
     .clk(clk),
     .rst_n(rst_n),
     .clear(start && !busy),
-    .enable(PALETTE_MODE),
+    .enable(ctu_has_palette_cu),
     .ctu_coded_width(coding_tree_coded_width),
     .ctu_coded_height(coding_tree_coded_height),
-    .cu_select_mask(ctu_cu_active_mask),
+    .cu_select_mask(ctu_cu_palette_mask),
     .s_axis_valid(palette_sample_valid),
     .s_axis_ready(),
     .s_axis_plane(palette_sample_plane),
@@ -213,7 +219,7 @@ module ff_vvc_encoder #(
     .rst_n(rst_n),
     .start(cabac_start_q),
     .enable(cabac_enable),
-    .mode_palette_444(PALETTE_MODE),
+    .mode_palette_444(ctu_has_palette_cu),
     .body_kind(coding_tree_body_kind),
     .visible_width(visible_width),
     .visible_height(visible_height),
@@ -245,7 +251,7 @@ module ff_vvc_encoder #(
     .rst_n(rst_n),
     .clear(start && !busy),
     .enable(1'b1),
-    .cu_active_mask(ctu_cu_active_mask),
+    .cu_active_mask(ctu_cu_residual_mask),
     .cu_index(8'd0),
     .cu_active(),
     .s_axis_valid(residual_sample_valid),
@@ -272,7 +278,7 @@ module ff_vvc_encoder #(
     .rst_n(rst_n),
     .clear(start && !busy),
     .enable(1'b1),
-    .cu_active_mask(ctu_cu_active_mask),
+    .cu_active_mask(ctu_cu_residual_mask),
     .cu_index(8'd1),
     .cu_active(),
     .s_axis_valid(residual_sample_1_valid),
@@ -419,7 +425,7 @@ module ff_vvc_encoder #(
         end else begin
           input_count_q <= input_count_q + 1'b1;
         end
-      end else if (pending_output_q && PALETTE_MODE &&
+      end else if (pending_output_q && ctu_has_palette_cu &&
                    (palette_out_state_q == PALETTE_OUT_IDLE)) begin
         pending_output_q <= 1'b0;
         palette_out_state_q <= PALETTE_OUT_PREAMBLE;
@@ -434,7 +440,7 @@ module ff_vvc_encoder #(
         m_axis_valid <= 1'b0;
         m_axis_data <= 8'd0;
         m_axis_last <= 1'b0;
-      end else if (pending_output_q && !PALETTE_MODE &&
+      end else if (pending_output_q && !ctu_has_palette_cu &&
                    (generated_out_state_q == GENERATED_OUT_IDLE)) begin
         pending_output_q <= 1'b0;
         generated_out_state_q <= GENERATED_OUT_PREAMBLE;
@@ -462,7 +468,7 @@ module ff_vvc_encoder #(
           index_q     <= index_q + 1'b1;
         end
       end
-      if (PALETTE_MODE && (palette_out_state_q != PALETTE_OUT_IDLE) &&
+      if (ctu_has_palette_cu && (palette_out_state_q != PALETTE_OUT_IDLE) &&
           (!m_axis_valid || m_axis_ready)) begin
         if (palette_epb_pending_q) begin
           m_axis_valid <= 1'b1;
@@ -533,7 +539,7 @@ module ff_vvc_encoder #(
       if (pending_output_q && palette_stream_valid && palette_stream_ready && palette_stream_last) begin
         palette_done_q <= 1'b1;
       end
-      if (!PALETTE_MODE && (generated_out_state_q != GENERATED_OUT_IDLE) &&
+      if (!ctu_has_palette_cu && (generated_out_state_q != GENERATED_OUT_IDLE) &&
           (!m_axis_valid || m_axis_ready)) begin
         if (generated_epb_pending_q) begin
           m_axis_valid <= 1'b1;
@@ -809,7 +815,7 @@ module ff_vvc_encoder #(
 
   function automatic logic [1:0] chroma_subsample_x();
     begin
-      case (CHROMA_FORMAT_IDC)
+      case (chroma_format_idc)
         1, 2: chroma_subsample_x = 2'd2;
         default: chroma_subsample_x = 2'd1;
       endcase
@@ -818,7 +824,7 @@ module ff_vvc_encoder #(
 
   function automatic logic [1:0] chroma_subsample_y();
     begin
-      case (CHROMA_FORMAT_IDC)
+      case (chroma_format_idc)
         1: chroma_subsample_y = 2'd2;
         default: chroma_subsample_y = 2'd1;
       endcase
@@ -1334,10 +1340,10 @@ module ff_vvc_encoder #(
       state = append_u(state, 0, 4);
       state = append_u(state, 0, 4);
       state = append_u(state, 0, 3);
-      state = append_u(state, CHROMA_FORMAT_IDC[1:0], 2);
+      state = append_u(state, chroma_format_idc, 2);
       state = append_u(state, 1, 2);
       state = append_flag(state, 1'b1);
-      state = append_u(state, (PALETTE_MODE || (CHROMA_FORMAT_IDC == 3)) ? 0 : 1, 7);
+      state = append_u(state, (ctu_has_palette_cu || (chroma_format_idc == 2'd3)) ? 0 : 1, 7);
       state = append_flag(state, 1'b0);
       state = append_u(state, 0, 8);
       state = append_flag(state, 1'b1);
@@ -1372,8 +1378,8 @@ module ff_vvc_encoder #(
       state = append_ue(state, 3);
       state = append_ue(state, 2);
       state = append_ue(state, 2);
-      state = append_flag(state, !((CHROMA_FORMAT_IDC == 3) && PALETTE_MODE));
-      if (!((CHROMA_FORMAT_IDC == 3) && PALETTE_MODE)) begin
+      state = append_flag(state, !((chroma_format_idc == 2'd3) && ctu_has_palette_cu));
+      if (!((chroma_format_idc == 2'd3) && ctu_has_palette_cu)) begin
         state = append_ue(state, 1);
         state = append_ue(state, 3);
         state = append_ue(state, 3);
@@ -1431,12 +1437,12 @@ module ff_vvc_encoder #(
       state = append_flag(state, 1'b1);
       state = append_flag(state, 1'b0);
       state = append_flag(state, 1'b1);
-      if (CHROMA_FORMAT_IDC == 1) begin
+      if (chroma_format_idc == 2'd1) begin
         state = append_flag(state, 1'b1);
         state = append_flag(state, 1'b0);
       end
-      state = append_flag(state, PALETTE_MODE);
-      if (PALETTE_MODE) begin
+      state = append_flag(state, ctu_has_palette_cu);
+      if (ctu_has_palette_cu) begin
         state = append_ue(state, 0);
       end
       state = append_flag(state, 1'b0);
