@@ -34,27 +34,24 @@ module ff_vvc_cabac #(
   output logic        m_axis_valid,
   output logic [7:0]  m_axis_data,
   output logic        m_axis_last,
-  output logic [12:0] stream_bit_count,
-  output logic [12:0] stream_byte_count
+  output logic [2:0]  stream_last_byte_bits
 );
   localparam logic [1:0] BODY_GENERATED = 2'd0;
 
   logic generated_m_axis_valid;
   logic [7:0] generated_m_axis_data;
   logic generated_m_axis_last;
-  logic [12:0] generated_stream_bit_count;
-  logic [12:0] generated_stream_byte_count;
+  logic [2:0] generated_stream_last_byte_bits;
   logic palette_m_axis_valid;
   logic [7:0] palette_m_axis_data;
   logic palette_m_axis_last;
-  logic [12:0] palette_stream_bit_count;
-  logic [12:0] palette_stream_byte_count;
+  logic [2:0] palette_stream_last_byte_bits;
   logic unused_generated_symbol_inputs;
   logic palette_s_axis_ready;
 
   assign s_axis_ready = mode_palette_444 ? palette_s_axis_ready : enable;
-  assign stream_bit_count = mode_palette_444 ? palette_stream_bit_count : generated_stream_bit_count;
-  assign stream_byte_count = mode_palette_444 ? palette_stream_byte_count : generated_stream_byte_count;
+  assign stream_last_byte_bits =
+    mode_palette_444 ? palette_stream_last_byte_bits : generated_stream_last_byte_bits;
   assign m_axis_valid = mode_palette_444 ? palette_m_axis_valid : generated_m_axis_valid;
   assign m_axis_data = mode_palette_444 ? palette_m_axis_data : generated_m_axis_data;
   assign m_axis_last = mode_palette_444 ? palette_m_axis_last : generated_m_axis_last;
@@ -73,8 +70,7 @@ module ff_vvc_cabac #(
     .m_axis_valid(generated_m_axis_valid),
     .m_axis_data(generated_m_axis_data),
     .m_axis_last(generated_m_axis_last),
-    .stream_bit_count(generated_stream_bit_count),
-    .stream_byte_count(generated_stream_byte_count)
+    .stream_last_byte_bits(generated_stream_last_byte_bits)
   );
 
   ff_vvc_palette_cabac #(
@@ -96,8 +92,7 @@ module ff_vvc_cabac #(
     .m_axis_valid(palette_m_axis_valid),
     .m_axis_data(palette_m_axis_data),
     .m_axis_last(palette_m_axis_last),
-    .stream_bit_count(palette_stream_bit_count),
-    .stream_byte_count(palette_stream_byte_count)
+    .stream_last_byte_bits(palette_stream_last_byte_bits)
   );
 
   // Generated CABAC is still parameter-driven; keep the symbol-side inputs

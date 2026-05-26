@@ -19,8 +19,7 @@ module ff_vvc_palette_cabac #(
   output logic        m_axis_valid,
   output logic [7:0]  m_axis_data,
   output logic        m_axis_last,
-  output logic [12:0] stream_bit_count,
-  output logic [12:0] stream_byte_count
+  output logic [2:0]  stream_last_byte_bits
 );
   localparam int PALETTE_MODEL_BITS = 40;
   localparam int PALETTE_CTX_COUNT = 18;
@@ -98,8 +97,7 @@ module ff_vvc_palette_cabac #(
 
   assign s_axis_ready = enable && !m_axis_valid &&
                         (palette_state_q.cabac.stream.pending_count == 8'd0);
-  assign stream_bit_count = palette_state_q.cabac.stream.bit_count;
-  assign stream_byte_count = palette_state_q.cabac.stream.byte_count;
+  assign stream_last_byte_bits = palette_state_q.cabac.stream.bit_count[2:0];
   assign stream_symbol_selected = s_axis_data[24];
   assign finished_palette_state = palette_finish(next_palette_state);
   assign accepted_palette_state = s_axis_last ? finished_palette_state : next_palette_state;

@@ -14,8 +14,7 @@ module ff_vvc_generated_cabac_body (
   output logic         m_axis_valid,
   output logic [7:0]   m_axis_data,
   output logic         m_axis_last,
-  output logic [12:0]  stream_bit_count,
-  output logic [12:0]  stream_byte_count
+  output logic [2:0]   stream_last_byte_bits
 );
   localparam logic [1:0] BODY_GENERATED = 2'd0;
 
@@ -125,13 +124,44 @@ module ff_vvc_generated_cabac_body (
   } cabac_chroma_partition_step_t;
 
   logic [12:0] generated_bit_count;
-  logic [12:0] stream_byte_count_q;
+  logic [12:0] stream_last_byte_index_q;
   logic [12:0] stream_byte_index_q;
   logic stream_active_q;
+  logic use_streamed_8x8;
+  logic legacy_m_axis_valid;
+  logic [7:0] legacy_m_axis_data;
+  logic legacy_m_axis_last;
+  logic legacy_m_axis_ready;
+  logic streamed8_m_axis_valid;
+  logic [7:0] streamed8_m_axis_data;
+  logic streamed8_m_axis_last;
+  logic [2:0] streamed8_last_byte_bits;
+  logic streamed8_done;
 
-  assign stream_byte_count =
-    stream_active_q ? stream_byte_count_q : ((generated_bit_count + 13'd7) >> 3);
-  assign stream_bit_count = generated_bit_count;
+  // Keep the first streamed syntax source built under this wrapper, but do
+  // not route it into conforming streams until its arithmetic byte-out is
+  // byte-equivalent with the existing generated path.
+  assign use_streamed_8x8 = 1'b0;
+  assign legacy_m_axis_ready = m_axis_ready && !use_streamed_8x8;
+  assign m_axis_valid = use_streamed_8x8 ? streamed8_m_axis_valid : legacy_m_axis_valid;
+  assign m_axis_data = use_streamed_8x8 ? streamed8_m_axis_data : legacy_m_axis_data;
+  assign m_axis_last = use_streamed_8x8 ? streamed8_m_axis_last : legacy_m_axis_last;
+  assign stream_last_byte_bits = use_streamed_8x8 ? streamed8_last_byte_bits : generated_bit_count[2:0];
+
+  ff_vvc_cabac_8x8_stream_body streamed_8x8_body (
+    .clk(clk),
+    .rst_n(rst_n),
+    .start(start && use_streamed_8x8),
+    .clear(1'b0),
+    .luma_rem(luma_rem),
+    .cb_rem(cb_rem),
+    .m_axis_ready(m_axis_ready && use_streamed_8x8),
+    .m_axis_valid(streamed8_m_axis_valid),
+    .m_axis_data(streamed8_m_axis_data),
+    .m_axis_last(streamed8_m_axis_last),
+    .stream_last_byte_bits(streamed8_last_byte_bits),
+    .done(streamed8_done)
+  );
 
   always @* begin
     generated_bit_count = current_bit_count_for_inputs(coded_width, coded_height, luma_rem, cb_rem, cr_rem);
@@ -139,35 +169,35 @@ module ff_vvc_generated_cabac_body (
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      stream_byte_count_q <= 13'd0;
+      stream_last_byte_index_q <= 13'd0;
       stream_byte_index_q <= 13'd0;
       stream_active_q <= 1'b0;
-      m_axis_valid <= 1'b0;
-      m_axis_data <= 8'd0;
-      m_axis_last <= 1'b0;
+      legacy_m_axis_valid <= 1'b0;
+      legacy_m_axis_data <= 8'd0;
+      legacy_m_axis_last <= 1'b0;
     end else begin
-      if (start && (generated_bit_count != 13'd0)) begin
-        stream_byte_count_q <= (generated_bit_count + 13'd7) >> 3;
+      if (start && !use_streamed_8x8 && (generated_bit_count != 13'd0)) begin
+        stream_last_byte_index_q <= ((generated_bit_count + 13'd7) >> 3) - 13'd1;
         stream_byte_index_q <= 13'd0;
         stream_active_q <= ((generated_bit_count + 13'd7) >> 3) != 13'd0;
-        m_axis_valid <= ((generated_bit_count + 13'd7) >> 3) != 13'd0;
-        m_axis_data <= current_stream_byte(13'd0);
-        m_axis_last <= ((generated_bit_count + 13'd7) >> 3) == 13'd1;
-      end else if (m_axis_valid && m_axis_ready) begin
-        if (m_axis_last) begin
+        legacy_m_axis_valid <= ((generated_bit_count + 13'd7) >> 3) != 13'd0;
+        legacy_m_axis_data <= current_stream_byte(13'd0);
+        legacy_m_axis_last <= ((generated_bit_count + 13'd7) >> 3) == 13'd1;
+      end else if (legacy_m_axis_valid && legacy_m_axis_ready) begin
+        if (legacy_m_axis_last) begin
           stream_active_q <= 1'b0;
-          m_axis_valid <= 1'b0;
-          m_axis_data <= 8'd0;
-          m_axis_last <= 1'b0;
+          legacy_m_axis_valid <= 1'b0;
+          legacy_m_axis_data <= 8'd0;
+          legacy_m_axis_last <= 1'b0;
         end else begin
           stream_byte_index_q <= stream_byte_index_q + 13'd1;
-          m_axis_data <= current_stream_byte(stream_byte_index_q + 13'd1);
-          m_axis_last <= (stream_byte_index_q + 13'd1) == (stream_byte_count_q - 13'd1);
+          legacy_m_axis_data <= current_stream_byte(stream_byte_index_q + 13'd1);
+          legacy_m_axis_last <= (stream_byte_index_q + 13'd1) == stream_last_byte_index_q;
         end
       end else if (!stream_active_q) begin
-        m_axis_valid <= 1'b0;
-        m_axis_last <= 1'b0;
-        m_axis_data <= 8'd0;
+        legacy_m_axis_valid <= 1'b0;
+        legacy_m_axis_last <= 1'b0;
+        legacy_m_axis_data <= 8'd0;
       end
     end
   end

@@ -92,8 +92,7 @@ module ff_vvc_encoder #(
   logic        cabac_stream_ready;
   logic [7:0]  cabac_stream_data;
   logic        cabac_stream_last;
-  logic [12:0] cabac_stream_bit_count;
-  logic [12:0] cabac_stream_byte_count;
+  logic [2:0]  cabac_stream_last_byte_bits;
   logic        cabac_start_q;
   logic        pending_output_q;
   logic        palette_done_q;
@@ -238,8 +237,7 @@ module ff_vvc_encoder #(
     .m_axis_valid(cabac_stream_valid),
     .m_axis_data(cabac_stream_data),
     .m_axis_last(cabac_stream_last),
-    .stream_bit_count(cabac_stream_bit_count),
-    .stream_byte_count(cabac_stream_byte_count)
+    .stream_last_byte_bits(cabac_stream_last_byte_bits)
   );
 
   ff_vvc_residual_transform #(
@@ -511,7 +509,7 @@ module ff_vvc_encoder #(
               palette_hold_byte_q <= cabac_stream_data;
               if (cabac_stream_last) begin
                 palette_out_state_q <= PALETTE_OUT_TRAIL;
-                palette_tail_extra_q <= (cabac_stream_bit_count[2:0] == 3'd0);
+                palette_tail_extra_q <= (cabac_stream_last_byte_bits == 3'd0);
               end
             end else begin
               m_axis_valid <= 1'b0;
@@ -526,7 +524,7 @@ module ff_vvc_encoder #(
               emit_palette_raw_byte(8'h80, 1'b1);
               palette_tail_extra_q <= 1'b0;
             end else begin
-              emit_palette_raw_byte(palette_tail_byte(palette_hold_byte_q, cabac_stream_bit_count[2:0]), 1'b1);
+              emit_palette_raw_byte(palette_tail_byte(palette_hold_byte_q, cabac_stream_last_byte_bits), 1'b1);
               palette_hold_valid_q <= 1'b0;
             end
           end
@@ -593,7 +591,7 @@ module ff_vvc_encoder #(
               generated_hold_byte_q <= cabac_stream_data;
               if (cabac_stream_last) begin
                 generated_out_state_q <= GENERATED_OUT_TRAIL;
-                generated_tail_extra_q <= (cabac_stream_bit_count[2:0] == 3'd0);
+                generated_tail_extra_q <= (cabac_stream_last_byte_bits == 3'd0);
               end
             end else begin
               m_axis_valid <= 1'b0;
@@ -609,7 +607,7 @@ module ff_vvc_encoder #(
               generated_tail_extra_q <= 1'b0;
             end else begin
               emit_generated_raw_byte(
-                palette_tail_byte(generated_hold_byte_q, cabac_stream_bit_count[2:0]),
+                palette_tail_byte(generated_hold_byte_q, cabac_stream_last_byte_bits),
                 generated_stream_last_slice(),
                 1'b1
               );
