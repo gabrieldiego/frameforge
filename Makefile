@@ -1,4 +1,4 @@
-.PHONY: help check-tools build test fmt lint decoder-setup validate validate-decode rtl-test synth-env synth-check synth synth-postsim synth-vivado clean
+.PHONY: help check-tools build test fmt lint decoder-setup validate validate-decode rtl-test synth-env synth-check synth synth-postsim synth-vivado vivado-prepare vivado-config vivado-auth vivado-install clean
 
 SIM ?= icarus
 TOPLEVEL_LANG ?= verilog
@@ -17,6 +17,9 @@ SYNTH_BOARD ?= synth/boards/arty-z7-10.env
 SYNTH_FILELIST ?= synth/filelists/cabac_8x8.f
 SYNTH_TOP ?= ff_vvc_cabac_8x8_stream_body
 SYNTH_CLOCK_MHZ ?= 50
+VIVADO_INSTALLER ?=
+VIVADO_LICENSE ?=
+VIVADO_INSTALL_LOG ?= .tools/vivado-install-run.log
 
 help:
 	@printf '%s\n' 'FrameForge targets:'
@@ -43,6 +46,10 @@ help:
 	@printf '%s\n' '  make synth [SYNTH_BOARD=synth/boards/arty-z7-10.env SYNTH_TOP=ff_vvc_cabac_8x8_stream_body SYNTH_FILELIST=synth/filelists/cabac_8x8.f SYNTH_CLOCK_MHZ=50] - run Yosys/Xilinx synthesis estimate'
 	@printf '%s\n' '  make synth-postsim - run Yosys synthesis and a post-synthesis smoke sim when supported'
 	@printf '%s\n' '  make synth-vivado - run optional Vivado synthesis/timing if Vivado is installed'
+	@printf '%s\n' '  make vivado-prepare [VIVADO_LICENSE=~/Downloads/Xilinx.lic] - create local .tools Vivado directories and ~/.Xilinx cache symlink'
+	@printf '%s\n' '  make vivado-config - generate a host-local Vivado install config from the tracked template'
+	@printf '%s\n' '  make vivado-auth - run AMD xsetup AuthTokenGen'
+	@printf '%s\n' '  make vivado-install - run AMD xsetup batch install using the generated config'
 	@printf '%s\n' '  make clean     - remove local build outputs'
 
 check-tools:
@@ -92,6 +99,18 @@ synth-postsim:
 
 synth-vivado:
 	python3 scripts/run_synth.py --tool vivado --board "$(SYNTH_BOARD)" --filelist "$(SYNTH_FILELIST)" --top "$(SYNTH_TOP)" --clock-mhz "$(SYNTH_CLOCK_MHZ)"
+
+vivado-prepare:
+	python3 scripts/setup_vivado.py prepare --link-home-cache $(if $(VIVADO_LICENSE),--license "$(VIVADO_LICENSE)")
+
+vivado-config:
+	python3 scripts/setup_vivado.py config
+
+vivado-auth:
+	python3 scripts/setup_vivado.py auth
+
+vivado-install:
+	python3 scripts/setup_vivado.py install --log "$(VIVADO_INSTALL_LOG)"
 
 clean:
 	cargo clean

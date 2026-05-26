@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import shutil
 import subprocess
 import sys
@@ -124,6 +125,7 @@ TOOLS = (
             "  # See docs/synthesis.md for why this is not downloaded automatically."
         ),
         required=False,
+        alternate_paths=(".tools/Xilinx/Vivado/*/bin/vivado",),
     ),
 )
 
@@ -186,6 +188,9 @@ def find_tool(tool: Tool) -> str | None:
         return path
 
     for alternate in tool.alternate_paths:
+        matches = sorted(glob.glob(alternate), reverse=True)
+        if matches:
+            return matches[0]
         candidate = Path(alternate)
         if candidate.exists():
             return str(candidate)

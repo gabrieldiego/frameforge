@@ -10,6 +10,7 @@ separate Vivado install; this script detects it but does not download it.
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import platform
@@ -87,11 +88,34 @@ def print_detected_tools(repo: Path, install_dir: Path) -> None:
     path = os.environ.get("PATH", "")
     search_path = f"{local_bin}{os.pathsep}{path}" if local_bin.exists() else path
     for tool in ("yosys", "yosys-config", "iverilog", "vvp", "vivado"):
-        found = shutil.which(tool, path=search_path)
+        found = shutil.which(tool, path=search_path) or find_project_vivado(repo, tool)
         status = "ok" if found else "missing"
         print(f"[{status}] {tool}: {found or 'not found'}")
+    settings = find_project_vivado_settings(repo)
+    license_file = repo / ".tools" / "Xilinx.lic"
+    if settings:
+        print(f"[ok] Vivado settings: {settings}")
+    else:
+        print("[missing] Vivado settings: not found under .tools/Xilinx/Vivado/*/settings64.sh")
+    if license_file.exists():
+        print(f"[ok] Vivado license: {license_file}")
+    else:
+        print("[optional] Vivado license: .tools/Xilinx.lic not found")
     if not (repo / ".tools").exists():
         print("\n.tools is gitignored and intended for local downloads.")
+
+
+def find_project_vivado(repo: Path, tool: str) -> str | None:
+    if tool != "vivado":
+        return None
+    pattern = repo / ".tools" / "Xilinx" / "Vivado" / "*" / "bin" / "vivado"
+    candidates = sorted(glob.glob(str(pattern)), reverse=True)
+    return candidates[0] if candidates else None
+
+
+def find_project_vivado_settings(repo: Path) -> Path | None:
+    candidates = sorted((repo / ".tools" / "Xilinx" / "Vivado").glob("*/settings64.sh"), reverse=True)
+    return candidates[0] if candidates else None
 
 
 def print_env_hint(install_dir: Path) -> None:

@@ -14,6 +14,8 @@ from pathlib import Path
 DEFAULT_BOARD = Path("synth/boards/arty-z7-10.env")
 DEFAULT_FILELIST = Path("synth/filelists/cabac_8x8.f")
 DEFAULT_TOP = "ff_vvc_cabac_8x8_stream_body"
+LOCAL_LICENSE = Path(".tools/Xilinx.lic")
+LOCAL_VIVADO_ROOT = Path(".tools/Xilinx/Vivado")
 
 
 def main() -> int:
@@ -77,6 +79,53 @@ def find_tool(name: str) -> str:
     )
 
 
+def find_local_vivado_settings() -> Path | None:
+    env_setting = os.environ.get("VIVADO_SETTINGS") or os.environ.get("SYNTH_VIVADO_SETTINGS")
+    if env_setting:
+        candidate = Path(env_setting)
+        if candidate.exists():
+            return candidate
+        raise SystemExit(f"Configured Vivado settings script does not exist: {candidate}")
+
+    candidates = sorted(LOCAL_VIVADO_ROOT.glob("*/settings64.sh"), reverse=True)
+    return candidates[0] if candidates else None
+
+
+def find_project_vivado_settings() -> Path | None:
+    candidates = sorted(LOCAL_VIVADO_ROOT.glob("*/settings64.sh"), reverse=True)
+    return candidates[0] if candidates else None
+
+
+def find_vivado_command() -> list[str]:
+    explicit = os.environ.get("SYNTH_VIVADO") or os.environ.get("VIVADO")
+    if explicit:
+        return [explicit]
+
+    found = shutil.which("vivado")
+    if found:
+        return [found]
+
+    local_bins = sorted(LOCAL_VIVADO_ROOT.glob("*/bin/vivado"), reverse=True)
+    if local_bins:
+        return [str(local_bins[0])]
+
+    settings = find_project_vivado_settings()
+    if settings:
+        return ["bash", "-lc", f"source {shlex.quote(str(settings))} >/dev/null && exec vivado \"$@\"", "vivado"]
+
+    raise SystemExit(
+        "vivado was not found. Install Vivado under .tools/Xilinx, set VIVADO_SETTINGS, "
+        "set SYNTH_VIVADO, or place vivado on PATH."
+    )
+
+
+def vivado_environment() -> dict[str, str]:
+    env = os.environ.copy()
+    if "XILINXD_LICENSE_FILE" not in env and LOCAL_LICENSE.exists():
+        env["XILINXD_LICENSE_FILE"] = str(LOCAL_LICENSE.resolve())
+    return env
+
+
 def run_yosys(
     board: dict[str, str],
     top: str,
@@ -129,11 +178,7 @@ def run_vivado(
     out_dir: Path,
     clock_mhz: float,
 ) -> int:
-    vivado = os.environ.get("SYNTH_VIVADO") or shutil.which("vivado")
-    if not vivado:
-        raise SystemExit(
-            "vivado was not found. Install AMD Vivado separately, then set PATH or SYNTH_VIVADO."
-        )
+    vivado_cmd = find_vivado_command()
 
     tcl = out_dir / "vivado_synth.tcl"
     period_ns = 1000.0 / clock_mhz
@@ -159,9 +204,15 @@ def run_vivado(
     )
     log = out_dir / "vivado.log"
     print(f"Running Vivado synthesis for {top} on {part}")
+    if "XILINXD_LICENSE_FILE" not in os.environ and LOCAL_LICENSE.exists():
+        print(f"Using project-local Vivado license: {LOCAL_LICENSE}")
+    settings = find_project_vivado_settings()
+    if settings:
+        print(f"Detected project-local Vivado settings: {settings}")
     with log.open("w") as log_file:
         completed = subprocess.run(
-            [vivado, "-mode", "batch", "-source", str(tcl)],
+            [*vivado_cmd, "-mode", "batch", "-source", str(tcl)],
+            env=vivado_environment(),
             text=True,
             stdout=log_file,
             stderr=subprocess.STDOUT,

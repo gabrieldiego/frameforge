@@ -18,9 +18,10 @@ The default flow uses `oss-cad-suite`:
 This is intended to catch unsupported RTL constructs and track rough resource
 growth.  It is not a replacement for vendor place-and-route timing.
 
-For actual Zynq timing, use the optional Vivado path.  Vivado is detected by the
-scripts, but it is not downloaded automatically because AMD/Xilinx distribution
-requires a separate installer/account/license flow.
+For actual Zynq timing, use the optional Vivado path.  The scripts first honor
+explicit environment overrides, then look for a project-local Vivado install
+under `.tools/Xilinx`.  Vivado still requires AMD's installer, account, and
+license flow.
 
 ## Setup
 
@@ -83,7 +84,59 @@ design can leave reset, accept `start`, and eventually assert `done`.
 
 ## Optional Vivado Synthesis
 
-After installing Vivado separately and placing `vivado` on `PATH`:
+FrameForge keeps a tracked Vivado install template at
+`synth/vivado/install_config.template`.  The generated machine-local config is
+written under `.tools/` and remains untracked because it contains absolute local
+paths.
+
+Prepare a local install area:
+
+```sh
+make vivado-prepare VIVADO_LICENSE="$HOME/Downloads/Xilinx.lic"
+make vivado-config
+```
+
+If the AMD web installer has already been downloaded, extract it into `.tools`:
+
+```sh
+python3 scripts/setup_vivado.py extract \
+  --installer "$HOME/Downloads/FPGAs_AdaptiveSoCs_Unified_SDI_2025.2_1114_2157_Lin64.bin"
+```
+
+Generate an AMD authentication token when needed:
+
+```sh
+make vivado-auth
+```
+
+Run the install:
+
+```sh
+make vivado-install
+```
+
+If the checkout is mounted over `sshfs`, prefer running the same commands on the
+machine that physically owns the storage device.  The generated config must be
+created on that machine so `Destination=` uses the host's real mount path rather
+than the sshfs client path.
+
+If Vivado is installed locally by AMD `xsetup` under `.tools/Xilinx`, the
+synthesis runner detects:
+
+- `.tools/Xilinx/Vivado/*/bin/vivado`
+- `.tools/Xilinx/Vivado/*/settings64.sh`
+- `.tools/Xilinx.lic`
+
+You can also point at existing machine-wide resources without using the local
+install:
+
+```sh
+export SYNTH_VIVADO=/path/to/vivado
+export VIVADO_SETTINGS=/path/to/Vivado/2025.2/settings64.sh
+export XILINXD_LICENSE_FILE=/path/to/Xilinx.lic
+```
+
+Run vendor synthesis:
 
 ```sh
 make synth-vivado
