@@ -1,4 +1,4 @@
-.PHONY: help check-tools build test fmt decoder-setup validate validate-decode rtl-test clean
+.PHONY: help check-tools build test fmt lint decoder-setup validate validate-decode rtl-test clean
 
 SIM ?= icarus
 TOPLEVEL_LANG ?= verilog
@@ -20,6 +20,7 @@ help:
 	@printf '%s\n' '  make build     - build Rust crate'
 	@printf '%s\n' '  make test      - run Rust tests'
 	@printf '%s\n' '  make fmt       - format Rust code'
+	@printf '%s\n' '  make lint      - run Rust Clippy lints'
 	@printf '%s\n' '  make decoder-setup - find or build external VTM decoder'
 	@printf '%s\n' '  make validate INPUT=in.yuv [WIDTH=<w> HEIGHT=<h> MAX_WIDTH=64 MAX_HEIGHT=64 FRAMES=1 FORMAT=yuv420p8|yuv422p8|yuv444p8|...]'
 	@printf '%s\n' '  make validate-decode BITSTREAM=out.vvc [DECODED=out.yuv]'
@@ -46,6 +47,9 @@ test:
 
 fmt:
 	cargo fmt
+
+lint:
+	cargo clippy --all-targets -- -D warnings
 
 decoder-setup:
 	python3 scripts/ensure_reference_decoder.py

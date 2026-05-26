@@ -35,13 +35,15 @@ module ff_vvc_encoder #(
   output logic [7:0] m_axis_data,
   output logic       m_axis_last
 );
+  import ff_vvc_geometry_pkg::*;
+
   localparam int NAL_OVERHEAD_LEN = 6;
   localparam int MAX_LUMA_SAMPLES = MAX_VISIBLE_WIDTH * MAX_VISIBLE_HEIGHT;
   localparam int MAX_CHROMA_PLANE_SAMPLES = MAX_LUMA_SAMPLES;
   localparam int MAX_FRAME_SAMPLES = MAX_LUMA_SAMPLES + (MAX_CHROMA_PLANE_SAMPLES * 2);
   localparam int INPUT_COUNT_BITS = $clog2((MAX_FRAME_SAMPLES * 2) + 1);
-  localparam int TOY_RESIDUAL_CB_SIZE = 4;
-  localparam int TOY_RESIDUAL_LUMA_SAMPLES = TOY_RESIDUAL_CB_SIZE * TOY_RESIDUAL_CB_SIZE;
+  localparam int VVC_RESIDUAL_CB_SIZE = 4;
+  localparam int VVC_RESIDUAL_LUMA_SAMPLES = VVC_RESIDUAL_CB_SIZE * VVC_RESIDUAL_CB_SIZE;
   localparam int PALETTE_CU_SIZE = 8;
   localparam int MAX_CTU_PALETTE_SYMBOLS =
     ((CTU_SIZE + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE) *
@@ -62,8 +64,8 @@ module ff_vvc_encoder #(
   logic [INPUT_COUNT_BITS - 1:0] input_len_q;
   logic       input_active_q;
   logic [(SAMPLE_BITS * MAX_LUMA_SAMPLES) - 1:0] luma_frame_q;
-  logic [(SAMPLE_BITS * TOY_RESIDUAL_LUMA_SAMPLES) - 1:0] luma_samples_q;
-  logic [(SAMPLE_BITS * TOY_RESIDUAL_LUMA_SAMPLES) - 1:0] luma_samples_1_q;
+  logic [(SAMPLE_BITS * VVC_RESIDUAL_LUMA_SAMPLES) - 1:0] luma_samples_q;
+  logic [(SAMPLE_BITS * VVC_RESIDUAL_LUMA_SAMPLES) - 1:0] luma_samples_1_q;
   logic [4:0] quant_luma_rem_q;
   logic [4:0] quant_luma_rem_1_q;
   logic [4:0] quant_cb_rem_q;
@@ -243,7 +245,7 @@ module ff_vvc_encoder #(
 
   ff_residual_stub #(
     .SAMPLE_BITS(SAMPLE_BITS),
-    .LUMA_CB_SIZE(TOY_RESIDUAL_CB_SIZE)
+    .LUMA_CB_SIZE(VVC_RESIDUAL_CB_SIZE)
   ) residual_block (
     .clk(clk),
     .rst_n(rst_n),
@@ -266,7 +268,7 @@ module ff_vvc_encoder #(
 
   ff_residual_stub #(
     .SAMPLE_BITS(SAMPLE_BITS),
-    .LUMA_CB_SIZE(TOY_RESIDUAL_CB_SIZE)
+    .LUMA_CB_SIZE(VVC_RESIDUAL_CB_SIZE)
   ) residual_block_1 (
     .clk(clk),
     .rst_n(rst_n),
@@ -851,36 +853,36 @@ module ff_vvc_encoder #(
   function automatic logic is_residual_luma_sample(input logic [INPUT_COUNT_BITS - 1:0] sample_index);
     begin
       is_residual_luma_sample = (sample_index < luma_samples()) &&
-                                ((sample_index % visible_width) < TOY_RESIDUAL_CB_SIZE) &&
-                                ((sample_index / visible_width) < TOY_RESIDUAL_CB_SIZE);
+                                ((sample_index % visible_width) < VVC_RESIDUAL_CB_SIZE) &&
+                                ((sample_index / visible_width) < VVC_RESIDUAL_CB_SIZE);
     end
   endfunction
 
   function automatic logic [3:0] residual_luma_sample_index(input logic [INPUT_COUNT_BITS - 1:0] sample_index);
     logic [INPUT_COUNT_BITS - 1:0] index;
     begin
-      index = ((sample_index / visible_width) * TOY_RESIDUAL_CB_SIZE) + (sample_index % visible_width);
+      index = ((sample_index / visible_width) * VVC_RESIDUAL_CB_SIZE) + (sample_index % visible_width);
       residual_luma_sample_index = index[3:0];
     end
   endfunction
 
   function automatic logic has_second_residual_luma_block();
     begin
-      has_second_residual_luma_block = (visible_width >= (TOY_RESIDUAL_CB_SIZE * 2)) ||
-                                       (visible_height >= (TOY_RESIDUAL_CB_SIZE * 2));
+      has_second_residual_luma_block = (visible_width >= (VVC_RESIDUAL_CB_SIZE * 2)) ||
+                                       (visible_height >= (VVC_RESIDUAL_CB_SIZE * 2));
     end
   endfunction
 
   function automatic logic [15:0] second_residual_origin_x();
     begin
-      second_residual_origin_x = (visible_width >= (TOY_RESIDUAL_CB_SIZE * 2)) ? TOY_RESIDUAL_CB_SIZE : 16'd0;
+      second_residual_origin_x = (visible_width >= (VVC_RESIDUAL_CB_SIZE * 2)) ? VVC_RESIDUAL_CB_SIZE : 16'd0;
     end
   endfunction
 
   function automatic logic [15:0] second_residual_origin_y();
     begin
-      second_residual_origin_y = (visible_width >= (TOY_RESIDUAL_CB_SIZE * 2)) ? 16'd0 :
-                                 ((visible_height >= (TOY_RESIDUAL_CB_SIZE * 2)) ? TOY_RESIDUAL_CB_SIZE : 16'd0);
+      second_residual_origin_y = (visible_width >= (VVC_RESIDUAL_CB_SIZE * 2)) ? 16'd0 :
+                                 ((visible_height >= (VVC_RESIDUAL_CB_SIZE * 2)) ? VVC_RESIDUAL_CB_SIZE : 16'd0);
     end
   endfunction
 
@@ -893,9 +895,9 @@ module ff_vvc_encoder #(
       is_second_residual_luma_sample = (sample_index < luma_samples()) &&
                                        has_second_residual_luma_block() &&
                                        (x >= second_residual_origin_x()) &&
-                                       (x < second_residual_origin_x() + TOY_RESIDUAL_CB_SIZE) &&
+                                       (x < second_residual_origin_x() + VVC_RESIDUAL_CB_SIZE) &&
                                        (y >= second_residual_origin_y()) &&
-                                       (y < second_residual_origin_y() + TOY_RESIDUAL_CB_SIZE);
+                                       (y < second_residual_origin_y() + VVC_RESIDUAL_CB_SIZE);
     end
   endfunction
 
@@ -906,7 +908,7 @@ module ff_vvc_encoder #(
     begin
       x = sample_index % visible_width;
       y = sample_index / visible_width;
-      index = ((y - second_residual_origin_y()) * TOY_RESIDUAL_CB_SIZE) +
+      index = ((y - second_residual_origin_y()) * VVC_RESIDUAL_CB_SIZE) +
               (x - second_residual_origin_x());
       second_residual_luma_sample_index = index[3:0];
     end
@@ -1341,15 +1343,7 @@ module ff_vvc_encoder #(
 
   function automatic logic [15:0] coded_dimension(input logic [15:0] value);
     begin
-      if (value <= 16'd8) begin
-        coded_dimension = 16'd8;
-      end else if (value <= 16'd16) begin
-        coded_dimension = 16'd16;
-      end else if (value <= 16'd32) begin
-        coded_dimension = 16'd32;
-      end else begin
-        coded_dimension = 16'd64;
-      end
+      coded_dimension = ff_vvc_coded_dimension(value);
     end
   endfunction
 

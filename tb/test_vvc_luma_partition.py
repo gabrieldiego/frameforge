@@ -17,6 +17,7 @@ async def check_partition(dut, width, height, coded_width, coded_height, root_sp
 async def luma_partition_matches_software_geometry_plan(dut):
     await check_partition(dut, 4, 4, 8, 8, 0, 1)
     await check_partition(dut, 16, 16, 16, 16, 0, 1)
-    await check_partition(dut, 32, 16, 32, 32, 0, 1)
+    await check_partition(dut, 32, 16, 32, 16, 0, 1)
+    await check_partition(dut, 64, 24, 64, 24, 1, 4)
     await check_partition(dut, 32, 32, 32, 32, 0, 1)
     await check_partition(dut, 64, 64, 64, 64, 1, 4)

@@ -230,10 +230,12 @@ impl Picture {
         if width == 0 || height == 0 {
             return Err("picture width and height must be non-zero".to_string());
         }
-        if format.is_yuv420() && (width % 2 != 0 || height % 2 != 0) {
+        if format.is_yuv420() && (!width.is_multiple_of(2) || !height.is_multiple_of(2)) {
             return Err("yuv420p formats require even width and height".to_string());
         }
-        if matches!(format.chroma_sampling(), Some(ChromaSampling::Cs422)) && width % 2 != 0 {
+        if matches!(format.chroma_sampling(), Some(ChromaSampling::Cs422))
+            && !width.is_multiple_of(2)
+        {
             return Err("yuv422p formats require even width".to_string());
         }
         Self::checked_len(width, height, format)

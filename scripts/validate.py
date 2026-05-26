@@ -18,7 +18,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_DIR = Path("verification/generated/checksums")
 RTL_SUPPORTED_FORMAT = "yuv420p8"
-TOY_16X16_SCRIPTED_RECON = bytes(
+VVC_16X16_SCRIPTED_RECON = bytes(
     [
         124, 124, 124, 125, 125, 126, 127, 128, 129, 129, 130, 131, 131, 132, 132, 132,
         122, 123, 123, 123, 124, 125, 126, 126, 127, 128, 129, 129, 130, 130, 131, 131,
@@ -40,11 +40,16 @@ TOY_16X16_SCRIPTED_RECON = bytes(
     + [128] * 64
     + [119] * 64
 )
-TOY_32X32_SCRIPTED_RECON_ZLIB_B64 = (
+
+# Keep this in sync with frameforge::vvc::VVC_CODED_DIMENSION_GRANULARITY and
+# rtl/ff_vvc_geometry_pkg.sv. It is the current validation-path coded-picture
+# luma dimension alignment, not a general statement about every VVC profile.
+VVC_CODED_DIMENSION_GRANULARITY = 8
+VVC_32X32_SCRIPTED_RECON_ZLIB_B64 = (
     "eNo1lOlz2gYWwP+wnZ1JN20d3wZs8AlufNvggI0xp4QAXUhCAt23QAgf2DXEjl2TJj5qp023s5N2nWzafOp/UmU6+768efN7b945b97zxT8e9Q/1PXrU75vbyOsX9zdne067c9K5ePP+0+//nRv71z+/eDLU/1XfSGA+DEqd73udlsufn17e//bx48OU58njx32DwyPeqdByFGSbJ5120z44OT1/efvzrw8Pk+Njg31f948FQktrm4kCozb3Wo2663B2cfnq7pd3M7Mz/uG+J57gWjSeBFFGNGynrqlmq3102D69fvvN0uqCf7Df9zSWBiCEYHjNbtVllpUNXRLrz1+HY4mtxYmxyZXdAoITFMPrzp7Fl1GiQsAw0+juZCBwe3EmuJHBqApFVjjdaRkMnIcgIJVGxCZQIqlSYn01CpAsx3zmdl3AgVRyNx6LA6SIkJzEoqlYPE9LMsdURd2UyPzudiy6GdlKlwhOMhqWgGbTxZpmKoKg6EolH4+sry4vr0a2U1nb2T9wNLoEYZxuabKi6wKeiizOB+dCT1fDz2LnZ92jls6RRIWXVVlSjM98LRgYH/dPzy8sLf/0Q++kqQocx3O1Wo2TdF2icuvTo4NDo17/1Gzw4T833YYsKppcLWNEVdJNtQZtBNx9DQyPeiam/nh4c2bLsmGpNFwqs6ppajVo3ff1476BgYEhT+DTh7cXLU2rNzQaRijJsAy5klsa/fLL/qGBJwNj/k8ffu4dWmajabAEybrlyTU0MT/yVd/w6FC/y39/eNtr182G01B5lhNEoUZCW/OewWGvb2x42Bt4/+7+fN/UzGbL1gSGIimqXIgvTfrGA5N+t8epX3581bFlQbZaLYvHi0V3S2h2c2Fudi4UCgWDodcvXxzqNYqWGo7JIkAepWuVUjKyvLi4sraxsb7WPmo3pTJUICVLZzGoWK5y1XJ+NxqOxBLpTDqlmM06V0wkIEbRBBrHiQpDE3BuN76TAmG8TBCsrlXS4XAS41VFqFIYgpUJrAhkcgWM5hU9Twg8HFtY2irVZE3lqRKYRwgCLRRKeIVT7YNEHkeTyzOhCEgJiiqQUBZEqQqB4WSVk8yDzrOdTHJjzj+zlkIYUeYIyD24WpUiKqwoytbhc7eL1ZDfN7kQBQhOZIlSiWB5lqY5Rde0xvGL+VBw2u/zTsys7KKsxJEIRgsCW2WVesOyWt3edMDn9Xi93olQDOYVnkRxxuWs6M7TttsXNwHfyMiYz+fxTG/CoiZQLuc5llPs/X3H+fb7N+UyjqEwDIsG657ycRdDEbhULBRIjqlJerNdLBagPAAACF3BKYbWISgP5rKZLEKTnzVRcDEI5HIIVdrdjm4Bf4dDBXcq4ZWV8BZFEp8zYGU0sTg793S5VmXoClEmSSIVGg9MzV49V1mOQCo1IjntC0xMv+rqnMiRZby0HZyanZr983/3vau7872DI5OEEQR5+PDT+cu3t+ff9U5butnav393d3z247/veuffnR53L287l0faXu/uuvvti9Pui96d45iqfXp7c/X6+urq+ubOUGRFO769+7+gIpECgK1YNLwTj0W+CcYxKAFhUCGzk0zEIqtPV7Kp7RJD0flUCkgnk5ubRSBeJBAsn8zAKIZnCyyeBPOJBJCGSLrKILhMpXPZ6LMMSPCSxDPZCrybL2UyWZBU65amrOey8SJVJrMAYbaatrW4mQJABC+CRdpqNZuNlc00mAOLMIzVjLpZt1BSUAVWNjXJ2Dvc39tXlfqho5t2XTedA/eTHtoH5x3bsBynYTsNTThpdy67Tc1oNnVdkwX64uLl1eWRZZqGqsiiwL66vr5+3TUNXXNtSRT/AhplPes="
 )
-TOY_32X32_SCRIPTED_RECON = zlib.decompress(
-    base64.b64decode(TOY_32X32_SCRIPTED_RECON_ZLIB_B64)
+VVC_32X32_SCRIPTED_RECON = zlib.decompress(
+    base64.b64decode(VVC_32X32_SCRIPTED_RECON_ZLIB_B64)
 )
 SUPPORTED_FORMATS = {
     "i420": "yuv420p8",
@@ -230,7 +235,7 @@ def main() -> int:
     if has_vtm_recon:
         print("OK: software, RTL, and VTM reconstructions match")
     else:
-        print("SKIP: VTM decode is not wired for this toy path yet")
+        print("SKIP: VTM decode is not wired for this VVC path yet")
     if has_vtm_recon and input_has_nonzero_chroma(input_path, info):
         validate_decoded_non_monochrome(vtm_recon, info)
         print("OK: VTM reconstruction contains decoder-visible chroma")
@@ -291,22 +296,22 @@ def infer_from_filename(name: str) -> InputInfo:
 def validate_supported_input(input_path: Path, info: InputInfo, max_width: int, max_height: int) -> None:
     if normalize_format(info.fmt) not in SUPPORTED_FORMATS.values():
         raise ValueError(
-            f"unsupported format {info.fmt}; supported toy formats are "
+            f"unsupported format {info.fmt}; supported VVC formats are "
             "yuv420p/yuv422p/yuv444p at 8, 10, 12, or 16 bits"
         )
     if info.width > max_width or info.height > max_height:
         raise ValueError(
-            f"toy VVC validation supports at most {max_width}x{max_height} input at this entry point; got {info.width}x{info.height}"
+            f"VVC validation supports at most {max_width}x{max_height} input at this entry point; got {info.width}x{info.height}"
         )
     if info.width % 2 or info.height % 2:
-        raise ValueError("toy VVC validation currently requires even width and height")
+        raise ValueError("VVC validation currently requires even width and height")
     sampling = format_chroma_sampling(info.fmt)
     if sampling == "420" and (info.width % 2 or info.height % 2):
         raise ValueError("yuv420p formats require even width and height")
     if sampling == "422" and info.width % 2:
         raise ValueError("yuv422p formats require even width")
     if info.frames not in (1, 2):
-        raise ValueError("toy VVC validation currently supports only 1 or 2 frames")
+        raise ValueError("VVC validation currently supports only 1 or 2 frames")
 
     expected_len = frame_len(info) * info.frames
     data = input_path.read_bytes()
@@ -326,20 +331,18 @@ def vtm_decode_supported(input_path: Path, info: InputInfo) -> bool:
     if coded_dimension(info.width) == 8 and coded_dimension(info.height) == 8:
         return True
     return (
-        is_toy_16x16_generated_path(info)
-        or is_toy_32x32_generated_path(info)
-        or is_toy_64x64_generated_path(info)
+        is_vvc_16x16_generated_path(info)
+        or is_vvc_32x32_generated_path(info)
+        or is_vvc_64x64_generated_path(info)
     )
 
 
 def coded_dimension(value: int) -> int:
-    if value <= 8:
-        return 8
-    if value <= 16:
-        return 16
-    if value <= 32:
-        return 32
-    return 64
+    return (
+        (value + VVC_CODED_DIMENSION_GRANULARITY - 1)
+        // VVC_CODED_DIMENSION_GRANULARITY
+        * VVC_CODED_DIMENSION_GRANULARITY
+    )
 
 
 def normalize_format(fmt: str) -> str:
@@ -362,12 +365,12 @@ def sha256(path: Path) -> str:
 def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes:
     if format_chroma_sampling(info.fmt) == "444":
         return palette_444_tile_reconstruction(input_path, info)
-    if is_toy_16x16_generated_path(info):
-        return cropped_toy_16x16_generated_recon(info) * info.frames
-    if is_toy_32x32_generated_path(info):
-        return cropped_toy_32x32_generated_recon(info) * info.frames
-    if is_toy_64x64_generated_path(info):
-        return cropped_toy_64x64_generated_recon(info) * info.frames
+    if is_vvc_16x16_generated_path(info):
+        return cropped_vvc_16x16_generated_recon(info) * info.frames
+    if is_vvc_32x32_generated_path(info):
+        return cropped_vvc_32x32_generated_recon(info) * info.frames
+    if is_vvc_64x64_generated_path(info):
+        return cropped_vvc_64x64_generated_recon(info) * info.frames
     frame = normalized_first_frame_to_yuv420p8(input_path, info)
     luma_len = info.width * info.height
     chroma_len = luma_len // 4
@@ -387,7 +390,7 @@ def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes
         return bytes(recon) * info.frames
 
     y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(first_residual_luma_block(frame, info))))
-    # This is the reconstruction of the emitted toy VVC bitstream, not the
+    # This is the reconstruction of the emitted VVC bitstream, not the
     # original input. Keep this matched to VTM decode output after quantization.
     frame = bytes([y] * luma_len + [chroma] * chroma_len + [chroma] * chroma_len)
     return frame * info.frames
@@ -423,18 +426,18 @@ def palette_444_tile_reconstruction(input_path: Path, info: InputInfo) -> bytes:
 def uses_capacity_tu_grid(frame: bytes, info: InputInfo) -> bool:
     return not (
         (info.width, info.height) == (8, 8)
-        or is_toy_16x16_generated_path(info)
-        or is_toy_32x32_generated_path(info)
-        or is_toy_64x64_generated_path(info)
+        or is_vvc_16x16_generated_path(info)
+        or is_vvc_32x32_generated_path(info)
+        or is_vvc_64x64_generated_path(info)
     )
 
 
-def cropped_toy_16x16_generated_recon(info: InputInfo) -> bytes:
+def cropped_vvc_16x16_generated_recon(info: InputInfo) -> bytes:
     coded_luma = 16 * 16
     coded_chroma = 8 * 8
-    luma = TOY_16X16_SCRIPTED_RECON[:coded_luma]
-    cb = TOY_16X16_SCRIPTED_RECON[coded_luma : coded_luma + coded_chroma]
-    cr = TOY_16X16_SCRIPTED_RECON[coded_luma + coded_chroma :]
+    luma = VVC_16X16_SCRIPTED_RECON[:coded_luma]
+    cb = VVC_16X16_SCRIPTED_RECON[coded_luma : coded_luma + coded_chroma]
+    cr = VVC_16X16_SCRIPTED_RECON[coded_luma + coded_chroma :]
 
     out_luma = bytearray()
     for y in range(info.height):
@@ -453,9 +456,9 @@ def cropped_toy_16x16_generated_recon(info: InputInfo) -> bytes:
     return bytes(out_luma + out_cb + out_cr)
 
 
-def cropped_toy_32x32_generated_recon(info: InputInfo) -> bytes:
+def cropped_vvc_32x32_generated_recon(info: InputInfo) -> bytes:
     return crop_yuv420p8_frame(
-        TOY_32X32_SCRIPTED_RECON,
+        VVC_32X32_SCRIPTED_RECON,
         coded_width=32,
         coded_height=32,
         visible_width=info.width,
@@ -463,7 +466,7 @@ def cropped_toy_32x32_generated_recon(info: InputInfo) -> bytes:
     )
 
 
-def cropped_toy_64x64_generated_recon(info: InputInfo) -> bytes:
+def cropped_vvc_64x64_generated_recon(info: InputInfo) -> bytes:
     # The current 64x64 path emits planar intra prediction with no residuals.
     # VTM reconstructs the neutral 8-bit sample value for Y, Cb, and Cr.
     luma_len = info.width * info.height
@@ -592,7 +595,7 @@ def input_is_all_zero(path: Path) -> bool:
     return True
 
 
-def is_toy_16x16_generated_path(info: InputInfo) -> bool:
+def is_vvc_16x16_generated_path(info: InputInfo) -> bool:
     return (
         info.width <= 16
         and info.height <= 16
@@ -600,7 +603,7 @@ def is_toy_16x16_generated_path(info: InputInfo) -> bool:
     )
 
 
-def is_toy_32x32_generated_path(info: InputInfo) -> bool:
+def is_vvc_32x32_generated_path(info: InputInfo) -> bool:
     return (
         info.width <= 32
         and info.height <= 32
@@ -608,7 +611,7 @@ def is_toy_32x32_generated_path(info: InputInfo) -> bool:
     )
 
 
-def is_toy_64x64_generated_path(info: InputInfo) -> bool:
+def is_vvc_64x64_generated_path(info: InputInfo) -> bool:
     return (
         info.width <= 64
         and info.height <= 64
@@ -618,9 +621,9 @@ def is_toy_64x64_generated_path(info: InputInfo) -> bool:
 
 def expects_zero_reconstruction(input_path: Path, info: InputInfo) -> bool:
     return input_is_all_zero(input_path) and not (
-        is_toy_16x16_generated_path(info)
-        or is_toy_32x32_generated_path(info)
-        or is_toy_64x64_generated_path(info)
+        is_vvc_16x16_generated_path(info)
+        or is_vvc_32x32_generated_path(info)
+        or is_vvc_64x64_generated_path(info)
     )
 
 

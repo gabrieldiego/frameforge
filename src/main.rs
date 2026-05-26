@@ -6,11 +6,11 @@ use frameforge::PixelFormat;
 
 #[derive(Debug)]
 enum Command {
-    VvcEos(VvcEosCli),
-    VvcSkeleton(VvcSkeletonCli),
-    VvcEncode(VvcEncodeCli),
-    VvcPaletteCabacDump(VvcPaletteCabacDumpCli),
-    VvcList(VvcListCli),
+    Eos(VvcEosCli),
+    Skeleton(VvcSkeletonCli),
+    Encode(VvcEncodeCli),
+    PaletteCabacDump(VvcPaletteCabacDumpCli),
+    List(VvcListCli),
 }
 
 #[derive(Debug)]
@@ -67,11 +67,11 @@ fn main() {
 
 fn run(command: Command) -> Result<(), String> {
     match command {
-        Command::VvcEos(cli) => run_vvc_eos(cli),
-        Command::VvcSkeleton(cli) => run_vvc_skeleton(cli),
-        Command::VvcEncode(cli) => run_vvc_encode(cli),
-        Command::VvcPaletteCabacDump(cli) => run_vvc_palette_cabac_dump(cli),
-        Command::VvcList(cli) => run_vvc_list(cli),
+        Command::Eos(cli) => run_vvc_eos(cli),
+        Command::Skeleton(cli) => run_vvc_skeleton(cli),
+        Command::Encode(cli) => run_vvc_encode(cli),
+        Command::PaletteCabacDump(cli) => run_vvc_palette_cabac_dump(cli),
+        Command::List(cli) => run_vvc_list(cli),
     }
 }
 
@@ -97,19 +97,19 @@ fn run_vvc_encode(cli: VvcEncodeCli) -> Result<(), String> {
         ));
     }
 
-    let params = frameforge::vvc::Toy4x4EncodeParams { frames: cli.frames };
-    let geometry = frameforge::vvc::ToyVideoGeometry {
+    let params = frameforge::vvc::VvcEncodeParams { frames: cli.frames };
+    let geometry = frameforge::vvc::VvcVideoGeometry {
         width: cli.width,
         height: cli.height,
     };
-    let limits = frameforge::vvc::ToyVideoLimits {
+    let limits = frameforge::vvc::VvcVideoLimits {
         max_width: cli.max_width,
         max_height: cli.max_height,
     };
     geometry.validate_against(limits)?;
     let data = fs::read(&cli.input)
         .map_err(|err| format!("failed to read input '{}': {err}", cli.input.display()))?;
-    let bytes = frameforge::vvc::toy_yuv_annex_b_from_input_with_limits(
+    let bytes = frameforge::vvc::vvc_yuv_annex_b_from_input_with_limits(
         &data, params, geometry, limits, cli.format,
     )?;
     fs::write(&cli.output, bytes)
@@ -118,14 +118,14 @@ fn run_vvc_encode(cli: VvcEncodeCli) -> Result<(), String> {
 }
 
 fn run_vvc_palette_cabac_dump(cli: VvcPaletteCabacDumpCli) -> Result<(), String> {
-    let geometry = frameforge::vvc::ToyVideoGeometry {
+    let geometry = frameforge::vvc::VvcVideoGeometry {
         width: cli.width,
         height: cli.height,
     };
-    geometry.validate_against(frameforge::vvc::ToyVideoLimits::max_64x64())?;
+    geometry.validate_against(frameforge::vvc::VvcVideoLimits::max_64x64())?;
     let data = fs::read(&cli.input)
         .map_err(|err| format!("failed to read input '{}': {err}", cli.input.display()))?;
-    let json = frameforge::vvc::toy_palette_444_cabac_dump_json(&data, geometry, cli.format)?;
+    let json = frameforge::vvc::vvc_palette_444_cabac_dump_json(&data, geometry, cli.format)?;
     fs::write(&cli.output, json)
         .map_err(|err| format!("failed to write output '{}': {err}", cli.output.display()))?;
     Ok(())
@@ -174,7 +174,7 @@ fn parse_vvc_eos_cli(args: Vec<String>) -> Result<Command, String> {
         }
     }
 
-    Ok(Command::VvcEos(VvcEosCli {
+    Ok(Command::Eos(VvcEosCli {
         output: output.ok_or_else(|| "missing --output <path>".to_string())?,
     }))
 }
@@ -191,7 +191,7 @@ fn parse_vvc_skeleton_cli(args: Vec<String>) -> Result<Command, String> {
         }
     }
 
-    Ok(Command::VvcSkeleton(VvcSkeletonCli {
+    Ok(Command::Skeleton(VvcSkeletonCli {
         output: output.ok_or_else(|| "missing --output <path>".to_string())?,
     }))
 }
@@ -229,7 +229,7 @@ fn parse_vvc_encode_cli(args: Vec<String>) -> Result<Command, String> {
         }
     }
 
-    Ok(Command::VvcEncode(VvcEncodeCli {
+    Ok(Command::Encode(VvcEncodeCli {
         input: input.ok_or_else(|| "missing --input <path>".to_string())?,
         output: output.ok_or_else(|| "missing --output <path>".to_string())?,
         frames,
@@ -264,7 +264,7 @@ fn parse_vvc_palette_cabac_dump_cli(args: Vec<String>) -> Result<Command, String
         }
     }
 
-    Ok(Command::VvcPaletteCabacDump(VvcPaletteCabacDumpCli {
+    Ok(Command::PaletteCabacDump(VvcPaletteCabacDumpCli {
         input: input.ok_or_else(|| "missing --input <path>".to_string())?,
         output: output.ok_or_else(|| "missing --output <path>".to_string())?,
         width,
@@ -285,7 +285,7 @@ fn parse_vvc_list_cli(args: Vec<String>) -> Result<Command, String> {
         }
     }
 
-    Ok(Command::VvcList(VvcListCli {
+    Ok(Command::List(VvcListCli {
         input: input.ok_or_else(|| "missing --input <path>".to_string())?,
     }))
 }
@@ -325,7 +325,7 @@ mod tests {
         let command =
             parse_cli(vec!["vvc-eos".into(), "--output".into(), "eos.vvc".into()]).unwrap();
 
-        let Command::VvcEos(cli) = command else {
+        let Command::Eos(cli) = command else {
             panic!("expected vvc-eos command");
         };
         assert_eq!(cli.output, PathBuf::from("eos.vvc"));
@@ -340,7 +340,7 @@ mod tests {
         ])
         .unwrap();
 
-        let Command::VvcSkeleton(cli) = command else {
+        let Command::Skeleton(cli) = command else {
             panic!("expected vvc-skeleton command");
         };
         assert_eq!(cli.output, PathBuf::from("skeleton.vvc"));
@@ -369,7 +369,7 @@ mod tests {
         ])
         .unwrap();
 
-        let Command::VvcEncode(cli) = command else {
+        let Command::Encode(cli) = command else {
             panic!("expected vvc-encode command");
         };
         assert_eq!(cli.input, PathBuf::from("input_4x4_2f_yuv420p8.yuv"));
@@ -391,7 +391,7 @@ mod tests {
         ])
         .unwrap();
 
-        let Command::VvcList(cli) = command else {
+        let Command::List(cli) = command else {
             panic!("expected vvc-list command");
         };
         assert_eq!(cli.input, PathBuf::from("reference.vvc"));

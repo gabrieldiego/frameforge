@@ -4,7 +4,7 @@ FrameForge is an open-source lab for video compression, bitstream generation, RT
 
 FrameForge is starting with a minimal VVC/H.266 encoder foundation, but the project is not limited to VVC, H.266, screen-content coding, FPGA work, or encoding only. The long-term goal is a practical research workspace for codec block experiments, software golden models, bitstream generation, RTL acceleration, FPGA-oriented blocks, encoder and decoder research, and hardware/software co-verification.
 
-Current status: skeleton, experimental, not production-ready, and not conforming. The current VVC toy path can generate tiny streams for software/RTL validation from planar YUV 4:2:0, 4:2:2, or 4:4:4 input at 8, 10, 12, or 16 bits. VTM-backed validation is currently wired for toy pictures up to 32x32 through generated 8x8 syntax plus generated 16x16 and 32x32 coding-tree bodies. Larger toy inputs up to 64x64 now route through the same generated body selector in software and RTL, using an internal generated TU-grid payload while external decoder validation remains disabled until that path is replaced with VVC coding-tree syntax. The generated stream now carries residual tokens only through the slice entropy path rather than reserved FrameForge sideband NAL units. The 4:4:4 path is still normalized into the current toy 4:2:0 decoded-picture syntax; conforming VVC palette coding is a future milestone.
+Current status: skeleton, experimental, not production-ready, and not conforming. The current VVC path can generate tiny streams for software/RTL validation from planar YUV 4:2:0, 4:2:2, or 4:4:4 input at 8, 10, 12, or 16 bits. VTM-backed validation is currently wired for VVC pictures up to 32x32 through generated 8x8 syntax plus generated 16x16 and 32x32 coding-tree bodies. Larger VVC inputs up to 64x64 now route through the same generated body selector in software and RTL, using an internal generated TU-grid payload while external decoder validation remains disabled until that path is replaced with VVC coding-tree syntax. The generated stream now carries residual tokens only through the slice entropy path rather than reserved FrameForge sideband NAL units. The 4:4:4 path is still normalized into the current VVC 4:2:0 decoded-picture syntax; conforming VVC palette coding is a future milestone.
 
 ## Near-Term Direction
 
@@ -108,25 +108,25 @@ cargo run -- vvc-skeleton --output /tmp/frameforge-skeleton.vvc
 
 This writes VPS, SPS, PPS, IDR_N_LP, EOS, and EOB NAL units with correct Annex-B start codes and VVC NAL unit headers. The RBSP payloads are deliberately placeholder `rbsp_trailing_bits` only, so this is not a decodable VVC picture stream yet.
 
-Generate the toy 1-frame 4x4 VVC validation stream:
+Generate a one-frame VVC validation stream:
 
 ```sh
-dd if=/dev/zero of=/tmp/frameforge-toy-4x4-1f.yuv bs=24 count=1
-cargo run -- vvc-toy-4x4-video --input /tmp/frameforge-toy-4x4-1f.yuv --frames 1 --output /tmp/frameforge-toy-4x4-1f.vvc
-make validate-decode BITSTREAM=/tmp/frameforge-toy-4x4-1f.vvc DECODED=/tmp/frameforge-toy-4x4-1f-dec.yuv
+dd if=/dev/zero of=/tmp/frameforge-vvc-4x4-1f.yuv bs=24 count=1
+cargo run -- vvc-encode --input /tmp/frameforge-vvc-4x4-1f.yuv --frames 1 --output /tmp/frameforge-vvc-4x4-1f.vvc
+make validate-decode BITSTREAM=/tmp/frameforge-vvc-4x4-1f.vvc DECODED=/tmp/frameforge-vvc-4x4-1f-dec.yuv
 ```
 
-This reads a 4x4 planar YUV input and writes a generated Annex-B VVC stream for one IDR picture. FrameForge emits the sequence header, a color-derived Filler Data NAL unit, picture header, slice header, and toy residual tokens internally. The residual tokens are passed through the current arithmetic writer and placed in the VTM-decoded slice payload. The VTM-decoded luma is the nearest value on the current toy quantization ladder; decoded chroma is currently quantized to the narrow set encoded by the toy syntax.
+This example uses a 4x4 planar YUV input, but the encoder entry point accepts explicit width and height parameters for the currently supported small geometries. FrameForge emits the sequence header, a color-derived Filler Data NAL unit, picture header, slice header, and VVC residual tokens internally. The residual tokens are passed through the current arithmetic writer and placed in the VTM-decoded slice payload. The VTM-decoded luma is the nearest value on the current VVC quantization ladder; decoded chroma is currently quantized to the narrow set encoded by the VVC syntax.
 
-Generate the toy 2-frame 4x4 VVC validation stream:
+Generate a two-frame VVC validation stream:
 
 ```sh
-dd if=/dev/zero of=/tmp/frameforge-toy-4x4-2f.yuv bs=48 count=1
-cargo run -- vvc-toy-4x4-video --input /tmp/frameforge-toy-4x4-2f.yuv --frames 2 --output /tmp/frameforge-toy-4x4-2f.vvc
-make validate-decode BITSTREAM=/tmp/frameforge-toy-4x4-2f.vvc DECODED=/tmp/frameforge-toy-4x4-2f-dec.yuv
+dd if=/dev/zero of=/tmp/frameforge-vvc-4x4-2f.yuv bs=48 count=1
+cargo run -- vvc-encode --input /tmp/frameforge-vvc-4x4-2f.yuv --frames 2 --output /tmp/frameforge-vvc-4x4-2f.vvc
+make validate-decode BITSTREAM=/tmp/frameforge-vvc-4x4-2f.vvc DECODED=/tmp/frameforge-vvc-4x4-2f-dec.yuv
 ```
 
-This stream emits one SPS/PPS sequence header followed by two picture slices. It decodes to two 4x4 YUV420p8 frames and is useful for proving that the software and RTL output paths can generate the same short video stream before clean-room VVC picture syntax is complete.
+This stream emits one SPS/PPS sequence header followed by two picture slices. The same command can be run with `--width` and `--height` for other supported validation geometries, which is useful for proving that the software and RTL output paths can generate the same short video stream before clean-room VVC picture syntax is complete.
 
 Validate the software stream, RTL stream, and VTM reconstructions with SHA-256 checksums:
 
@@ -139,9 +139,9 @@ dd if=/dev/zero of=/tmp/frameforge/black_4x4_2f_yuv420p8.yuv bs=48 count=1
 make validate INPUT=/tmp/frameforge/black_4x4_2f_yuv420p8.yuv
 ```
 
-The validation command infers resolution, frame count, and format from names such as `black_4x4_2f_yuv420p8.yuv`, `color_4x8_1f_yuv422p10le.yuv`, or `color_64x64_1f_yuv444p8.yuv`. You can override them with `WIDTH=64 HEIGHT=64 FRAMES=1 FORMAT=yuv444p8`. Supported toy input formats are planar `yuv420p`, `yuv422p`, and `yuv444p` at 8, 10, 12, or 16 bits, with common `i420`, `i422`, `i444`, `i010`, `i210`, and `i410` style aliases. Non-420 paths and the VTM-visible 4:4:4 path still normalize samples into the current 8-bit 4:2:0 toy syntax for decoded-picture validation. Validation feeds the input YUV into both the software toy encoder and the RTL testbench, checks that their bitstreams match, and taps the software and RTL internal reconstructions. For toy geometries up to 32x32 it also decodes the RTL bitstream with VTM and checks that the three reconstruction checksums match. For 64x64 generated TU-grid toy geometry, VTM decode is explicitly skipped until that generated body is emitted as compliant VVC coding-tree entropy.
+The validation command infers resolution, frame count, and format from names such as `black_4x4_2f_yuv420p8.yuv`, `color_4x8_1f_yuv422p10le.yuv`, or `color_64x64_1f_yuv444p8.yuv`. You can override them with `WIDTH=64 HEIGHT=64 FRAMES=1 FORMAT=yuv444p8`. Supported VVC input formats are planar `yuv420p`, `yuv422p`, and `yuv444p` at 8, 10, 12, or 16 bits, with common `i420`, `i422`, `i444`, `i010`, `i210`, and `i410` style aliases. Non-420 paths and the VTM-visible 4:4:4 path still normalize samples into the current 8-bit 4:2:0 VVC syntax for decoded-picture validation. Validation feeds the input YUV into both the software VVC encoder and the RTL testbench, checks that their bitstreams match, and taps the software and RTL internal reconstructions. For VVC geometries up to 32x32 it also decodes the RTL bitstream with VTM and checks that the three reconstruction checksums match. For 64x64 generated TU-grid geometry, VTM decode is explicitly skipped until that generated body is emitted as compliant VVC coding-tree entropy.
 
-Internal reconstruction is always the reconstruction represented by the emitted toy picture syntax. For geometries currently accepted by VTM, it must match the external decoder output. Unsupported features must not be represented as hidden sideband reconstruction.
+Internal reconstruction is always the reconstruction represented by the emitted VVC picture syntax. For geometries currently accepted by VTM, it must match the external decoder output. Unsupported features must not be represented as hidden sideband reconstruction.
 
 Inspect NAL headers in any Annex-B VVC stream:
 
@@ -173,10 +173,10 @@ Run the RTL VVC skeleton byte-format check:
 make rtl-test DUT=vvc-skeleton
 ```
 
-Run the RTL generated VVC toy stream check:
+Run the RTL generated VVC stream check:
 
 ```sh
-make rtl-test DUT=vvc-toy4x4
+make rtl-test DUT=vvc-encoder
 ```
 
 Run the local coding-tree scheduler check without generating a complete stream:
@@ -191,19 +191,19 @@ Run the local generated CABAC body check:
 make rtl-test DUT=vvc-cabac-body
 ```
 
-Run the same RTL toy encoder with wider input sample buses:
+Run the same RTL VVC encoder with wider input sample buses:
 
 ```sh
-make rtl-test DUT=vvc-toy4x4 RTL_SAMPLE_BITS=10
-make rtl-test DUT=vvc-toy4x4 RTL_SAMPLE_BITS=12
-make rtl-test DUT=vvc-toy4x4 RTL_SAMPLE_BITS=16
+make rtl-test DUT=vvc-encoder RTL_SAMPLE_BITS=10
+make rtl-test DUT=vvc-encoder RTL_SAMPLE_BITS=12
+make rtl-test DUT=vvc-encoder RTL_SAMPLE_BITS=16
 ```
 
-Run the same RTL toy encoder with wider chroma input planes:
+Run the same RTL VVC encoder with wider chroma input planes:
 
 ```sh
-make rtl-test DUT=vvc-toy4x4 RTL_CHROMA_FORMAT_IDC=2
-make rtl-test DUT=vvc-toy4x4 RTL_CHROMA_FORMAT_IDC=3
+make rtl-test DUT=vvc-encoder RTL_CHROMA_FORMAT_IDC=2
+make rtl-test DUT=vvc-encoder RTL_CHROMA_FORMAT_IDC=3
 ```
 
 The Makefile uses variables so other simulators can be introduced later:
@@ -214,7 +214,7 @@ make rtl-test SIM=icarus TOPLEVEL_LANG=verilog
 
 ## External Decoder Validation
 
-External decoder validation is partially wired. The `vvc-eos` command emits only a VVC EOS NAL unit, and `vvc-skeleton` uses placeholder RBSP payloads. The `vvc-toy-4x4-video` command assembles a tiny VTM-accepted stream for geometries up to 32x32 from internally scheduled sequence and picture NALs, a color-derived Filler Data NAL, and toy slice entropy syntax. The 16x16 and 32x32 coding-tree bodies are generated from geometry-specific body emitters while the clean-room syntax writer catches up. Larger toy geometries currently validate software/RTL byte alignment only; they are an incremental input-drain and parameter-set path, not complete clean-room VVC picture syntax yet.
+External decoder validation is partially wired. The `vvc-eos` command emits only a VVC EOS NAL unit, and `vvc-skeleton` uses placeholder RBSP payloads. The `vvc-encode` command assembles a tiny VTM-accepted stream for geometries up to 32x32 from internally scheduled sequence and picture NALs, a color-derived Filler Data NAL, and slice entropy syntax. The 16x16 and 32x32 coding-tree bodies are generated from geometry-specific body emitters while the clean-room syntax writer catches up. Larger VVC geometries currently validate software/RTL byte alignment only; they are an incremental input-drain and parameter-set path, not complete clean-room VVC picture syntax yet.
 
 FrameForge looks for decoder resources in this order:
 

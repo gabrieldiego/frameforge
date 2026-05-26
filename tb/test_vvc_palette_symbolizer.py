@@ -19,9 +19,6 @@ async def reset(dut):
     dut.ctu_coded_width.value = 8
     dut.ctu_coded_height.value = 8
     dut.cu_select_mask.value = 1 << 63
-    dut.sample_valid.value = 0
-    dut.sample_plane.value = 0
-    dut.sample.value = 0
     dut.s_axis_valid.value = 0
     dut.s_axis_plane.value = 0
     dut.s_axis_sample.value = 0
