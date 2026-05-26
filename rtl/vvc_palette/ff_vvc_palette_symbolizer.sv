@@ -67,6 +67,8 @@ module ff_vvc_palette_symbolizer #(
   logic [7:0]  selected_cu_count_x;
   logic [7:0]  selected_cu_count_y;
   logic [7:0]  visible_symbol_count;
+  logic [15:0] root_size_value;
+  logic [15:0] root_leaf_count_value;
   logic [7:0]  last_symbol_index;
   logic        start_drain;
   logic        drain_symbol_selected;
@@ -78,8 +80,7 @@ module ff_vvc_palette_symbolizer #(
   logic [7:0]  cu_palette_size_q;
   logic [7:0]  cu_sample_count_q;
 
-  assign symbol_count =
-    enable ? (palette_cu_count_x(ctu_coded_width) * palette_cu_count_y(ctu_coded_height)) : 8'd0;
+  assign symbol_count = enable ? root_leaf_count_value[7:0] : 8'd0;
   assign visible_symbol_count =
     enable ? (selected_cu_count_x * selected_cu_count_y) : 8'd0;
   assign s_axis_ready = enable && (!m_axis_valid || m_axis_ready);
@@ -99,7 +100,11 @@ module ff_vvc_palette_symbolizer #(
   always_comb begin
     logic [31:0] pos;
     logic [7:0] idx;
+    logic [15:0] root_cus_per_side;
 
+    root_size_value = CTU_SIZE;
+    root_cus_per_side = root_size_value / PALETTE_CU_SIZE;
+    root_leaf_count_value = root_cus_per_side * root_cus_per_side;
     selected_cu_count_x = 8'd0;
     selected_cu_count_y = 8'd0;
     for (int i = 0; i < MAX_PALETTE_SYMBOLS; i = i + 1) begin
@@ -483,7 +488,7 @@ module ff_vvc_palette_symbolizer #(
     begin
       origin_x = 16'd0;
       origin_y = 16'd0;
-      if (ctu_coded_width == 16'd64 && ctu_coded_height == 16'd64) begin
+      if (palette_root_size() == 16'd64) begin
         origin_x = index[4] ? 16'd32 : 16'd0;
         origin_y = index[5] ? 16'd32 : 16'd0;
         index_in_32 = {4'd0, index[3:0]};
@@ -491,7 +496,7 @@ module ff_vvc_palette_symbolizer #(
         index_in_32 = index;
       end
 
-      if (ctu_coded_width >= 16'd32 && ctu_coded_height >= 16'd32) begin
+      if (palette_root_size() >= 16'd32) begin
         origin_x = origin_x + (index_in_32[2] ? 16'd16 : 16'd0);
         origin_y = origin_y + (index_in_32[3] ? 16'd16 : 16'd0);
         index_in_16 = {6'd0, index_in_32[1:0]};
@@ -499,7 +504,7 @@ module ff_vvc_palette_symbolizer #(
         index_in_16 = index_in_32;
       end
 
-      if (ctu_coded_width >= 16'd16 && ctu_coded_height >= 16'd16) begin
+      if (palette_root_size() >= 16'd16) begin
         origin_x = origin_x + (index_in_16[0] ? PALETTE_CU_SIZE : 16'd0);
         origin_y = origin_y + (index_in_16[1] ? PALETTE_CU_SIZE : 16'd0);
       end else begin
@@ -508,6 +513,12 @@ module ff_vvc_palette_symbolizer #(
       end
 
       coding_order_position = {origin_x, origin_y};
+    end
+  endfunction
+
+  function automatic logic [15:0] palette_root_size();
+    begin
+      palette_root_size = CTU_SIZE;
     end
   endfunction
 

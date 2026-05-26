@@ -65,7 +65,7 @@ VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_generated_cabac_body.sv $(RTL_DIR
 TOPLEVEL := ff_vvc_cabac
 COCOTB_TEST_MODULES := test_vvc_palette_cabac
 else ifeq ($(DUT),vvc-encoder)
-VERILOG_SOURCES := $(RTL_DIR)/ff_vvc_geometry_pkg.sv $(RTL_DIR)/ff_residual_stub.sv $(RTL_DIR)/ff_vvc_coding_tree_scheduler.sv $(RTL_DIR)/vvc_cabac/ff_vvc_generated_cabac_body.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_cabac.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_symbolizer.sv $(RTL_DIR)/ff_vvc_encoder.sv
+VERILOG_SOURCES := $(RTL_DIR)/ff_vvc_geometry_pkg.sv $(RTL_DIR)/ff_residual_stub.sv $(RTL_DIR)/ff_vvc_coding_tree_scheduler.sv $(RTL_DIR)/ff_vvc_cu_activity_mask.sv $(RTL_DIR)/vvc_cabac/ff_vvc_generated_cabac_body.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_cabac.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_symbolizer.sv $(RTL_DIR)/ff_vvc_encoder.sv
 TOPLEVEL := ff_vvc_encoder
 COCOTB_TEST_MODULES := test_vvc_encoder
 else

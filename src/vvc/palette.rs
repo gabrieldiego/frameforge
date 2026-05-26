@@ -7,6 +7,9 @@ use super::{
     VvcVideoGeometry,
 };
 
+const VVC_PALETTE_CTU_SIZE: u16 = 64;
+const VVC_PALETTE_CU_SIZE: u16 = 8;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum VvcPaletteTreeType {
     SingleTree,
@@ -172,82 +175,60 @@ fn write_vvc_palette_444_entropy(writer: &mut VvcSyntaxWriter, frame: &Vvc4x4Sam
 }
 
 fn vvc_palette_444_cabac_bits(frame: &Vvc4x4SampledFrame) -> Vec<bool> {
-    let geometry = frame.geometry;
     let mut cabac = VvcCabacEncoder::new();
     let mut ctx = VvcPaletteCabacContexts::new();
+    let mut predictor_mode = VvcPalettePredictorMode::SignalNewEntry;
     cabac.start();
-    if geometry.coded_width() == 64 && geometry.coded_height() == 64 {
-        let mut predictor_mode = VvcPalettePredictorMode::SignalNewEntry;
-        append_vvc_palette_444_64x64_tree(&mut cabac, &mut ctx, frame, &mut predictor_mode);
-    } else if geometry.coded_width() == 32 && geometry.coded_height() == 32 {
-        let mut predictor_mode = VvcPalettePredictorMode::SignalNewEntry;
-        append_vvc_palette_444_32x32_tree(&mut cabac, &mut ctx, frame, &mut predictor_mode, 0, 0);
-    } else if geometry.coded_width() == 16 && geometry.coded_height() == 16 {
-        let mut predictor_mode = VvcPalettePredictorMode::SignalNewEntry;
-        append_vvc_palette_444_16x16_tree(
-            &mut cabac,
-            &mut ctx,
-            frame,
-            &mut predictor_mode,
-            0,
-            0,
-            VvcPalette16x16TreeCtx {
-                split: VvcPaletteCtx::Split6,
-                qt: VvcPaletteCtx::SplitQt12,
-            },
-        );
-    } else {
-        append_vvc_palette_444_8x8_cu(&mut cabac, &mut ctx, frame, 0, 0);
-    }
+    append_vvc_palette_444_tree(
+        &mut cabac,
+        &mut ctx,
+        frame,
+        &mut predictor_mode,
+        0,
+        0,
+        vvc_palette_root_size(frame.geometry),
+    );
     cabac.encode_bin_trm(true);
     cabac.finish()
 }
 
-fn append_vvc_palette_444_64x64_tree(
-    cabac: &mut VvcCabacEncoder,
-    ctx: &mut VvcPaletteCabacContexts,
-    frame: &Vvc4x4SampledFrame,
-    predictor_mode: &mut VvcPalettePredictorMode,
-) {
-    ctx.encode(cabac, VvcPaletteCtx::Split0, true);
-    for child in 0..4 {
-        let origin_x = if child & 1 == 0 { 0 } else { 32 };
-        let origin_y = if child < 2 { 0 } else { 32 };
-        append_vvc_palette_444_32x32_tree(cabac, ctx, frame, predictor_mode, origin_x, origin_y);
-    }
+fn vvc_palette_root_size(geometry: VvcVideoGeometry) -> u16 {
+    let _ = geometry;
+    VVC_PALETTE_CTU_SIZE
 }
 
-fn append_vvc_palette_444_32x32_tree(
+fn append_vvc_palette_444_tree(
     cabac: &mut VvcCabacEncoder,
     ctx: &mut VvcPaletteCabacContexts,
     frame: &Vvc4x4SampledFrame,
     predictor_mode: &mut VvcPalettePredictorMode,
     origin_x: u16,
     origin_y: u16,
+    size: u16,
 ) {
-    ctx.encode(cabac, vvc_palette_split_ctx(origin_x, origin_y, 32), true);
-    ctx.encode(
-        cabac,
-        vvc_palette_split_qt_ctx(origin_x, origin_y, 32, VvcPaletteQtCtxBase::Large),
-        true,
-    );
-    for child in 0..4 {
-        let x = origin_x + if child & 1 == 0 { 0 } else { 16 };
-        let y = origin_y + if child < 2 { 0 } else { 16 };
-        let split_ctx = vvc_palette_split_ctx(x, y, 16);
-        let qt_ctx = vvc_palette_split_qt_ctx(x, y, 16, VvcPaletteQtCtxBase::Small);
-        append_vvc_palette_444_16x16_tree(
+    if !vvc_palette_cu_origin_is_visible(frame.geometry, origin_x, origin_y) {
+        return;
+    }
+    if size == VVC_PALETTE_CU_SIZE {
+        if append_vvc_palette_444_8x8_cu_with_events(
             cabac,
             ctx,
             frame,
-            predictor_mode,
-            x,
-            y,
-            VvcPalette16x16TreeCtx {
-                split: split_ctx,
-                qt: qt_ctx,
-            },
-        );
+            origin_x,
+            origin_y,
+            *predictor_mode,
+        ) {
+            *predictor_mode = VvcPalettePredictorMode::SignalNewEntryAfterPredictor;
+        }
+        return;
+    }
+
+    append_vvc_palette_split(cabac, ctx, frame.geometry, origin_x, origin_y, size);
+    let child_size = size / 2;
+    for child in 0..4 {
+        let x = origin_x + if child & 1 == 0 { 0 } else { child_size };
+        let y = origin_y + if child < 2 { 0 } else { child_size };
+        append_vvc_palette_444_tree(cabac, ctx, frame, predictor_mode, x, y, child_size);
     }
 }
 
@@ -257,10 +238,44 @@ enum VvcPaletteQtCtxBase {
     Small,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct VvcPalette16x16TreeCtx {
-    split: VvcPaletteCtx,
-    qt: VvcPaletteCtx,
+fn append_vvc_palette_split(
+    cabac: &mut VvcCabacEncoder,
+    ctx: &mut VvcPaletteCabacContexts,
+    geometry: VvcVideoGeometry,
+    origin_x: u16,
+    origin_y: u16,
+    size: u16,
+) {
+    let split_cu_flag_present = (origin_x as usize + size as usize) <= geometry.coded_width()
+        && (origin_y as usize + size as usize) <= geometry.coded_height();
+    match size {
+        64 => {
+            if split_cu_flag_present {
+                ctx.encode(cabac, VvcPaletteCtx::Split0, true);
+            }
+        }
+        32 => {
+            if split_cu_flag_present {
+                ctx.encode(cabac, vvc_palette_split_ctx(origin_x, origin_y, 32), true);
+            }
+            ctx.encode(
+                cabac,
+                vvc_palette_split_qt_ctx(origin_x, origin_y, 32, VvcPaletteQtCtxBase::Large),
+                true,
+            );
+        }
+        16 => {
+            if split_cu_flag_present {
+                ctx.encode(cabac, vvc_palette_split_ctx(origin_x, origin_y, 16), true);
+            }
+            ctx.encode(
+                cabac,
+                vvc_palette_split_qt_ctx(origin_x, origin_y, 16, VvcPaletteQtCtxBase::Small),
+                true,
+            );
+        }
+        _ => unreachable!("palette coding tree currently recurses to palette CU leaves"),
+    }
 }
 
 fn vvc_palette_position_ctx_index(x: u16, y: u16, step: u16) -> u8 {
@@ -284,70 +299,6 @@ fn vvc_palette_split_qt_ctx(x: u16, y: u16, step: u16, base: VvcPaletteQtCtxBase
         (VvcPaletteQtCtxBase::Small, 1) => VvcPaletteCtx::SplitQt13,
         (VvcPaletteQtCtxBase::Small, _) => VvcPaletteCtx::SplitQt14,
     }
-}
-
-fn append_vvc_palette_444_16x16_tree(
-    cabac: &mut VvcCabacEncoder,
-    ctx: &mut VvcPaletteCabacContexts,
-    frame: &Vvc4x4SampledFrame,
-    predictor_mode: &mut VvcPalettePredictorMode,
-    origin_x: u16,
-    origin_y: u16,
-    tree_ctx: VvcPalette16x16TreeCtx,
-) {
-    ctx.encode(cabac, tree_ctx.split, true);
-    ctx.encode(cabac, tree_ctx.qt, true);
-    if append_vvc_palette_444_8x8_cu_with_events(
-        cabac,
-        ctx,
-        frame,
-        origin_x,
-        origin_y,
-        *predictor_mode,
-    ) {
-        *predictor_mode = VvcPalettePredictorMode::SignalNewEntryAfterPredictor;
-    }
-    append_vvc_palette_444_8x8_cu_with_events(
-        cabac,
-        ctx,
-        frame,
-        origin_x + 8,
-        origin_y,
-        VvcPalettePredictorMode::SignalNewEntryAfterPredictor,
-    );
-    let _ = append_vvc_palette_444_8x8_cu_with_events(
-        cabac,
-        ctx,
-        frame,
-        origin_x,
-        origin_y + 8,
-        VvcPalettePredictorMode::SignalNewEntryAfterPredictor,
-    );
-    append_vvc_palette_444_8x8_cu_with_events(
-        cabac,
-        ctx,
-        frame,
-        origin_x + 8,
-        origin_y + 8,
-        VvcPalettePredictorMode::SignalNewEntryAfterPredictor,
-    );
-}
-
-fn append_vvc_palette_444_8x8_cu(
-    cabac: &mut VvcCabacEncoder,
-    ctx: &mut VvcPaletteCabacContexts,
-    frame: &Vvc4x4SampledFrame,
-    origin_x: u16,
-    origin_y: u16,
-) {
-    append_vvc_palette_444_8x8_cu_with_events(
-        cabac,
-        ctx,
-        frame,
-        origin_x,
-        origin_y,
-        VvcPalettePredictorMode::SignalNewEntry,
-    );
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -518,29 +469,35 @@ struct VvcPaletteCabacContexts {
 }
 
 impl VvcPaletteCabacContexts {
+    const DEFAULT_SLICE_QP: i32 = 32;
+
     fn new() -> Self {
         Self {
-            split0: VvcCabacProbModel::from_cabac_state(78, 12),
-            split6: VvcCabacProbModel::from_cabac_state(114, 5),
-            split7: VvcCabacProbModel::from_cabac_state(202, 9),
-            split8: VvcCabacProbModel::from_cabac_state(238, 9),
-            split_qt9: VvcCabacProbModel::from_cabac_state(94, 0),
-            split_qt10: VvcCabacProbModel::from_cabac_state(154, 8),
-            split_qt11: VvcCabacProbModel::from_cabac_state(206, 8),
-            split_qt12: VvcCabacProbModel::from_cabac_state(22, 12),
-            split_qt13: VvcCabacProbModel::from_cabac_state(78, 12),
-            split_qt14: VvcCabacProbModel::from_cabac_state(182, 8),
-            plt_flag: VvcCabacProbModel::from_cabac_state(22, 1),
-            rotation_flag: VvcCabacProbModel::from_cabac_state(90, 5),
-            run_type_flag: VvcCabacProbModel::from_cabac_state(90, 9),
+            split0: Self::model_from_init(19, 12),
+            split6: Self::model_from_init(20, 5),
+            split7: Self::model_from_init(30, 9),
+            split8: Self::model_from_init(31, 9),
+            split_qt9: Self::model_from_init(27, 0),
+            split_qt10: Self::model_from_init(6, 8),
+            split_qt11: Self::model_from_init(15, 8),
+            split_qt12: Self::model_from_init(25, 12),
+            split_qt13: Self::model_from_init(19, 12),
+            split_qt14: Self::model_from_init(37, 8),
+            plt_flag: Self::model_from_init(22, 1),
+            rotation_flag: Self::model_from_init(90, 5),
+            run_type_flag: Self::model_from_init(90, 9),
             idx_run_model: [
-                VvcCabacProbModel::from_cabac_state(106, 9),
-                VvcCabacProbModel::from_cabac_state(182, 6),
-                VvcCabacProbModel::from_cabac_state(198, 9),
-                VvcCabacProbModel::from_cabac_state(202, 10),
-                VvcCabacProbModel::from_cabac_state(234, 5),
+                Self::model_from_init(106, 9),
+                Self::model_from_init(182, 6),
+                Self::model_from_init(198, 9),
+                Self::model_from_init(202, 10),
+                Self::model_from_init(234, 5),
             ],
         }
+    }
+
+    fn model_from_init(init_value: u8, log2_window_size: u8) -> VvcCabacProbModel {
+        VvcCabacProbModel::from_init_value(init_value, Self::DEFAULT_SLICE_QP, log2_window_size)
     }
 
     fn encode(&mut self, cabac: &mut VvcCabacEncoder, ctx: VvcPaletteCtx, bin: bool) {

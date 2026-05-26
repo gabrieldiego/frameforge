@@ -26,6 +26,7 @@ module ff_vvc_palette_cabac #(
   localparam int PALETTE_CTX_COUNT = 18;
   localparam int PALETTE_MODEL_BANK_BITS = PALETTE_CTX_COUNT * PALETTE_MODEL_BITS;
   localparam int CABAC_PENDING_BYTES = 64;
+  localparam int PALETTE_DEFAULT_SLICE_QP = 32;
   localparam int PALETTE_CTX_SPLIT0 = 0;
   localparam int PALETTE_CTX_SPLIT6 = 1;
   localparam int PALETTE_CTX_SPLIT7 = 2;
@@ -302,15 +303,20 @@ module ff_vvc_palette_cabac #(
       origin_x = pos[31:16];
       origin_y = pos[15:0];
 
-      if (coded_width == 16'd64 && coded_height == 16'd64 && symbol_index == 8'd0) begin
+      if (palette_root_size() == 16'd64 && symbol_index == 8'd0 &&
+          palette_split_cu_flag_present(origin_x, origin_y, 16'd64)) begin
         pst = palette_encode_ctx(pst, PALETTE_CTX_SPLIT0, 1'b1);
       end
-      if (coded_width >= 16'd32 && coded_height >= 16'd32 && symbol_index[3:0] == 4'd0) begin
-        pst = palette_encode_ctx(pst, palette_split_ctx_id(origin_x, origin_y, 16'd32), 1'b1);
+      if (palette_root_size() >= 16'd32 && symbol_index[3:0] == 4'd0) begin
+        if (palette_split_cu_flag_present(origin_x, origin_y, 16'd32)) begin
+          pst = palette_encode_ctx(pst, palette_split_ctx_id(origin_x, origin_y, 16'd32), 1'b1);
+        end
         pst = palette_encode_ctx(pst, palette_split_qt_ctx_id(origin_x, origin_y, 16'd32, 1'b1), 1'b1);
       end
-      if (coded_width >= 16'd16 && coded_height >= 16'd16 && symbol_index[1:0] == 2'd0) begin
-        pst = palette_encode_ctx(pst, palette_split_ctx_id(origin_x, origin_y, 16'd16), 1'b1);
+      if (palette_root_size() >= 16'd16 && symbol_index[1:0] == 2'd0) begin
+        if (palette_split_cu_flag_present(origin_x, origin_y, 16'd16)) begin
+          pst = palette_encode_ctx(pst, palette_split_ctx_id(origin_x, origin_y, 16'd16), 1'b1);
+        end
         pst = palette_encode_ctx(pst, palette_split_qt_ctx_id(origin_x, origin_y, 16'd16, 1'b0), 1'b1);
       end
 
@@ -435,7 +441,7 @@ module ff_vvc_palette_cabac #(
     begin
       origin_x = 16'd0;
       origin_y = 16'd0;
-      if (coded_width == 16'd64 && coded_height == 16'd64) begin
+      if (palette_root_size() == 16'd64) begin
         origin_x = index[4] ? 16'd32 : 16'd0;
         origin_y = index[5] ? 16'd32 : 16'd0;
         index_in_32 = {4'd0, index[3:0]};
@@ -443,7 +449,7 @@ module ff_vvc_palette_cabac #(
         index_in_32 = index;
       end
 
-      if (coded_width >= 16'd32 && coded_height >= 16'd32) begin
+      if (palette_root_size() >= 16'd32) begin
         origin_x = origin_x + (index_in_32[2] ? 16'd16 : 16'd0);
         origin_y = origin_y + (index_in_32[3] ? 16'd16 : 16'd0);
         index_in_16 = {6'd0, index_in_32[1:0]};
@@ -451,7 +457,7 @@ module ff_vvc_palette_cabac #(
         index_in_16 = index_in_32;
       end
 
-      if (coded_width >= 16'd16 && coded_height >= 16'd16) begin
+      if (palette_root_size() >= 16'd16) begin
         origin_x = origin_x + (index_in_16[0] ? 16'd8 : 16'd0);
         origin_y = origin_y + (index_in_16[1] ? 16'd8 : 16'd0);
       end else begin
@@ -460,6 +466,23 @@ module ff_vvc_palette_cabac #(
       end
 
       palette_coding_order_position = {origin_x, origin_y};
+    end
+  endfunction
+
+  function automatic logic [15:0] palette_root_size();
+    begin
+      palette_root_size = 16'd64;
+    end
+  endfunction
+
+  function automatic logic palette_split_cu_flag_present(
+    input logic [15:0] origin_x,
+    input logic [15:0] origin_y,
+    input logic [15:0] size
+  );
+    begin
+      palette_split_cu_flag_present =
+        ((origin_x + size) <= coded_width) && ((origin_y + size) <= coded_height);
     end
   endfunction
 
@@ -474,25 +497,51 @@ module ff_vvc_palette_cabac #(
     begin
       pst = '0;
       pst.cabac = cabac_start();
-      pst = palette_init_model(pst, PALETTE_CTX_SPLIT0, 8'd78, 8'd12);
-      pst = palette_init_model(pst, PALETTE_CTX_SPLIT6, 8'd114, 8'd5);
-      pst = palette_init_model(pst, PALETTE_CTX_SPLIT7, 8'd202, 8'd9);
-      pst = palette_init_model(pst, PALETTE_CTX_SPLIT8, 8'd238, 8'd9);
-      pst = palette_init_model(pst, PALETTE_CTX_SPLIT_QT9, 8'd94, 8'd0);
-      pst = palette_init_model(pst, PALETTE_CTX_SPLIT_QT10, 8'd154, 8'd8);
-      pst = palette_init_model(pst, PALETTE_CTX_SPLIT_QT11, 8'd206, 8'd8);
-      pst = palette_init_model(pst, PALETTE_CTX_SPLIT_QT12, 8'd22, 8'd12);
-      pst = palette_init_model(pst, PALETTE_CTX_SPLIT_QT13, 8'd78, 8'd12);
-      pst = palette_init_model(pst, PALETTE_CTX_SPLIT_QT14, 8'd182, 8'd8);
-      pst = palette_init_model(pst, PALETTE_CTX_PLT_FLAG, 8'd22, 8'd1);
-      pst = palette_init_model(pst, PALETTE_CTX_ROTATION_FLAG, 8'd90, 8'd5);
-      pst = palette_init_model(pst, PALETTE_CTX_RUN_TYPE_FLAG, 8'd90, 8'd9);
-      pst = palette_init_model(pst, PALETTE_CTX_IDX_RUN_0, 8'd106, 8'd9);
-      pst = palette_init_model(pst, PALETTE_CTX_IDX_RUN_1, 8'd182, 8'd6);
-      pst = palette_init_model(pst, PALETTE_CTX_IDX_RUN_2, 8'd198, 8'd9);
-      pst = palette_init_model(pst, PALETTE_CTX_IDX_RUN_3, 8'd202, 8'd10);
-      pst = palette_init_model(pst, PALETTE_CTX_IDX_RUN_4, 8'd234, 8'd5);
+      pst = palette_init_model_from_init(pst, PALETTE_CTX_SPLIT0, 8'd19, 8'd12);
+      pst = palette_init_model_from_init(pst, PALETTE_CTX_SPLIT6, 8'd20, 8'd5);
+      pst = palette_init_model_from_init(pst, PALETTE_CTX_SPLIT7, 8'd30, 8'd9);
+      pst = palette_init_model_from_init(pst, PALETTE_CTX_SPLIT8, 8'd31, 8'd9);
+      pst = palette_init_model_from_init(pst, PALETTE_CTX_SPLIT_QT9, 8'd27, 8'd0);
+      pst = palette_init_model_from_init(pst, PALETTE_CTX_SPLIT_QT10, 8'd6, 8'd8);
+      pst = palette_init_model_from_init(pst, PALETTE_CTX_SPLIT_QT11, 8'd15, 8'd8);
+      pst = palette_init_model_from_init(pst, PALETTE_CTX_SPLIT_QT12, 8'd25, 8'd12);
+      pst = palette_init_model_from_init(pst, PALETTE_CTX_SPLIT_QT13, 8'd19, 8'd12);
+      pst = palette_init_model_from_init(pst, PALETTE_CTX_SPLIT_QT14, 8'd37, 8'd8);
+      pst = palette_init_model_from_init(pst, PALETTE_CTX_PLT_FLAG, 8'd22, 8'd1);
+      pst = palette_init_model_from_init(pst, PALETTE_CTX_ROTATION_FLAG, 8'd90, 8'd5);
+      pst = palette_init_model_from_init(pst, PALETTE_CTX_RUN_TYPE_FLAG, 8'd90, 8'd9);
+      pst = palette_init_model_from_init(pst, PALETTE_CTX_IDX_RUN_0, 8'd106, 8'd9);
+      pst = palette_init_model_from_init(pst, PALETTE_CTX_IDX_RUN_1, 8'd182, 8'd6);
+      pst = palette_init_model_from_init(pst, PALETTE_CTX_IDX_RUN_2, 8'd198, 8'd9);
+      pst = palette_init_model_from_init(pst, PALETTE_CTX_IDX_RUN_3, 8'd202, 8'd10);
+      pst = palette_init_model_from_init(pst, PALETTE_CTX_IDX_RUN_4, 8'd234, 8'd5);
       palette_start = pst;
+    end
+  endfunction
+
+  function automatic palette_state_t palette_init_model_from_init(
+    input palette_state_t pst_in,
+    input int ctx_id,
+    input logic [7:0] init_value,
+    input logic [7:0] log2_window_size
+  );
+    int slope;
+    int offset;
+    int ini_state;
+    logic [7:0] clipped;
+    begin
+      slope = {24'd0, init_value[7:3]} - 4;
+      offset = ({24'd0, init_value[2:0]} * 18) + 1;
+      ini_state = ((slope * (PALETTE_DEFAULT_SLICE_QP - 16)) >>> 1) + offset;
+      if (ini_state < 1) begin
+        clipped = 8'd1;
+      end else if (ini_state > 127) begin
+        clipped = 8'd127;
+      end else begin
+        clipped = ini_state[7:0];
+      end
+      palette_init_model_from_init =
+        palette_init_model(pst_in, ctx_id, clipped, log2_window_size);
     end
   endfunction
 
@@ -513,8 +562,8 @@ module ff_vvc_palette_cabac #(
       models = pst.models;
       lsb = palette_model_lsb(ctx_id);
       pstate = {state, 8'd0};
-      models[lsb +: 16] = (pstate >> 1) & 16'h7fe0;
-      models[lsb + 16 +: 16] = (pstate >> 1) & 16'h7ffe;
+      models[lsb +: 16] = pstate & 16'h7fe0;
+      models[lsb + 16 +: 16] = pstate & 16'h7ffe;
       rate0 = 4'd2 + {2'd0, log2_window_size[3:2]};
       rate1 = 4'd3 + rate0 + {2'd0, log2_window_size[1:0]};
       models[lsb + 32 +: 8] = {rate0, rate1};

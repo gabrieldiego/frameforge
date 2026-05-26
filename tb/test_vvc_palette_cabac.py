@@ -12,6 +12,9 @@ VECTOR = REPO_ROOT / "verification/test_vectors/palette_tiles_64x64_1f_yuv444p8.
 DUMP = REPO_ROOT / "verification/generated/checksums/palette_tiles_64x64_1f_yuv444p8_palette_cabac.json"
 MULTICOLOR_VECTOR = REPO_ROOT / "verification/generated/checksums/palette_multicolor_8x8_1f_yuv444p8.yuv"
 MULTICOLOR_DUMP = REPO_ROOT / "verification/generated/checksums/palette_multicolor_8x8_1f_yuv444p8_palette_cabac.json"
+CTU_SIZE = 64
+PALETTE_CU_SIZE = 8
+CTU_PALETTE_CU_COUNT = (CTU_SIZE // PALETTE_CU_SIZE) * (CTU_SIZE // PALETTE_CU_SIZE)
 
 
 def pack_plane(data, width=64, height=64, max_width=64, max_height=64):
@@ -39,13 +42,13 @@ def palette_entries_and_indices(y, cb, cr, width, height, origin_x=0, origin_y=0
 
 def pack_palette_lossless_frame_symbols(y, cb, cr, width=64, height=64):
     symbols = []
-    tiles_x = (width + 7) // 8
-    tiles_y = (height + 7) // 8
-    count = tiles_x * tiles_y
+    count = CTU_PALETTE_CU_COUNT
     for index in range(count):
-        tile_x, tile_y = coding_order_tile(index, width, height)
-        origin_x = tile_x * 8
-        origin_y = tile_y * 8
+        origin_x, origin_y = coding_order_position(index)
+        selected = origin_x < width and origin_y < height
+        if not selected:
+            symbols.append(0x1 << 28)
+            continue
         entries, indices = palette_entries_and_indices(y, cb, cr, width, height, origin_x, origin_y)
         symbols.append((0x1 << 28) | (1 << 24) | (len(entries) << 16))
         for entry_y, _, _ in entries:
@@ -65,19 +68,7 @@ def pack_palette_lossless_frame_symbols(y, cb, cr, width=64, height=64):
 
 
 def pack_palette_lossless_symbols(y, cb, cr, width=8, height=8):
-    entries, indices = palette_entries_and_indices(y, cb, cr, width, height)
-    symbols = [(0x1 << 28) | (1 << 24) | (len(entries) << 16)]
-    for entry_y, _, _ in entries:
-        symbols.append((0x2 << 28) | entry_y)
-    for _, entry_cb, _ in entries:
-        symbols.append((0x4 << 28) | entry_cb)
-    for _, _, entry_cr in entries:
-        symbols.append((0x5 << 28) | entry_cr)
-    if len(entries) > 1:
-        for x, y_pos in palette_horizontal_scan_positions(width, height):
-            index = indices[y_pos * width + x]
-            symbols.append((0x3 << 28) | index)
-    return len(symbols), symbols
+    return pack_palette_lossless_frame_symbols(y, cb, cr, width, height)
 
 def palette_horizontal_scan_positions(width, height):
     for y_pos in range(height):
@@ -89,37 +80,18 @@ def palette_horizontal_scan_positions(width, height):
             yield x, y_pos
 
 
-def coding_order_tile(index, width, height):
+def coding_order_position(index):
     origin_x = 0
     origin_y = 0
-    index_in_32 = index
-    if width == 64 and height == 64:
-        origin_x += 32 if index & 0x10 else 0
-        origin_y += 32 if index & 0x20 else 0
-        index_in_32 = index & 0x0F
-    index_in_16 = index_in_32
-    if width >= 32 and height >= 32:
-        origin_x += 16 if index_in_32 & 0x04 else 0
-        origin_y += 16 if index_in_32 & 0x08 else 0
-        index_in_16 = index_in_32 & 0x03
-    if width >= 16 and height >= 16:
-        origin_x += 8 if index_in_16 & 0x01 else 0
-        origin_y += 8 if index_in_16 & 0x02 else 0
-    else:
-        origin_x += (index_in_16 & 0x07) * 8
-        origin_y += ((index_in_16 >> 3) & 0x07) * 8
-    return origin_x // 8, origin_y // 8
-
-
-def cabac_bytes(dut):
-    if not hasattr(dut, "compat_payload_bits"):
-        return None
-    bit_len = int(dut.compat_payload_bit_len.value)
-    value = int(dut.compat_payload_bits.value)
-    if bit_len == 0:
-        return b""
-    pad = ((bit_len + 7) // 8 * 8) - bit_len
-    return (value << pad).to_bytes((bit_len + 7) // 8, byteorder="big")
+    origin_x += 32 if index & 0x10 else 0
+    origin_y += 32 if index & 0x20 else 0
+    index_in_32 = index & 0x0F
+    origin_x += 16 if index_in_32 & 0x04 else 0
+    origin_y += 16 if index_in_32 & 0x08 else 0
+    index_in_16 = index_in_32 & 0x03
+    origin_x += 8 if index_in_16 & 0x01 else 0
+    origin_y += 8 if index_in_16 & 0x02 else 0
+    return origin_x, origin_y
 
 
 async def feed_palette_symbols(dut, symbols, count):
@@ -270,27 +242,19 @@ async def palette_cabac_matches_software_boundary_dump(dut):
         dut.m_axis_ready.value = 1
     dut.coded_width.value = reference["width"]
     dut.coded_height.value = reference["height"]
-    dut.symbol_count.value = ((reference["width"] + 7) // 8) * ((reference["height"] + 7) // 8)
+    dut.symbol_count.value = CTU_PALETTE_CU_COUNT
     await Timer(1, unit="ns")
     observed_stream = await feed_palette_symbols(dut, symbols, symbol_count)
     await Timer(1, unit="ns")
 
-    compat_bytes = cabac_bytes(dut)
-    observed_len = (
-        int(dut.compat_payload_bit_len.value)
-        if hasattr(dut, "compat_payload_bit_len")
-        else int(dut.stream_bit_count.value)
-    )
+    observed_len = int(dut.stream_bit_count.value)
     assert observed_len == reference["cabac_bit_len"], (
         observed_len,
         reference["cabac_bit_len"],
-        compat_bytes.hex() if compat_bytes is not None else None,
+        observed_stream.hex() if observed_stream is not None else None,
         reference["cabac_hex"],
     )
-    if compat_bytes is not None:
-        assert compat_bytes.hex() == reference["cabac_hex"], (compat_bytes.hex(), reference["cabac_hex"])
-    if observed_stream is not None:
-        assert observed_stream.hex() == reference["cabac_hex"]
+    assert observed_stream.hex() == reference["cabac_hex"]
 
 
 @cocotb.test()
@@ -338,24 +302,16 @@ async def palette_cabac_matches_multicolor_lossless_symbols(dut):
         dut.m_axis_ready.value = 1
     dut.coded_width.value = reference["width"]
     dut.coded_height.value = reference["height"]
-    dut.symbol_count.value = symbol_count
+    dut.symbol_count.value = CTU_PALETTE_CU_COUNT
     await Timer(1, unit="ns")
     observed_stream = await feed_palette_symbols(dut, symbols, symbol_count)
     await Timer(1, unit="ns")
 
-    compat_bytes = cabac_bytes(dut)
-    observed_len = (
-        int(dut.compat_payload_bit_len.value)
-        if hasattr(dut, "compat_payload_bit_len")
-        else int(dut.stream_bit_count.value)
-    )
+    observed_len = int(dut.stream_bit_count.value)
     assert observed_len == reference["cabac_bit_len"], (
         observed_len,
         reference["cabac_bit_len"],
-        compat_bytes.hex() if compat_bytes is not None else None,
+        observed_stream.hex() if observed_stream is not None else None,
         reference["cabac_hex"],
     )
-    if compat_bytes is not None:
-        assert compat_bytes.hex() == reference["cabac_hex"], (compat_bytes.hex(), reference["cabac_hex"])
-    if observed_stream is not None:
-        assert observed_stream.hex() == reference["cabac_hex"]
+    assert observed_stream.hex() == reference["cabac_hex"]

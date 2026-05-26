@@ -9,8 +9,7 @@ module ff_vvc_encoder #(
   // VVC chroma_format_idc values: 1=4:2:0, 2=4:2:2, 3=4:4:4.
   // 4:2:0 uses the current transform/residual path. 4:4:4 is routed through
   // the palette path so the sampling path is independent of TU size.
-  parameter int CHROMA_FORMAT_IDC = 1,
-  parameter bit PALETTE_SKIP_OFF_VIEW_CUS = 1'b1
+  parameter int CHROMA_FORMAT_IDC = 1
 ) (
   input  logic       clk,
   input  logic       rst_n,
@@ -79,7 +78,7 @@ module ff_vvc_encoder #(
   logic [1:0]  coding_tree_body_kind;
   logic        cabac_enable;
   logic [7:0]  palette_symbol_count;
-  logic [MAX_CTU_PALETTE_SYMBOLS - 1:0] palette_cu_select_mask;
+  logic [MAX_CTU_PALETTE_SYMBOLS - 1:0] ctu_cu_active_mask;
   logic        palette_sample_valid;
   logic [1:0]  palette_sample_plane;
   logic        palette_stream_valid;
@@ -133,21 +132,15 @@ module ff_vvc_encoder #(
       : ((generated_out_state_q == GENERATED_OUT_CABAC) && !generated_epb_pending_q &&
          (!m_axis_valid || m_axis_ready));
 
-  generate
-    if (PALETTE_SKIP_OFF_VIEW_CUS) begin : gen_palette_skip_off_view_cus
-      always_comb begin
-        palette_cu_select_mask = '0;
-        for (int i = 0; i < MAX_CTU_PALETTE_SYMBOLS; i = i + 1) begin
-          palette_cu_select_mask[MAX_CTU_PALETTE_SYMBOLS - 1 - i] =
-            palette_cu_origin_is_visible(i);
-        end
-      end
-    end else begin : gen_palette_code_padded_cus
-      // Compatibility mode for the current VVC syntax path, which still codes
-      // padded CUs in the cropped canvas.
-      assign palette_cu_select_mask = {MAX_CTU_PALETTE_SYMBOLS{1'b1}};
-    end
-  endgenerate
+  ff_vvc_cu_activity_mask #(
+    .CTU_SIZE(CTU_SIZE),
+    .CU_SIZE(PALETTE_CU_SIZE),
+    .CU_COUNT(MAX_CTU_PALETTE_SYMBOLS)
+  ) ctu_cu_activity_mask (
+    .visible_width(visible_width),
+    .visible_height(visible_height),
+    .cu_active_mask(ctu_cu_active_mask)
+  );
 
   ff_vvc_coding_tree_scheduler #(
     .CTU_SIZE(CTU_SIZE)
@@ -198,7 +191,7 @@ module ff_vvc_encoder #(
     .enable(PALETTE_MODE),
     .ctu_coded_width(coding_tree_coded_width),
     .ctu_coded_height(coding_tree_coded_height),
-    .cu_select_mask(palette_cu_select_mask),
+    .cu_select_mask(ctu_cu_active_mask),
     .s_axis_valid(palette_sample_valid),
     .s_axis_ready(),
     .s_axis_plane(palette_sample_plane),
@@ -1350,51 +1343,6 @@ module ff_vvc_encoder #(
   function automatic logic [15:0] coded_width();
     begin
       coded_width = coding_tree_coded_width;
-    end
-  endfunction
-
-  function automatic logic palette_cu_origin_is_visible(input logic [7:0] index);
-    logic [31:0] pos;
-    begin
-      pos = palette_coding_order_position(index);
-      palette_cu_origin_is_visible =
-        (pos[31:16] < visible_width) && (pos[15:0] < visible_height);
-    end
-  endfunction
-
-  function automatic logic [31:0] palette_coding_order_position(input logic [7:0] index);
-    logic [15:0] origin_x;
-    logic [15:0] origin_y;
-    logic [7:0]  index_in_32;
-    logic [7:0]  index_in_16;
-    begin
-      origin_x = 16'd0;
-      origin_y = 16'd0;
-      if (coding_tree_coded_width == 16'd64 && coding_tree_coded_height == 16'd64) begin
-        origin_x = index[4] ? 16'd32 : 16'd0;
-        origin_y = index[5] ? 16'd32 : 16'd0;
-        index_in_32 = {4'd0, index[3:0]};
-      end else begin
-        index_in_32 = index;
-      end
-
-      if (coding_tree_coded_width >= 16'd32 && coding_tree_coded_height >= 16'd32) begin
-        origin_x = origin_x + (index_in_32[2] ? 16'd16 : 16'd0);
-        origin_y = origin_y + (index_in_32[3] ? 16'd16 : 16'd0);
-        index_in_16 = {6'd0, index_in_32[1:0]};
-      end else begin
-        index_in_16 = index_in_32;
-      end
-
-      if (coding_tree_coded_width >= 16'd16 && coding_tree_coded_height >= 16'd16) begin
-        origin_x = origin_x + (index_in_16[0] ? PALETTE_CU_SIZE : 16'd0);
-        origin_y = origin_y + (index_in_16[1] ? PALETTE_CU_SIZE : 16'd0);
-      end else begin
-        origin_x = index_in_16[2:0] * PALETTE_CU_SIZE;
-        origin_y = index_in_16[5:3] * PALETTE_CU_SIZE;
-      end
-
-      palette_coding_order_position = {origin_x, origin_y};
     end
   endfunction
 
