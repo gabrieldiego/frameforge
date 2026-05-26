@@ -572,33 +572,12 @@ fn vvc_annex_b(params: VvcEncodeParams, frame: Vvc4x4SampledFrame) -> Result<Vec
     let mut units = Vec::with_capacity(params.frames + 3);
     units.push(vvc_4x4_sps_unit(frame.geometry));
     units.push(vvc_4x4_pps_unit(frame.geometry));
-    units.push(vvc_4x4_color_filler_unit(frame.sampled_color()));
     let geometry = frame.geometry;
     let quantized = quantize_vvc_4x4_frame(frame);
     for frame_idx in 0..params.frames {
         units.push(vvc_4x4_slice_unit(frame_idx, geometry, quantized)?);
     }
     write_annex_b(&units)
-}
-
-fn vvc_4x4_color_filler_unit(color: Vvc4x4SampledColor) -> VvcNalUnit {
-    VvcNalUnit {
-        nal_unit_type: VvcNalUnitType::FillerData,
-        layer_id: 0,
-        temporal_id: 0,
-        rbsp_payload: vvc_4x4_color_filler_payload(color),
-    }
-}
-
-fn vvc_4x4_color_filler_payload(color: Vvc4x4SampledColor) -> Vec<u8> {
-    let filler_count = vvc_4x4_color_filler_count(color);
-    let mut payload = vec![0xff; filler_count];
-    payload.push(0x80);
-    payload
-}
-
-fn vvc_4x4_color_filler_count(color: Vvc4x4SampledColor) -> usize {
-    ((color.y as usize) + (color.u as usize) + (color.v as usize)) & 0x0f
 }
 
 fn encode_vvc_coeff_token(negative: bool, magnitude: u8) -> u8 {

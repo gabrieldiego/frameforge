@@ -22,7 +22,6 @@ pub enum VvcNalUnitType {
     EndOfBitstream = 22,
     PrefixSei = 23,
     SuffixSei = 24,
-    FillerData = 25,
     ReservedNvcl30 = 30,
 }
 

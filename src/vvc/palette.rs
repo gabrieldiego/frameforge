@@ -1,10 +1,9 @@
 use crate::picture::{ChromaSampling, PixelFormat};
 
 use super::{
-    sample_vvc_yuv_frame, vvc_4x4_color_filler_unit, vvc_4x4_pps_unit, vvc_palette_444_sps_unit,
-    write_annex_b, Vvc4x4PictureKind, Vvc4x4SampledColor, Vvc4x4SampledFrame, VvcCabacEncoder,
-    VvcCabacProbModel, VvcEncodeParams, VvcNalUnit, VvcNalUnitType, VvcSyntaxWriter,
-    VvcVideoGeometry,
+    sample_vvc_yuv_frame, vvc_4x4_pps_unit, vvc_palette_444_sps_unit, write_annex_b,
+    Vvc4x4PictureKind, Vvc4x4SampledColor, Vvc4x4SampledFrame, VvcCabacEncoder, VvcCabacProbModel,
+    VvcEncodeParams, VvcNalUnit, VvcNalUnitType, VvcSyntaxWriter, VvcVideoGeometry,
 };
 
 const VVC_PALETTE_CTU_SIZE: u16 = 64;
@@ -108,7 +107,6 @@ pub(super) fn vvc_palette_444_annex_b(
     let geometry = frame.geometry;
     units.push(vvc_palette_444_sps_unit(geometry));
     units.push(vvc_4x4_pps_unit(geometry));
-    units.push(vvc_4x4_color_filler_unit(frame.sampled_color()));
     for frame_idx in 0..params.frames {
         units.push(vvc_palette_444_slice_unit(frame_idx, &frame)?);
     }

@@ -722,8 +722,8 @@ module ff_vvc_generated_cabac_body (
             cr_rem_in,
             8'd0,
             8'd0,
-            8'd32,
-            8'd32,
+            visible_width[8:1],
+            visible_height[8:1],
             visible_width[8:1],
             visible_height[8:1],
             8'd4,
@@ -934,12 +934,79 @@ module ff_vvc_generated_cabac_body (
       {split_ctx, st} = encode_ctu_luma_leaf_split(st_in, split_ctx_in, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
       {multi_ref_line_ctx, st} = encode_ctu_luma_multi_ref_line(st, multi_ref_line_ctx_in, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
       {intra_mpm_ctx, intra_planar_ctx, st} = encode_ctu_luma_intra_planar_mode(st, intra_mpm_ctx_in, intra_planar_ctx_in, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
-      {qt_cbf_y_ctx, st} = encode_ctu_luma_cbf(st, qt_cbf_y_ctx_in, 1'b0, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
-      // Zero-CBF generated leaves do not consume mts_idx CABAC bins. VTM still
-      // logs mts_idx() with the inferred DCT2 value, but CU::isMTSAllowed()
-      // is false for this no-residual subset.
+      {qt_cbf_y_ctx, st} = encode_ctu_luma_cbf(st, qt_cbf_y_ctx_in, rem != 5'd0, cb_x, cb_y, cb_width, cb_height, cqt_depth, mtt_depth);
+      if (rem != 5'd0) begin
+        st = encode_ctu_luma_dc_residual(st, rem, cb_width, cb_height);
+      end
+      // The current DC-only residual subset does not consume mts_idx CABAC
+      // bins. VTM still logs mts_idx() with the inferred DCT2 value, but
+      // CU::isMTSAllowed() is false for this generated path.
       mts_idx_ctx = mts_idx_ctx_in;
       encode_ctu_luma_leaf = {split_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, st};
+    end
+  endfunction
+
+  function automatic cabac_writer_state_t encode_ctu_luma_dc_residual(
+    input cabac_writer_state_t st_in,
+    input logic [4:0] rem,
+    input logic [7:0] cb_width,
+    input logic [7:0] cb_height
+  );
+    cabac_writer_state_t st;
+    vvc_prob_model_t last_sig_x_ctx0;
+    vvc_prob_model_t last_sig_y_ctx0;
+    vvc_prob_model_t abs_gtx_ctx0;
+    vvc_prob_model_t par_level_ctx0;
+    vvc_prob_model_t abs_gtx_ctx32;
+    logic [4:0] last_sig_x_ctx_inc;
+    logic [4:0] last_sig_y_ctx_inc;
+    begin
+      st = st_in;
+      last_sig_x_ctx_inc = vvc_last_sig_coeff_prefix_ctx(1'b1, log2_u8(cb_width), 6'd0);
+      last_sig_y_ctx_inc = vvc_last_sig_coeff_prefix_ctx(1'b1, log2_u8(cb_height), 6'd0);
+      last_sig_x_ctx0 = vvc_prob_model_init(
+        vvc_last_sig_coeff_x_prefix_init(last_sig_x_ctx_inc),
+        vvc_last_sig_coeff_x_prefix_log2_window(last_sig_x_ctx_inc),
+        32
+      );
+      last_sig_y_ctx0 = vvc_prob_model_init(
+        vvc_last_sig_coeff_y_prefix_init(last_sig_y_ctx_inc),
+        vvc_last_sig_coeff_y_prefix_log2_window(last_sig_y_ctx_inc),
+        32
+      );
+      abs_gtx_ctx0 = vvc_prob_model_init(
+        vvc_abs_level_gtx_flag_init(6'd0),
+        vvc_abs_level_gtx_flag_log2_window(6'd0),
+        32
+      );
+      par_level_ctx0 = vvc_prob_model_init(
+        vvc_par_level_flag_init(6'd0),
+        vvc_par_level_flag_log2_window(6'd0),
+        32
+      );
+      abs_gtx_ctx32 = vvc_prob_model_init(
+        vvc_abs_level_gtx_flag_init(6'd32),
+        vvc_abs_level_gtx_flag_log2_window(6'd32),
+        32
+      );
+
+      // DC-only residual_coding subset:
+      // last_sig_coeff_x_prefix=0, last_sig_coeff_y_prefix=0. With the last
+      // significant scan position at DC, sig_coeff_flag is inferred for that
+      // coefficient. The regular level bins are gt1, parity, gt2, remainder,
+      // followed by the bypass sign.
+      {last_sig_x_ctx0, st} = cabac_encode_vvc_model_bin(st, last_sig_x_ctx0, 1'b0);
+      {last_sig_y_ctx0, st} = cabac_encode_vvc_model_bin(st, last_sig_y_ctx0, 1'b0);
+      {abs_gtx_ctx0, st} = cabac_encode_vvc_model_bin(st, abs_gtx_ctx0, rem > 5'd1);
+      if (rem > 5'd1) begin
+        {par_level_ctx0, st} = cabac_encode_vvc_model_bin(st, par_level_ctx0, rem[0]);
+        {abs_gtx_ctx32, st} = cabac_encode_vvc_model_bin(st, abs_gtx_ctx32, rem > 5'd3);
+        if (rem > 5'd3) begin
+          st = cabac_encode_rem_abs_ep(st, (rem - 5'd4) >> 1, 3'd0);
+        end
+      end
+      st = cabac_encode_bin_ep(st, 1'b1);
+      encode_ctu_luma_dc_residual = st;
     end
   endfunction
 
@@ -1035,11 +1102,12 @@ module ff_vvc_generated_cabac_body (
     vvc_prob_model_t intra_mpm_ctx;
     vvc_prob_model_t intra_planar_ctx;
     begin
-      // Planar as MPM index zero: intra_luma_mpm_flag=1 followed by
-      // intra_luma_not_planar_flag=0. Future work should derive MPMs from
-      // neighbouring CUs instead of assuming the planar entry.
-      {intra_mpm_ctx, st} = cabac_encode_vvc_model_bin(st_in, intra_mpm_ctx_in, 1'b1);
-      {intra_planar_ctx, st} = cabac_encode_vvc_model_bin(st, intra_planar_ctx_in, 1'b0);
+      // Explicit remaining-mode branch matching the Rust syntax generator:
+      // intra_luma_mpm_flag=0 followed by the six bypass bits for mode 26.
+      // Future work should derive the selected mode from prediction costs.
+      {intra_mpm_ctx, st} = cabac_encode_vvc_model_bin(st_in, intra_mpm_ctx_in, 1'b0);
+      st = cabac_encode_bins_ep(st, 32'd26, 6'd6);
+      intra_planar_ctx = intra_planar_ctx_in;
       encode_ctu_luma_intra_planar_mode = {intra_mpm_ctx, intra_planar_ctx, st};
     end
   endfunction
@@ -1754,6 +1822,20 @@ module ff_vvc_generated_cabac_body (
         {3'd0, left_deeper_qt && available_left} +
         {3'd0, above_deeper_qt && available_above} +
         (cqt_depth >= 3'd2 ? 4'd3 : 4'd0);
+    end
+  endfunction
+
+  function automatic logic [2:0] log2_u8(input logic [7:0] value);
+    logic [7:0] shifted;
+    logic [2:0] result;
+    begin
+      shifted = value;
+      result = 3'd0;
+      while (shifted > 8'd1) begin
+        shifted = shifted >> 1;
+        result = result + 3'd1;
+      end
+      log2_u8 = result;
     end
   endfunction
 

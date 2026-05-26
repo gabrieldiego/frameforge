@@ -215,14 +215,13 @@ fn syntax_writer_encodes_signed_exp_golomb() {
 #[test]
 fn parses_vvc_black_4x4_one_frame_headers() {
     let bytes = vvc_black_yuv420p8_annex_b(VvcEncodeParams { frames: 1 }).unwrap();
-    assert_eq!(bytes.len(), 81);
+    assert_eq!(bytes.len(), 74);
     let infos = parse_annex_b_nal_units(&bytes).unwrap();
     let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
-    assert_eq!(types, vec![15, 16, 25, 8]);
+    assert_eq!(types, vec![15, 16, 8]);
     assert_eq!(infos[0].payload_len, 31);
     assert_eq!(infos[1].payload_len, 14);
-    assert_eq!(infos[2].payload_len, 1);
-    assert_eq!(infos[3].payload_len, 11);
+    assert_eq!(infos[2].payload_len, 11);
 }
 
 #[test]
@@ -1667,12 +1666,12 @@ fn vvc_coding_tree_plan_carries_chroma_sampling_parameter() {
 #[test]
 fn parses_vvc_black_4x4_two_frame_headers() {
     let bytes = vvc_black_yuv420p8_annex_b(VvcEncodeParams { frames: 2 }).unwrap();
-    assert_eq!(bytes.len(), 98);
+    assert_eq!(bytes.len(), 91);
     let infos = parse_annex_b_nal_units(&bytes).unwrap();
     let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
-    assert_eq!(types, vec![15, 16, 25, 8, 9]);
-    assert_eq!(infos[4].offset, 85);
-    assert_eq!(infos[4].payload_len, 11);
+    assert_eq!(types, vec![15, 16, 8, 9]);
+    assert_eq!(infos[3].offset, 78);
+    assert_eq!(infos[3].payload_len, 11);
 }
 
 #[test]
@@ -1699,7 +1698,7 @@ fn vvc_input_path_accepts_4x8_yuv420p8_frames() {
     .unwrap();
     let infos = parse_annex_b_nal_units(&bytes).unwrap();
     let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
-    assert_eq!(types, vec![15, 16, 25, 8]);
+    assert_eq!(types, vec![15, 16, 8]);
 }
 
 #[test]
@@ -1717,7 +1716,7 @@ fn vvc_input_path_accepts_16x16_yuv444p8_frames() {
     .unwrap();
     let infos = parse_annex_b_nal_units(&bytes).unwrap();
     let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
-    assert_eq!(types, vec![15, 16, 25, 8]);
+    assert_eq!(types, vec![15, 16, 8]);
     assert_eq!(infos[0].payload_len, 29);
     assert_eq!(infos[1].payload_len, 14);
 }
@@ -1763,8 +1762,7 @@ fn vvc_bitstream_path_accepts_sampled_non_black_input() {
     let bytes = vvc_yuv420p8_annex_b_from_input(&input, VvcEncodeParams { frames: 1 }).unwrap();
     let infos = parse_annex_b_nal_units(&bytes).unwrap();
     let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
-    assert_eq!(types, vec![15, 16, 25, 8]);
-    assert_eq!(infos[2].payload_len, 2);
+    assert_eq!(types, vec![15, 16, 8]);
 }
 
 #[test]
@@ -1821,7 +1819,7 @@ fn vvc_yuv444_input_routes_to_palette_path() {
     .unwrap();
     let infos = parse_annex_b_nal_units(&bytes).unwrap();
     let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
-    assert_eq!(types, vec![15, 16, 25, 8]);
+    assert_eq!(types, vec![15, 16, 8]);
     assert_ne!(bytes, transform_bytes);
     assert!(!bytes.windows(4).any(|window| window == b"FFPL"));
     assert!(!bytes.windows(4).any(|window| window == b"FFAC"));

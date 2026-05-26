@@ -688,7 +688,7 @@ module ff_vvc_encoder #(
   function automatic logic [12:0] palette_direct_preamble_len();
     begin
       palette_direct_preamble_len =
-        parameter_set_len() + color_filler_nal_len() + NAL_OVERHEAD_LEN + 13'd3;
+        parameter_set_len() + NAL_OVERHEAD_LEN + 13'd3;
     end
   endfunction
 
@@ -696,7 +696,7 @@ module ff_vvc_encoder #(
     logic [12:0] slice_base;
     logic [12:0] slice_index;
     begin
-      slice_base = parameter_set_len() + color_filler_nal_len();
+      slice_base = parameter_set_len();
       if (index < slice_base) begin
         palette_direct_preamble_byte = stream_byte(index);
       end else if (index < slice_base + NAL_OVERHEAD_LEN) begin
@@ -716,14 +716,14 @@ module ff_vvc_encoder #(
   function automatic logic palette_direct_preamble_is_slice_payload(input logic [12:0] index);
     begin
       palette_direct_preamble_is_slice_payload =
-        index >= (parameter_set_len() + color_filler_nal_len() + NAL_OVERHEAD_LEN);
+        index >= (parameter_set_len() + NAL_OVERHEAD_LEN);
     end
   endfunction
 
   function automatic logic [12:0] generated_direct_preamble_len(input logic cra_picture);
     begin
       generated_direct_preamble_len =
-        (cra_picture ? 13'd0 : parameter_set_len() + color_filler_nal_len())
+        (cra_picture ? 13'd0 : parameter_set_len())
         + NAL_OVERHEAD_LEN + 13'd3;
     end
   endfunction
@@ -735,10 +735,10 @@ module ff_vvc_encoder #(
     logic [12:0] slice_prefix_base;
     logic [12:0] slice_index;
     begin
-      if (!cra_picture && (index < parameter_set_len() + color_filler_nal_len())) begin
+      if (!cra_picture && (index < parameter_set_len())) begin
         generated_direct_preamble_byte = stream_byte(index);
       end else begin
-        slice_prefix_base = cra_picture ? 13'd0 : parameter_set_len() + color_filler_nal_len();
+        slice_prefix_base = cra_picture ? 13'd0 : parameter_set_len();
         slice_index = index - slice_prefix_base;
         if (slice_index < 13'd4) begin
           generated_direct_preamble_byte = start_code_byte(slice_index[1:0]);
@@ -757,7 +757,7 @@ module ff_vvc_encoder #(
   );
     begin
       generated_direct_preamble_is_slice_payload =
-        index >= ((cra_picture ? 13'd0 : parameter_set_len() + color_filler_nal_len()) + NAL_OVERHEAD_LEN);
+        index >= ((cra_picture ? 13'd0 : parameter_set_len()) + NAL_OVERHEAD_LEN);
     end
   endfunction
 
@@ -917,8 +917,8 @@ module ff_vvc_encoder #(
 
   function automatic logic [12:0] stream_len(input logic [1:0] frames);
     case (frames)
-      2'd2: stream_len = parameter_set_len() + color_filler_nal_len() + slice_nal_len() + slice_cra_nal_len();
-      default: stream_len = parameter_set_len() + color_filler_nal_len() + slice_nal_len();
+      2'd2: stream_len = parameter_set_len() + slice_nal_len() + slice_cra_nal_len();
+      default: stream_len = parameter_set_len() + slice_nal_len();
     endcase
   endfunction
 
@@ -930,11 +930,11 @@ module ff_vvc_encoder #(
       second_slice_len = slice_payload_escaped_len_calc(1'b1);
       case (frames)
         2'd2: stream_len_from_slice_payloads =
-          parameter_set_len() + color_filler_nal_len()
+          parameter_set_len()
           + NAL_OVERHEAD_LEN + first_slice_len
           + NAL_OVERHEAD_LEN + second_slice_len;
         default: stream_len_from_slice_payloads =
-          parameter_set_len() + color_filler_nal_len()
+          parameter_set_len()
           + NAL_OVERHEAD_LEN + first_slice_len;
       endcase
     end
@@ -1016,24 +1016,6 @@ module ff_vvc_encoder #(
     end
   endfunction
 
-  function automatic logic [7:0] color_filler_count();
-    begin
-      color_filler_count = (sample_to_8bit(sampled_y) + sample_to_8bit(sampled_u) + sample_to_8bit(sampled_v)) & 8'h0f;
-    end
-  endfunction
-
-  function automatic logic [7:0] color_filler_payload_len();
-    begin
-      color_filler_payload_len = color_filler_count() + 8'd1;
-    end
-  endfunction
-
-  function automatic logic [12:0] color_filler_nal_len();
-    begin
-      color_filler_nal_len = NAL_OVERHEAD_LEN + color_filler_payload_len();
-    end
-  endfunction
-
   function automatic logic [7:0] stream_byte(input logic [12:0] index);
     logic second_picture;
     logic [12:0] slice_base;
@@ -1044,10 +1026,8 @@ module ff_vvc_encoder #(
         stream_byte = nal_byte(3'd0, index, 1'b0);
       end else if (index < parameter_set_len()) begin
         stream_byte = nal_byte(3'd1, index - sps_nal_len(), 1'b0);
-      end else if (index < parameter_set_len() + color_filler_nal_len()) begin
-        stream_byte = nal_byte(3'd3, index - parameter_set_len(), 1'b0);
       end else begin
-        slice_base = parameter_set_len() + color_filler_nal_len();
+        slice_base = parameter_set_len();
         second_picture = (index >= slice_base + slice_nal_len());
         slice_index = second_picture
           ? (index - (slice_base + slice_nal_len()))
@@ -1103,7 +1083,6 @@ module ff_vvc_encoder #(
       case (nal_kind)
         3'd0: nal_unit_type = 5'd15; // SPS.
         3'd1: nal_unit_type = 5'd16; // PPS.
-        3'd3: nal_unit_type = 5'd25; // Filler data.
         default: nal_unit_type = cra_picture ? 5'd9 : 5'd8;
       endcase
     end
@@ -1134,7 +1113,6 @@ module ff_vvc_encoder #(
       case (nal_kind)
         3'd0: payload_byte = sps_payload_byte(payload_index);
         3'd1: payload_byte = pps_payload_byte(payload_index);
-        3'd3: payload_byte = color_filler_payload_byte(payload_index);
         default: payload_byte = slice_payload_byte(payload_index, cra_picture);
       endcase
     end
@@ -1208,18 +1186,6 @@ module ff_vvc_encoder #(
         end else begin
           zero_count = 2'd0;
         end
-      end
-    end
-  endfunction
-
-  function automatic logic [7:0] color_filler_payload_byte(input logic [12:0] index);
-    begin
-      if (index < color_filler_count()) begin
-        color_filler_payload_byte = 8'hff;
-      end else if (index == color_filler_count()) begin
-        color_filler_payload_byte = 8'h80;
-      end else begin
-        color_filler_payload_byte = 8'h00;
       end
     end
   endfunction
