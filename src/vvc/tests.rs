@@ -818,6 +818,7 @@ fn vvc_ctu_partition_params_are_geometry_derived() {
             root_height: 64,
             visible_width: 64,
             visible_height: 64,
+            chroma_sampling: ChromaSampling::Cs420,
             luma_leaf_count: 1,
             chroma_tu_count: 64,
             luma_dc_abs_level: 16,
@@ -837,6 +838,7 @@ fn vvc_ctu_partition_params_are_geometry_derived() {
             root_height: 64,
             visible_width: 64,
             visible_height: 32,
+            chroma_sampling: ChromaSampling::Cs420,
             luma_leaf_count: 52,
             chroma_tu_count: 32,
             luma_dc_abs_level: 16,
@@ -856,6 +858,7 @@ fn vvc_ctu_partition_params_are_geometry_derived() {
             root_height: 64,
             visible_width: 32,
             visible_height: 64,
+            chroma_sampling: ChromaSampling::Cs420,
             luma_leaf_count: 64,
             chroma_tu_count: 32,
             luma_dc_abs_level: 16,
@@ -875,6 +878,7 @@ fn vvc_ctu_partition_params_are_geometry_derived() {
             root_height: 32,
             visible_width: 32,
             visible_height: 32,
+            chroma_sampling: ChromaSampling::Cs420,
             luma_leaf_count: 1,
             chroma_tu_count: 16,
             luma_dc_abs_level: 16,
@@ -894,6 +898,7 @@ fn vvc_ctu_partition_params_are_geometry_derived() {
             root_height: 16,
             visible_width: 16,
             visible_height: 16,
+            chroma_sampling: ChromaSampling::Cs420,
             luma_leaf_count: 1,
             chroma_tu_count: 4,
             luma_dc_abs_level: 16,
@@ -1352,6 +1357,7 @@ fn vvc_ctu_cabac_generator_names_64x64_operation_sequence() {
         root_height: 64,
         visible_width: 64,
         visible_height: 64,
+        chroma_sampling: ChromaSampling::Cs420,
         luma_leaf_count: 1,
         chroma_tu_count: 64,
         luma_dc_abs_level: 0,
@@ -1374,9 +1380,9 @@ fn vvc_ctu_cabac_generator_names_64x64_operation_sequence() {
                 split_ctx: VvcSplitCtxInput::qt_only_root().split_cu_flag_ctx()
             },
             VvcCtuCabacOp::ChromaTree {
-                node: VvcCodingTreeNode::root(32, 32, VvcTreeType::DualTreeChroma),
-                visible_width: 32,
-                visible_height: 32
+                node: params.ctu_chroma_root(),
+                visible_width: params.visible_chroma_width(),
+                visible_height: params.visible_chroma_height()
             }
         ]
     );
@@ -1389,6 +1395,7 @@ fn vvc_ctu_cabac_generator_names_rectangular_64_sample_operation_sequence() {
         root_height: 64,
         visible_width: 64,
         visible_height: 32,
+        chroma_sampling: ChromaSampling::Cs420,
         luma_leaf_count: 52,
         chroma_tu_count: 32,
         luma_dc_abs_level: 0,
@@ -1410,9 +1417,9 @@ fn vvc_ctu_cabac_generator_names_rectangular_64_sample_operation_sequence() {
     assert_eq!(
         ops.last(),
         Some(&VvcCtuCabacOp::ChromaTree {
-            node: VvcCodingTreeNode::root(32, 32, VvcTreeType::DualTreeChroma),
-            visible_width: 32,
-            visible_height: 16,
+            node: params.ctu_chroma_root(),
+            visible_width: params.visible_chroma_width(),
+            visible_height: params.visible_chroma_height(),
         })
     );
     assert_eq!(

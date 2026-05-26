@@ -18,28 +18,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_DIR = Path("verification/generated/checksums")
 RTL_SUPPORTED_FORMAT = "yuv420p8"
-VVC_16X16_SCRIPTED_RECON = bytes(
-    [
-        124, 124, 124, 125, 125, 126, 127, 128, 129, 129, 130, 131, 131, 132, 132, 132,
-        122, 123, 123, 123, 124, 125, 126, 126, 127, 128, 129, 129, 130, 130, 131, 131,
-        122, 123, 123, 123, 124, 125, 125, 126, 127, 128, 128, 129, 130, 130, 130, 131,
-        125, 125, 126, 126, 127, 127, 128, 129, 130, 130, 131, 132, 132, 133, 133, 133,
-        129, 129, 129, 130, 130, 131, 132, 132, 133, 134, 134, 135, 135, 136, 136, 136,
-        130, 130, 130, 131, 131, 132, 132, 133, 134, 134, 135, 135, 136, 136, 136, 137,
-        127, 127, 127, 128, 128, 128, 129, 130, 130, 131, 131, 132, 132, 132, 133, 133,
-        123, 123, 123, 124, 124, 124, 125, 125, 126, 126, 127, 127, 128, 128, 128, 128,
-        122, 122, 122, 123, 123, 123, 124, 124, 125, 125, 126, 126, 126, 127, 127, 127,
-        124, 125, 125, 125, 125, 126, 126, 126, 127, 127, 127, 128, 128, 128, 128, 129,
-        127, 127, 127, 127, 127, 128, 128, 128, 128, 129, 129, 129, 130, 130, 130, 130,
-        126, 126, 126, 126, 126, 127, 127, 127, 127, 128, 128, 128, 128, 128, 129, 129,
-        123, 123, 123, 123, 123, 124, 124, 124, 124, 124, 125, 125, 125, 125, 125, 125,
-        121, 121, 122, 122, 122, 122, 122, 122, 122, 123, 123, 123, 123, 123, 123, 123,
-        123, 123, 123, 123, 123, 123, 123, 123, 124, 124, 124, 124, 124, 124, 124, 124,
-        125, 125, 125, 125, 125, 125, 125, 125, 126, 126, 126, 126, 126, 126, 126, 126,
-    ]
-    + [128] * 64
-    + [119] * 64
-)
 
 # Keep this in sync with frameforge::vvc::VVC_CODED_DIMENSION_GRANULARITY and
 # rtl/ff_vvc_geometry_pkg.sv. It is the current validation-path coded-picture
@@ -433,27 +411,9 @@ def uses_capacity_tu_grid(frame: bytes, info: InputInfo) -> bool:
 
 
 def cropped_vvc_16x16_generated_recon(info: InputInfo) -> bytes:
-    coded_luma = 16 * 16
-    coded_chroma = 8 * 8
-    luma = VVC_16X16_SCRIPTED_RECON[:coded_luma]
-    cb = VVC_16X16_SCRIPTED_RECON[coded_luma : coded_luma + coded_chroma]
-    cr = VVC_16X16_SCRIPTED_RECON[coded_luma + coded_chroma :]
-
-    out_luma = bytearray()
-    for y in range(info.height):
-        row = y * 16
-        out_luma.extend(luma[row : row + info.width])
-
-    chroma_width = info.width // 2
-    chroma_height = info.height // 2
-    out_cb = bytearray()
-    out_cr = bytearray()
-    for y in range(chroma_height):
-        row = y * 8
-        out_cb.extend(cb[row : row + chroma_width])
-        out_cr.extend(cr[row : row + chroma_width])
-
-    return bytes(out_luma + out_cb + out_cr)
+    luma_len = info.width * info.height
+    chroma_len = luma_len // 4
+    return bytes([100] * luma_len + [128] * chroma_len + [128] * chroma_len)
 
 
 def cropped_vvc_32x32_generated_recon(info: InputInfo) -> bytes:

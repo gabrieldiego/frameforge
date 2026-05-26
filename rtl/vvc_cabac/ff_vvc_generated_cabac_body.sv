@@ -20,6 +20,12 @@ module ff_vvc_generated_cabac_body (
   localparam logic [1:0] BODY_GENERATED = 2'd0;
 
   localparam int VVC_PROB_MODEL_BITS = 40;
+  localparam int VVC_LUMA_CTU_SIZE = 64;
+  localparam int VVC_HALF_LUMA_CTU_SIZE = VVC_LUMA_CTU_SIZE / 2;
+  localparam int VVC_420_CHROMA_SUBSAMPLE_X = 2;
+  localparam int VVC_420_CHROMA_SUBSAMPLE_Y = 2;
+  localparam int VVC_420_CHROMA_CTU_WIDTH = VVC_LUMA_CTU_SIZE / VVC_420_CHROMA_SUBSAMPLE_X;
+  localparam int VVC_420_CHROMA_CTU_HEIGHT = VVC_LUMA_CTU_SIZE / VVC_420_CHROMA_SUBSAMPLE_Y;
 
   typedef logic [VVC_PROB_MODEL_BITS - 1:0] vvc_prob_model_t;
 
@@ -333,8 +339,8 @@ module ff_vvc_generated_cabac_body (
     vvc_prob_model_t mts_idx_ctx;
     begin
       st = st_in;
-      child_width = 8'd32;
-      child_height = 8'd32;
+      child_width = VVC_HALF_LUMA_CTU_SIZE[7:0];
+      child_height = VVC_HALF_LUMA_CTU_SIZE[7:0];
       split_root_ctx = vvc_prob_model_init(
         vvc_split_flag_init(vvc_split_cu_ctx_qt_only_root()),
         vvc_split_flag_log2_window(vvc_split_cu_ctx_qt_only_root()),
@@ -400,16 +406,16 @@ module ff_vvc_generated_cabac_body (
       cclm_mode_ctx = vvc_prob_model_init(vvc_cclm_mode_flag_init(), vvc_cclm_mode_flag_log2_window(), 32);
       intra_chroma_pred_ctx = vvc_prob_model_init(vvc_intra_chroma_pred_mode_init(4'd0), vvc_intra_chroma_pred_mode_log2_window(4'd0), 32);
       mts_idx_ctx = vvc_prob_model_init(vvc_mts_idx_init(4'd0), vvc_mts_idx_log2_window(4'd0), 32);
-      // The 64x64 root QT split is inferred for this single-CTU subset. VTM
+      // The CTU root QT split is inferred for this single-CTU subset. VTM
       // logs split_cu_mode() for it, but the first consumed CABAC bin belongs
-      // to the visible 32x32 child.
-      is_wide_half_ctu = (visible_width == 16'd64) && (visible_height == 16'd32);
-      is_tall_half_ctu = (visible_width == 16'd32) && (visible_height == 16'd64);
+      // to the visible half-CTU child.
+      is_wide_half_ctu = (visible_width == VVC_LUMA_CTU_SIZE) && (visible_height == VVC_HALF_LUMA_CTU_SIZE);
+      is_tall_half_ctu = (visible_width == VVC_HALF_LUMA_CTU_SIZE) && (visible_height == VVC_LUMA_CTU_SIZE);
 
-      if ((visible_width <= 16'd32) && (visible_height <= 16'd32)) begin
-        // Pictures at or below 32x32 are coded as their actual visible root,
-        // not as a hidden 64x64 canvas. VTM derives SplitFlag context 6 for
-        // this root leaf in the current intra subset.
+      if ((visible_width <= VVC_HALF_LUMA_CTU_SIZE) && (visible_height <= VVC_HALF_LUMA_CTU_SIZE)) begin
+        // Pictures at or below half CTU are coded as their actual visible
+        // root. VTM derives SplitFlag context 6 for this root leaf in the
+        // current intra subset.
         {split_ctx6, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, st} =
           encode_ctu_luma_leaf(
             st,
@@ -433,8 +439,8 @@ module ff_vvc_generated_cabac_body (
         end
         for (child_yi = 0; child_yi < 2; child_yi = child_yi + 1) begin
           for (child_xi = 0; child_xi < 2; child_xi = child_xi + 1) begin
-            child_x = (child_xi == 1) ? 8'd32 : 8'd0;
-            child_y = (child_yi == 1) ? 8'd32 : 8'd0;
+            child_x = (child_xi == 1) ? VVC_HALF_LUMA_CTU_SIZE[7:0] : 8'd0;
+            child_y = (child_yi == 1) ? VVC_HALF_LUMA_CTU_SIZE[7:0] : 8'd0;
             if (({8'd0, child_x} < visible_width) && ({8'd0, child_y} < visible_height)) begin
               if ((child_xi != 0) || (child_yi != 0)) begin
                 {split_child_one_neighbour_ctx, st} =
@@ -685,7 +691,7 @@ module ff_vvc_generated_cabac_body (
         end
       end
       end else begin
-        if ((visible_width == 16'd64) && (visible_height == 16'd64)) begin
+        if ((visible_width == VVC_LUMA_CTU_SIZE) && (visible_height == VVC_LUMA_CTU_SIZE)) begin
           {split_root_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, st} =
             encode_ctu_luma_leaf(st, split_root_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, rem, 8'd0, 8'd0, 8'd64, 8'd64, 3'd0, 3'd0);
         end else begin
@@ -699,7 +705,7 @@ module ff_vvc_generated_cabac_body (
             encode_ctu_luma_leaf(st, split_child_ctx, multi_ref_line_ctx, intra_mpm_ctx, intra_planar_ctx, qt_cbf_y_ctx, mts_idx_ctx, rem, child_width, child_height, child_width, child_height, 3'd1, 3'd0);
         end
       end
-      if ((visible_width <= 16'd32) && (visible_height <= 16'd32)) begin
+      if ((visible_width <= VVC_HALF_LUMA_CTU_SIZE) && (visible_height <= VVC_HALF_LUMA_CTU_SIZE)) begin
         intra_chroma_pred_ctx = vvc_prob_model_init(vvc_intra_chroma_pred_mode_init(4'd1), vvc_intra_chroma_pred_mode_log2_window(4'd1), 32);
         {split_root_ctx, split_ctx6, split_ctx7, split_qt_ctx, split_qt_deep_ctx,
          mtt_vertical_ctx3, mtt_binary_ctx, cclm_mode_ctx, intra_chroma_pred_ctx,
@@ -722,8 +728,8 @@ module ff_vvc_generated_cabac_body (
             cr_rem_in,
             8'd0,
             8'd0,
-            visible_width[8:1],
-            visible_height[8:1],
+            VVC_420_CHROMA_CTU_WIDTH[7:0],
+            VVC_420_CHROMA_CTU_HEIGHT[7:0],
             visible_width[8:1],
             visible_height[8:1],
             8'd4,
@@ -1194,6 +1200,29 @@ module ff_vvc_generated_cabac_body (
       if ((cb_x >= visible_width) || (cb_y >= visible_height)) begin
       end else if (((cb_x + cb_width) <= visible_width) &&
                    ((cb_y + cb_height) <= visible_height) &&
+                   (cb_width == 8'd8) &&
+                   (cb_height == 8'd8)) begin
+        if (cqt_depth < 3'd2) begin
+          {split_ctx0, st} = cabac_encode_vvc_model_bin(st, split_ctx0, 1'b1);
+          {split_qt_ctx0, st} = cabac_encode_vvc_model_bin(st, split_qt_ctx0, 1'b1);
+        end else begin
+          if (cb_y >= 8'd8) begin
+            {split_ctx7, st} = cabac_encode_vvc_model_bin(st, split_ctx7, 1'b1);
+          end else begin
+            {split_ctx6, st} = cabac_encode_vvc_model_bin(st, split_ctx6, 1'b1);
+          end
+          {split_qt_ctx3, st} = cabac_encode_vvc_model_bin(st, split_qt_ctx3, 1'b0);
+        end
+        {mtt_vertical_ctx3, st} = cabac_encode_vvc_model_bin(st, mtt_vertical_ctx3, 1'b1);
+        {split_ctx0, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, st} =
+          encode_ctu_chroma_transform_only_leaf(st, split_ctx0, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, cb_rem_in, cr_rem_in, cb_x, cb_y, cb_width >> 1, cb_height, cqt_depth, 3'd1);
+        {split_ctx0, st} = cabac_encode_vvc_model_bin(st, split_ctx0, 1'b1);
+        {split_ctx0, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, st} =
+          encode_ctu_chroma_transform_only_leaf(st, split_ctx0, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, cb_rem_in, cr_rem_in, cb_x + (cb_width >> 1), cb_y, cb_width >> 1, cb_height >> 1, cqt_depth, 3'd2);
+        {split_ctx0, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, st} =
+          encode_ctu_chroma_transform_only_leaf(st, split_ctx0, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, cb_rem_in, cr_rem_in, cb_x + (cb_width >> 1), cb_y + (cb_height >> 1), cb_width >> 1, cb_height >> 1, cqt_depth, 3'd2);
+      end else if (((cb_x + cb_width) <= visible_width) &&
+                   ((cb_y + cb_height) <= visible_height) &&
                    (cb_width <= stop_size) &&
                    (cb_height <= stop_size)) begin
         {split_ctx0, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, st} =
@@ -1441,12 +1470,20 @@ module ff_vvc_generated_cabac_body (
 	    vvc_prob_model_t qt_cbf_cb_ctx;
 	    vvc_prob_model_t qt_cbf_cr_ctx;
 	    vvc_prob_model_t mts_idx_ctx;
-	    vvc_prob_model_t cclm_mode_ctx;
-	    vvc_prob_model_t intra_chroma_pred_ctx;
-	    begin
-	      {split_ctx, st} = cabac_encode_vvc_model_bin(st_in, split_ctx_in, 1'b0);
-	      cclm_mode_ctx = cclm_mode_ctx_in;
-	      intra_chroma_pred_ctx = intra_chroma_pred_ctx_in;
+	      vvc_prob_model_t cclm_mode_ctx;
+	      vvc_prob_model_t intra_chroma_pred_ctx;
+	      begin
+	        st = st_in;
+	        split_ctx = split_ctx_in;
+	        if (!((cb_width == 8'd4) && (cb_height == 8'd4))) begin
+	          {split_ctx, st} = cabac_encode_vvc_model_bin(st, split_ctx, 1'b0);
+	        end
+	      {cclm_mode_ctx, st} = cabac_encode_vvc_model_bin(st, cclm_mode_ctx_in, 1'b0);
+	      {intra_chroma_pred_ctx, st} = cabac_encode_vvc_model_bin(
+	        st,
+	        intra_chroma_pred_ctx_in,
+	        1'b0
+	      );
 	      {qt_cbf_cb_ctx, st} = cabac_encode_vvc_model_bin(st, qt_cbf_cb_ctx_in, 1'b0);
 	      {qt_cbf_cr_ctx, st} = cabac_encode_vvc_model_bin(st, qt_cbf_cr_ctx_in, 1'b0);
 	      mts_idx_ctx = mts_idx_ctx_in;
@@ -1465,108 +1502,6 @@ module ff_vvc_generated_cabac_body (
       // existing decodable subset until non-zero MTS choices are generated.
       {mts_idx_ctx, st} = cabac_encode_vvc_model_bin(st_in, mts_idx_ctx_in, 1'b0);
       encode_ctu_mts_idx_zero = {mts_idx_ctx, st};
-    end
-  endfunction
-
-  function automatic cabac_writer_state_t encode_ctu_luma_32x32_cbf(
-    input cabac_writer_state_t st_in,
-    input logic [7:0]   cb_x,
-    input logic [7:0]   cb_y,
-    input logic [7:0]   cb_width,
-    input logic [7:0]   cb_height,
-    input logic [2:0]   cqt_depth,
-    input logic [2:0]   mtt_depth
-  );
-    begin
-      // cbf_comp luma=1 for the 32x32 transform unit. The current path
-      // always emits a residual-bearing luma TU so the downstream residual
-      // syntax remains present.
-      encode_ctu_luma_32x32_cbf = cabac_encode_bin(st_in, 1'b1, 9'd130, 1'b1);
-    end
-  endfunction
-
-  function automatic cabac_writer_state_t encode_ctu_luma_32x32_residual_prefix(
-    input cabac_writer_state_t st_in,
-    input logic [7:0]   cb_x,
-    input logic [7:0]   cb_y,
-    input logic [7:0]   cb_width,
-    input logic [7:0]   cb_height,
-    input logic [2:0]   cqt_depth,
-    input logic [2:0]   mtt_depth
-  );
-    cabac_writer_state_t st;
-    begin
-      // TODO(vvc): Split residual_coding into named coefficient-group,
-      // last-position, significance, and level syntax. These are the first
-      // VVC 7.3.11.11.
-      st = cabac_encode_bin(st_in, 1'b1, 9'd84, 1'b1);
-      st = cabac_encode_bin(st, 1'b1, 9'd84, 1'b1);
-      encode_ctu_luma_32x32_residual_prefix = st;
-    end
-  endfunction
-
-  function automatic cabac_writer_state_t encode_ctu_luma_32x32_residual_scan_prefix(
-    input cabac_writer_state_t st_in,
-    input logic [7:0]   cb_x,
-    input logic [7:0]   cb_y,
-    input logic [7:0]   cb_width,
-    input logic [7:0]   cb_height,
-    input logic [2:0]   cqt_depth,
-    input logic [2:0]   mtt_depth
-  );
-    cabac_writer_state_t st;
-    begin
-      // TODO(vvc): Replace this with named residual_coding syntax once the
-      // coefficient scan position and group flags are derived from the
-      // residual path.
-      st = cabac_encode_bin(st_in, 1'b1, 9'd60, 1'b1);
-      st = cabac_encode_bin(st, 1'b1, 9'd130, 1'b1);
-      st = cabac_encode_bin(st, 1'b1, 9'd76, 1'b1);
-      st = cabac_encode_bin(st, 1'b0, 9'd178, 1'b0);
-      encode_ctu_luma_32x32_residual_scan_prefix = st;
-    end
-  endfunction
-
-  function automatic cabac_writer_state_t encode_ctu_luma_32x32_residual_scan_tail(
-    input cabac_writer_state_t st_in,
-    input logic [7:0]   cb_x,
-    input logic [7:0]   cb_y,
-    input logic [7:0]   cb_width,
-    input logic [7:0]   cb_height,
-    input logic [2:0]   cqt_depth,
-    input logic [2:0]   mtt_depth
-  );
-    cabac_writer_state_t st;
-    begin
-      // TODO(vvc): Replace these coefficient-position/context bins with
-      // generated residual_coding syntax driven by transform output.
-      st = cabac_encode_bin(st_in, 1'b1, 9'd140, 1'b1);
-      st = cabac_encode_bin(st, 1'b1, 9'd84, 1'b1);
-      st = cabac_encode_bin(st, 1'b1, 9'd106, 1'b1);
-      st = cabac_encode_bin(st, 1'b1, 9'd68, 1'b1);
-      st = cabac_encode_bin(st, 1'b1, 9'd166, 1'b1);
-      st = cabac_encode_bin(st, 1'b0, 9'd92, 1'b1);
-      encode_ctu_luma_32x32_residual_scan_tail = st;
-    end
-  endfunction
-
-  function automatic cabac_writer_state_t encode_ctu_luma_32x32_residual_bypass_suffix(
-    input cabac_writer_state_t st_in,
-    input logic [7:0]   cb_x,
-    input logic [7:0]   cb_y,
-    input logic [7:0]   cb_width,
-    input logic [7:0]   cb_height,
-    input logic [2:0]   cqt_depth,
-    input logic [2:0]   mtt_depth
-  );
-    cabac_writer_state_t st;
-    begin
-      // TODO(vvc): Replace this with named residual bypass syntax
-      // (suffix/remainder/sign bins) from generated coefficient levels.
-      st = cabac_encode_bin_ep(st_in, 1'b1);
-      st = cabac_encode_bin_ep(st, 1'b1);
-      st = cabac_encode_bin_ep(st, 1'b0);
-      encode_ctu_luma_32x32_residual_bypass_suffix = st;
     end
   endfunction
 

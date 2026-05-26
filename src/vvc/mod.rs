@@ -76,6 +76,7 @@ pub struct VvcEncodeParams {
 /// This is a deliberately narrow property of the current VVC validation path,
 /// not a claim about all legal VVC profiles or future FrameForge codec paths.
 pub const VVC_CODED_DIMENSION_GRANULARITY: usize = 8;
+const VVC_CTU_SIZE: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VvcVideoGeometry {
@@ -318,10 +319,29 @@ struct VvcCtuPartitionParams {
     root_height: usize,
     visible_width: usize,
     visible_height: usize,
+    chroma_sampling: ChromaSampling,
     luma_leaf_count: usize,
     chroma_tu_count: usize,
     luma_dc_abs_level: u8,
     luma_dc_negative: bool,
+}
+
+impl VvcCtuPartitionParams {
+    fn visible_chroma_width(self) -> u16 {
+        (self.visible_width / chroma_subsample_x(self.chroma_sampling)) as u16
+    }
+
+    fn visible_chroma_height(self) -> u16 {
+        (self.visible_height / chroma_subsample_y(self.chroma_sampling)) as u16
+    }
+
+    fn ctu_chroma_root(self) -> VvcCodingTreeNode {
+        VvcCodingTreeNode::root(
+            (VVC_CTU_SIZE / chroma_subsample_x(self.chroma_sampling)) as u16,
+            (VVC_CTU_SIZE / chroma_subsample_y(self.chroma_sampling)) as u16,
+            VvcTreeType::DualTreeChroma,
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1578,8 +1598,8 @@ fn vvc_luma_partition_plan(geometry: VvcVideoGeometry) -> Vec<VvcLumaPartitionSt
         coded.width,
         coded.height,
         VvcCodedGeometry {
-            width: 32,
-            height: 32,
+            width: VVC_CTU_SIZE / 2,
+            height: VVC_CTU_SIZE / 2,
         },
     );
     steps
@@ -1783,10 +1803,16 @@ fn vvc_ctu_partition_params(
     color: Vvc4x4QuantizedColor,
 ) -> Option<VvcCtuPartitionParams> {
     let coded = geometry.coded();
-    if coded.width > 64 || coded.height > 64 || coded.width < 16 || coded.height < 16 {
+    if coded.width > VVC_CTU_SIZE
+        || coded.height > VVC_CTU_SIZE
+        || coded.width < 16
+        || coded.height < 16
+    {
         return None;
     }
-    if coded.width <= 32 && coded.height <= 32 {
+    let chroma_sampling = ChromaSampling::Cs420;
+    let half_ctu = VVC_CTU_SIZE / 2;
+    if coded.width <= half_ctu && coded.height <= half_ctu {
         let chroma_tu_count = vvc_coding_tree_plan(geometry)
             .iter()
             .filter(|step| matches!(step, VvcCodingTreeStep::ChromaTransformUnit { .. }))
@@ -1796,19 +1822,20 @@ fn vvc_ctu_partition_params(
             root_height: coded.height,
             visible_width: coded.width,
             visible_height: coded.height,
+            chroma_sampling,
             luma_leaf_count: 1,
             chroma_tu_count,
             luma_dc_abs_level: color.luma_rem,
             luma_dc_negative: color.y < VVC_LUMA_DC_BASE as u8 && color.luma_rem != 0,
         });
     }
-    if coded.width != 64 && coded.height != 64 {
+    if coded.width != VVC_CTU_SIZE && coded.height != VVC_CTU_SIZE {
         return None;
     }
 
-    let luma_leaf_count = if coded.width == 64 && coded.height == 64 {
+    let luma_leaf_count = if coded.width == VVC_CTU_SIZE && coded.height == VVC_CTU_SIZE {
         1
-    } else if coded.width == 64 {
+    } else if coded.width == VVC_CTU_SIZE {
         // The top-right visible 16x16 corner uses horizontal BT splits on two
         // 8x16 halves to match the neighbour-derived partition constraints.
         52
@@ -1816,18 +1843,19 @@ fn vvc_ctu_partition_params(
         // Rectangular 64-sample CTU views currently split each visible 16x16
         // area into position-dependent 8x8 edge patterns. The current 64x32
         // subset has one 7-leaf region, one 8-leaf region, and two 9-leaf
-        // regions per visible 32x32 child.
-        ((coded.width * coded.height) / (32 * 32)) * 32
+        // regions per visible half-CTU child.
+        ((coded.width * coded.height) / (half_ctu * half_ctu)) * half_ctu
     };
     let chroma_tu_count = vvc_coding_tree_plan(geometry)
         .iter()
         .filter(|step| matches!(step, VvcCodingTreeStep::ChromaTransformUnit { .. }))
         .count();
     Some(VvcCtuPartitionParams {
-        root_width: 64,
-        root_height: 64,
+        root_width: VVC_CTU_SIZE,
+        root_height: VVC_CTU_SIZE,
         visible_width: coded.width,
         visible_height: coded.height,
+        chroma_sampling,
         luma_leaf_count,
         chroma_tu_count,
         luma_dc_abs_level: color.luma_rem,
@@ -1840,8 +1868,8 @@ fn vvc_ctu_partition_cabac_bits(params: VvcCtuPartitionParams) -> Vec<bool> {
     debug_assert!((16..=64).contains(&params.root_height));
     debug_assert!(
         (params.visible_width == params.root_width && params.visible_height == params.root_height)
-            || params.visible_width == 64
-            || params.visible_height == 64
+            || params.visible_width == VVC_CTU_SIZE
+            || params.visible_height == VVC_CTU_SIZE
     );
     debug_assert!(params.visible_width >= 16 && params.visible_height >= 16);
     debug_assert!(params.luma_leaf_count > 0);
@@ -2259,11 +2287,7 @@ impl VvcCtuCabacOp {
             params.root_height as u16,
             VvcTreeType::DualTreeLuma,
         );
-        let chroma = VvcCodingTreeNode::root(
-            (params.root_width / 2) as u16,
-            (params.root_height / 2) as u16,
-            VvcTreeType::DualTreeChroma,
-        );
+        let chroma = params.ctu_chroma_root();
         let mut ops = Vec::with_capacity(params.luma_leaf_count + 2);
         let root_split_ctx = VvcSplitCtxInput::qt_only_root().split_cu_flag_ctx();
         ops.push(Self::QtSplit {
@@ -2276,7 +2300,8 @@ impl VvcCtuCabacOp {
         });
         if params.visible_width == params.root_width && params.visible_height == params.root_height
         {
-            let split_ctx = if params.root_width <= 32 && params.root_height <= 32 {
+            let half_ctu = VVC_CTU_SIZE / 2;
+            let split_ctx = if params.root_width <= half_ctu && params.root_height <= half_ctu {
                 VvcSplitCtxInput::full_child_without_smaller_neighbours().split_cu_flag_ctx()
             } else {
                 VvcSplitCtxInput::qt_only_root().split_cu_flag_ctx()
@@ -2285,13 +2310,15 @@ impl VvcCtuCabacOp {
                 node: root,
                 split_ctx,
             });
-        } else if params.visible_width <= 32 && params.visible_height <= 32 {
+        } else if params.visible_width <= VVC_CTU_SIZE / 2
+            && params.visible_height <= VVC_CTU_SIZE / 2
+        {
             Self::append_visible_qt_luma_subtree(
                 &mut ops,
                 root.qt_child(0),
                 params.visible_width as u16,
                 params.visible_height as u16,
-                32,
+                (VVC_CTU_SIZE / 2) as u16,
             );
         } else if params.visible_width == params.root_width {
             for child_idx in [0_u8, 1] {
@@ -3082,8 +3109,8 @@ impl VvcCtuCabacOp {
         }
         ops.push(Self::ChromaTree {
             node: chroma,
-            visible_width: (params.visible_width / 2) as u16,
-            visible_height: (params.visible_height / 2) as u16,
+            visible_width: params.visible_chroma_width(),
+            visible_height: params.visible_chroma_height(),
         });
         ops
     }
@@ -3439,6 +3466,36 @@ impl VvcCtuCabacGenerator {
         if !node.intersects_visible(visible_width, visible_height) {
             return;
         }
+        if node.fits_visible(visible_width, visible_height) && node.width == 8 && node.height == 8 {
+            let split_ctx = if node.y >= 8 { 7 } else { 6 };
+            self.contexts
+                .encode(cabac, VvcCabacContext::SplitFlag(split_ctx), true);
+            self.contexts
+                .encode(cabac, VvcCabacContext::SplitQtFlag(3), false);
+            self.contexts
+                .encode(cabac, VvcCabacContext::MttSplitCuVerticalFlag(3), true);
+            self.emit_chroma_transform_only_leaf_with_split_ctx(
+                cabac,
+                node.mtt_child(true, 0),
+                0,
+                0,
+            );
+            self.contexts
+                .encode(cabac, VvcCabacContext::SplitFlag(0), true);
+            self.emit_chroma_transform_only_leaf_with_split_ctx(
+                cabac,
+                node.mtt_child(true, 1).mtt_child(false, 0),
+                0,
+                0,
+            );
+            self.emit_chroma_transform_only_leaf_with_split_ctx(
+                cabac,
+                node.mtt_child(true, 1).mtt_child(false, 1),
+                0,
+                0,
+            );
+            return;
+        }
         if node.fits_visible(visible_width, visible_height)
             && node.width <= min_leaf_size
             && node.height <= min_leaf_size
@@ -3460,7 +3517,24 @@ impl VvcCtuCabacGenerator {
             return;
         }
 
-        let split_ctx = if node.cqt_depth == 0 {
+        self.emit_chroma_visible_qt_split(cabac, node);
+        for child_idx in 0..4 {
+            self.emit_chroma_visible_qt_subtree(
+                cabac,
+                node.qt_child(child_idx),
+                visible_width,
+                visible_height,
+                min_leaf_size,
+            );
+        }
+    }
+
+    fn emit_chroma_visible_qt_split(
+        &mut self,
+        cabac: &mut VvcCabacEncoder,
+        node: VvcCodingTreeNode,
+    ) {
+        let split_ctx = if node.cqt_depth < 2 {
             0
         } else if node.y >= 8 {
             7
@@ -3472,15 +3546,6 @@ impl VvcCtuCabacGenerator {
             .encode(cabac, VvcCabacContext::SplitFlag(split_ctx), true);
         self.contexts
             .encode(cabac, VvcCabacContext::SplitQtFlag(qt_ctx), true);
-        for child_idx in 0..4 {
-            self.emit_chroma_visible_qt_subtree(
-                cabac,
-                node.qt_child(child_idx),
-                visible_width,
-                visible_height,
-                min_leaf_size,
-            );
-        }
     }
 
     fn emit_chroma_leaf_with_split_ctx(
@@ -3530,8 +3595,14 @@ impl VvcCtuCabacGenerator {
         cbf_cb_ctx: u8,
     ) {
         debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
+        if node.width != 4 || node.height != 4 {
+            self.contexts
+                .encode(cabac, VvcCabacContext::SplitFlag(split_ctx), false);
+        }
         self.contexts
-            .encode(cabac, VvcCabacContext::SplitFlag(split_ctx), false);
+            .encode(cabac, VvcCabacContext::CclmModeFlag, false);
+        self.contexts
+            .encode(cabac, VvcCabacContext::IntraChromaPredMode(1), false);
         self.contexts
             .encode(cabac, VvcCabacContext::QtCbfCb(cbf_cb_ctx), false);
         self.contexts
