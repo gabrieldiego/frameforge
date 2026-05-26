@@ -236,14 +236,18 @@ module ff_vvc_encoder #(
     .stream_byte_count(cabac_stream_byte_count)
   );
 
-  ff_residual_stub #(
+  ff_vvc_residual_transform #(
     .SAMPLE_BITS(SAMPLE_BITS),
-    .LUMA_CB_SIZE(VVC_RESIDUAL_CB_SIZE)
+    .LUMA_CB_SIZE(VVC_RESIDUAL_CB_SIZE),
+    .CU_ACTIVE_COUNT(MAX_CTU_PALETTE_SYMBOLS)
   ) residual_block (
     .clk(clk),
     .rst_n(rst_n),
     .clear(start && !busy),
     .enable(1'b1),
+    .cu_active_mask(ctu_cu_active_mask),
+    .cu_index(8'd0),
+    .cu_active(),
     .s_axis_valid(residual_sample_valid),
     .s_axis_ready(),
     .s_axis_sample(s_axis_data),
@@ -259,14 +263,18 @@ module ff_vvc_encoder #(
     .recon_luma_sample(residual_recon_luma_sample)
   );
 
-  ff_residual_stub #(
+  ff_vvc_residual_transform #(
     .SAMPLE_BITS(SAMPLE_BITS),
-    .LUMA_CB_SIZE(VVC_RESIDUAL_CB_SIZE)
+    .LUMA_CB_SIZE(VVC_RESIDUAL_CB_SIZE),
+    .CU_ACTIVE_COUNT(MAX_CTU_PALETTE_SYMBOLS)
   ) residual_block_1 (
     .clk(clk),
     .rst_n(rst_n),
     .clear(start && !busy),
     .enable(1'b1),
+    .cu_active_mask(ctu_cu_active_mask),
+    .cu_index(8'd1),
+    .cu_active(),
     .s_axis_valid(residual_sample_1_valid),
     .s_axis_ready(),
     .s_axis_sample(s_axis_data),
@@ -1670,24 +1678,15 @@ module ff_vvc_encoder #(
   endfunction
 
   function automatic logic [4:0] quant_luma_rem_from_sample(input logic [7:0] sample);
+    logic [12:0] scaled_distance;
     begin
-      if (sample >= 8'd111) quant_luma_rem_from_sample = 5'd0;
-      else if (sample >= 8'd104) quant_luma_rem_from_sample = 5'd1;
-      else if (sample >= 8'd97) quant_luma_rem_from_sample = 5'd2;
-      else if (sample >= 8'd90) quant_luma_rem_from_sample = 5'd3;
-      else if (sample >= 8'd82) quant_luma_rem_from_sample = 5'd4;
-      else if (sample >= 8'd75) quant_luma_rem_from_sample = 5'd5;
-      else if (sample >= 8'd68) quant_luma_rem_from_sample = 5'd6;
-      else if (sample >= 8'd61) quant_luma_rem_from_sample = 5'd7;
-      else if (sample >= 8'd54) quant_luma_rem_from_sample = 5'd8;
-      else if (sample >= 8'd46) quant_luma_rem_from_sample = 5'd9;
-      else if (sample >= 8'd40) quant_luma_rem_from_sample = 5'd10;
-      else if (sample >= 8'd33) quant_luma_rem_from_sample = 5'd11;
-      else if (sample >= 8'd25) quant_luma_rem_from_sample = 5'd12;
-      else if (sample >= 8'd18) quant_luma_rem_from_sample = 5'd13;
-      else if (sample >= 8'd11) quant_luma_rem_from_sample = 5'd14;
-      else if (sample >= 8'd4) quant_luma_rem_from_sample = 5'd15;
-      else quant_luma_rem_from_sample = 5'd16;
+      if (sample >= 8'd114) begin
+        quant_luma_rem_from_sample = 5'd0;
+      end else begin
+        scaled_distance = (((13'd114 - {5'd0, sample}) * 13'd16) + 13'd57) / 13'd114;
+        quant_luma_rem_from_sample =
+          (scaled_distance > 13'd16) ? 5'd16 : scaled_distance[4:0];
+      end
     end
   endfunction
 

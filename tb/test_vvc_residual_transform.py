@@ -8,6 +8,8 @@ async def reset(dut):
     dut.rst_n.value = 0
     dut.clear.value = 0
     dut.enable.value = 1
+    dut.cu_active_mask.value = (1 << 64) - 1
+    dut.cu_index.value = 0
     dut.s_axis_valid.value = 0
     dut.s_axis_sample.value = 0
     dut.s_axis_last.value = 0
@@ -22,6 +24,7 @@ async def reset(dut):
 @cocotb.test()
 async def residual_stream_emits_quantized_packets(dut):
     await reset(dut)
+    assert int(dut.cu_active.value) == 1
 
     for index in range(16):
         while int(dut.s_axis_ready.value) != 1:

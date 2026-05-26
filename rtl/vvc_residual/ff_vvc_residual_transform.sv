@@ -1,13 +1,17 @@
 `timescale 1ns/1ps
 
-module ff_residual_stub #(
+module ff_vvc_residual_transform #(
   parameter int SAMPLE_BITS = 8,
-  parameter int LUMA_CB_SIZE = 4
+  parameter int LUMA_CB_SIZE = 4,
+  parameter int CU_ACTIVE_COUNT = 64
 ) (
   input  logic clk,
   input  logic rst_n,
   input  logic clear,
   input  logic enable,
+  input  logic [CU_ACTIVE_COUNT - 1:0] cu_active_mask,
+  input  logic [7:0] cu_index,
+  output logic cu_active,
   input  logic s_axis_valid,
   output logic s_axis_ready,
   input  logic [SAMPLE_BITS - 1:0] s_axis_sample,
@@ -22,6 +26,8 @@ module ff_residual_stub #(
   output logic [119:0] quant_luma_ac_tokens,
   output logic [7:0]   recon_luma_sample
 );
+  import ff_vvc_reconstruction_pkg::*;
+
   localparam int LUMA_SAMPLE_COUNT = LUMA_CB_SIZE * LUMA_CB_SIZE;
 
   logic signed [9:0] dc_coeff;
@@ -39,14 +45,15 @@ module ff_residual_stub #(
   assign dc_coeff = $signed({ 2'b00, dc_sample }) - 10'sd114;
   assign quant_luma_rem = quant_luma_rem_from_dc_coeff(dc_coeff);
   assign quant_luma_ac_tokens = quant_ac_tokens(luma_samples, dc_sample);
-  assign quantized_dc_coeff = reconstructed_dc_coeff_from_rem(quant_luma_rem);
-  assign recon_luma_sample = inverse_luma_dc_coeff(quantized_dc_coeff);
+  assign quantized_dc_coeff = ff_vvc_reconstructed_luma_dc_coeff_from_rem(quant_luma_rem);
+  assign recon_luma_sample = ff_vvc_inverse_luma_dc_coeff(quantized_dc_coeff);
   assign s_axis_ready = enable && (!stream_result_valid_q || (m_axis_valid && m_axis_ready && m_axis_last));
   assign stream_quant_luma_rem =
     quant_luma_rem_from_dc_coeff($signed({2'b00, forward_luma_dc_sample(stream_samples_q)}) - 10'sd114);
   assign stream_quant_luma_ac_tokens = quant_ac_tokens(stream_samples_q, forward_luma_dc_sample(stream_samples_q));
   assign stream_recon_luma_sample =
-    inverse_luma_dc_coeff(reconstructed_dc_coeff_from_rem(stream_quant_luma_rem));
+    ff_vvc_inverse_luma_dc_coeff(ff_vvc_reconstructed_luma_dc_coeff_from_rem(stream_quant_luma_rem));
+  assign cu_active = cu_active_mask[CU_ACTIVE_COUNT - 1 - cu_index];
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -104,7 +111,7 @@ module ff_residual_stub #(
     logic negative;
     begin
       rem = stream_quant_luma_rem;
-      recon_dc = reconstructed_dc_coeff_from_rem(rem);
+      recon_dc = ff_vvc_reconstructed_luma_dc_coeff_from_rem(rem);
       negative = (rem != 5'd0) && (recon_dc < 10'sd0);
       case (index)
         4'd0: residual_packet = {8'd1, 27'd0, rem, 1'b0};
@@ -219,56 +226,21 @@ module ff_residual_stub #(
   function automatic logic [4:0] quant_luma_rem_from_dc_coeff(input logic signed [9:0] coeff);
     logic [7:0] sample;
     begin
-      sample = inverse_luma_dc_coeff(coeff);
+      sample = ff_vvc_inverse_luma_dc_coeff(coeff);
       quant_luma_rem_from_dc_coeff = quant_luma_rem_from_sample(sample);
     end
   endfunction
 
-  function automatic logic signed [9:0] reconstructed_dc_coeff_from_rem(input logic [4:0] rem);
-    begin
-      reconstructed_dc_coeff_from_rem = $signed({ 2'b00, reconstructed_luma_from_rem(rem) }) - 10'sd114;
-    end
-  endfunction
-
-  function automatic logic [7:0] inverse_luma_dc_coeff(input logic signed [9:0] coeff);
-    begin
-      if (coeff <= -10'sd114) begin
-        inverse_luma_dc_coeff = 8'd0;
-      end else if (coeff >= 10'sd141) begin
-        inverse_luma_dc_coeff = 8'd255;
-      end else begin
-        inverse_luma_dc_coeff = coeff + 10'sd114;
-      end
-    end
-  endfunction
-
-  function automatic logic [7:0] reconstructed_luma_from_rem(input logic [4:0] rem);
-    logic [8:0] scaled;
-    begin
-      scaled = ((9'd16 - rem) * 9'd114) + 9'd8;
-      reconstructed_luma_from_rem = scaled >> 4;
-    end
-  endfunction
-
   function automatic logic [4:0] quant_luma_rem_from_sample(input logic [7:0] sample);
+    logic [12:0] scaled_distance;
     begin
-      if (sample >= 8'd111) quant_luma_rem_from_sample = 5'd0;
-      else if (sample >= 8'd104) quant_luma_rem_from_sample = 5'd1;
-      else if (sample >= 8'd97) quant_luma_rem_from_sample = 5'd2;
-      else if (sample >= 8'd90) quant_luma_rem_from_sample = 5'd3;
-      else if (sample >= 8'd82) quant_luma_rem_from_sample = 5'd4;
-      else if (sample >= 8'd75) quant_luma_rem_from_sample = 5'd5;
-      else if (sample >= 8'd68) quant_luma_rem_from_sample = 5'd6;
-      else if (sample >= 8'd61) quant_luma_rem_from_sample = 5'd7;
-      else if (sample >= 8'd54) quant_luma_rem_from_sample = 5'd8;
-      else if (sample >= 8'd46) quant_luma_rem_from_sample = 5'd9;
-      else if (sample >= 8'd40) quant_luma_rem_from_sample = 5'd10;
-      else if (sample >= 8'd33) quant_luma_rem_from_sample = 5'd11;
-      else if (sample >= 8'd25) quant_luma_rem_from_sample = 5'd12;
-      else if (sample >= 8'd18) quant_luma_rem_from_sample = 5'd13;
-      else if (sample >= 8'd11) quant_luma_rem_from_sample = 5'd14;
-      else if (sample >= 8'd4) quant_luma_rem_from_sample = 5'd15;
-      else quant_luma_rem_from_sample = 5'd16;
+      if (sample >= 8'd114) begin
+        quant_luma_rem_from_sample = 5'd0;
+      end else begin
+        scaled_distance = (((13'd114 - {5'd0, sample}) * 13'd16) + 13'd57) / 13'd114;
+        quant_luma_rem_from_sample =
+          (scaled_distance > 13'd16) ? 5'd16 : scaled_distance[4:0];
+      end
     end
   endfunction
 endmodule
