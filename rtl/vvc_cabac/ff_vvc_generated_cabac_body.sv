@@ -46,6 +46,10 @@ module ff_vvc_generated_cabac_body (
     logic [2:0] partial_bit_count;
     logic [7:0] partial_byte;
     logic [7:0] probe_byte;
+    logic [12:0] symbol_count;
+    logic [12:0] probe_symbol_index;
+    logic [7:0]  probe_symbol_kind;
+    logic [31:0] probe_symbol_data;
   } cabac_byte_stream_state_t;
 
   typedef struct packed {
@@ -120,60 +124,65 @@ module ff_vvc_generated_cabac_body (
     cabac_writer_state_t st;
   } cabac_chroma_partition_step_t;
 
-  logic [12:0] generated_bit_count;
-  logic [12:0] stream_last_byte_index_q;
-  logic [12:0] stream_byte_index_q;
-  logic stream_active_q;
-  logic legacy_m_axis_valid;
-  logic [7:0] legacy_m_axis_data;
-  logic legacy_m_axis_last;
-  logic legacy_m_axis_ready;
-  assign legacy_m_axis_ready = m_axis_ready;
-  assign m_axis_valid = legacy_m_axis_valid;
-  assign m_axis_data = legacy_m_axis_data;
-  assign m_axis_last = legacy_m_axis_last;
-  assign stream_last_byte_bits = generated_bit_count[2:0];
+  localparam logic [7:0] SYMBOL_BIN_EP  = 8'd0;
+  localparam logic [7:0] SYMBOL_BIN_TRM = 8'd1;
+  localparam logic [7:0] SYMBOL_BIN_CTX_DIRECT = 8'd3;
+  localparam logic [7:0] SYMBOL_BINS_EP = 8'd4;
+
+  logic [12:0] generated_symbol_count;
+  logic [12:0] symbol_index_q;
+  logic symbol_active_q;
+  logic symbol_valid;
+  logic symbol_ready;
+  logic [7:0] symbol_kind;
+  logic [31:0] symbol_data;
+  logic pipeline_done;
+
+  assign symbol_valid = symbol_active_q && (generated_symbol_count != 13'd0);
+  assign symbol_kind = current_symbol_kind(symbol_index_q);
+  assign symbol_data = current_symbol_data(symbol_index_q);
 
   always @* begin
-    generated_bit_count = current_bit_count_for_inputs(coded_width, coded_height, luma_rem, cb_rem, cr_rem);
+    generated_symbol_count = current_symbol_count_for_inputs(coded_width, coded_height, luma_rem, cb_rem, cr_rem);
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      stream_last_byte_index_q <= 13'd0;
-      stream_byte_index_q <= 13'd0;
-      stream_active_q <= 1'b0;
-      legacy_m_axis_valid <= 1'b0;
-      legacy_m_axis_data <= 8'd0;
-      legacy_m_axis_last <= 1'b0;
+      symbol_index_q <= 13'd0;
+      symbol_active_q <= 1'b0;
     end else begin
-      if (start && (generated_bit_count != 13'd0)) begin
-        stream_last_byte_index_q <= ((generated_bit_count + 13'd7) >> 3) - 13'd1;
-        stream_byte_index_q <= 13'd0;
-        stream_active_q <= ((generated_bit_count + 13'd7) >> 3) != 13'd0;
-        legacy_m_axis_valid <= ((generated_bit_count + 13'd7) >> 3) != 13'd0;
-        legacy_m_axis_data <= current_stream_byte(13'd0);
-        legacy_m_axis_last <= ((generated_bit_count + 13'd7) >> 3) == 13'd1;
-      end else if (legacy_m_axis_valid && legacy_m_axis_ready) begin
-        if (legacy_m_axis_last) begin
-          stream_active_q <= 1'b0;
-          legacy_m_axis_valid <= 1'b0;
-          legacy_m_axis_data <= 8'd0;
-          legacy_m_axis_last <= 1'b0;
+      if (start && (generated_symbol_count != 13'd0)) begin
+        symbol_index_q <= 13'd0;
+        symbol_active_q <= 1'b1;
+      end else if (symbol_valid && symbol_ready) begin
+        if (symbol_index_q + 13'd1 >= generated_symbol_count) begin
+          symbol_active_q <= 1'b0;
         end else begin
-          stream_byte_index_q <= stream_byte_index_q + 13'd1;
-          legacy_m_axis_data <= current_stream_byte(stream_byte_index_q + 13'd1);
-          legacy_m_axis_last <= (stream_byte_index_q + 13'd1) == stream_last_byte_index_q;
+          symbol_index_q <= symbol_index_q + 13'd1;
         end
-      end else if (!stream_active_q) begin
-        legacy_m_axis_valid <= 1'b0;
-        legacy_m_axis_last <= 1'b0;
-        legacy_m_axis_data <= 8'd0;
       end
     end
   end
 
-  function automatic logic [12:0] current_bit_count_for_inputs(
+  ff_vvc_cabac_pipeline stream_pipeline (
+    .clk(clk),
+    .rst_n(rst_n),
+    .start(start),
+    .clear(1'b0),
+    .s_axis_valid(symbol_valid),
+    .s_axis_ready(symbol_ready),
+    .s_axis_kind(symbol_kind),
+    .s_axis_data(symbol_data),
+    .s_axis_last(symbol_index_q + 13'd1 >= generated_symbol_count),
+    .m_axis_ready(m_axis_ready),
+    .m_axis_valid(m_axis_valid),
+    .m_axis_data(m_axis_data),
+    .m_axis_last(m_axis_last),
+    .stream_last_byte_bits(stream_last_byte_bits),
+    .done(pipeline_done)
+  );
+
+  function automatic logic [12:0] current_symbol_count_for_inputs(
     input logic [15:0] width,
     input logic [15:0] height,
     input logic [4:0]  rem,
@@ -182,37 +191,24 @@ module ff_vvc_generated_cabac_body (
   );
     cabac_writer_state_t st;
     begin
-      st = encode_generated_state(width, height, rem, cb_rem_in, cr_rem_in, 13'h1fff);
-      current_bit_count_for_inputs = st.stream.bit_count;
+      st = encode_generated_state(width, height, rem, cb_rem_in, cr_rem_in, 13'h1fff, 13'h1fff);
+      current_symbol_count_for_inputs = st.stream.symbol_count;
     end
   endfunction
 
-  function automatic logic [7:0] current_stream_byte(input logic [12:0] byte_index);
+  function automatic logic [7:0] current_symbol_kind(input logic [12:0] symbol_index);
     cabac_writer_state_t st;
     begin
-      st = encode_generated_state(coded_width, coded_height, luma_rem, cb_rem, cr_rem, byte_index);
-      current_stream_byte = cabac_state_stream_byte(st, byte_index);
+      st = encode_generated_state(coded_width, coded_height, luma_rem, cb_rem, cr_rem, 13'h1fff, symbol_index);
+      current_symbol_kind = st.stream.probe_symbol_kind;
     end
   endfunction
 
-  function automatic logic [7:0] cabac_state_stream_byte(
-    input cabac_writer_state_t st,
-    input logic [12:0] byte_index
-  );
-    logic [12:0] bit_count;
-    logic [12:0] byte_count;
-    logic [12:0] pad_bits;
+  function automatic logic [31:0] current_symbol_data(input logic [12:0] symbol_index);
+    cabac_writer_state_t st;
     begin
-      bit_count = st.stream.bit_count;
-      byte_count = (bit_count + 13'd7) >> 3;
-      pad_bits = ((((bit_count + 13'd7) >> 3) << 3) - bit_count);
-      if (byte_index < st.stream.byte_count) begin
-        cabac_state_stream_byte = st.stream.probe_byte;
-      end else if ((byte_index == st.stream.byte_count) && (pad_bits != 13'd0)) begin
-        cabac_state_stream_byte = st.stream.partial_byte << pad_bits[2:0];
-      end else begin
-        cabac_state_stream_byte = 8'd0;
-      end
+      st = encode_generated_state(coded_width, coded_height, luma_rem, cb_rem, cr_rem, 13'h1fff, symbol_index);
+      current_symbol_data = st.stream.probe_symbol_data;
     end
   endfunction
 
@@ -222,10 +218,13 @@ module ff_vvc_generated_cabac_body (
     input logic [4:0]  rem,
     input logic [4:0]  cb_rem_in,
     input logic [4:0]  cr_rem_in,
-    input logic [12:0] probe_byte_index
+    input logic [12:0] probe_byte_index,
+    input logic [12:0] probe_symbol_index
   );
     begin
-      encode_generated_state = encode_ctu_state(width, height, rem, cb_rem_in, cr_rem_in, probe_byte_index);
+      encode_generated_state = encode_ctu_state(
+        width, height, rem, cb_rem_in, cr_rem_in, probe_byte_index, probe_symbol_index
+      );
     end
   endfunction
 
@@ -235,11 +234,12 @@ module ff_vvc_generated_cabac_body (
     input logic [4:0] rem,
     input logic [4:0] cb_rem_in,
     input logic [4:0] cr_rem_in,
-    input logic [12:0] probe_byte_index
+    input logic [12:0] probe_byte_index,
+    input logic [12:0] probe_symbol_index
   );
     cabac_writer_state_t st;
     begin
-      st = cabac_start(probe_byte_index);
+      st = cabac_start(probe_byte_index, probe_symbol_index);
       st = encode_partitioned_ctu_tree(st, coded_width, coded_height, rem, cb_rem_in, cr_rem_in);
       st = cabac_encode_bin_trm(st, 1'b1);
       st = cabac_finish(st);
@@ -1483,7 +1483,10 @@ module ff_vvc_generated_cabac_body (
     end
   endfunction
 
-  function automatic cabac_writer_state_t cabac_start(input logic [12:0] probe_byte_index);
+  function automatic cabac_writer_state_t cabac_start(
+    input logic [12:0] probe_byte_index,
+    input logic [12:0] probe_symbol_index
+  );
     begin
       cabac_start = '0;
       cabac_start.core.low = 32'd0;
@@ -1492,6 +1495,24 @@ module ff_vvc_generated_cabac_body (
       cabac_start.core.num_buffered_bytes = 8'd0;
       cabac_start.core.bits_left = 8'd23;
       cabac_start.stream.probe_byte_index = probe_byte_index;
+      cabac_start.stream.probe_symbol_index = probe_symbol_index;
+    end
+  endfunction
+
+  function automatic cabac_writer_state_t cabac_record_symbol(
+    input cabac_writer_state_t st_in,
+    input logic [7:0] kind,
+    input logic [31:0] data
+  );
+    cabac_writer_state_t st;
+    begin
+      st = st_in;
+      if (st.stream.symbol_count == st.stream.probe_symbol_index) begin
+        st.stream.probe_symbol_kind = kind;
+        st.stream.probe_symbol_data = data;
+      end
+      st.stream.symbol_count = st.stream.symbol_count + 13'd1;
+      cabac_record_symbol = st;
     end
   endfunction
 
@@ -1792,6 +1813,11 @@ module ff_vvc_generated_cabac_body (
     integer num_bits;
     begin
       st = st_in;
+      st = cabac_record_symbol(
+        st,
+        SYMBOL_BIN_CTX_DIRECT,
+        {6'd0, mps, lps_in, 15'd0, bin}
+      );
       low = st.core.low;
       range = st.core.range;
       bits_left = st.core.bits_left;
@@ -1840,6 +1866,7 @@ module ff_vvc_generated_cabac_body (
     integer bits_left;
     begin
       st = st_in;
+      st = cabac_record_symbol(st, SYMBOL_BIN_EP, {31'd0, bin});
       low = st.core.low << 1;
       range = st.core.range;
       bits_left = st.core.bits_left - 1;
@@ -1867,8 +1894,25 @@ module ff_vvc_generated_cabac_body (
     logic [31:0] pattern;
     integer bits_left;
     integer num_bins;
+    integer record_i;
+    integer chunk_bins;
+    integer remaining_bins;
+    logic [31:0] chunk_pattern;
     begin
       st = st_in;
+      remaining_bins = num_bins_in;
+      for (record_i = 0; record_i < 2; record_i = record_i + 1) begin
+        if (remaining_bins > 0) begin
+          chunk_bins = (remaining_bins > 26) ? 26 : remaining_bins;
+          chunk_pattern = (bin_pattern_in >> (remaining_bins - chunk_bins)) & ((32'd1 << chunk_bins) - 32'd1);
+          st = cabac_record_symbol(
+            st,
+            SYMBOL_BINS_EP,
+            (chunk_pattern << 6) | chunk_bins[5:0]
+          );
+          remaining_bins = remaining_bins - chunk_bins;
+        end
+      end
       bin_pattern = bin_pattern_in;
       num_bins = num_bins_in;
       low = st.core.low;
@@ -1952,6 +1996,7 @@ module ff_vvc_generated_cabac_body (
     integer bits_left;
     begin
       st = st_in;
+      st = cabac_record_symbol(st, SYMBOL_BIN_TRM, {31'd0, bin});
       low = st.core.low;
       range = st.core.range - 16'd2;
       bits_left = st.core.bits_left;

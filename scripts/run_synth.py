@@ -297,6 +297,7 @@ module post_synth_smoke_tb;
     .clk(clk), .rst_n(rst_n), .start(start), .clear(clear),
     .s_axis_valid(s_axis_valid), .s_axis_ready(s_axis_ready),
     .s_axis_kind(s_axis_kind), .s_axis_bin(s_axis_bin),
+    .s_axis_bins_pattern({31'd0, s_axis_bin}), .s_axis_bins_count(6'd1),
     .s_axis_ctx_valid(s_axis_ctx_valid), .s_axis_ctx_id(s_axis_ctx_id),
     .s_axis_lps(s_axis_lps), .s_axis_mps(s_axis_mps),
     .s_axis_last(s_axis_last),

@@ -10,6 +10,8 @@ module ff_vvc_cabac_stream_writer (
   output logic        s_axis_ready,
   input  logic [2:0]  s_axis_kind,
   input  logic        s_axis_bin,
+  input  logic [31:0] s_axis_bins_pattern,
+  input  logic [5:0]  s_axis_bins_count,
   input  logic        s_axis_ctx_valid,
   input  logic [4:0]  s_axis_ctx_id,
   input  logic [8:0]  s_axis_lps,
@@ -26,13 +28,9 @@ module ff_vvc_cabac_stream_writer (
   localparam logic [2:0] CABAC_BIN_EP  = 3'd0;
   localparam logic [2:0] CABAC_BIN_TRM = 3'd1;
   localparam logic [2:0] CABAC_BIN_CTX = 3'd2;
+  localparam logic [2:0] CABAC_BINS_EP = 3'd3;
   localparam int CABAC_PENDING_BYTES = 8;
   localparam int CABAC_PENDING_BITS = CABAC_PENDING_BYTES * 8;
-  localparam int VVC_PROB_MODEL_BITS = 40;
-  localparam int VVC_CTX_COUNT = 32;
-  localparam int VVC_CTX_QP = 32;
-
-  typedef logic [VVC_PROB_MODEL_BITS - 1:0] vvc_prob_model_t;
 
   typedef struct packed {
     logic [7:0] bits_left;
@@ -57,7 +55,6 @@ module ff_vvc_cabac_stream_writer (
   } cabac_writer_state_t;
 
   cabac_writer_state_t writer_q;
-  vvc_prob_model_t ctx_model_q [0:VVC_CTX_COUNT - 1];
   logic finishing_q;
   logic final_pending_q;
   logic queue_load_valid;
@@ -67,7 +64,20 @@ module ff_vvc_cabac_stream_writer (
   logic [CABAC_PENDING_BITS - 1:0] queue_load_bytes;
   logic queue_idle;
   logic queue_last_accepted;
-  integer ctx_i;
+  logic [4:0] engine_ctx_bank_id;
+  logic [8:0] context_ctx_lps;
+  logic context_ctx_mps;
+  logic [8:0] selected_ctx_lps;
+  logic selected_ctx_mps;
+  logic [31:0] engine_low_in;
+  logic [15:0] engine_range_in;
+  logic [7:0] engine_bits_left_in;
+  logic [15:0] context_range_in;
+  logic [31:0] engine_low;
+  logic [15:0] engine_range;
+  logic [7:0] engine_bits_left;
+  logic engine_write_out;
+  logic context_update_valid;
 
   assign s_axis_ready = queue_idle && (writer_q.stream.pending_count == 4'd0) && !finishing_q;
   assign stream_last_byte_bits = writer_q.stream.bit_count[2:0];
@@ -75,6 +85,46 @@ module ff_vvc_cabac_stream_writer (
   assign queue_load_count = writer_q.stream.pending_count;
   assign queue_load_bytes = writer_q.stream.pending_bytes;
   assign queue_load_last = final_pending_q && (writer_q.stream.partial_bit_count == 3'd0);
+  assign selected_ctx_lps = (s_axis_kind == CABAC_BIN_CTX) ?
+    (s_axis_ctx_valid ? context_ctx_lps : s_axis_lps) :
+    9'd0;
+  assign selected_ctx_mps = (s_axis_kind == CABAC_BIN_CTX) ?
+    (s_axis_ctx_valid ? context_ctx_mps : s_axis_mps) :
+    1'b0;
+  assign engine_low_in = writer_q.core.low;
+  assign engine_range_in = writer_q.core.range;
+  assign engine_bits_left_in = writer_q.core.bits_left;
+  assign context_range_in = writer_q.core.range;
+  assign context_update_valid = s_axis_valid && s_axis_ready &&
+    (s_axis_kind == CABAC_BIN_CTX) && s_axis_ctx_valid;
+
+  ff_vvc_cabac_context_model context_model (
+    .clk(clk),
+    .rst_n(rst_n),
+    .reset_contexts(clear || start),
+    .query_ctx_id(s_axis_ctx_id),
+    .query_range(context_range_in),
+    .query_bank_id(engine_ctx_bank_id),
+    .query_lps(context_ctx_lps),
+    .query_mps(context_ctx_mps),
+    .update_valid(context_update_valid),
+    .update_ctx_id(s_axis_ctx_id),
+    .update_bin(s_axis_bin)
+  );
+
+  ff_vvc_cabac_bin_engine bin_engine (
+    .bin_kind(s_axis_kind),
+    .bin_value(s_axis_bin),
+    .ctx_lps(selected_ctx_lps),
+    .ctx_mps(selected_ctx_mps),
+    .low_in(engine_low_in),
+    .range_in(engine_range_in),
+    .bits_left_in(engine_bits_left_in),
+    .low_out(engine_low),
+    .range_out(engine_range),
+    .bits_left_out(engine_bits_left),
+    .write_out(engine_write_out)
+  );
 
   ff_vvc_byte_queue #(
     .QUEUE_BYTES(CABAC_PENDING_BYTES)
@@ -98,17 +148,11 @@ module ff_vvc_cabac_stream_writer (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       writer_q <= cabac_start();
-      for (ctx_i = 0; ctx_i < VVC_CTX_COUNT; ctx_i = ctx_i + 1) begin
-        ctx_model_q[ctx_i] <= vvc_context_model_init(ctx_i[4:0]);
-      end
       finishing_q <= 1'b0;
       final_pending_q <= 1'b0;
       done <= 1'b0;
     end else if (clear) begin
       writer_q <= cabac_start();
-      for (ctx_i = 0; ctx_i < VVC_CTX_COUNT; ctx_i = ctx_i + 1) begin
-        ctx_model_q[ctx_i] <= vvc_context_model_init(ctx_i[4:0]);
-      end
       finishing_q <= 1'b0;
       final_pending_q <= 1'b0;
       done <= 1'b0;
@@ -117,9 +161,6 @@ module ff_vvc_cabac_stream_writer (
 
       if (start) begin
         writer_q <= cabac_start();
-        for (ctx_i = 0; ctx_i < VVC_CTX_COUNT; ctx_i = ctx_i + 1) begin
-          ctx_model_q[ctx_i] <= vvc_context_model_init(ctx_i[4:0]);
-        end
         finishing_q <= 1'b0;
         final_pending_q <= 1'b0;
       end else if (queue_last_accepted) begin
@@ -155,27 +196,42 @@ module ff_vvc_cabac_stream_writer (
               $display(
                 "FF_RTL_STREAM_CABAC ctx=%0d bank=%0d range=%0d lps=%0d mps=%0d bin=%0d",
                 s_axis_ctx_id,
-                vvc_context_bank_id(s_axis_ctx_id),
+                engine_ctx_bank_id,
                 writer_q.core.range,
-                vvc_prob_model_lps(ctx_model_q[vvc_context_bank_id(s_axis_ctx_id)], writer_q.core.range),
-                vvc_prob_model_mps(ctx_model_q[vvc_context_bank_id(s_axis_ctx_id)]),
+                selected_ctx_lps,
+                selected_ctx_mps,
                 s_axis_bin
               );
 `endif
-              writer_q <= cabac_encode_bin(
+              writer_q <= cabac_apply_bin_engine(
                 writer_q,
-                s_axis_bin,
-                vvc_prob_model_lps(ctx_model_q[vvc_context_bank_id(s_axis_ctx_id)], writer_q.core.range),
-                vvc_prob_model_mps(ctx_model_q[vvc_context_bank_id(s_axis_ctx_id)])
+                engine_low,
+                engine_range,
+                engine_bits_left,
+                engine_write_out
               );
-              ctx_model_q[vvc_context_bank_id(s_axis_ctx_id)] <=
-                vvc_prob_model_update(ctx_model_q[vvc_context_bank_id(s_axis_ctx_id)], s_axis_bin);
             end else begin
-              writer_q <= cabac_encode_bin(writer_q, s_axis_bin, s_axis_lps, s_axis_mps);
+              writer_q <= cabac_apply_bin_engine(
+                writer_q,
+                engine_low,
+                engine_range,
+                engine_bits_left,
+                engine_write_out
+              );
             end
           end
-          CABAC_BIN_TRM: writer_q <= cabac_encode_bin_trm(writer_q, s_axis_bin);
-          default:       writer_q <= cabac_encode_bin_ep(writer_q, s_axis_bin);
+          CABAC_BINS_EP: writer_q <= cabac_encode_bins_ep(
+            writer_q,
+            s_axis_bins_pattern,
+            s_axis_bins_count
+          );
+          default: writer_q <= cabac_apply_bin_engine(
+            writer_q,
+            engine_low,
+            engine_range,
+            engine_bits_left,
+            engine_write_out
+          );
         endcase
         if (s_axis_last) begin
           finishing_q <= 1'b1;
@@ -197,109 +253,23 @@ module ff_vvc_cabac_stream_writer (
     end
   endfunction
 
-  function automatic cabac_writer_state_t cabac_encode_bin_ep(
+  function automatic cabac_writer_state_t cabac_apply_bin_engine(
     input cabac_writer_state_t st_in,
-    input logic bin
+    input logic [31:0] low,
+    input logic [15:0] range,
+    input logic [7:0] bits_left,
+    input logic do_write_out
   );
     cabac_writer_state_t st;
-    logic [31:0] low;
-    logic [7:0] bits_left;
     begin
       st = st_in;
-      low = st.core.low << 1;
-      bits_left = st.core.bits_left - 8'd1;
-      if (bin) begin
-        low = low + st.core.range;
-      end
-      st.core.low = low;
-      st.core.bits_left = bits_left;
-      if (bits_left < 8'd12) begin
-        st = cabac_write_out(st);
-      end
-      cabac_encode_bin_ep = st;
-    end
-  endfunction
-
-  function automatic cabac_writer_state_t cabac_encode_bin(
-    input cabac_writer_state_t st_in,
-    input logic bin,
-    input logic [8:0] lps_in,
-    input logic mps
-  );
-    cabac_writer_state_t st;
-    logic [31:0] low;
-    logic [15:0] range;
-    logic [8:0] lps;
-    logic [7:0] bits_left;
-    logic [3:0] num_bits;
-    begin
-      st = st_in;
-      low = st.core.low;
-      range = st.core.range;
-      bits_left = st.core.bits_left;
-      lps = lps_in;
-
-      range = range - lps;
-      if (bin != mps) begin
-        num_bits = renorm_bits_sv(lps);
-        bits_left = bits_left - num_bits;
-        low = low + range;
-        low = low << num_bits;
-        range = lps << num_bits;
-        st.core.low = low;
-        st.core.range = range;
-        st.core.bits_left = bits_left;
-        if (bits_left < 8'd12) begin
-          st = cabac_write_out(st);
-        end
-      end else if (range < 16'd256) begin
-        num_bits = 4'd1;
-        bits_left = bits_left - num_bits;
-        low = low << num_bits;
-        range = range << num_bits;
-        st.core.low = low;
-        st.core.range = range;
-        st.core.bits_left = bits_left;
-        if (bits_left < 8'd12) begin
-          st = cabac_write_out(st);
-        end
-      end else begin
-        st.core.range = range;
-      end
-      cabac_encode_bin = st;
-    end
-  endfunction
-
-  function automatic cabac_writer_state_t cabac_encode_bin_trm(
-    input cabac_writer_state_t st_in,
-    input logic bin
-  );
-    cabac_writer_state_t st;
-    logic [31:0] low;
-    logic [15:0] range;
-    logic [7:0] bits_left;
-    begin
-      st = st_in;
-      low = st.core.low;
-      range = st.core.range - 16'd2;
-      bits_left = st.core.bits_left;
-      if (bin) begin
-        low = low + range;
-        low = low << 7;
-        range = 16'd256;
-        bits_left = bits_left - 8'd7;
-      end else if (range < 16'd256) begin
-        low = low << 1;
-        range = range << 1;
-        bits_left = bits_left - 8'd1;
-      end
       st.core.low = low;
       st.core.range = range;
       st.core.bits_left = bits_left;
-      if (bits_left < 8'd12) begin
+      if (do_write_out) begin
         st = cabac_write_out(st);
       end
-      cabac_encode_bin_trm = st;
+      cabac_apply_bin_engine = st;
     end
   endfunction
 
@@ -401,313 +371,21 @@ module ff_vvc_cabac_stream_writer (
       end
 
       final_bits = 24 - bits_left;
+`ifdef FRAMEFORGE_RTL_CABAC_TRACE
+      $display(
+        "FF_RTL_STREAM_FINISH low=%08x bits_left=%0d final_bits=%0d partial_count=%0d partial=%02x pending=%0d",
+        low,
+        bits_left,
+        final_bits,
+        st.stream.partial_bit_count,
+        st.stream.partial_byte,
+        st.stream.pending_count
+      );
+`endif
       if (final_bits > 0) begin
         st = cabac_write_bits(st, low >> 8, final_bits[5:0]);
       end
       cabac_finish = st;
-    end
-  endfunction
-
-  function automatic logic [3:0] floor_log2_u16(input logic [15:0] value);
-    integer i;
-    begin
-      floor_log2_u16 = 4'd0;
-      for (i = 0; i < 16; i = i + 1) begin
-        if (value[i]) begin
-          floor_log2_u16 = i[3:0];
-        end
-      end
-    end
-  endfunction
-
-  function automatic logic [3:0] renorm_bits_sv(input logic [15:0] range_in);
-    begin
-      renorm_bits_sv = (range_in >= 16'd256) ? 4'd0 : (4'd8 - floor_log2_u16(range_in));
-    end
-  endfunction
-
-  function automatic vvc_prob_model_t vvc_context_model_init(input logic [4:0] index);
-    logic [7:0] init_value;
-    logic [3:0] log2_window_size;
-    begin
-      init_value = 8'd31;
-      log2_window_size = 4'd8;
-      if (index < 5'd4) begin
-        init_value = vvc_split_flag_init(index[3:0]);
-        log2_window_size = vvc_split_flag_log2_window(index[3:0]);
-      end else if (index < 5'd8) begin
-        init_value = vvc_split_qt_flag_init(index[3:0] - 4'd4);
-        log2_window_size = vvc_split_qt_flag_log2_window(index[3:0] - 4'd4);
-      end else if (index == 5'd8) begin
-        init_value = vvc_qt_cbf_y_init(4'd0);
-        log2_window_size = vvc_qt_cbf_y_log2_window(4'd0);
-      end else if (index < 5'd13) begin
-        init_value = (index == 5'd9) ? vvc_multi_ref_line_idx_init(4'd0) :
-          ((index == 5'd10) ? vvc_intra_luma_mpm_flag_init() :
-          ((index == 5'd11) ? vvc_intra_luma_planar_flag_init(4'd1) :
-                              vvc_mts_idx_init(4'd0)));
-        log2_window_size = (index == 5'd9) ? vvc_multi_ref_line_idx_log2_window(4'd0) :
-          ((index == 5'd10) ? vvc_intra_luma_mpm_flag_log2_window() :
-          ((index == 5'd11) ? vvc_intra_luma_planar_flag_log2_window(4'd1) :
-                              vvc_mts_idx_log2_window(4'd0)));
-      end else if (index < 5'd16) begin
-        init_value = vvc_intra_luma_planar_flag_init((index == 5'd13) ? 4'd0 : 4'd1);
-        log2_window_size = vvc_intra_luma_planar_flag_log2_window((index == 5'd13) ? 4'd0 : 4'd1);
-      end else begin
-        init_value = vvc_qt_cbf_cb_init((index[3:0] == 4'd0) ? 4'd0 : 4'd1);
-        log2_window_size = vvc_qt_cbf_cb_log2_window((index[3:0] == 4'd0) ? 4'd0 : 4'd1);
-      end
-      vvc_context_model_init = vvc_prob_model_init(init_value, log2_window_size, VVC_CTX_QP);
-    end
-  endfunction
-
-  function automatic logic [4:0] vvc_context_bank_id(input logic [4:0] index);
-    begin
-      if ((index == 5'd14) || (index == 5'd15)) begin
-        vvc_context_bank_id = 5'd11;
-      end else if (index > 5'd17) begin
-        vvc_context_bank_id = 5'd17;
-      end else begin
-        vvc_context_bank_id = index;
-      end
-    end
-  endfunction
-
-  function automatic vvc_prob_model_t vvc_prob_model_init(
-    input logic [7:0] init_value,
-    input logic [3:0] log2_window_size,
-    input integer qp
-  );
-    integer slope;
-    integer offset;
-    integer inistate;
-    logic [15:0] p_state;
-    integer rate0;
-    integer rate1;
-    begin
-      slope = (init_value >> 3) - 4;
-      offset = ((init_value & 8'd7) * 18) + 1;
-      inistate = ((slope * (qp - 16)) >>> 1) + offset;
-      if (inistate < 1) begin
-        inistate = 1;
-      end else if (inistate > 127) begin
-        inistate = 127;
-      end
-      p_state = inistate[15:0] << 8;
-      rate0 = 2 + ((log2_window_size >> 2) & 3);
-      rate1 = 3 + rate0 + (log2_window_size & 3);
-      vvc_prob_model_init[0 +: 16] = p_state & 16'h7fe0;
-      vvc_prob_model_init[16 +: 16] = p_state & 16'h7ffe;
-      vvc_prob_model_init[32 +: 8] = ((rate0 & 8'h0f) << 4) | (rate1 & 8'h0f);
-    end
-  endfunction
-
-  function automatic logic [7:0] vvc_prob_model_state(input vvc_prob_model_t model);
-    logic [16:0] state_sum;
-    begin
-      state_sum = {1'b0, model[0 +: 16]} + {1'b0, model[16 +: 16]};
-      vvc_prob_model_state = state_sum[15:8];
-    end
-  endfunction
-
-  function automatic logic vvc_prob_model_mps(input vvc_prob_model_t model);
-    logic [7:0] state;
-    begin
-      state = vvc_prob_model_state(model);
-      vvc_prob_model_mps = state[7];
-    end
-  endfunction
-
-  function automatic logic [8:0] vvc_prob_model_lps(
-    input vvc_prob_model_t model,
-    input logic [15:0] range
-  );
-    logic [15:0] q;
-    logic [15:0] lps_full;
-    begin
-      q = {8'd0, vvc_prob_model_state(model)};
-      if (q[7]) begin
-        q = q ^ 16'h00ff;
-      end
-      lps_full = (((q >> 2) * (range >> 5)) >> 1) + 16'd4;
-      vvc_prob_model_lps = lps_full[8:0];
-    end
-  endfunction
-
-  function automatic vvc_prob_model_t vvc_prob_model_update(
-    input vvc_prob_model_t model_in,
-    input logic bin
-  );
-    logic [15:0] state0;
-    logic [15:0] state1;
-    logic [7:0] rate;
-    integer rate0;
-    integer rate1;
-    begin
-      state0 = model_in[0 +: 16];
-      state1 = model_in[16 +: 16];
-      rate = model_in[32 +: 8];
-      rate0 = rate[7:4];
-      rate1 = rate[3:0];
-      state0 = state0 - ((state0 >> rate0) & 16'h7fe0);
-      state1 = state1 - ((state1 >> rate1) & 16'h7ffe);
-      if (bin) begin
-        state0 = state0 + ((16'h7fff >> rate0) & 16'h7fe0);
-        state1 = state1 + ((16'h7fff >> rate1) & 16'h7ffe);
-      end
-      vvc_prob_model_update = model_in;
-      vvc_prob_model_update[0 +: 16] = state0;
-      vvc_prob_model_update[16 +: 16] = state1;
-    end
-  endfunction
-
-  function automatic logic [7:0] vvc_split_flag_init(input logic [3:0] index);
-    begin
-      case (index)
-        4'd0: vvc_split_flag_init = 8'd19;
-        4'd1: vvc_split_flag_init = 8'd28;
-        4'd2: vvc_split_flag_init = 8'd38;
-        4'd3: vvc_split_flag_init = 8'd27;
-        4'd4: vvc_split_flag_init = 8'd29;
-        4'd5: vvc_split_flag_init = 8'd38;
-        4'd6: vvc_split_flag_init = 8'd20;
-        4'd7: vvc_split_flag_init = 8'd30;
-        default: vvc_split_flag_init = 8'd31;
-      endcase
-    end
-  endfunction
-
-  function automatic logic [3:0] vvc_split_flag_log2_window(input logic [3:0] index);
-    begin
-      case (index)
-        4'd0: vvc_split_flag_log2_window = 4'd12;
-        4'd1: vvc_split_flag_log2_window = 4'd13;
-        4'd2: vvc_split_flag_log2_window = 4'd8;
-        4'd3: vvc_split_flag_log2_window = 4'd8;
-        4'd4: vvc_split_flag_log2_window = 4'd13;
-        4'd5: vvc_split_flag_log2_window = 4'd12;
-        4'd6: vvc_split_flag_log2_window = 4'd5;
-        4'd7: vvc_split_flag_log2_window = 4'd9;
-        default: vvc_split_flag_log2_window = 4'd9;
-      endcase
-    end
-  endfunction
-
-  function automatic logic [7:0] vvc_split_qt_flag_init(input logic [3:0] index);
-    begin
-      case (index)
-        4'd0: vvc_split_qt_flag_init = 8'd27;
-        4'd1: vvc_split_qt_flag_init = 8'd6;
-        4'd2: vvc_split_qt_flag_init = 8'd15;
-        4'd3: vvc_split_qt_flag_init = 8'd25;
-        4'd4: vvc_split_qt_flag_init = 8'd19;
-        default: vvc_split_qt_flag_init = 8'd37;
-      endcase
-    end
-  endfunction
-
-  function automatic logic [3:0] vvc_split_qt_flag_log2_window(input logic [3:0] index);
-    begin
-      case (index)
-        4'd0: vvc_split_qt_flag_log2_window = 4'd0;
-        4'd1: vvc_split_qt_flag_log2_window = 4'd8;
-        4'd2: vvc_split_qt_flag_log2_window = 4'd8;
-        4'd3: vvc_split_qt_flag_log2_window = 4'd12;
-        4'd4: vvc_split_qt_flag_log2_window = 4'd12;
-        default: vvc_split_qt_flag_log2_window = 4'd8;
-      endcase
-    end
-  endfunction
-
-  function automatic logic [7:0] vvc_multi_ref_line_idx_init(input logic [3:0] index);
-    begin
-      vvc_multi_ref_line_idx_init = (index == 4'd0) ? 8'd25 : 8'd60;
-    end
-  endfunction
-
-  function automatic logic [3:0] vvc_multi_ref_line_idx_log2_window(input logic [3:0] index);
-    begin
-      vvc_multi_ref_line_idx_log2_window = (index == 4'd0) ? 4'd5 : 4'd8;
-    end
-  endfunction
-
-  function automatic logic [7:0] vvc_intra_luma_mpm_flag_init();
-    begin
-      vvc_intra_luma_mpm_flag_init = 8'd45;
-    end
-  endfunction
-
-  function automatic logic [3:0] vvc_intra_luma_mpm_flag_log2_window();
-    begin
-      vvc_intra_luma_mpm_flag_log2_window = 4'd6;
-    end
-  endfunction
-
-  function automatic logic [7:0] vvc_intra_luma_planar_flag_init(input logic [3:0] index);
-    begin
-      vvc_intra_luma_planar_flag_init = (index == 4'd0) ? 8'd13 : 8'd28;
-    end
-  endfunction
-
-  function automatic logic [3:0] vvc_intra_luma_planar_flag_log2_window(input logic [3:0] index);
-    begin
-      vvc_intra_luma_planar_flag_log2_window = (index == 4'd0) ? 4'd1 : 4'd5;
-    end
-  endfunction
-
-  function automatic logic [7:0] vvc_qt_cbf_y_init(input logic [3:0] index);
-    begin
-      case (index)
-        4'd0: vvc_qt_cbf_y_init = 8'd15;
-        4'd1: vvc_qt_cbf_y_init = 8'd12;
-        4'd2: vvc_qt_cbf_y_init = 8'd5;
-        default: vvc_qt_cbf_y_init = 8'd7;
-      endcase
-    end
-  endfunction
-
-  function automatic logic [3:0] vvc_qt_cbf_y_log2_window(input logic [3:0] index);
-    begin
-      case (index)
-        4'd0: vvc_qt_cbf_y_log2_window = 4'd5;
-        4'd1: vvc_qt_cbf_y_log2_window = 4'd1;
-        4'd2: vvc_qt_cbf_y_log2_window = 4'd8;
-        default: vvc_qt_cbf_y_log2_window = 4'd9;
-      endcase
-    end
-  endfunction
-
-  function automatic logic [7:0] vvc_qt_cbf_cb_init(input logic [3:0] index);
-    begin
-      vvc_qt_cbf_cb_init = 8'd12;
-    end
-  endfunction
-
-  function automatic logic [3:0] vvc_qt_cbf_cb_log2_window(input logic [3:0] index);
-    begin
-      vvc_qt_cbf_cb_log2_window = (index == 4'd0) ? 4'd5 : 4'd4;
-    end
-  endfunction
-
-  function automatic logic [7:0] vvc_mts_idx_init(input logic [3:0] index);
-    begin
-      case (index)
-        4'd0: vvc_mts_idx_init = 8'd29;
-        4'd1: vvc_mts_idx_init = 8'd0;
-        4'd2: vvc_mts_idx_init = 8'd28;
-        default: vvc_mts_idx_init = 8'd0;
-      endcase
-    end
-  endfunction
-
-  function automatic logic [3:0] vvc_mts_idx_log2_window(input logic [3:0] index);
-    begin
-      case (index)
-        4'd0: vvc_mts_idx_log2_window = 4'd8;
-        4'd1: vvc_mts_idx_log2_window = 4'd0;
-        4'd2: vvc_mts_idx_log2_window = 4'd9;
-        default: vvc_mts_idx_log2_window = 4'd0;
-      endcase
     end
   endfunction
 
@@ -739,6 +417,54 @@ module ff_vvc_cabac_stream_writer (
       st.stream.partial_byte = partial_byte;
       st.stream.partial_bit_count = partial_bit_count[2:0];
       cabac_write_bits = st;
+    end
+  endfunction
+
+  function automatic cabac_writer_state_t cabac_encode_bins_ep(
+    input cabac_writer_state_t st_in,
+    input logic [31:0] bin_pattern_in,
+    input logic [5:0] num_bins_in
+  );
+    cabac_writer_state_t st;
+    logic [31:0] low;
+    logic [31:0] bin_pattern;
+    logic [15:0] range;
+    logic [31:0] pattern;
+    integer bits_left;
+    integer num_bins;
+    begin
+      st = st_in;
+      bin_pattern = bin_pattern_in;
+      num_bins = num_bins_in;
+      low = st.core.low;
+      range = st.core.range;
+      bits_left = st.core.bits_left;
+
+      while (num_bins > 8) begin
+        num_bins = num_bins - 8;
+        pattern = bin_pattern >> num_bins;
+        low = low << 8;
+        low = low + (range * pattern);
+        bin_pattern = bin_pattern - (pattern << num_bins);
+        bits_left = bits_left - 8;
+        st.core.low = low;
+        st.core.bits_left = bits_left[7:0];
+        if (bits_left < 12) begin
+          st = cabac_write_out(st);
+          low = st.core.low;
+          bits_left = st.core.bits_left;
+        end
+      end
+
+      low = low << num_bins;
+      low = low + (range * bin_pattern);
+      bits_left = bits_left - num_bins;
+      st.core.low = low;
+      st.core.bits_left = bits_left[7:0];
+      if (bits_left < 12) begin
+        st = cabac_write_out(st);
+      end
+      cabac_encode_bins_ep = st;
     end
   endfunction
 
@@ -782,7 +508,8 @@ module ff_vvc_cabac_stream_writer (
       st = st_in;
       if (st.stream.partial_bit_count != 3'd0) begin
         pad_bits = 3'd0 - st.stream.partial_bit_count;
-        st = cabac_write_bits(st, st.stream.partial_byte << pad_bits, pad_bits);
+        st.stream.bit_count = st.stream.bit_count + {10'd0, pad_bits};
+        st = cabac_append_pending_byte(st, st.stream.partial_byte << pad_bits);
         st.stream.partial_byte = 8'd0;
         st.stream.partial_bit_count = 3'd0;
       end

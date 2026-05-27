@@ -16,6 +16,8 @@ async def reset_dut(dut):
     dut.s_axis_valid.value = 0
     dut.s_axis_kind.value = CABAC_BIN_EP
     dut.s_axis_bin.value = 0
+    dut.s_axis_bins_pattern.value = 0
+    dut.s_axis_bins_count.value = 1
     dut.s_axis_ctx_valid.value = 0
     dut.s_axis_ctx_id.value = 0
     dut.s_axis_lps.value = 4
@@ -52,6 +54,8 @@ async def drive_bins_and_collect(dut, bins, backpressure=False, max_cycles=256):
             dut.s_axis_valid.value = 1
             dut.s_axis_kind.value = kind
             dut.s_axis_bin.value = bit
+            dut.s_axis_bins_pattern.value = bit
+            dut.s_axis_bins_count.value = 1
             dut.s_axis_ctx_valid.value = 0
             dut.s_axis_ctx_id.value = 0
             dut.s_axis_lps.value = lps
