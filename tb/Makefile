@@ -45,7 +45,7 @@ VERILOG_SOURCES := $(RTL_DIR)/ff_vvc_geometry_pkg.sv $(RTL_DIR)/ff_vvc_luma_part
 TOPLEVEL := ff_vvc_luma_partition
 COCOTB_TEST_MODULES := test_vvc_luma_partition
 else ifeq ($(DUT),vvc-cabac-body)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_stream_writer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_8x8_symbolizer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_8x8_stream_body.sv $(RTL_DIR)/vvc_cabac/ff_vvc_generated_cabac_body.sv
+VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_generated_cabac_body.sv
 TOPLEVEL := ff_vvc_generated_cabac_body
 COCOTB_TEST_MODULES := test_vvc_generated_cabac_body
 else ifeq ($(DUT),vvc-palette-cabac)
@@ -61,23 +61,19 @@ VERILOG_SOURCES := $(RTL_DIR)/vvc_residual/ff_vvc_reconstruction_pkg.sv $(RTL_DI
 TOPLEVEL := ff_vvc_residual_transform
 COCOTB_TEST_MODULES := test_vvc_residual_transform
 else ifeq ($(DUT),vvc-cabac)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_stream_writer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_8x8_symbolizer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_8x8_stream_body.sv $(RTL_DIR)/vvc_cabac/ff_vvc_generated_cabac_body.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_cabac.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac.sv
+VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_generated_cabac_body.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_cabac.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac.sv
 TOPLEVEL := ff_vvc_cabac
 COCOTB_TEST_MODULES := test_vvc_palette_cabac
 else ifeq ($(DUT),vvc-cabac-stream-writer)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_stream_writer.sv
+VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_byte_queue.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_stream_writer.sv
 TOPLEVEL := ff_vvc_cabac_stream_writer
 COCOTB_TEST_MODULES := test_vvc_cabac_stream_writer
-else ifeq ($(DUT),vvc-cabac-8x8-symbolizer)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_8x8_symbolizer.sv
-TOPLEVEL := ff_vvc_cabac_8x8_symbolizer
-COCOTB_TEST_MODULES := test_vvc_cabac_8x8_symbolizer
-else ifeq ($(DUT),vvc-cabac-8x8-stream-body)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_stream_writer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_8x8_symbolizer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_8x8_stream_body.sv
-TOPLEVEL := ff_vvc_cabac_8x8_stream_body
-COCOTB_TEST_MODULES := test_vvc_cabac_8x8_stream_body
+else ifeq ($(DUT),vvc-byte-queue)
+VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_byte_queue.sv
+TOPLEVEL := ff_vvc_byte_queue
+COCOTB_TEST_MODULES := test_vvc_byte_queue
 else ifeq ($(DUT),vvc-encoder)
-VERILOG_SOURCES := $(RTL_DIR)/ff_vvc_geometry_pkg.sv $(RTL_DIR)/vvc_residual/ff_vvc_reconstruction_pkg.sv $(RTL_DIR)/vvc_residual/ff_vvc_residual_transform.sv $(RTL_DIR)/ff_vvc_coding_tree_scheduler.sv $(RTL_DIR)/ff_vvc_cu_activity_mask.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_stream_writer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_8x8_symbolizer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_8x8_stream_body.sv $(RTL_DIR)/vvc_cabac/ff_vvc_generated_cabac_body.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_cabac.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_symbolizer.sv $(RTL_DIR)/ff_vvc_encoder.sv
+VERILOG_SOURCES := $(RTL_DIR)/ff_vvc_geometry_pkg.sv $(RTL_DIR)/vvc_residual/ff_vvc_reconstruction_pkg.sv $(RTL_DIR)/vvc_residual/ff_vvc_residual_transform.sv $(RTL_DIR)/ff_vvc_coding_tree_scheduler.sv $(RTL_DIR)/ff_vvc_cu_activity_mask.sv $(RTL_DIR)/vvc_cabac/ff_vvc_generated_cabac_body.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_cabac.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_symbolizer.sv $(RTL_DIR)/ff_vvc_encoder.sv
 TOPLEVEL := ff_vvc_encoder
 COCOTB_TEST_MODULES := test_vvc_encoder
 else
@@ -97,6 +93,19 @@ COMPILE_ARGS += -P$(TOPLEVEL).CTU_SIZE=$(RTL_CTU_SIZE)
 endif
 endif
 
+ifeq ($(filter print-verilog-sources print-toplevel,$(MAKECMDGOALS)),)
+.DEFAULT_GOAL := sim
+endif
+
+.PHONY: print-verilog-sources print-toplevel
+
+print-verilog-sources:
+	@printf '%s\n' $(VERILOG_SOURCES)
+
+print-toplevel:
+	@printf '%s\n' $(TOPLEVEL)
+
+ifeq ($(filter print-verilog-sources print-toplevel,$(MAKECMDGOALS)),)
 COCOTB_MAKEFILES := $(shell $(COCOTB_CONFIG) --makefiles 2>/dev/null)
 
 ifeq ($(COCOTB_MAKEFILES),)
@@ -104,3 +113,4 @@ $(error cocotb-config was not found. Install cocotb to run RTL tests; no proprie
 endif
 
 include $(COCOTB_MAKEFILES)/Makefile.sim
+endif

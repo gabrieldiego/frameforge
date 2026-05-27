@@ -54,8 +54,8 @@ make synth
 Defaults:
 
 - board: `synth/boards/arty-z7-10.env`
-- top: `ff_vvc_cabac_8x8_stream_body`
-- file list: `synth/filelists/cabac_8x8.f`
+- DUT source selection: `vvc-cabac-stream-writer`, derived from `tb/Makefile`
+- top: derived from the selected `SYNTH_DUT`
 - clock metadata: `50 MHz`
 
 Override these from the command line:
@@ -63,16 +63,19 @@ Override these from the command line:
 ```sh
 make synth \
   SYNTH_BOARD=synth/boards/arty-z7-20.env \
-  SYNTH_TOP=ff_vvc_cabac_8x8_stream_body \
-  SYNTH_FILELIST=synth/filelists/cabac_8x8.f \
+  SYNTH_DUT=vvc-cabac-stream-writer \
   SYNTH_CLOCK_MHZ=100
 ```
+
+`SYNTH_TOP` and `SYNTH_FILELIST` remain available as explicit overrides, but the
+normal path reuses the same DUT source selection as RTL simulation to avoid
+separate stale synthesis file lists.
 
 Outputs are written under `synth/out/`, which is intentionally gitignored.
 
 ## Post-Synthesis Smoke Simulation
 
-For the default CABAC 8x8 streaming top, run:
+For the default CABAC stream writer top, run:
 
 ```sh
 make synth-postsim

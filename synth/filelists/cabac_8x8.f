@@ -1,4 +1,0 @@
-rtl/vvc_cabac/ff_vvc_cabac_stream_writer.sv
-rtl/vvc_cabac/ff_vvc_cabac_8x8_symbolizer.sv
-rtl/vvc_cabac/ff_vvc_cabac_8x8_stream_body.sv
-

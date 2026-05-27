@@ -13,7 +13,7 @@ mod nal;
 mod palette;
 mod residual;
 mod syntax;
-use cabac::{VvcCabacEncoder, VvcCtxEvent, VVC_CTX_EVENTS};
+use cabac::{VvcCabacEncoder, VvcCtxEvent};
 pub use nal::{
     nal_unit_header_bytes, parse_annex_b_nal_units, write_annex_b, write_nal_unit_header,
     VvcNalHeader, VvcNalInfo, VvcNalUnit, VvcNalUnitType,
@@ -33,11 +33,12 @@ use residual::{
     quantize_vvc_4x4_chroma_sample, quantize_vvc_4x4_luma_dc, reconstruct_vvc_4x4_chroma,
     second_residual_luma_block, transform_vvc_4x4_luma, Vvc4x4QuantizedTransformBlock,
     Vvc4x4ReconstructedLumaBlock, Vvc4x4TransformBlock, VvcResidualCabacSymbol,
-    VvcResidualCtxConfig, VvcResidualLocalStats, VvcResidualPass1State, MAX_VVC_LUMA_TUS,
+    VvcResidualComponent, VvcResidualCtxConfig, VvcResidualLocalStats, VvcResidualPass1State,
+    MAX_VVC_LUMA_TUS,
 };
 use residual::{
     quantize_vvc_4x4_frame, Vvc4x4QuantizedColor, VvcResidualCabacEncoder, VvcResidualCabacOptions,
-    VvcResidualCabacSymbolStream, VvcResidualComponent, VVC_LUMA_DC_BASE,
+    VvcResidualCabacSymbolStream, VVC_LUMA_DC_BASE,
 };
 pub use syntax::{VvcSyntaxCode, VvcSyntaxField, VvcSyntaxRbsp, VvcSyntaxWriter};
 
@@ -268,52 +269,6 @@ enum Vvc4x4PictureKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum VvcEntropyTokenKind {
-    ContextBins {
-        ctx_offset: usize,
-        bins: &'static [bool],
-    },
-    RemAbsEp {
-        component: VvcResidualComponent,
-        value: u8,
-        rice_param: u8,
-    },
-    SignEp {
-        component: VvcResidualComponent,
-        negative: bool,
-    },
-    Terminate,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct VvcEntropyToken {
-    name: &'static str,
-    kind: VvcEntropyTokenKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum VvcEntropyScheduleKind {
-    Generated8x8,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum VvcCodingTreeBodyKind {
-    Generated,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct VvcCodingTreeBody {
-    kind: VvcCodingTreeBodyKind,
-    coded: VvcCodedGeometry,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct VvcEntropySchedule {
-    kind: VvcEntropyScheduleKind,
-    tokens: Vec<VvcEntropyToken>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct VvcCtuPartitionParams {
     root_width: usize,
     root_height: usize,
@@ -324,6 +279,8 @@ struct VvcCtuPartitionParams {
     chroma_tu_count: usize,
     luma_dc_abs_level: u8,
     luma_dc_negative: bool,
+    cb_dc_abs_level: u8,
+    cb_dc_negative: bool,
 }
 
 impl VvcCtuPartitionParams {
@@ -1526,34 +1483,8 @@ fn write_vvc_coding_tree_entropy(
     geometry: VvcVideoGeometry,
     color: Vvc4x4QuantizedColor,
 ) {
-    let bits = match vvc_coding_tree_body(geometry, color).kind {
-        VvcCodingTreeBodyKind::Generated => vvc_cabac_bits(geometry, color),
-    };
+    let bits = vvc_cabac_bits(geometry, color);
     writer.write_cabac_bits("cabac_vvc_quantized_residual_bits", &bits);
-}
-
-fn vvc_4x4_entropy_tokens(
-    geometry: VvcVideoGeometry,
-    color: Vvc4x4QuantizedColor,
-) -> Vec<VvcEntropyToken> {
-    vvc_entropy_schedule(geometry, color).tokens
-}
-
-fn vvc_entropy_schedule(
-    geometry: VvcVideoGeometry,
-    color: Vvc4x4QuantizedColor,
-) -> VvcEntropySchedule {
-    let _syntax_plan = vvc_coding_tree_plan(geometry);
-    assert!(
-        vvc_entropy_tokens_support_geometry(geometry),
-        "non-8x8 entropy schedules require generated VVC syntax"
-    );
-    let kind = VvcEntropyScheduleKind::Generated8x8;
-
-    VvcEntropySchedule {
-        kind,
-        tokens: vvc_8x8_mapped_entropy_tokens(color),
-    }
 }
 
 fn vvc_coding_tree_plan(geometry: VvcVideoGeometry) -> Vec<VvcCodingTreeStep> {
@@ -1645,157 +1576,15 @@ fn append_vvc_luma_partition(
     }
 }
 
-fn vvc_8x8_mapped_entropy_tokens(color: Vvc4x4QuantizedColor) -> Vec<VvcEntropyToken> {
-    let mut tokens = Vec::new();
-    append_vvc_8x8_luma_tree_tokens(&mut tokens, color);
-    append_vvc_4x4_chroma_tree_tokens(&mut tokens, color);
-    tokens.push(VvcEntropyToken {
-        name: "end_of_slice_segment_flag",
-        kind: VvcEntropyTokenKind::Terminate,
-    });
-    tokens
-}
-
-fn append_vvc_8x8_luma_tree_tokens(tokens: &mut Vec<VvcEntropyToken>, color: Vvc4x4QuantizedColor) {
-    tokens.extend([
-        VvcEntropyToken {
-            name: "split_cu_flag_luma_prefix",
-            kind: VvcEntropyTokenKind::ContextBins {
-                ctx_offset: 0,
-                bins: &[false, true, false, true],
-            },
-        },
-        VvcEntropyToken {
-            name: "luma_intra_prediction_mode_prefix",
-            kind: VvcEntropyTokenKind::ContextBins {
-                ctx_offset: 4,
-                bins: &[false, false, true, false],
-            },
-        },
-        VvcEntropyToken {
-            name: "luma_transform_unit_prefix",
-            kind: VvcEntropyTokenKind::ContextBins {
-                ctx_offset: 8,
-                bins: &[true],
-            },
-        },
-        VvcEntropyToken {
-            name: "luma_abs_remainder",
-            kind: VvcEntropyTokenKind::RemAbsEp {
-                component: VvcResidualComponent::Luma,
-                value: color.luma_rem,
-                rice_param: 0,
-            },
-        },
-        VvcEntropyToken {
-            name: "luma_coeff_sign",
-            kind: VvcEntropyTokenKind::SignEp {
-                component: VvcResidualComponent::Luma,
-                negative: true,
-            },
-        },
-        VvcEntropyToken {
-            name: "luma_residual_prefix",
-            kind: VvcEntropyTokenKind::ContextBins {
-                ctx_offset: 9,
-                bins: &[true, false, true, true],
-            },
-        },
-        VvcEntropyToken {
-            name: "luma_residual_suffix",
-            kind: VvcEntropyTokenKind::ContextBins {
-                ctx_offset: 13,
-                bins: &[true, false, false],
-            },
-        },
-    ]);
-}
-
-fn append_vvc_4x4_chroma_tree_tokens(
-    tokens: &mut Vec<VvcEntropyToken>,
-    color: Vvc4x4QuantizedColor,
-) {
-    tokens.extend([
-        VvcEntropyToken {
-            name: "chroma_tree_prefix",
-            kind: VvcEntropyTokenKind::ContextBins {
-                ctx_offset: 16,
-                bins: &[true, false, true],
-            },
-        },
-        VvcEntropyToken {
-            name: "cb_abs_remainder",
-            kind: VvcEntropyTokenKind::RemAbsEp {
-                component: VvcResidualComponent::ChromaCb,
-                value: color.cb_rem,
-                rice_param: 0,
-            },
-        },
-        VvcEntropyToken {
-            name: "cb_coeff_sign",
-            kind: VvcEntropyTokenKind::SignEp {
-                component: VvcResidualComponent::ChromaCb,
-                negative: true,
-            },
-        },
-    ]);
-}
-
-fn vvc_entropy_tokens_support_geometry(geometry: VvcVideoGeometry) -> bool {
-    geometry.coded()
-        == (VvcCodedGeometry {
-            width: 8,
-            height: 8,
-        })
-}
-
-fn vvc_coding_tree_body(
-    geometry: VvcVideoGeometry,
-    _color: Vvc4x4QuantizedColor,
-) -> VvcCodingTreeBody {
-    let coded = geometry.coded();
-    let kind = VvcCodingTreeBodyKind::Generated;
-    VvcCodingTreeBody { kind, coded }
-}
-
 fn vvc_cabac_bits(geometry: VvcVideoGeometry, color: Vvc4x4QuantizedColor) -> Vec<bool> {
-    if geometry.coded()
-        != (VvcCodedGeometry {
-            width: 8,
-            height: 8,
-        })
-    {
-        if let Some(params) = vvc_ctu_partition_params(geometry, color) {
-            return vvc_ctu_partition_cabac_bits(params);
-        }
-        unimplemented!(
-            "VVC coding tree for coded geometry {}x{} must be generated from syntax parameters",
-            geometry.coded_width(),
-            geometry.coded_height()
-        );
+    if let Some(params) = vvc_ctu_partition_params(geometry, color) {
+        return vvc_ctu_partition_cabac_bits(params);
     }
-
-    let mut cabac = VvcCabacEncoder::new();
-    cabac.start();
-    for token in vvc_4x4_entropy_tokens(geometry, color) {
-        match token.kind {
-            VvcEntropyTokenKind::ContextBins { ctx_offset, bins } => {
-                cabac.encode_ctx_bins(&VVC_CTX_EVENTS[ctx_offset..ctx_offset + bins.len()], bins);
-            }
-            VvcEntropyTokenKind::RemAbsEp {
-                value, rice_param, ..
-            } => {
-                cabac.encode_rem_abs_ep(value as u32, rice_param as u32);
-            }
-            VvcEntropyTokenKind::SignEp { negative, .. } => {
-                cabac.encode_bin_ep(negative);
-            }
-            VvcEntropyTokenKind::Terminate => {
-                cabac.encode_bin_trm(true);
-            }
-        }
-    }
-    cabac.finish()
+    unimplemented!(
+        "VVC coding tree for coded geometry {}x{} must be generated from syntax parameters",
+        geometry.coded_width(),
+        geometry.coded_height()
+    );
 }
 
 fn vvc_ctu_partition_params(
@@ -1805,8 +1594,8 @@ fn vvc_ctu_partition_params(
     let coded = geometry.coded();
     if coded.width > VVC_CTU_SIZE
         || coded.height > VVC_CTU_SIZE
-        || coded.width < 16
-        || coded.height < 16
+        || coded.width < 8
+        || coded.height < 8
     {
         return None;
     }
@@ -1827,6 +1616,8 @@ fn vvc_ctu_partition_params(
             chroma_tu_count,
             luma_dc_abs_level: color.luma_rem,
             luma_dc_negative: color.y < VVC_LUMA_DC_BASE as u8 && color.luma_rem != 0,
+            cb_dc_abs_level: color.cb_rem,
+            cb_dc_negative: color.u < 128 && color.cb_rem != 0,
         });
     }
     if coded.width != VVC_CTU_SIZE && coded.height != VVC_CTU_SIZE {
@@ -1860,18 +1651,22 @@ fn vvc_ctu_partition_params(
         chroma_tu_count,
         luma_dc_abs_level: color.luma_rem,
         luma_dc_negative: color.y < VVC_LUMA_DC_BASE as u8 && color.luma_rem != 0,
+        cb_dc_abs_level: color.cb_rem,
+        cb_dc_negative: color.u < 128 && color.cb_rem != 0,
     })
 }
 
 fn vvc_ctu_partition_cabac_bits(params: VvcCtuPartitionParams) -> Vec<bool> {
-    debug_assert!((16..=64).contains(&params.root_width));
-    debug_assert!((16..=64).contains(&params.root_height));
+    debug_assert!((8..=64).contains(&params.root_width));
+    debug_assert!((8..=64).contains(&params.root_height));
     debug_assert!(
         (params.visible_width == params.root_width && params.visible_height == params.root_height)
             || params.visible_width == VVC_CTU_SIZE
             || params.visible_height == VVC_CTU_SIZE
+            || (params.visible_width <= VVC_CTU_SIZE / 2
+                && params.visible_height <= VVC_CTU_SIZE / 2)
     );
-    debug_assert!(params.visible_width >= 16 && params.visible_height >= 16);
+    debug_assert!(params.visible_width >= 8 && params.visible_height >= 8);
     debug_assert!(params.luma_leaf_count > 0);
 
     let mut cabac = VvcCabacEncoder::new();
@@ -1882,7 +1677,12 @@ fn vvc_ctu_partition_cabac_bits(params: VvcCtuPartitionParams) -> Vec<bool> {
 }
 
 fn encode_ctu_partition_body(cabac: &mut VvcCabacEncoder, params: VvcCtuPartitionParams) {
-    let mut ctu = VvcCtuCabacGenerator::new(params.luma_dc_abs_level, params.luma_dc_negative);
+    let mut ctu = VvcCtuCabacGenerator::new(
+        params.luma_dc_abs_level,
+        params.luma_dc_negative,
+        params.cb_dc_abs_level,
+        params.cb_dc_negative,
+    );
     for op in VvcCtuCabacOp::yuv420_ctu_partition(params) {
         ctu.emit(cabac, op);
     }
@@ -3186,14 +2986,23 @@ struct VvcCtuCabacGenerator {
     contexts: VvcCabacContexts,
     luma_dc_abs_level: u8,
     luma_dc_negative: bool,
+    cb_dc_abs_level: u8,
+    cb_dc_negative: bool,
 }
 
 impl VvcCtuCabacGenerator {
-    fn new(luma_dc_abs_level: u8, luma_dc_negative: bool) -> Self {
+    fn new(
+        luma_dc_abs_level: u8,
+        luma_dc_negative: bool,
+        cb_dc_abs_level: u8,
+        cb_dc_negative: bool,
+    ) -> Self {
         Self {
             contexts: VvcCabacContexts::new(),
             luma_dc_abs_level,
             luma_dc_negative,
+            cb_dc_abs_level,
+            cb_dc_negative,
         }
     }
 
@@ -3581,10 +3390,19 @@ impl VvcCtuCabacGenerator {
             .encode(cabac, VvcCabacContext::SplitFlag(split_ctx), false);
         self.contexts
             .encode(cabac, VvcCabacContext::IntraChromaPredMode(1), false);
+        let cbf_cb = node.width == 4 && node.height == 4 && self.cb_dc_abs_level != 0;
         self.contexts
-            .encode(cabac, VvcCabacContext::QtCbfCb(cbf_cb_ctx), false);
+            .encode(cabac, VvcCabacContext::QtCbfCb(cbf_cb_ctx), cbf_cb);
         self.contexts
             .encode(cabac, VvcCabacContext::QtCbfCr(0), false);
+        if cbf_cb {
+            self.emit_chroma_cb_residual(cabac);
+        }
+    }
+
+    fn emit_chroma_cb_residual(&mut self, cabac: &mut VvcCabacEncoder) {
+        cabac.encode_rem_abs_ep(self.cb_dc_abs_level as u32, 0);
+        cabac.encode_bin_ep(self.cb_dc_negative);
     }
 
     fn emit_chroma_transform_only_leaf_with_split_ctx(
@@ -3603,10 +3421,14 @@ impl VvcCtuCabacGenerator {
             .encode(cabac, VvcCabacContext::CclmModeFlag, false);
         self.contexts
             .encode(cabac, VvcCabacContext::IntraChromaPredMode(1), false);
+        let cbf_cb = node.width == 4 && node.height == 4 && self.cb_dc_abs_level != 0;
         self.contexts
-            .encode(cabac, VvcCabacContext::QtCbfCb(cbf_cb_ctx), false);
+            .encode(cabac, VvcCabacContext::QtCbfCb(cbf_cb_ctx), cbf_cb);
         self.contexts
             .encode(cabac, VvcCabacContext::QtCbfCr(0), false);
+        if cbf_cb {
+            self.emit_chroma_cb_residual(cabac);
+        }
     }
 
     fn emit_chroma_leaf_split(&mut self, cabac: &mut VvcCabacEncoder, node: VvcCodingTreeNode) {

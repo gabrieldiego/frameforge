@@ -4,79 +4,6 @@ pub(super) struct VvcCtxEvent {
     pub(super) mps: bool,
 }
 
-pub(super) const VVC_CTX_EVENTS: [VvcCtxEvent; 19] = [
-    VvcCtxEvent {
-        lps: 146,
-        mps: false,
-    },
-    VvcCtxEvent { lps: 81, mps: true },
-    VvcCtxEvent {
-        lps: 128,
-        mps: true,
-    },
-    VvcCtxEvent { lps: 52, mps: true },
-    VvcCtxEvent {
-        lps: 160,
-        mps: true,
-    },
-    VvcCtxEvent {
-        lps: 129,
-        mps: true,
-    },
-    VvcCtxEvent {
-        lps: 24,
-        mps: false,
-    },
-    VvcCtxEvent {
-        lps: 58,
-        mps: false,
-    },
-    VvcCtxEvent {
-        lps: 29,
-        mps: false,
-    },
-    VvcCtxEvent {
-        lps: 172,
-        mps: true,
-    },
-    VvcCtxEvent {
-        lps: 107,
-        mps: false,
-    },
-    VvcCtxEvent {
-        lps: 136,
-        mps: false,
-    },
-    VvcCtxEvent {
-        lps: 128,
-        mps: true,
-    },
-    VvcCtxEvent {
-        lps: 125,
-        mps: false,
-    },
-    VvcCtxEvent {
-        lps: 184,
-        mps: false,
-    },
-    VvcCtxEvent {
-        lps: 112,
-        mps: false,
-    },
-    VvcCtxEvent {
-        lps: 28,
-        mps: false,
-    },
-    VvcCtxEvent {
-        lps: 67,
-        mps: false,
-    },
-    VvcCtxEvent {
-        lps: 26,
-        mps: false,
-    },
-];
-
 #[derive(Debug, Clone)]
 pub(super) struct VvcCabacEncoder {
     pub(super) bits: Vec<bool>,
@@ -105,13 +32,6 @@ impl VvcCabacEncoder {
         self.buffered_byte = 0xff;
         self.num_buffered_bytes = 0;
         self.bits_left = 23;
-    }
-
-    pub(super) fn encode_ctx_bins(&mut self, events: &[VvcCtxEvent], bins: &[bool]) {
-        debug_assert_eq!(events.len(), bins.len());
-        for (event, bin) in events.iter().zip(bins) {
-            self.encode_bin(*bin, *event);
-        }
     }
 
     pub(super) fn encode_bin(&mut self, bin: bool, event: VvcCtxEvent) {

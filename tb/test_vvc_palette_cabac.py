@@ -208,7 +208,6 @@ async def palette_cabac_matches_software_boundary_dump(dut):
             dut.start.value = 0
         if hasattr(dut, "mode_palette_444"):
             dut.mode_palette_444.value = 1
-            dut.body_kind.value = 0
             dut.luma_rem.value = 0
             dut.cb_rem.value = 0
             dut.cr_rem.value = 0
@@ -235,7 +234,6 @@ async def palette_cabac_matches_software_boundary_dump(dut):
     dut.enable.value = 1
     if hasattr(dut, "mode_palette_444"):
         dut.mode_palette_444.value = 1
-        dut.body_kind.value = 0
         dut.luma_rem.value = 0
         dut.cb_rem.value = 0
         dut.cr_rem.value = 0
@@ -269,7 +267,6 @@ async def palette_cabac_matches_multicolor_lossless_symbols(dut):
             dut.start.value = 0
         if hasattr(dut, "mode_palette_444"):
             dut.mode_palette_444.value = 1
-            dut.body_kind.value = 0
             dut.luma_rem.value = 0
             dut.cb_rem.value = 0
             dut.cr_rem.value = 0
@@ -295,7 +292,6 @@ async def palette_cabac_matches_multicolor_lossless_symbols(dut):
     dut.enable.value = 1
     if hasattr(dut, "mode_palette_444"):
         dut.mode_palette_444.value = 1
-        dut.body_kind.value = 0
         dut.luma_rem.value = 0
         dut.cb_rem.value = 0
         dut.cr_rem.value = 0

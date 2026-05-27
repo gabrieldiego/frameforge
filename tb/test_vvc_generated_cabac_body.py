@@ -3,9 +3,6 @@ from cocotb.triggers import ReadOnly, RisingEdge, Timer
 import cocotb
 
 
-BODY_GENERATED = 0
-
-
 async def reset_dut(dut):
     cocotb.start_soon(Clock(dut.clk, 1, unit="ns").start())
     dut.rst_n.value = 0
@@ -67,7 +64,6 @@ async def stream_cabac_bytes_with_backpressure(dut, max_cycles=512):
 @cocotb.test()
 async def cabac_body_generates_8x8_black_payload(dut):
     await reset_dut(dut)
-    dut.body_kind.value = BODY_GENERATED
     dut.coded_width.value = 8
     dut.coded_height.value = 8
     dut.luma_rem.value = 16
@@ -84,7 +80,6 @@ async def cabac_body_generates_8x8_black_payload(dut):
 async def ctu_geometries_generate_nonempty_cabac_streams(dut):
     for width, height in [(16, 16), (16, 32), (32, 16), (32, 32), (16, 64), (64, 16)]:
         await reset_dut(dut)
-        dut.body_kind.value = BODY_GENERATED
         dut.coded_width.value = width
         dut.coded_height.value = height
         dut.luma_rem.value = 16
@@ -98,7 +93,6 @@ async def ctu_geometries_generate_nonempty_cabac_streams(dut):
 @cocotb.test()
 async def cabac_body_generates_64x64_partition_payload(dut):
     await reset_dut(dut)
-    dut.body_kind.value = BODY_GENERATED
     dut.coded_width.value = 64
     dut.coded_height.value = 64
     dut.luma_rem.value = 16
@@ -113,7 +107,6 @@ async def cabac_body_generates_64x64_partition_payload(dut):
 async def cabac_body_generates_rectangular_64_sample_partition_payloads(dut):
     for width, height in [(64, 32), (32, 64)]:
         await reset_dut(dut)
-        dut.body_kind.value = BODY_GENERATED
         dut.coded_width.value = width
         dut.coded_height.value = height
         dut.luma_rem.value = 16
@@ -127,7 +120,6 @@ async def cabac_body_generates_rectangular_64_sample_partition_payloads(dut):
 @cocotb.test()
 async def cabac_body_holds_output_stable_under_backpressure(dut):
     await reset_dut(dut)
-    dut.body_kind.value = BODY_GENERATED
     dut.coded_width.value = 32
     dut.coded_height.value = 32
     dut.luma_rem.value = 16

@@ -1,4 +1,4 @@
-.PHONY: help check-tools build test fmt lint decoder-setup validate validate-decode rtl-test synth-env synth-check synth synth-postsim synth-vivado vivado-prepare vivado-config vivado-auth vivado-install clean
+.PHONY: help check-tools build test fmt lint decoder-setup validate validate-decode rtl-test synth-env synth-check synth synth-postsim synth-vivado yosys vivado vivado-prepare vivado-config vivado-auth vivado-install clean
 
 SIM ?= icarus
 TOPLEVEL_LANG ?= verilog
@@ -14,9 +14,11 @@ RTL_CTU_SIZE ?= 64
 MAX_WIDTH ?= 64
 MAX_HEIGHT ?= 64
 SYNTH_BOARD ?= synth/boards/arty-z7-10.env
-SYNTH_FILELIST ?= synth/filelists/cabac_8x8.f
-SYNTH_TOP ?= ff_vvc_cabac_8x8_stream_body
+SYNTH_DUT ?= vvc-cabac-stream-writer
+SYNTH_FILELIST ?=
+SYNTH_TOP ?=
 SYNTH_CLOCK_MHZ ?= 50
+SYNTH_TOOL ?= $(or $(filter yosys vivado,$(MAKECMDGOALS)),yosys)
 VIVADO_INSTALLER ?=
 VIVADO_LICENSE ?=
 VIVADO_INSTALL_LOG ?= .tools/vivado-install-run.log
@@ -43,7 +45,7 @@ help:
 	@printf '%s\n' '  make reference-vvc BITSTREAM=out.vvc [INPUT=in.yuv WIDTH=<w> HEIGHT=<h> FRAMES=1 BIT_DEPTH=8|10|12|16 CHROMA_FORMAT=420|422|444] - create real VVC using VTM'
 	@printf '%s\n' '  make synth-env - install/detect optional local synthesis tools under .tools/'
 	@printf '%s\n' '  make synth-check - detect Yosys/Icarus/Vivado synthesis tools'
-	@printf '%s\n' '  make synth [SYNTH_BOARD=synth/boards/arty-z7-10.env SYNTH_TOP=ff_vvc_cabac_8x8_stream_body SYNTH_FILELIST=synth/filelists/cabac_8x8.f SYNTH_CLOCK_MHZ=50] - run Yosys/Xilinx synthesis estimate'
+	@printf '%s\n' '  make synth [yosys|vivado] [SYNTH_DUT=vvc-cabac-stream-writer SYNTH_BOARD=synth/boards/arty-z7-10.env SYNTH_TOP=<override> SYNTH_FILELIST=<override> SYNTH_CLOCK_MHZ=50] - run selected synthesis estimate'
 	@printf '%s\n' '  make synth-postsim - run Yosys synthesis and a post-synthesis smoke sim when supported'
 	@printf '%s\n' '  make synth-vivado - run optional Vivado synthesis/timing if Vivado is installed'
 	@printf '%s\n' '  make vivado-prepare [VIVADO_LICENSE=~/Downloads/Xilinx.lic] - create local .tools Vivado directories and ~/.Xilinx cache symlink'
@@ -92,13 +94,16 @@ synth-check:
 	python3 scripts/install_synth_env.py --skip-download
 
 synth:
-	python3 scripts/run_synth.py --board "$(SYNTH_BOARD)" --filelist "$(SYNTH_FILELIST)" --top "$(SYNTH_TOP)" --clock-mhz "$(SYNTH_CLOCK_MHZ)"
+	python3 scripts/run_synth.py --tool "$(SYNTH_TOOL)" --dut "$(SYNTH_DUT)" --board "$(SYNTH_BOARD)" $(if $(SYNTH_FILELIST),--filelist "$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),--top "$(SYNTH_TOP)") --clock-mhz "$(SYNTH_CLOCK_MHZ)"
 
 synth-postsim:
-	python3 scripts/run_synth.py --board "$(SYNTH_BOARD)" --filelist "$(SYNTH_FILELIST)" --top "$(SYNTH_TOP)" --clock-mhz "$(SYNTH_CLOCK_MHZ)" --post-synth-smoke
+	python3 scripts/run_synth.py --dut "$(SYNTH_DUT)" --board "$(SYNTH_BOARD)" $(if $(SYNTH_FILELIST),--filelist "$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),--top "$(SYNTH_TOP)") --clock-mhz "$(SYNTH_CLOCK_MHZ)" --post-synth-smoke
 
 synth-vivado:
-	python3 scripts/run_synth.py --tool vivado --board "$(SYNTH_BOARD)" --filelist "$(SYNTH_FILELIST)" --top "$(SYNTH_TOP)" --clock-mhz "$(SYNTH_CLOCK_MHZ)"
+	python3 scripts/run_synth.py --tool vivado --dut "$(SYNTH_DUT)" --board "$(SYNTH_BOARD)" $(if $(SYNTH_FILELIST),--filelist "$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),--top "$(SYNTH_TOP)") --clock-mhz "$(SYNTH_CLOCK_MHZ)"
+
+yosys vivado:
+	@:
 
 vivado-prepare:
 	python3 scripts/setup_vivado.py prepare --link-home-cache $(if $(VIVADO_LICENSE),--license "$(VIVADO_LICENSE)")

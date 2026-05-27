@@ -72,7 +72,6 @@ module ff_vvc_encoder #(
   logic [7:0] residual_recon_luma_sample_1;
   logic [15:0] coding_tree_coded_width;
   logic [15:0] coding_tree_coded_height;
-  logic [1:0]  coding_tree_body_kind;
   logic        cabac_enable;
   logic [7:0]  palette_symbol_count;
   logic [MAX_CTU_PALETTE_SYMBOLS - 1:0] ctu_cu_active_mask;
@@ -159,8 +158,7 @@ module ff_vvc_encoder #(
     .visible_width(visible_width),
     .visible_height(visible_height),
     .coded_width(coding_tree_coded_width),
-    .coded_height(coding_tree_coded_height),
-    .body_kind(coding_tree_body_kind)
+    .coded_height(coding_tree_coded_height)
   );
 
   always @* begin
@@ -219,7 +217,6 @@ module ff_vvc_encoder #(
     .start(cabac_start_q),
     .enable(cabac_enable),
     .mode_palette_444(ctu_has_palette_cu),
-    .body_kind(coding_tree_body_kind),
     .visible_width(visible_width),
     .visible_height(visible_height),
     .coded_width(coding_tree_coded_width),

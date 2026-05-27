@@ -746,30 +746,6 @@ module ff_vvc_palette_cabac #(
       cabac_start.core.bits_left = 8'd23;
     end
   endfunction
-
-  function automatic cabac_writer_state_t cabac_encode_ctx_bins(
-    input cabac_writer_state_t st_in,
-    input logic [4:0]   ctx_offset,
-    input logic [7:0]   bin_pattern,
-    input logic [3:0]   num_bins
-  );
-    cabac_writer_state_t st;
-    integer i;
-
-    begin
-      st = st_in;
-      for (i = 0; i < num_bins; i = i + 1) begin
-        st = cabac_encode_bin(
-          st,
-          bin_pattern[num_bins - 1 - i],
-          vvc_ctx_lps(ctx_offset + i[4:0]),
-          vvc_ctx_mps(ctx_offset + i[4:0])
-        );
-      end
-      cabac_encode_ctx_bins = st;
-    end
-  endfunction
-
   function automatic cabac_writer_state_t cabac_encode_bin(
     input cabac_writer_state_t st_in,
     input logic         bin,
@@ -1212,42 +1188,6 @@ module ff_vvc_palette_cabac #(
         count = count + 4'd1;
       end
       renorm_bits_sv = count;
-    end
-  endfunction
-
-  function automatic logic [8:0] vvc_ctx_lps(input logic [4:0] index);
-    begin
-      case (index)
-        5'd0: vvc_ctx_lps = 9'd146;
-        5'd1: vvc_ctx_lps = 9'd81;
-        5'd2: vvc_ctx_lps = 9'd128;
-        5'd3: vvc_ctx_lps = 9'd52;
-        5'd4: vvc_ctx_lps = 9'd160;
-        5'd5: vvc_ctx_lps = 9'd129;
-        5'd6: vvc_ctx_lps = 9'd24;
-        5'd7: vvc_ctx_lps = 9'd58;
-        5'd8: vvc_ctx_lps = 9'd29;
-        5'd9: vvc_ctx_lps = 9'd172;
-        5'd10: vvc_ctx_lps = 9'd107;
-        5'd11: vvc_ctx_lps = 9'd136;
-        5'd12: vvc_ctx_lps = 9'd128;
-        5'd13: vvc_ctx_lps = 9'd125;
-        5'd14: vvc_ctx_lps = 9'd184;
-        5'd15: vvc_ctx_lps = 9'd112;
-        5'd16: vvc_ctx_lps = 9'd28;
-        5'd17: vvc_ctx_lps = 9'd67;
-        default: vvc_ctx_lps = 9'd26;
-      endcase
-    end
-  endfunction
-
-  function automatic logic vvc_ctx_mps(input logic [4:0] index);
-    begin
-      case (index)
-        5'd0: vvc_ctx_mps = 1'b0;
-        5'd1, 5'd2, 5'd3, 5'd4, 5'd5, 5'd9, 5'd12: vvc_ctx_mps = 1'b1;
-        default: vvc_ctx_mps = 1'b0;
-      endcase
     end
   endfunction
 

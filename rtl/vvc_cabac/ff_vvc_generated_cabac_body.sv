@@ -4,7 +4,6 @@ module ff_vvc_generated_cabac_body (
   input  logic         clk,
   input  logic         rst_n,
   input  logic         start,
-  input  logic [1:0]   body_kind,
   input  logic [15:0]  coded_width,
   input  logic [15:0]  coded_height,
   input  logic [4:0]   luma_rem,
@@ -16,8 +15,6 @@ module ff_vvc_generated_cabac_body (
   output logic         m_axis_last,
   output logic [2:0]   stream_last_byte_bits
 );
-  localparam logic [1:0] BODY_GENERATED = 2'd0;
-
   localparam int VVC_PROB_MODEL_BITS = 40;
   localparam int VVC_LUMA_CTU_SIZE = 64;
   localparam int VVC_HALF_LUMA_CTU_SIZE = VVC_LUMA_CTU_SIZE / 2;
@@ -127,41 +124,15 @@ module ff_vvc_generated_cabac_body (
   logic [12:0] stream_last_byte_index_q;
   logic [12:0] stream_byte_index_q;
   logic stream_active_q;
-  logic use_streamed_8x8;
   logic legacy_m_axis_valid;
   logic [7:0] legacy_m_axis_data;
   logic legacy_m_axis_last;
   logic legacy_m_axis_ready;
-  logic streamed8_m_axis_valid;
-  logic [7:0] streamed8_m_axis_data;
-  logic streamed8_m_axis_last;
-  logic [2:0] streamed8_last_byte_bits;
-  logic streamed8_done;
-
-  // Keep the first streamed syntax source built under this wrapper, but do
-  // not route it into conforming streams until its arithmetic byte-out is
-  // byte-equivalent with the existing generated path.
-  assign use_streamed_8x8 = 1'b0;
-  assign legacy_m_axis_ready = m_axis_ready && !use_streamed_8x8;
-  assign m_axis_valid = use_streamed_8x8 ? streamed8_m_axis_valid : legacy_m_axis_valid;
-  assign m_axis_data = use_streamed_8x8 ? streamed8_m_axis_data : legacy_m_axis_data;
-  assign m_axis_last = use_streamed_8x8 ? streamed8_m_axis_last : legacy_m_axis_last;
-  assign stream_last_byte_bits = use_streamed_8x8 ? streamed8_last_byte_bits : generated_bit_count[2:0];
-
-  ff_vvc_cabac_8x8_stream_body streamed_8x8_body (
-    .clk(clk),
-    .rst_n(rst_n),
-    .start(start && use_streamed_8x8),
-    .clear(1'b0),
-    .luma_rem(luma_rem),
-    .cb_rem(cb_rem),
-    .m_axis_ready(m_axis_ready && use_streamed_8x8),
-    .m_axis_valid(streamed8_m_axis_valid),
-    .m_axis_data(streamed8_m_axis_data),
-    .m_axis_last(streamed8_m_axis_last),
-    .stream_last_byte_bits(streamed8_last_byte_bits),
-    .done(streamed8_done)
-  );
+  assign legacy_m_axis_ready = m_axis_ready;
+  assign m_axis_valid = legacy_m_axis_valid;
+  assign m_axis_data = legacy_m_axis_data;
+  assign m_axis_last = legacy_m_axis_last;
+  assign stream_last_byte_bits = generated_bit_count[2:0];
 
   always @* begin
     generated_bit_count = current_bit_count_for_inputs(coded_width, coded_height, luma_rem, cb_rem, cr_rem);
@@ -176,7 +147,7 @@ module ff_vvc_generated_cabac_body (
       legacy_m_axis_data <= 8'd0;
       legacy_m_axis_last <= 1'b0;
     end else begin
-      if (start && !use_streamed_8x8 && (generated_bit_count != 13'd0)) begin
+      if (start && (generated_bit_count != 13'd0)) begin
         stream_last_byte_index_q <= ((generated_bit_count + 13'd7) >> 3) - 13'd1;
         stream_byte_index_q <= 13'd0;
         stream_active_q <= ((generated_bit_count + 13'd7) >> 3) != 13'd0;
@@ -211,24 +182,16 @@ module ff_vvc_generated_cabac_body (
   );
     cabac_writer_state_t st;
     begin
-      if (body_kind == BODY_GENERATED) begin
-        st = encode_generated_state(width, height, rem, cb_rem_in, cr_rem_in, 13'h1fff);
-        current_bit_count_for_inputs = st.stream.bit_count;
-      end else begin
-        current_bit_count_for_inputs = 13'd0;
-      end
+      st = encode_generated_state(width, height, rem, cb_rem_in, cr_rem_in, 13'h1fff);
+      current_bit_count_for_inputs = st.stream.bit_count;
     end
   endfunction
 
   function automatic logic [7:0] current_stream_byte(input logic [12:0] byte_index);
     cabac_writer_state_t st;
     begin
-      if (body_kind == BODY_GENERATED) begin
-        st = encode_generated_state(coded_width, coded_height, luma_rem, cb_rem, cr_rem, byte_index);
-        current_stream_byte = cabac_state_stream_byte(st, byte_index);
-      end else begin
-        current_stream_byte = 8'd0;
-      end
+      st = encode_generated_state(coded_width, coded_height, luma_rem, cb_rem, cr_rem, byte_index);
+      current_stream_byte = cabac_state_stream_byte(st, byte_index);
     end
   endfunction
 
@@ -262,28 +225,7 @@ module ff_vvc_generated_cabac_body (
     input logic [12:0] probe_byte_index
   );
     begin
-      if ((width == 16'd8) && (height == 16'd8)) begin
-        encode_generated_state = encode_8x8_state(rem, cb_rem_in, cr_rem_in, probe_byte_index);
-      end else begin
-        encode_generated_state = encode_ctu_state(width, height, rem, cb_rem_in, cr_rem_in, probe_byte_index);
-      end
-    end
-  endfunction
-
-  function automatic cabac_writer_state_t encode_8x8_state(
-    input logic [4:0] rem,
-    input logic [4:0] cb_rem_in,
-    input logic [4:0] cr_rem_in,
-    input logic [12:0] probe_byte_index
-  );
-    cabac_writer_state_t st;
-    begin
-      st = cabac_start(probe_byte_index);
-      st = encode_8x8_luma_tree(st, rem);
-      st = encode_4x4_chroma_tree(st, cb_rem_in, cr_rem_in);
-      st = cabac_encode_bin_trm(st, 1'b1);
-      st = cabac_finish(st);
-      encode_8x8_state = st;
+      encode_generated_state = encode_ctu_state(width, height, rem, cb_rem_in, cr_rem_in, probe_byte_index);
     end
   endfunction
 
@@ -1502,6 +1444,7 @@ module ff_vvc_generated_cabac_body (
 	    vvc_prob_model_t mts_idx_ctx;
 	      vvc_prob_model_t cclm_mode_ctx;
 	      vvc_prob_model_t intra_chroma_pred_ctx;
+        logic cb_coded;
 	      begin
 	        st = st_in;
 	        split_ctx = split_ctx_in;
@@ -1514,8 +1457,13 @@ module ff_vvc_generated_cabac_body (
 	        intra_chroma_pred_ctx_in,
 	        1'b0
 	      );
-	      {qt_cbf_cb_ctx, st} = cabac_encode_vvc_model_bin(st, qt_cbf_cb_ctx_in, 1'b0);
+        cb_coded = (cb_width == 8'd4) && (cb_height == 8'd4) && (cb_rem_in != 5'd0);
+	      {qt_cbf_cb_ctx, st} = cabac_encode_vvc_model_bin(st, qt_cbf_cb_ctx_in, cb_coded);
 	      {qt_cbf_cr_ctx, st} = cabac_encode_vvc_model_bin(st, qt_cbf_cr_ctx_in, 1'b0);
+        if (cb_coded) begin
+          st = cabac_encode_rem_abs_ep(st, cb_rem_in, 3'd0);
+          st = cabac_encode_bin_ep(st, 1'b1);
+        end
 	      mts_idx_ctx = mts_idx_ctx_in;
 	      encode_ctu_chroma_transform_only_leaf = {split_ctx, cclm_mode_ctx, intra_chroma_pred_ctx, qt_cbf_cb_ctx, qt_cbf_cr_ctx, mts_idx_ctx, st};
 	    end
@@ -1535,41 +1483,6 @@ module ff_vvc_generated_cabac_body (
     end
   endfunction
 
-  function automatic cabac_writer_state_t encode_8x8_luma_tree(
-    input cabac_writer_state_t st_in,
-    input logic [4:0]   rem
-  );
-    cabac_writer_state_t st;
-    begin
-      st = st_in;
-      st = cabac_encode_ctx_bins(st, 5'd0,  8'b0000_0101, 4'd4);
-      st = cabac_encode_ctx_bins(st, 5'd4,  8'b0000_0010, 4'd4);
-      st = cabac_encode_ctx_bins(st, 5'd8,  8'b0000_0001, 4'd1);
-      st = cabac_encode_rem_abs_ep(st, rem, 3'd0);
-      st = cabac_encode_bin_ep(st, 1'b1);
-      st = cabac_encode_ctx_bins(st, 5'd9,  8'b0000_1011, 4'd4);
-      st = cabac_encode_ctx_bins(st, 5'd13, 8'b0000_0100, 4'd3);
-      encode_8x8_luma_tree = st;
-    end
-  endfunction
-
-  function automatic cabac_writer_state_t encode_4x4_chroma_tree(
-    input cabac_writer_state_t st_in,
-    input logic [4:0]   cb_rem_in,
-    input logic [4:0]   cr_rem_in
-  );
-    cabac_writer_state_t st;
-    begin
-      st = st_in;
-      st = cabac_encode_ctx_bins(st, 5'd16, 8'b0000_0101, 4'd3);
-      st = cabac_encode_rem_abs_ep(st, cb_rem_in, 3'd0);
-      st = cabac_encode_bin_ep(st, 1'b1);
-      // TODO(vvc): emit the Cr residual path for the mapped 8x8 subset using
-      // cr_rem_in once this legacy small-frame path is folded into CTU syntax.
-      encode_4x4_chroma_tree = st;
-    end
-  endfunction
-
   function automatic cabac_writer_state_t cabac_start(input logic [12:0] probe_byte_index);
     begin
       cabac_start = '0;
@@ -1579,28 +1492,6 @@ module ff_vvc_generated_cabac_body (
       cabac_start.core.num_buffered_bytes = 8'd0;
       cabac_start.core.bits_left = 8'd23;
       cabac_start.stream.probe_byte_index = probe_byte_index;
-    end
-  endfunction
-
-  function automatic cabac_writer_state_t cabac_encode_ctx_bins(
-    input cabac_writer_state_t st_in,
-    input logic [4:0]   ctx_offset,
-    input logic [7:0]   bin_pattern,
-    input logic [3:0]   num_bins
-  );
-    cabac_writer_state_t st;
-    integer i;
-    begin
-      st = st_in;
-      for (i = 0; i < num_bins; i = i + 1) begin
-        st = cabac_encode_bin(
-          st,
-          bin_pattern[num_bins - 1 - i],
-          vvc_ctx_lps(ctx_offset + i[4:0]),
-          vvc_ctx_mps(ctx_offset + i[4:0])
-        );
-      end
-      cabac_encode_ctx_bins = st;
     end
   endfunction
 
@@ -2978,39 +2869,4 @@ module ff_vvc_generated_cabac_body (
     end
   endfunction
 
-  function automatic logic [8:0] vvc_ctx_lps(input logic [4:0] index);
-    begin
-      case (index)
-        5'd0: vvc_ctx_lps = 9'd146;
-        5'd1: vvc_ctx_lps = 9'd81;
-        5'd2: vvc_ctx_lps = 9'd128;
-        5'd3: vvc_ctx_lps = 9'd52;
-        5'd4: vvc_ctx_lps = 9'd160;
-        5'd5: vvc_ctx_lps = 9'd129;
-        5'd6: vvc_ctx_lps = 9'd24;
-        5'd7: vvc_ctx_lps = 9'd58;
-        5'd8: vvc_ctx_lps = 9'd29;
-        5'd9: vvc_ctx_lps = 9'd172;
-        5'd10: vvc_ctx_lps = 9'd107;
-        5'd11: vvc_ctx_lps = 9'd136;
-        5'd12: vvc_ctx_lps = 9'd128;
-        5'd13: vvc_ctx_lps = 9'd125;
-        5'd14: vvc_ctx_lps = 9'd184;
-        5'd15: vvc_ctx_lps = 9'd112;
-        5'd16: vvc_ctx_lps = 9'd28;
-        5'd17: vvc_ctx_lps = 9'd67;
-        default: vvc_ctx_lps = 9'd26;
-      endcase
-    end
-  endfunction
-
-  function automatic logic vvc_ctx_mps(input logic [4:0] index);
-    begin
-      case (index)
-        5'd0: vvc_ctx_mps = 1'b0;
-        5'd1, 5'd2, 5'd3, 5'd4, 5'd5, 5'd9, 5'd12: vvc_ctx_mps = 1'b1;
-        default: vvc_ctx_mps = 1'b0;
-      endcase
-    end
-  endfunction
 endmodule

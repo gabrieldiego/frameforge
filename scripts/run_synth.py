@@ -12,8 +12,8 @@ from pathlib import Path
 
 
 DEFAULT_BOARD = Path("synth/boards/arty-z7-10.env")
-DEFAULT_FILELIST = Path("synth/filelists/cabac_8x8.f")
-DEFAULT_TOP = "ff_vvc_cabac_8x8_stream_body"
+DEFAULT_DUT = "vvc-cabac-stream-writer"
+DEFAULT_TOP = "ff_vvc_cabac_stream_writer"
 LOCAL_LICENSE = Path(".tools/Xilinx.lic")
 LOCAL_VIVADO_ROOT = Path(".tools/Xilinx/Vivado")
 
@@ -21,8 +21,9 @@ LOCAL_VIVADO_ROOT = Path(".tools/Xilinx/Vivado")
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--board", type=Path, default=DEFAULT_BOARD)
-    parser.add_argument("--filelist", type=Path, default=DEFAULT_FILELIST)
-    parser.add_argument("--top", default=DEFAULT_TOP)
+    parser.add_argument("--dut", default=DEFAULT_DUT)
+    parser.add_argument("--filelist", type=Path, default=None)
+    parser.add_argument("--top", default=None)
     parser.add_argument("--out-dir", type=Path, default=Path("synth/out"))
     parser.add_argument("--clock-mhz", type=float, default=None)
     parser.add_argument("--tool", choices=("yosys", "vivado"), default="yosys")
@@ -30,18 +31,19 @@ def main() -> int:
     args = parser.parse_args()
 
     board = load_env_file(args.board)
-    out_dir = args.out_dir / board.get("BOARD_NAME", "board") / args.top
+    sources = read_filelist(args.filelist) if args.filelist else tb_verilog_sources(args.dut)
+    top = args.top or tb_toplevel(args.dut)
+    out_dir = args.out_dir / board.get("BOARD_NAME", "board") / top
     out_dir.mkdir(parents=True, exist_ok=True)
     clock_mhz = args.clock_mhz or float(board.get("DEFAULT_CLOCK_MHZ", "50"))
 
-    sources = read_filelist(args.filelist)
     if args.tool == "vivado":
-        return run_vivado(board, args.top, sources, out_dir, clock_mhz)
+        return run_vivado(board, top, sources, out_dir, clock_mhz)
 
-    rc = run_yosys(board, args.top, sources, out_dir, clock_mhz)
+    rc = run_yosys(board, top, sources, out_dir, clock_mhz)
     if rc != 0 or not args.post_synth_smoke:
         return rc
-    return run_post_synth_smoke(args.top, out_dir)
+    return run_post_synth_smoke(top, out_dir)
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -65,6 +67,35 @@ def read_filelist(path: Path) -> list[Path]:
             continue
         sources.append(Path(stripped))
     return sources
+
+
+def tb_make_value(dut: str, target: str) -> str:
+    completed = subprocess.run(
+        ["make", "-C", "tb", f"DUT={dut}", target],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    lines = [
+        line.strip()
+        for line in completed.stdout.splitlines()
+        if line.strip() and "Entering directory" not in line and "Leaving directory" not in line
+    ]
+    if not lines:
+        raise SystemExit(f"tb Makefile did not report {target} for DUT={dut}")
+    return "\n".join(lines)
+
+
+def tb_verilog_sources(dut: str) -> list[Path]:
+    return [
+        (Path("tb") / line).resolve()
+        for line in tb_make_value(dut, "print-verilog-sources").splitlines()
+    ]
+
+
+def tb_toplevel(dut: str) -> str:
+    return tb_make_value(dut, "print-toplevel").splitlines()[-1]
 
 
 def find_tool(name: str) -> str:
@@ -243,8 +274,15 @@ module post_synth_smoke_tb;
   reg rst_n = 1'b0;
   reg start = 1'b0;
   reg clear = 1'b0;
-  reg [4:0] luma_rem = 5'd16;
-  reg [4:0] cb_rem = 5'd16;
+  reg s_axis_valid = 1'b0;
+  reg [2:0] s_axis_kind = 3'd0;
+  reg s_axis_bin = 1'b0;
+  reg s_axis_ctx_valid = 1'b0;
+  reg [4:0] s_axis_ctx_id = 5'd0;
+  reg [8:0] s_axis_lps = 9'd4;
+  reg s_axis_mps = 1'b0;
+  reg s_axis_last = 1'b0;
+  wire s_axis_ready;
   reg m_axis_ready = 1'b1;
   wire m_axis_valid;
   wire [7:0] m_axis_data;
@@ -255,13 +293,31 @@ module post_synth_smoke_tb;
 
   always #5 clk = ~clk;
 
-  ff_vvc_cabac_8x8_stream_body dut (
+  ff_vvc_cabac_stream_writer dut (
     .clk(clk), .rst_n(rst_n), .start(start), .clear(clear),
-    .luma_rem(luma_rem), .cb_rem(cb_rem),
+    .s_axis_valid(s_axis_valid), .s_axis_ready(s_axis_ready),
+    .s_axis_kind(s_axis_kind), .s_axis_bin(s_axis_bin),
+    .s_axis_ctx_valid(s_axis_ctx_valid), .s_axis_ctx_id(s_axis_ctx_id),
+    .s_axis_lps(s_axis_lps), .s_axis_mps(s_axis_mps),
+    .s_axis_last(s_axis_last),
     .m_axis_ready(m_axis_ready), .m_axis_valid(m_axis_valid),
     .m_axis_data(m_axis_data), .m_axis_last(m_axis_last),
     .stream_last_byte_bits(stream_last_byte_bits), .done(done)
   );
+
+  task send_bin(input [2:0] kind, input bit bin, input bit last);
+    begin
+      s_axis_kind <= kind;
+      s_axis_bin <= bin;
+      s_axis_last <= last;
+      s_axis_valid <= 1'b1;
+      do begin
+        @(posedge clk);
+      end while (!s_axis_ready);
+      s_axis_valid <= 1'b0;
+      s_axis_last <= 1'b0;
+    end
+  endtask
 
   initial begin
     repeat (4) @(posedge clk);
@@ -270,6 +326,10 @@ module post_synth_smoke_tb;
     start <= 1'b1;
     @(posedge clk);
     start <= 1'b0;
+    send_bin(3'd0, 1'b0, 1'b0);
+    send_bin(3'd0, 1'b1, 1'b0);
+    send_bin(3'd0, 1'b0, 1'b0);
+    send_bin(3'd1, 1'b1, 1'b1);
     while (!done && cycles < 512) begin
       cycles = cycles + 1;
       @(posedge clk);

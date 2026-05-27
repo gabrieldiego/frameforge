@@ -10,7 +10,6 @@ module ff_vvc_cabac #(
   input  logic        start,
   input  logic        enable,
   input  logic        mode_palette_444,
-  input  logic [1:0]  body_kind,
   input  logic [15:0] visible_width,
   input  logic [15:0] visible_height,
   input  logic [15:0] coded_width,
@@ -36,8 +35,6 @@ module ff_vvc_cabac #(
   output logic        m_axis_last,
   output logic [2:0]  stream_last_byte_bits
 );
-  localparam logic [1:0] BODY_GENERATED = 2'd0;
-
   logic generated_m_axis_valid;
   logic [7:0] generated_m_axis_data;
   logic generated_m_axis_last;
@@ -60,7 +57,6 @@ module ff_vvc_cabac #(
     .clk(clk),
     .rst_n(rst_n),
     .start(start && enable && !mode_palette_444),
-    .body_kind(body_kind),
     .coded_width(coded_width),
     .coded_height(coded_height),
     .luma_rem(luma_rem),
