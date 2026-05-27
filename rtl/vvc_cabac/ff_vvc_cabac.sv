@@ -35,38 +35,41 @@ module ff_vvc_cabac #(
   output logic        m_axis_last,
   output logic [2:0]  stream_last_byte_bits
 );
-  logic generated_m_axis_valid;
-  logic [7:0] generated_m_axis_data;
-  logic generated_m_axis_last;
-  logic [2:0] generated_stream_last_byte_bits;
+  logic streamed_m_axis_valid;
+  logic [7:0] streamed_m_axis_data;
+  logic streamed_m_axis_last;
+  logic [2:0] streamed_stream_last_byte_bits;
+  logic streamed_s_axis_ready;
   logic palette_m_axis_valid;
   logic [7:0] palette_m_axis_data;
   logic palette_m_axis_last;
   logic [2:0] palette_stream_last_byte_bits;
-  logic unused_generated_symbol_inputs;
   logic palette_s_axis_ready;
+  logic streamed_done;
 
-  assign s_axis_ready = mode_palette_444 ? palette_s_axis_ready : enable;
+  assign s_axis_ready = mode_palette_444 ? palette_s_axis_ready : streamed_s_axis_ready;
   assign stream_last_byte_bits =
-    mode_palette_444 ? palette_stream_last_byte_bits : generated_stream_last_byte_bits;
-  assign m_axis_valid = mode_palette_444 ? palette_m_axis_valid : generated_m_axis_valid;
-  assign m_axis_data = mode_palette_444 ? palette_m_axis_data : generated_m_axis_data;
-  assign m_axis_last = mode_palette_444 ? palette_m_axis_last : generated_m_axis_last;
+    mode_palette_444 ? palette_stream_last_byte_bits : streamed_stream_last_byte_bits;
+  assign m_axis_valid = mode_palette_444 ? palette_m_axis_valid : streamed_m_axis_valid;
+  assign m_axis_data = mode_palette_444 ? palette_m_axis_data : streamed_m_axis_data;
+  assign m_axis_last = mode_palette_444 ? palette_m_axis_last : streamed_m_axis_last;
 
-  ff_vvc_generated_cabac_body generated_body (
+  ff_vvc_cabac_pipeline streamed_cabac (
     .clk(clk),
     .rst_n(rst_n),
     .start(start && enable && !mode_palette_444),
-    .coded_width(coded_width),
-    .coded_height(coded_height),
-    .luma_rem(luma_rem),
-    .cb_rem(cb_rem),
-    .cr_rem(cr_rem),
+    .clear(1'b0),
+    .s_axis_valid(s_axis_valid && !mode_palette_444),
+    .s_axis_ready(streamed_s_axis_ready),
+    .s_axis_kind(s_axis_kind),
+    .s_axis_data(s_axis_data),
+    .s_axis_last(s_axis_last),
     .m_axis_ready(mode_palette_444 || m_axis_ready),
-    .m_axis_valid(generated_m_axis_valid),
-    .m_axis_data(generated_m_axis_data),
-    .m_axis_last(generated_m_axis_last),
-    .stream_last_byte_bits(generated_stream_last_byte_bits)
+    .m_axis_valid(streamed_m_axis_valid),
+    .m_axis_data(streamed_m_axis_data),
+    .m_axis_last(streamed_m_axis_last),
+    .stream_last_byte_bits(streamed_stream_last_byte_bits),
+    .done(streamed_done)
   );
 
   ff_vvc_palette_cabac #(
@@ -90,11 +93,5 @@ module ff_vvc_cabac #(
     .m_axis_last(palette_m_axis_last),
     .stream_last_byte_bits(palette_stream_last_byte_bits)
   );
-
-  // Generated CABAC is still parameter-driven; keep the symbol-side inputs
-  // electrically consumed until that path becomes a real symbol streamer.
-  assign unused_generated_symbol_inputs =
-    (!mode_palette_444) && s_axis_valid && s_axis_ready &&
-    (|s_axis_kind || |s_axis_data || s_axis_last);
 
 endmodule

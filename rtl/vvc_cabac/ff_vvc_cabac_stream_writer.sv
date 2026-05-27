@@ -432,6 +432,7 @@ module ff_vvc_cabac_stream_writer (
     logic [31:0] pattern;
     integer bits_left;
     integer num_bins;
+    integer step_i;
     begin
       st = st_in;
       bin_pattern = bin_pattern_in;
@@ -440,19 +441,21 @@ module ff_vvc_cabac_stream_writer (
       range = st.core.range;
       bits_left = st.core.bits_left;
 
-      while (num_bins > 8) begin
-        num_bins = num_bins - 8;
-        pattern = bin_pattern >> num_bins;
-        low = low << 8;
-        low = low + (range * pattern);
-        bin_pattern = bin_pattern - (pattern << num_bins);
-        bits_left = bits_left - 8;
-        st.core.low = low;
-        st.core.bits_left = bits_left[7:0];
-        if (bits_left < 12) begin
-          st = cabac_write_out(st);
-          low = st.core.low;
-          bits_left = st.core.bits_left;
+      for (step_i = 0; step_i < 4; step_i = step_i + 1) begin
+        if (num_bins > 8) begin
+          num_bins = num_bins - 8;
+          pattern = bin_pattern >> num_bins;
+          low = low << 8;
+          low = low + (range * pattern);
+          bin_pattern = bin_pattern - (pattern << num_bins);
+          bits_left = bits_left - 8;
+          st.core.low = low;
+          st.core.bits_left = bits_left[7:0];
+          if (bits_left < 12) begin
+            st = cabac_write_out(st);
+            low = st.core.low;
+            bits_left = st.core.bits_left;
+          end
         end
       end
 
@@ -508,7 +511,6 @@ module ff_vvc_cabac_stream_writer (
       st = st_in;
       if (st.stream.partial_bit_count != 3'd0) begin
         pad_bits = 3'd0 - st.stream.partial_bit_count;
-        st.stream.bit_count = st.stream.bit_count + {10'd0, pad_bits};
         st = cabac_append_pending_byte(st, st.stream.partial_byte << pad_bits);
         st.stream.partial_byte = 8'd0;
         st.stream.partial_bit_count = 3'd0;
