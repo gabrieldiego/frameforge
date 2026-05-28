@@ -16,6 +16,8 @@ DEFAULT_DUT = "vvc-cabac-stream-writer"
 DEFAULT_TOP = "ff_vvc_cabac_stream_writer"
 LOCAL_LICENSE = Path(".tools/Xilinx.lic")
 LOCAL_VIVADO_ROOT = Path(".tools/Xilinx/Vivado")
+LOCAL_XILINX_ROOT = Path(".tools/Xilinx")
+LOCAL_VIVADO_COMPAT_LIB = Path(".tools/vivado-compat/lib")
 
 
 def main() -> int:
@@ -123,7 +125,10 @@ def find_local_vivado_settings() -> Path | None:
 
 
 def find_project_vivado_settings() -> Path | None:
-    candidates = sorted(LOCAL_VIVADO_ROOT.glob("*/settings64.sh"), reverse=True)
+    candidates = [
+        *sorted(LOCAL_VIVADO_ROOT.glob("*/settings64.sh"), reverse=True),
+        *sorted(LOCAL_XILINX_ROOT.glob("*/Vivado/settings64.sh"), reverse=True),
+    ]
     return candidates[0] if candidates else None
 
 
@@ -136,7 +141,10 @@ def find_vivado_command() -> list[str]:
     if found:
         return [found]
 
-    local_bins = sorted(LOCAL_VIVADO_ROOT.glob("*/bin/vivado"), reverse=True)
+    local_bins = [
+        *sorted(LOCAL_VIVADO_ROOT.glob("*/bin/vivado"), reverse=True),
+        *sorted(LOCAL_XILINX_ROOT.glob("*/Vivado/bin/vivado"), reverse=True),
+    ]
     if local_bins:
         return [str(local_bins[0])]
 
@@ -154,7 +162,37 @@ def vivado_environment() -> dict[str, str]:
     env = os.environ.copy()
     if "XILINXD_LICENSE_FILE" not in env and LOCAL_LICENSE.exists():
         env["XILINXD_LICENSE_FILE"] = str(LOCAL_LICENSE.resolve())
+    compat_lib = ensure_vivado_compat_libs()
+    if compat_lib:
+        existing = env.get("LD_LIBRARY_PATH")
+        env["LD_LIBRARY_PATH"] = (
+            str(compat_lib.resolve()) if not existing else f"{compat_lib.resolve()}:{existing}"
+        )
     return env
+
+
+def ensure_vivado_compat_libs() -> Path | None:
+    """Create project-local compatibility symlinks for newer Ubuntu releases.
+
+    AMD's 2025.2 launcher still loads libncurses.so.5 on some paths. Recent
+    Ubuntu installs may only ship ncurses 6, so keep the workaround local to the
+    project instead of writing symlinks into /usr/lib.
+    """
+    system_lib = Path("/usr/lib/x86_64-linux-gnu")
+    ncurses6 = system_lib / "libncurses.so.6"
+    tinfo6 = system_lib / "libtinfo.so.6"
+    if not ncurses6.exists():
+        return LOCAL_VIVADO_COMPAT_LIB if LOCAL_VIVADO_COMPAT_LIB.exists() else None
+
+    LOCAL_VIVADO_COMPAT_LIB.mkdir(parents=True, exist_ok=True)
+    ncurses5 = LOCAL_VIVADO_COMPAT_LIB / "libncurses.so.5"
+    if not ncurses5.exists():
+        ncurses5.symlink_to(ncurses6)
+    if tinfo6.exists():
+        tinfo5 = LOCAL_VIVADO_COMPAT_LIB / "libtinfo.so.5"
+        if not tinfo5.exists():
+            tinfo5.symlink_to(tinfo6)
+    return LOCAL_VIVADO_COMPAT_LIB
 
 
 def run_yosys(
@@ -286,6 +324,7 @@ def run_vivado(
         )
     )
     log = out_dir / "vivado.log"
+    journal = out_dir / "vivado.jou"
     print(f"Running Vivado synthesis for {top} on {part}")
     if "XILINXD_LICENSE_FILE" not in os.environ and LOCAL_LICENSE.exists():
         print(f"Using project-local Vivado license: {LOCAL_LICENSE}")
@@ -294,7 +333,17 @@ def run_vivado(
         print(f"Detected project-local Vivado settings: {settings}")
     with log.open("w") as log_file:
         completed = subprocess.run(
-            [*vivado_cmd, "-mode", "batch", "-source", str(tcl)],
+            [
+                *vivado_cmd,
+                "-mode",
+                "batch",
+                "-source",
+                str(tcl),
+                "-log",
+                str(log),
+                "-journal",
+                str(journal),
+            ],
             env=vivado_environment(),
             text=True,
             stdout=log_file,

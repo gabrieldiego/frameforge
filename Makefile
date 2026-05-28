@@ -1,4 +1,4 @@
-.PHONY: help check-tools build test fmt lint decoder-setup validate validate-decode rtl-test synth-env synth-check synth synth-postsim synth-vivado yosys vivado vivado-prepare vivado-config vivado-auth vivado-install clean
+.PHONY: help check-tools build test fmt lint decoder-setup validate validate-decode rtl-test synth-env synth-check synth synth-postsim synth-vivado synth-vivado-remote yosys vivado vivado-prepare vivado-config vivado-auth vivado-install vivado-host-deps clean
 
 SIM ?= icarus
 TOPLEVEL_LANG ?= verilog
@@ -19,6 +19,8 @@ SYNTH_FILELIST ?=
 SYNTH_TOP ?=
 SYNTH_CLOCK_MHZ ?= 50
 SYNTH_TOOL ?= $(or $(filter yosys vivado,$(MAKECMDGOALS)),yosys)
+VIVADO_REMOTE ?= gabriel@192.168.50.55
+VIVADO_REMOTE_ROOT ?= /media/gabriel/Gabriel8TB/Development/frameforge
 VALIDATE_SYNTH ?= 1
 VALIDATE_SYNTH_DUT ?= vvc-cabac-pipeline
 VIVADO_INSTALLER ?=
@@ -48,10 +50,12 @@ help:
 	@printf '%s\n' '  make synth [yosys|vivado] [SYNTH_DUT=vvc-cabac-stream-writer SYNTH_BOARD=synth/boards/arty-z7-10.env SYNTH_TOP=<override> SYNTH_FILELIST=<override> SYNTH_CLOCK_MHZ=50] - run selected synthesis estimate plus critical-path report'
 	@printf '%s\n' '  make synth-postsim - run Yosys synthesis and a post-synthesis smoke sim when supported'
 	@printf '%s\n' '  make synth-vivado - run optional Vivado synthesis/timing if Vivado is installed'
+	@printf '%s\n' '  make synth-vivado-remote [VIVADO_REMOTE=user@host VIVADO_REMOTE_ROOT=/path/to/frameforge] - run Vivado synthesis/timing over SSH'
 	@printf '%s\n' '  make vivado-prepare [VIVADO_LICENSE=~/Downloads/Xilinx.lic] - create local .tools Vivado directories and ~/.Xilinx cache symlink'
 	@printf '%s\n' '  make vivado-config - generate a host-local Vivado install config from the tracked template'
 	@printf '%s\n' '  make vivado-auth - run AMD xsetup AuthTokenGen'
 	@printf '%s\n' '  make vivado-install - run AMD xsetup batch install using the generated config'
+	@printf '%s\n' '  sudo make vivado-host-deps - install host packages required by project-local Vivado'
 	@printf '%s\n' '  make clean     - remove local build outputs'
 
 check-tools:
@@ -102,6 +106,9 @@ synth-postsim:
 synth-vivado:
 	python3 scripts/run_synth.py --tool vivado --dut "$(SYNTH_DUT)" --board "$(SYNTH_BOARD)" $(if $(SYNTH_FILELIST),--filelist "$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),--top "$(SYNTH_TOP)") --clock-mhz "$(SYNTH_CLOCK_MHZ)"
 
+synth-vivado-remote:
+	ssh "$(VIVADO_REMOTE)" 'cd "$(VIVADO_REMOTE_ROOT)" && make synth-vivado SYNTH_DUT="$(SYNTH_DUT)" SYNTH_BOARD="$(SYNTH_BOARD)" SYNTH_CLOCK_MHZ="$(SYNTH_CLOCK_MHZ)" $(if $(SYNTH_FILELIST),SYNTH_FILELIST="$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),SYNTH_TOP="$(SYNTH_TOP)")'
+
 yosys vivado:
 	@:
 
@@ -116,6 +123,9 @@ vivado-auth:
 
 vivado-install:
 	python3 scripts/setup_vivado.py install --log "$(VIVADO_INSTALL_LOG)"
+
+vivado-host-deps:
+	scripts/install_vivado_host_deps.sh --local
 
 clean:
 	cargo clean
