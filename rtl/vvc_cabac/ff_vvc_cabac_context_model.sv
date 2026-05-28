@@ -19,314 +19,122 @@ module ff_vvc_cabac_context_model #(
   input  logic        update_bin
 );
   localparam int VVC_PROB_MODEL_BITS = 40;
+  localparam logic [255:0] INIT_VALUE_LUT = {
+    8'd12, 8'd12, 8'd12, 8'd12, 8'd12, 8'd12, 8'd12, 8'd12,
+    8'd12, 8'd12, 8'd12, 8'd12, 8'd12, 8'd12, 8'd12, 8'd12,
+    8'd28, 8'd28, 8'd13, 8'd29, 8'd28, 8'd45, 8'd25, 8'd15,
+    8'd25, 8'd15, 8'd6,  8'd25, 8'd33, 8'd25, 8'd13, 8'd13
+  };
+  localparam logic [127:0] LOG2_WINDOW_LUT = {
+    4'd4, 4'd4, 4'd4, 4'd4, 4'd4, 4'd4, 4'd4, 4'd4,
+    4'd4, 4'd4, 4'd4, 4'd4, 4'd4, 4'd4, 4'd4, 4'd5,
+    4'd5, 4'd5, 4'd1, 4'd8, 4'd5, 4'd6, 4'd5, 4'd5,
+    4'd12, 4'd8, 4'd8, 4'd1, 4'd8, 4'd9, 4'd8, 4'd8
+  };
 
   typedef logic [VVC_PROB_MODEL_BITS - 1:0] vvc_prob_model_t;
 
   vvc_prob_model_t ctx_model_q [0:VVC_CTX_COUNT - 1];
+  vvc_prob_model_t ctx_init_model [0:VVC_CTX_COUNT - 1];
   logic [4:0] update_bank_id;
+  logic [4:0] query_bank_id_next;
+  logic [4:0] update_bank_id_next;
+  logic [16:0] query_state_sum;
+  logic [7:0] query_state;
+  logic [15:0] query_q;
+  logic [15:0] query_lps_full;
+  logic [15:0] update_state0;
+  logic [15:0] update_state1;
+  logic [7:0] update_rate;
+  logic [3:0] update_rate0;
+  logic [3:0] update_rate1;
   integer ctx_i;
+  integer model_i;
+  integer slope_i;
+  integer offset_i;
+  integer inistate_i;
+  integer rate0_i;
+  integer rate1_i;
 
-  assign query_bank_id = vvc_context_bank_id(query_ctx_id);
-  assign update_bank_id = vvc_context_bank_id(update_ctx_id);
-  assign query_lps = vvc_prob_model_lps(ctx_model_q[query_bank_id], query_range);
-  assign query_mps = vvc_prob_model_mps(ctx_model_q[query_bank_id]);
+  assign query_bank_id = query_bank_id_next;
+  assign update_bank_id = update_bank_id_next;
+
+  always_comb begin
+    query_bank_id_next = query_ctx_id;
+    if ((query_ctx_id == 5'd14) || (query_ctx_id == 5'd15)) begin
+      query_bank_id_next = 5'd11;
+    end else if (query_ctx_id > 5'd17) begin
+      query_bank_id_next = 5'd17;
+    end
+
+    update_bank_id_next = update_ctx_id;
+    if ((update_ctx_id == 5'd14) || (update_ctx_id == 5'd15)) begin
+      update_bank_id_next = 5'd11;
+    end else if (update_ctx_id > 5'd17) begin
+      update_bank_id_next = 5'd17;
+    end
+  end
+
+  always_comb begin
+    for (model_i = 0; model_i < VVC_CTX_COUNT; model_i = model_i + 1) begin
+      slope_i = (INIT_VALUE_LUT[model_i * 8 +: 8] >> 3) - 4;
+      offset_i = ((INIT_VALUE_LUT[model_i * 8 +: 8] & 8'd7) * 18) + 1;
+      inistate_i = ((slope_i * (VVC_CTX_QP - 16)) >>> 1) + offset_i;
+      if (inistate_i < 1) begin
+        inistate_i = 1;
+      end else if (inistate_i > 127) begin
+        inistate_i = 127;
+      end
+      rate0_i = 2 + ((LOG2_WINDOW_LUT[model_i * 4 +: 4] >> 2) & 3);
+      rate1_i = 3 + rate0_i + (LOG2_WINDOW_LUT[model_i * 4 +: 4] & 3);
+      ctx_init_model[model_i][0 +: 16] = (inistate_i[15:0] << 8) & 16'h7fe0;
+      ctx_init_model[model_i][16 +: 16] = (inistate_i[15:0] << 8) & 16'h7ffe;
+      ctx_init_model[model_i][32 +: 8] = ((rate0_i & 8'h0f) << 4) | (rate1_i & 8'h0f);
+    end
+  end
+
+  always @* begin
+    query_state_sum = {1'b0, ctx_model_q[query_bank_id_next][0 +: 16]} +
+      {1'b0, ctx_model_q[query_bank_id_next][16 +: 16]};
+    query_state = query_state_sum[15:8];
+    query_q = {8'd0, query_state};
+    if (query_q[7]) begin
+      query_q = query_q ^ 16'h00ff;
+    end
+    query_lps_full = (((query_q >> 2) * (query_range >> 5)) >> 1) + 16'd4;
+    query_lps = query_lps_full[8:0];
+    query_mps = query_state[7];
+  end
+
+  always @* begin
+    update_state0 = ctx_model_q[update_bank_id_next][0 +: 16];
+    update_state1 = ctx_model_q[update_bank_id_next][16 +: 16];
+    update_rate = ctx_model_q[update_bank_id_next][32 +: 8];
+    update_rate0 = update_rate[7:4];
+    update_rate1 = update_rate[3:0];
+    update_state0 = update_state0 - ((update_state0 >> update_rate0) & 16'h7fe0);
+    update_state1 = update_state1 - ((update_state1 >> update_rate1) & 16'h7ffe);
+    if (update_bin) begin
+      update_state0 = update_state0 + ((16'h7fff >> update_rate0) & 16'h7fe0);
+      update_state1 = update_state1 + ((16'h7fff >> update_rate1) & 16'h7ffe);
+    end
+  end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       for (ctx_i = 0; ctx_i < VVC_CTX_COUNT; ctx_i = ctx_i + 1) begin
-        ctx_model_q[ctx_i] <= vvc_context_model_init(ctx_i[4:0]);
+        ctx_model_q[ctx_i] <= ctx_init_model[ctx_i];
       end
     end else if (reset_contexts) begin
       for (ctx_i = 0; ctx_i < VVC_CTX_COUNT; ctx_i = ctx_i + 1) begin
-        ctx_model_q[ctx_i] <= vvc_context_model_init(ctx_i[4:0]);
+        ctx_model_q[ctx_i] <= ctx_init_model[ctx_i];
       end
     end else if (update_valid) begin
-      ctx_model_q[update_bank_id] <= vvc_prob_model_update(ctx_model_q[update_bank_id], update_bin);
+      ctx_model_q[update_bank_id] <= {
+        ctx_model_q[update_bank_id][32 +: 8],
+        update_state1,
+        update_state0
+      };
     end
   end
-
-  function automatic vvc_prob_model_t vvc_context_model_init(input logic [4:0] index);
-    logic [7:0] init_value;
-    logic [3:0] log2_window_size;
-    begin
-      init_value = 8'd31;
-      log2_window_size = 4'd8;
-      if (index < 5'd4) begin
-        init_value = vvc_split_flag_init(index[3:0]);
-        log2_window_size = vvc_split_flag_log2_window(index[3:0]);
-      end else if (index < 5'd8) begin
-        init_value = vvc_split_qt_flag_init(index[3:0] - 4'd4);
-        log2_window_size = vvc_split_qt_flag_log2_window(index[3:0] - 4'd4);
-      end else if (index == 5'd8) begin
-        init_value = vvc_qt_cbf_y_init(4'd0);
-        log2_window_size = vvc_qt_cbf_y_log2_window(4'd0);
-      end else if (index < 5'd13) begin
-        init_value = (index == 5'd9) ? vvc_multi_ref_line_idx_init(4'd0) :
-          ((index == 5'd10) ? vvc_intra_luma_mpm_flag_init() :
-          ((index == 5'd11) ? vvc_intra_luma_planar_flag_init(4'd1) :
-                              vvc_mts_idx_init(4'd0)));
-        log2_window_size = (index == 5'd9) ? vvc_multi_ref_line_idx_log2_window(4'd0) :
-          ((index == 5'd10) ? vvc_intra_luma_mpm_flag_log2_window() :
-          ((index == 5'd11) ? vvc_intra_luma_planar_flag_log2_window(4'd1) :
-                              vvc_mts_idx_log2_window(4'd0)));
-      end else if (index < 5'd16) begin
-        init_value = vvc_intra_luma_planar_flag_init((index == 5'd13) ? 4'd0 : 4'd1);
-        log2_window_size = vvc_intra_luma_planar_flag_log2_window((index == 5'd13) ? 4'd0 : 4'd1);
-      end else begin
-        init_value = vvc_qt_cbf_cb_init((index[3:0] == 4'd0) ? 4'd0 : 4'd1);
-        log2_window_size = vvc_qt_cbf_cb_log2_window((index[3:0] == 4'd0) ? 4'd0 : 4'd1);
-      end
-      vvc_context_model_init = vvc_prob_model_init(init_value, log2_window_size, VVC_CTX_QP);
-    end
-  endfunction
-
-  function automatic logic [4:0] vvc_context_bank_id(input logic [4:0] index);
-    begin
-      if ((index == 5'd14) || (index == 5'd15)) begin
-        vvc_context_bank_id = 5'd11;
-      end else if (index > 5'd17) begin
-        vvc_context_bank_id = 5'd17;
-      end else begin
-        vvc_context_bank_id = index;
-      end
-    end
-  endfunction
-
-  function automatic vvc_prob_model_t vvc_prob_model_init(
-    input logic [7:0] init_value,
-    input logic [3:0] log2_window_size,
-    input integer qp
-  );
-    integer slope;
-    integer offset;
-    integer inistate;
-    logic [15:0] p_state;
-    integer rate0;
-    integer rate1;
-    begin
-      slope = (init_value >> 3) - 4;
-      offset = ((init_value & 8'd7) * 18) + 1;
-      inistate = ((slope * (qp - 16)) >>> 1) + offset;
-      if (inistate < 1) begin
-        inistate = 1;
-      end else if (inistate > 127) begin
-        inistate = 127;
-      end
-      p_state = inistate[15:0] << 8;
-      rate0 = 2 + ((log2_window_size >> 2) & 3);
-      rate1 = 3 + rate0 + (log2_window_size & 3);
-      vvc_prob_model_init[0 +: 16] = p_state & 16'h7fe0;
-      vvc_prob_model_init[16 +: 16] = p_state & 16'h7ffe;
-      vvc_prob_model_init[32 +: 8] = ((rate0 & 8'h0f) << 4) | (rate1 & 8'h0f);
-    end
-  endfunction
-
-  function automatic logic [7:0] vvc_prob_model_state(input vvc_prob_model_t model);
-    logic [16:0] state_sum;
-    begin
-      state_sum = {1'b0, model[0 +: 16]} + {1'b0, model[16 +: 16]};
-      vvc_prob_model_state = state_sum[15:8];
-    end
-  endfunction
-
-  function automatic logic vvc_prob_model_mps(input vvc_prob_model_t model);
-    logic [7:0] state;
-    begin
-      state = vvc_prob_model_state(model);
-      vvc_prob_model_mps = state[7];
-    end
-  endfunction
-
-  function automatic logic [8:0] vvc_prob_model_lps(
-    input vvc_prob_model_t model,
-    input logic [15:0] range
-  );
-    logic [15:0] q;
-    logic [15:0] lps_full;
-    begin
-      q = {8'd0, vvc_prob_model_state(model)};
-      if (q[7]) begin
-        q = q ^ 16'h00ff;
-      end
-      lps_full = (((q >> 2) * (range >> 5)) >> 1) + 16'd4;
-      vvc_prob_model_lps = lps_full[8:0];
-    end
-  endfunction
-
-  function automatic vvc_prob_model_t vvc_prob_model_update(
-    input vvc_prob_model_t model_in,
-    input logic bin
-  );
-    logic [15:0] state0;
-    logic [15:0] state1;
-    logic [7:0] rate;
-    integer rate0;
-    integer rate1;
-    begin
-      state0 = model_in[0 +: 16];
-      state1 = model_in[16 +: 16];
-      rate = model_in[32 +: 8];
-      rate0 = rate[7:4];
-      rate1 = rate[3:0];
-      state0 = state0 - ((state0 >> rate0) & 16'h7fe0);
-      state1 = state1 - ((state1 >> rate1) & 16'h7ffe);
-      if (bin) begin
-        state0 = state0 + ((16'h7fff >> rate0) & 16'h7fe0);
-        state1 = state1 + ((16'h7fff >> rate1) & 16'h7ffe);
-      end
-      vvc_prob_model_update = model_in;
-      vvc_prob_model_update[0 +: 16] = state0;
-      vvc_prob_model_update[16 +: 16] = state1;
-    end
-  endfunction
-
-  function automatic logic [7:0] vvc_split_flag_init(input logic [3:0] index);
-    begin
-      case (index)
-        4'd0: vvc_split_flag_init = 8'd19;
-        4'd1: vvc_split_flag_init = 8'd28;
-        4'd2: vvc_split_flag_init = 8'd38;
-        4'd3: vvc_split_flag_init = 8'd27;
-        4'd4: vvc_split_flag_init = 8'd29;
-        4'd5: vvc_split_flag_init = 8'd38;
-        4'd6: vvc_split_flag_init = 8'd20;
-        4'd7: vvc_split_flag_init = 8'd30;
-        default: vvc_split_flag_init = 8'd31;
-      endcase
-    end
-  endfunction
-
-  function automatic logic [3:0] vvc_split_flag_log2_window(input logic [3:0] index);
-    begin
-      case (index)
-        4'd0: vvc_split_flag_log2_window = 4'd12;
-        4'd1: vvc_split_flag_log2_window = 4'd13;
-        4'd2: vvc_split_flag_log2_window = 4'd8;
-        4'd3: vvc_split_flag_log2_window = 4'd8;
-        4'd4: vvc_split_flag_log2_window = 4'd13;
-        4'd5: vvc_split_flag_log2_window = 4'd12;
-        4'd6: vvc_split_flag_log2_window = 4'd5;
-        4'd7: vvc_split_flag_log2_window = 4'd9;
-        default: vvc_split_flag_log2_window = 4'd9;
-      endcase
-    end
-  endfunction
-
-  function automatic logic [7:0] vvc_split_qt_flag_init(input logic [3:0] index);
-    begin
-      case (index)
-        4'd0: vvc_split_qt_flag_init = 8'd27;
-        4'd1: vvc_split_qt_flag_init = 8'd6;
-        4'd2: vvc_split_qt_flag_init = 8'd15;
-        4'd3: vvc_split_qt_flag_init = 8'd25;
-        4'd4: vvc_split_qt_flag_init = 8'd19;
-        default: vvc_split_qt_flag_init = 8'd37;
-      endcase
-    end
-  endfunction
-
-  function automatic logic [3:0] vvc_split_qt_flag_log2_window(input logic [3:0] index);
-    begin
-      case (index)
-        4'd0: vvc_split_qt_flag_log2_window = 4'd0;
-        4'd1: vvc_split_qt_flag_log2_window = 4'd8;
-        4'd2: vvc_split_qt_flag_log2_window = 4'd8;
-        4'd3: vvc_split_qt_flag_log2_window = 4'd12;
-        4'd4: vvc_split_qt_flag_log2_window = 4'd12;
-        default: vvc_split_qt_flag_log2_window = 4'd8;
-      endcase
-    end
-  endfunction
-
-  function automatic logic [7:0] vvc_multi_ref_line_idx_init(input logic [3:0] index);
-    begin
-      vvc_multi_ref_line_idx_init = (index == 4'd0) ? 8'd25 : 8'd60;
-    end
-  endfunction
-
-  function automatic logic [3:0] vvc_multi_ref_line_idx_log2_window(input logic [3:0] index);
-    begin
-      vvc_multi_ref_line_idx_log2_window = (index == 4'd0) ? 4'd5 : 4'd8;
-    end
-  endfunction
-
-  function automatic logic [7:0] vvc_intra_luma_mpm_flag_init();
-    begin
-      vvc_intra_luma_mpm_flag_init = 8'd45;
-    end
-  endfunction
-
-  function automatic logic [3:0] vvc_intra_luma_mpm_flag_log2_window();
-    begin
-      vvc_intra_luma_mpm_flag_log2_window = 4'd6;
-    end
-  endfunction
-
-  function automatic logic [7:0] vvc_intra_luma_planar_flag_init(input logic [3:0] index);
-    begin
-      vvc_intra_luma_planar_flag_init = (index == 4'd0) ? 8'd13 : 8'd28;
-    end
-  endfunction
-
-  function automatic logic [3:0] vvc_intra_luma_planar_flag_log2_window(input logic [3:0] index);
-    begin
-      vvc_intra_luma_planar_flag_log2_window = (index == 4'd0) ? 4'd1 : 4'd5;
-    end
-  endfunction
-
-  function automatic logic [7:0] vvc_qt_cbf_y_init(input logic [3:0] index);
-    begin
-      case (index)
-        4'd0: vvc_qt_cbf_y_init = 8'd15;
-        4'd1: vvc_qt_cbf_y_init = 8'd12;
-        4'd2: vvc_qt_cbf_y_init = 8'd5;
-        default: vvc_qt_cbf_y_init = 8'd7;
-      endcase
-    end
-  endfunction
-
-  function automatic logic [3:0] vvc_qt_cbf_y_log2_window(input logic [3:0] index);
-    begin
-      case (index)
-        4'd0: vvc_qt_cbf_y_log2_window = 4'd5;
-        4'd1: vvc_qt_cbf_y_log2_window = 4'd1;
-        4'd2: vvc_qt_cbf_y_log2_window = 4'd8;
-        default: vvc_qt_cbf_y_log2_window = 4'd9;
-      endcase
-    end
-  endfunction
-
-  function automatic logic [7:0] vvc_qt_cbf_cb_init(input logic [3:0] index);
-    begin
-      vvc_qt_cbf_cb_init = 8'd12;
-    end
-  endfunction
-
-  function automatic logic [3:0] vvc_qt_cbf_cb_log2_window(input logic [3:0] index);
-    begin
-      vvc_qt_cbf_cb_log2_window = (index == 4'd0) ? 4'd5 : 4'd4;
-    end
-  endfunction
-
-  function automatic logic [7:0] vvc_mts_idx_init(input logic [3:0] index);
-    begin
-      case (index)
-        4'd0: vvc_mts_idx_init = 8'd29;
-        4'd1: vvc_mts_idx_init = 8'd0;
-        4'd2: vvc_mts_idx_init = 8'd28;
-        default: vvc_mts_idx_init = 8'd0;
-      endcase
-    end
-  endfunction
-
-  function automatic logic [3:0] vvc_mts_idx_log2_window(input logic [3:0] index);
-    begin
-      case (index)
-        4'd0: vvc_mts_idx_log2_window = 4'd8;
-        4'd1: vvc_mts_idx_log2_window = 4'd0;
-        4'd2: vvc_mts_idx_log2_window = 4'd9;
-        default: vvc_mts_idx_log2_window = 4'd0;
-      endcase
-    end
-  endfunction
 endmodule

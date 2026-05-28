@@ -118,33 +118,10 @@ fn eos_annex_b_contains_start_code_and_header() {
 }
 
 #[test]
-fn skeleton_annex_b_contains_parameter_sets_idr_and_end_markers() {
-    let bytes = skeleton_annex_b();
-    let expected = vec![
-        0x00, 0x00, 0x00, 0x01, 0x00, 0x71, 0x80, // VPS
-        0x00, 0x00, 0x00, 0x01, 0x00, 0x79, 0x80, // SPS
-        0x00, 0x00, 0x00, 0x01, 0x00, 0x81, 0x80, // PPS
-        0x00, 0x00, 0x00, 0x01, 0x00, 0x41, 0x80, // IDR_N_LP
-        0x00, 0x00, 0x00, 0x01, 0x00, 0xa9, // EOS
-        0x00, 0x00, 0x00, 0x01, 0x00, 0xb1, // EOB
-    ];
-    assert_eq!(bytes, expected);
-}
-
-#[test]
 fn rejects_invalid_layer_id() {
     let mut unit = VvcNalUnit::eos();
     unit.layer_id = 56;
     assert!(nal_unit_header_bytes(&unit).is_err());
-}
-
-#[test]
-fn parses_skeleton_annex_b_headers() {
-    let infos = parse_annex_b_nal_units(&skeleton_annex_b()).unwrap();
-    let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
-    assert_eq!(types, vec![14, 15, 16, 8, 21, 22]);
-    assert_eq!(infos[0].payload_len, 1);
-    assert_eq!(infos[4].payload_len, 0);
 }
 
 #[test]

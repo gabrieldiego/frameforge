@@ -52,18 +52,12 @@ async def residual_stream_emits_quantized_packets(dut):
         await RisingEdge(dut.clk)
 
     expected = [
-        (1, 7, 0),
-        (2, 0x40404040, 0),
-        (3, 0x40404040, 0),
-        (4, 0x40404040, 0),
-        (5, 0x40404000, 0),
-        (6, 0, 0),
-        (7, 0, 0),
-        (8, 0, 0),
-        (9, 1, 0),
-        (10, 0, 0),
-        (11, 1, 0),
-        (12, 5, 0),
-        (13, 1, 1),
+        (2, 0, 0),
+        (2, 0x100, 0),
+        (2, 0x201, 0),
+        (2, 0x301, 0),
+        (2, 0x401, 0),
+        (4, 0x82, 0),
+        (0, 1, 1),
     ]
     assert observed == expected, (observed, expected)

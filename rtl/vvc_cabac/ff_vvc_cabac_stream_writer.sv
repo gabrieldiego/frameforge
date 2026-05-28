@@ -29,81 +29,87 @@ module ff_vvc_cabac_stream_writer (
   localparam logic [2:0] CABAC_BIN_TRM = 3'd1;
   localparam logic [2:0] CABAC_BIN_CTX = 3'd2;
   localparam logic [2:0] CABAC_BINS_EP = 3'd3;
-  localparam int CABAC_PENDING_BYTES = 8;
-  localparam int CABAC_PENDING_BITS = CABAC_PENDING_BYTES * 8;
 
-  typedef struct packed {
-    logic [7:0] bits_left;
-    logic [7:0] num_buffered_bytes;
-    logic [8:0] buffered_byte;
-    logic [15:0] range;
-    logic [31:0] low;
-  } cabac_core_state_t;
+  typedef enum logic [4:0] {
+    ST_RUN,
+    ST_WRITE_OUT,
+    ST_EMIT_BYTE,
+    ST_EMIT_REPEAT,
+    ST_FINISH_DECIDE,
+    ST_FINISH_BUFFERED,
+    ST_FINISH_REPEAT,
+    ST_FINISH_FINAL_BITS,
+    ST_FINISH_FLUSH,
+    ST_WAIT_EMIT
+  } state_t;
 
-  typedef struct packed {
-    logic [12:0] bit_count;
-    logic [2:0]  partial_bit_count;
-    logic [7:0]  partial_byte;
-    logic [3:0]  pending_count;
-    logic [CABAC_PENDING_BITS - 1:0] pending_bytes;
-    logic        overflow;
-  } cabac_stream_state_t;
+  state_t state_q;
+  state_t return_state_q;
+  logic [31:0] low_q;
+  logic [15:0] range_q;
+  logic [7:0] bits_left_q;
+  logic [8:0] buffered_byte_q;
+  logic [7:0] num_buffered_bytes_q;
+  logic finish_after_write_q;
+  logic finish_carry_q;
+  logic [5:0] final_bits_q;
 
-  typedef struct packed {
-    cabac_core_state_t core;
-    cabac_stream_state_t stream;
-  } cabac_writer_state_t;
-
-  cabac_writer_state_t writer_q;
-  logic finishing_q;
-  logic final_pending_q;
-  logic queue_load_valid;
-  logic queue_load_ready;
-  logic queue_load_last;
-  logic [3:0] queue_load_count;
-  logic [CABAC_PENDING_BITS - 1:0] queue_load_bytes;
-  logic queue_idle;
-  logic queue_last_accepted;
   logic [4:0] engine_ctx_bank_id;
   logic [8:0] context_ctx_lps;
   logic context_ctx_mps;
   logic [8:0] selected_ctx_lps;
   logic selected_ctx_mps;
-  logic [31:0] engine_low_in;
-  logic [15:0] engine_range_in;
-  logic [7:0] engine_bits_left_in;
-  logic [15:0] context_range_in;
   logic [31:0] engine_low;
   logic [15:0] engine_range;
   logic [7:0] engine_bits_left;
   logic engine_write_out;
   logic context_update_valid;
 
-  assign s_axis_ready = queue_idle && (writer_q.stream.pending_count == 4'd0) && !finishing_q;
-  assign stream_last_byte_bits = writer_q.stream.bit_count[2:0];
-  assign queue_load_valid = writer_q.stream.pending_count != 4'd0;
-  assign queue_load_count = writer_q.stream.pending_count;
-  assign queue_load_bytes = writer_q.stream.pending_bytes;
-  assign queue_load_last = final_pending_q && (writer_q.stream.partial_bit_count == 3'd0);
+  logic emit_valid_q;
+  logic emit_flush_q;
+  logic emit_last_q;
+  logic [31:0] emit_value_q;
+  logic [5:0] emit_count_q;
+  logic bit_writer_ready;
+  logic bit_writer_done;
+  logic bit_writer_idle;
+  logic [2:0] bit_writer_partial_bits;
+  logic [2:0] stream_last_byte_bits_q;
+
+  logic [8:0] lead_byte;
+  logic [31:0] low_mask;
+  logic [31:0] finish_test;
+  logic [31:0] final_bits_value;
+  logic [31:0] bins_ep_low_next;
+  logic [7:0] bins_ep_bits_left_next;
+  logic [31:0] bins_ep_pattern_shifted;
+  logic [31:0] bins_ep_mask;
+
   assign selected_ctx_lps = (s_axis_kind == CABAC_BIN_CTX) ?
     (s_axis_ctx_valid ? context_ctx_lps : s_axis_lps) :
     9'd0;
   assign selected_ctx_mps = (s_axis_kind == CABAC_BIN_CTX) ?
     (s_axis_ctx_valid ? context_ctx_mps : s_axis_mps) :
     1'b0;
-  assign engine_low_in = writer_q.core.low;
-  assign engine_range_in = writer_q.core.range;
-  assign engine_bits_left_in = writer_q.core.bits_left;
-  assign context_range_in = writer_q.core.range;
+  assign s_axis_ready = state_q == ST_RUN;
   assign context_update_valid = s_axis_valid && s_axis_ready &&
-    (s_axis_kind == CABAC_BIN_CTX) && s_axis_ctx_valid;
+                                (s_axis_kind == CABAC_BIN_CTX) && s_axis_ctx_valid;
+  assign lead_byte = low_q >> (24 - bits_left_q);
+  assign low_mask = 32'hffff_ffff >> (bits_left_q + 8'd8);
+  assign finish_test = low_q >> (32 - bits_left_q);
+  assign final_bits_value = low_q >> 8;
+  assign bins_ep_mask = (32'd1 << s_axis_bins_count) - 32'd1;
+  assign bins_ep_pattern_shifted = s_axis_bins_pattern & bins_ep_mask;
+  assign bins_ep_low_next = (low_q << s_axis_bins_count) + (range_q * bins_ep_pattern_shifted);
+  assign bins_ep_bits_left_next = bits_left_q - {2'd0, s_axis_bins_count};
+  assign stream_last_byte_bits = stream_last_byte_bits_q;
 
   ff_vvc_cabac_context_model context_model (
     .clk(clk),
     .rst_n(rst_n),
     .reset_contexts(clear || start),
     .query_ctx_id(s_axis_ctx_id),
-    .query_range(context_range_in),
+    .query_range(range_q),
     .query_bank_id(engine_ctx_bank_id),
     .query_lps(context_ctx_lps),
     .query_mps(context_ctx_mps),
@@ -117,405 +123,258 @@ module ff_vvc_cabac_stream_writer (
     .bin_value(s_axis_bin),
     .ctx_lps(selected_ctx_lps),
     .ctx_mps(selected_ctx_mps),
-    .low_in(engine_low_in),
-    .range_in(engine_range_in),
-    .bits_left_in(engine_bits_left_in),
+    .low_in(low_q),
+    .range_in(range_q),
+    .bits_left_in(bits_left_q),
     .low_out(engine_low),
     .range_out(engine_range),
     .bits_left_out(engine_bits_left),
     .write_out(engine_write_out)
   );
 
-  ff_vvc_byte_queue #(
-    .QUEUE_BYTES(CABAC_PENDING_BYTES)
-  ) byte_queue (
+  ff_vvc_cabac_bit_writer bit_writer (
     .clk(clk),
     .rst_n(rst_n),
     .clear(clear || start),
-    .load_valid(queue_load_valid),
-    .load_ready(queue_load_ready),
-    .load_count(queue_load_count),
-    .load_bytes(queue_load_bytes),
-    .load_last(queue_load_last),
+    .s_axis_valid(emit_valid_q),
+    .s_axis_ready(bit_writer_ready),
+    .s_axis_value(emit_value_q),
+    .s_axis_bit_count(emit_count_q),
+    .s_axis_flush_zero(emit_flush_q),
+    .s_axis_last(emit_last_q),
     .m_axis_ready(m_axis_ready),
     .m_axis_valid(m_axis_valid),
     .m_axis_data(m_axis_data),
     .m_axis_last(m_axis_last),
-    .idle(queue_idle),
-    .last_accepted(queue_last_accepted)
+    .total_bit_count(),
+    .partial_bit_count(bit_writer_partial_bits),
+    .idle(bit_writer_idle),
+    .done(bit_writer_done)
   );
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      writer_q <= cabac_start();
-      finishing_q <= 1'b0;
-      final_pending_q <= 1'b0;
+      state_q <= ST_RUN;
+      return_state_q <= ST_RUN;
+      low_q <= 32'd0;
+      range_q <= 16'd510;
+      bits_left_q <= 8'd23;
+      buffered_byte_q <= 9'h0ff;
+      num_buffered_bytes_q <= 8'd0;
+      finish_after_write_q <= 1'b0;
+      finish_carry_q <= 1'b0;
+      final_bits_q <= 6'd0;
+      emit_valid_q <= 1'b0;
+      emit_flush_q <= 1'b0;
+      emit_last_q <= 1'b0;
+      emit_value_q <= 32'd0;
+      emit_count_q <= 6'd0;
+      stream_last_byte_bits_q <= 3'd0;
       done <= 1'b0;
     end else if (clear) begin
-      writer_q <= cabac_start();
-      finishing_q <= 1'b0;
-      final_pending_q <= 1'b0;
+      state_q <= ST_RUN;
+      return_state_q <= ST_RUN;
+      low_q <= 32'd0;
+      range_q <= 16'd510;
+      bits_left_q <= 8'd23;
+      buffered_byte_q <= 9'h0ff;
+      num_buffered_bytes_q <= 8'd0;
+      finish_after_write_q <= 1'b0;
+      finish_carry_q <= 1'b0;
+      final_bits_q <= 6'd0;
+      emit_valid_q <= 1'b0;
+      emit_flush_q <= 1'b0;
+      emit_last_q <= 1'b0;
+      emit_value_q <= 32'd0;
+      emit_count_q <= 6'd0;
+      stream_last_byte_bits_q <= 3'd0;
       done <= 1'b0;
     end else begin
       done <= 1'b0;
+      if (emit_valid_q && bit_writer_ready) begin
+        emit_valid_q <= 1'b0;
+      end
 
       if (start) begin
-        writer_q <= cabac_start();
-        finishing_q <= 1'b0;
-        final_pending_q <= 1'b0;
-      end else if (queue_last_accepted) begin
-        done <= 1'b1;
-        finishing_q <= 1'b0;
-        final_pending_q <= 1'b0;
-        writer_q <= cabac_start();
-      end else if (queue_load_valid) begin
-        if (queue_load_ready) begin
-          writer_q.stream.pending_count <= 4'd0;
-          writer_q.stream.pending_bytes <= '0;
-          if (queue_load_last) begin
-            finishing_q <= 1'b0;
-          end
-        end
-      end else if (finishing_q) begin
-        if (!final_pending_q) begin
-          writer_q <= cabac_finish(writer_q);
-          final_pending_q <= 1'b1;
-        end else if (writer_q.stream.partial_bit_count != 3'd0) begin
-          writer_q <= cabac_flush_partial_byte(writer_q);
-        end else begin
-          done <= 1'b1;
-          finishing_q <= 1'b0;
-          final_pending_q <= 1'b0;
-          writer_q <= cabac_start();
-        end
-      end else if (s_axis_valid && s_axis_ready) begin
-        case (s_axis_kind)
-          CABAC_BIN_CTX: begin
-            if (s_axis_ctx_valid) begin
-`ifdef FRAMEFORGE_RTL_CABAC_TRACE
-              $display(
-                "FF_RTL_STREAM_CABAC ctx=%0d bank=%0d range=%0d lps=%0d mps=%0d bin=%0d",
-                s_axis_ctx_id,
-                engine_ctx_bank_id,
-                writer_q.core.range,
-                selected_ctx_lps,
-                selected_ctx_mps,
-                s_axis_bin
-              );
-`endif
-              writer_q <= cabac_apply_bin_engine(
-                writer_q,
-                engine_low,
-                engine_range,
-                engine_bits_left,
-                engine_write_out
-              );
-            end else begin
-              writer_q <= cabac_apply_bin_engine(
-                writer_q,
-                engine_low,
-                engine_range,
-                engine_bits_left,
-                engine_write_out
-              );
+        state_q <= ST_RUN;
+        return_state_q <= ST_RUN;
+        low_q <= 32'd0;
+        range_q <= 16'd510;
+        bits_left_q <= 8'd23;
+        buffered_byte_q <= 9'h0ff;
+        num_buffered_bytes_q <= 8'd0;
+        finish_after_write_q <= 1'b0;
+        finish_carry_q <= 1'b0;
+        final_bits_q <= 6'd0;
+        emit_valid_q <= 1'b0;
+        emit_flush_q <= 1'b0;
+        emit_last_q <= 1'b0;
+        emit_value_q <= 32'd0;
+        emit_count_q <= 6'd0;
+        stream_last_byte_bits_q <= 3'd0;
+      end else begin
+        case (state_q)
+          ST_RUN: begin
+            if (s_axis_valid) begin
+              if (s_axis_kind == CABAC_BINS_EP) begin
+                low_q <= bins_ep_low_next;
+                bits_left_q <= bins_ep_bits_left_next;
+                finish_after_write_q <= s_axis_last;
+                if (bins_ep_bits_left_next < 8'd12) begin
+                  state_q <= ST_WRITE_OUT;
+                end else if (s_axis_last) begin
+                  state_q <= ST_FINISH_DECIDE;
+                end
+              end else begin
+                low_q <= engine_low;
+                range_q <= engine_range;
+                bits_left_q <= engine_bits_left;
+                finish_after_write_q <= s_axis_last;
+                if (engine_write_out) begin
+                  state_q <= ST_WRITE_OUT;
+                end else if (s_axis_last) begin
+                  state_q <= ST_FINISH_DECIDE;
+                end
+              end
             end
           end
-          CABAC_BINS_EP: writer_q <= cabac_encode_bins_ep(
-            writer_q,
-            s_axis_bins_pattern,
-            s_axis_bins_count
-          );
-          default: writer_q <= cabac_apply_bin_engine(
-            writer_q,
-            engine_low,
-            engine_range,
-            engine_bits_left,
-            engine_write_out
-          );
+
+          ST_WRITE_OUT: begin
+            bits_left_q <= bits_left_q + 8'd8;
+            low_q <= low_q & low_mask;
+            if (lead_byte == 9'h0ff) begin
+              num_buffered_bytes_q <= num_buffered_bytes_q + 8'd1;
+              state_q <= finish_after_write_q ? ST_FINISH_DECIDE : ST_RUN;
+            end else if (num_buffered_bytes_q != 8'd0) begin
+              finish_carry_q <= lead_byte[8];
+              emit_value_q <= {23'd0, buffered_byte_q + {8'd0, lead_byte[8]}};
+              emit_count_q <= 6'd8;
+              emit_flush_q <= 1'b0;
+              emit_last_q <= 1'b0;
+              emit_valid_q <= 1'b1;
+              buffered_byte_q <= {1'b0, lead_byte[7:0]};
+              return_state_q <= (num_buffered_bytes_q > 8'd1) ? ST_EMIT_REPEAT :
+                                (finish_after_write_q ? ST_FINISH_DECIDE : ST_RUN);
+              state_q <= ST_WAIT_EMIT;
+            end else begin
+              num_buffered_bytes_q <= 8'd1;
+              buffered_byte_q <= lead_byte;
+              state_q <= finish_after_write_q ? ST_FINISH_DECIDE : ST_RUN;
+            end
+          end
+
+          ST_EMIT_REPEAT: begin
+            emit_value_q <= {24'd0, finish_carry_q ? 8'h00 : 8'hff};
+            emit_count_q <= 6'd8;
+            emit_flush_q <= 1'b0;
+            emit_last_q <= 1'b0;
+            emit_valid_q <= 1'b1;
+            num_buffered_bytes_q <= num_buffered_bytes_q - 8'd1;
+            return_state_q <= (num_buffered_bytes_q > 8'd2) ? ST_EMIT_REPEAT :
+                              (finish_after_write_q ? ST_FINISH_DECIDE : ST_RUN);
+            state_q <= ST_WAIT_EMIT;
+          end
+
+          ST_FINISH_DECIDE: begin
+            final_bits_q <= 6'(24 - bits_left_q);
+            if (finish_test != 32'd0) begin
+              finish_carry_q <= 1'b1;
+              low_q <= low_q - (32'd1 << (32 - bits_left_q));
+              state_q <= ST_FINISH_BUFFERED;
+            end else begin
+              finish_carry_q <= 1'b0;
+              if (num_buffered_bytes_q != 8'd0) begin
+                state_q <= ST_FINISH_BUFFERED;
+              end else if ((24 - bits_left_q) != 0) begin
+                state_q <= ST_FINISH_FINAL_BITS;
+              end else begin
+                emit_value_q <= 32'd0;
+                emit_count_q <= 6'd0;
+                emit_flush_q <= 1'b1;
+                emit_last_q <= 1'b1;
+                emit_valid_q <= 1'b1;
+                stream_last_byte_bits_q <= 3'd0;
+                return_state_q <= ST_RUN;
+                state_q <= ST_WAIT_EMIT;
+              end
+            end
+          end
+
+          ST_FINISH_BUFFERED: begin
+            emit_value_q <= {23'd0, buffered_byte_q + {8'd0, finish_carry_q}};
+            emit_count_q <= 6'd8;
+            emit_flush_q <= 1'b0;
+            emit_last_q <= (num_buffered_bytes_q <= 8'd1) && (final_bits_q == 6'd0);
+            emit_valid_q <= 1'b1;
+            if ((num_buffered_bytes_q <= 8'd1) && (final_bits_q == 6'd0)) begin
+              stream_last_byte_bits_q <= 3'd0;
+            end
+            if (num_buffered_bytes_q > 8'd1) begin
+              num_buffered_bytes_q <= num_buffered_bytes_q - 8'd1;
+              return_state_q <= ST_FINISH_REPEAT;
+            end else if (final_bits_q != 6'd0) begin
+              return_state_q <= ST_FINISH_FINAL_BITS;
+            end else begin
+              return_state_q <= ST_RUN;
+            end
+            state_q <= ST_WAIT_EMIT;
+          end
+
+          ST_FINISH_REPEAT: begin
+            emit_value_q <= {24'd0, finish_carry_q ? 8'h00 : 8'hff};
+            emit_count_q <= 6'd8;
+            emit_flush_q <= 1'b0;
+            emit_last_q <= (num_buffered_bytes_q <= 8'd1) && (final_bits_q == 6'd0);
+            emit_valid_q <= 1'b1;
+            if ((num_buffered_bytes_q <= 8'd1) && (final_bits_q == 6'd0)) begin
+              stream_last_byte_bits_q <= 3'd0;
+            end
+            if (num_buffered_bytes_q > 8'd1) begin
+              num_buffered_bytes_q <= num_buffered_bytes_q - 8'd1;
+              return_state_q <= ST_FINISH_REPEAT;
+            end else if (final_bits_q != 6'd0) begin
+              return_state_q <= ST_FINISH_FINAL_BITS;
+            end else begin
+              return_state_q <= ST_RUN;
+            end
+            state_q <= ST_WAIT_EMIT;
+          end
+
+          ST_FINISH_FINAL_BITS: begin
+            emit_value_q <= final_bits_value;
+            emit_count_q <= final_bits_q;
+            emit_flush_q <= 1'b0;
+            emit_last_q <= final_bits_q[2:0] == 3'd0;
+            emit_valid_q <= 1'b1;
+            stream_last_byte_bits_q <= final_bits_q[2:0];
+            return_state_q <= (final_bits_q[2:0] == 3'd0) ? ST_RUN : ST_FINISH_FLUSH;
+            state_q <= ST_WAIT_EMIT;
+          end
+
+          ST_FINISH_FLUSH: begin
+            emit_value_q <= 32'd0;
+            emit_count_q <= 6'd0;
+            emit_flush_q <= 1'b1;
+            emit_last_q <= 1'b1;
+            emit_valid_q <= 1'b1;
+            return_state_q <= ST_RUN;
+            state_q <= ST_WAIT_EMIT;
+          end
+
+          ST_WAIT_EMIT: begin
+            if (!emit_valid_q && bit_writer_idle) begin
+              if (return_state_q == ST_RUN) begin
+                done <= emit_last_q;
+              end
+              state_q <= return_state_q;
+            end
+          end
+
+          default: begin
+            state_q <= ST_RUN;
+          end
         endcase
-        if (s_axis_last) begin
-          finishing_q <= 1'b1;
-        end
       end
     end
   end
-
-  function automatic cabac_writer_state_t cabac_start();
-    cabac_writer_state_t st;
-    begin
-      st = '0;
-      st.core.low = 32'd0;
-      st.core.range = 16'd510;
-      st.core.buffered_byte = 9'h0ff;
-      st.core.num_buffered_bytes = 8'd0;
-      st.core.bits_left = 8'd23;
-      cabac_start = st;
-    end
-  endfunction
-
-  function automatic cabac_writer_state_t cabac_apply_bin_engine(
-    input cabac_writer_state_t st_in,
-    input logic [31:0] low,
-    input logic [15:0] range,
-    input logic [7:0] bits_left,
-    input logic do_write_out
-  );
-    cabac_writer_state_t st;
-    begin
-      st = st_in;
-      st.core.low = low;
-      st.core.range = range;
-      st.core.bits_left = bits_left;
-      if (do_write_out) begin
-        st = cabac_write_out(st);
-      end
-      cabac_apply_bin_engine = st;
-    end
-  endfunction
-
-  function automatic cabac_writer_state_t cabac_write_out(input cabac_writer_state_t st_in);
-    cabac_writer_state_t st;
-    logic [31:0] low;
-    logic [31:0] lead_byte;
-    logic [31:0] mask;
-    logic [8:0] buffered_byte;
-    logic [7:0] num_buffered_bytes;
-    logic [8:0] byte_value;
-    logic [8:0] repeated_byte;
-    logic [8:0] carry;
-    logic [7:0] bits_left;
-    integer repeat_i;
-    begin
-      st = st_in;
-      low = st.core.low;
-      bits_left = st.core.bits_left;
-      buffered_byte = st.core.buffered_byte;
-      num_buffered_bytes = st.core.num_buffered_bytes;
-      lead_byte = low >> (8'd24 - bits_left);
-      bits_left = bits_left + 8'd8;
-      mask = 32'hffff_ffff >> bits_left;
-      low = low & mask;
-
-      if (lead_byte == 32'hff) begin
-        num_buffered_bytes = num_buffered_bytes + 8'd1;
-      end else if (num_buffered_bytes > 8'd0) begin
-        carry = lead_byte >> 8;
-        byte_value = buffered_byte + carry;
-        buffered_byte = lead_byte[7:0];
-        st.core.low = low;
-        st.core.buffered_byte = buffered_byte;
-        st.core.num_buffered_bytes = num_buffered_bytes;
-        st.core.bits_left = bits_left[7:0];
-        st = cabac_write_bits(st, byte_value, 6'd8);
-        repeated_byte = (9'h0ff + carry) & 9'h0ff;
-        num_buffered_bytes = st.core.num_buffered_bytes;
-        for (repeat_i = 0; repeat_i < CABAC_PENDING_BYTES; repeat_i = repeat_i + 1) begin
-          if (num_buffered_bytes > 8'd1) begin
-            st = cabac_write_bits(st, repeated_byte, 6'd8);
-            num_buffered_bytes = num_buffered_bytes - 8'd1;
-            st.core.num_buffered_bytes = num_buffered_bytes;
-          end
-        end
-      end else begin
-        num_buffered_bytes = 8'd1;
-        buffered_byte = lead_byte[7:0];
-      end
-
-      st.core.low = low;
-      st.core.buffered_byte = buffered_byte;
-      st.core.num_buffered_bytes = num_buffered_bytes;
-      st.core.bits_left = bits_left;
-      cabac_write_out = st;
-    end
-  endfunction
-
-  function automatic cabac_writer_state_t cabac_finish(input cabac_writer_state_t st_in);
-    cabac_writer_state_t st;
-    logic [31:0] low;
-    logic [8:0] buffered_byte;
-    logic [7:0] num_buffered_bytes;
-    integer bits_left;
-    integer final_bits;
-    integer repeat_i;
-    begin
-      st = st_in;
-      low = st.core.low;
-      buffered_byte = st.core.buffered_byte;
-      num_buffered_bytes = st.core.num_buffered_bytes;
-      bits_left = st.core.bits_left;
-
-      if ((low >> (32 - bits_left)) != 0) begin
-        st = cabac_write_bits(st, buffered_byte + 9'd1, 6'd8);
-        num_buffered_bytes = st.core.num_buffered_bytes;
-        for (repeat_i = 0; repeat_i < CABAC_PENDING_BYTES; repeat_i = repeat_i + 1) begin
-          if (num_buffered_bytes > 8'd1) begin
-            st = cabac_write_bits(st, 9'd0, 6'd8);
-            num_buffered_bytes = num_buffered_bytes - 8'd1;
-            st.core.num_buffered_bytes = num_buffered_bytes;
-          end
-        end
-        low = low - (32'd1 << (32 - bits_left));
-        st.core.low = low;
-      end else begin
-        if (num_buffered_bytes > 8'd0) begin
-          st = cabac_write_bits(st, buffered_byte, 6'd8);
-        end
-        num_buffered_bytes = st.core.num_buffered_bytes;
-        for (repeat_i = 0; repeat_i < CABAC_PENDING_BYTES; repeat_i = repeat_i + 1) begin
-          if (num_buffered_bytes > 8'd1) begin
-            st = cabac_write_bits(st, 9'h0ff, 6'd8);
-            num_buffered_bytes = num_buffered_bytes - 8'd1;
-            st.core.num_buffered_bytes = num_buffered_bytes;
-          end
-        end
-      end
-
-      final_bits = 24 - bits_left;
-`ifdef FRAMEFORGE_RTL_CABAC_TRACE
-      $display(
-        "FF_RTL_STREAM_FINISH low=%08x bits_left=%0d final_bits=%0d partial_count=%0d partial=%02x pending=%0d",
-        low,
-        bits_left,
-        final_bits,
-        st.stream.partial_bit_count,
-        st.stream.partial_byte,
-        st.stream.pending_count
-      );
-`endif
-      if (final_bits > 0) begin
-        st = cabac_write_bits(st, low >> 8, final_bits[5:0]);
-      end
-      cabac_finish = st;
-    end
-  endfunction
-
-  function automatic cabac_writer_state_t cabac_write_bits(
-    input cabac_writer_state_t st_in,
-    input logic [31:0] value,
-    input logic [5:0] bit_count
-  );
-    cabac_writer_state_t st;
-    logic [7:0] partial_byte;
-    logic [3:0] partial_bit_count;
-    integer i;
-    begin
-      st = st_in;
-      partial_byte = st.stream.partial_byte;
-      partial_bit_count = st.stream.partial_bit_count;
-      for (i = 31; i >= 0; i = i - 1) begin
-        if (i < bit_count) begin
-          partial_byte = (partial_byte << 1) | value[i];
-          partial_bit_count = partial_bit_count + 4'd1;
-          st.stream.bit_count = st.stream.bit_count + 13'd1;
-          if (partial_bit_count == 4'd8) begin
-            st = cabac_append_pending_byte(st, partial_byte);
-            partial_byte = 8'd0;
-            partial_bit_count = 4'd0;
-          end
-        end
-      end
-      st.stream.partial_byte = partial_byte;
-      st.stream.partial_bit_count = partial_bit_count[2:0];
-      cabac_write_bits = st;
-    end
-  endfunction
-
-  function automatic cabac_writer_state_t cabac_encode_bins_ep(
-    input cabac_writer_state_t st_in,
-    input logic [31:0] bin_pattern_in,
-    input logic [5:0] num_bins_in
-  );
-    cabac_writer_state_t st;
-    logic [31:0] low;
-    logic [31:0] bin_pattern;
-    logic [15:0] range;
-    logic [31:0] pattern;
-    integer bits_left;
-    integer num_bins;
-    integer step_i;
-    begin
-      st = st_in;
-      bin_pattern = bin_pattern_in;
-      num_bins = num_bins_in;
-      low = st.core.low;
-      range = st.core.range;
-      bits_left = st.core.bits_left;
-
-      for (step_i = 0; step_i < 4; step_i = step_i + 1) begin
-        if (num_bins > 8) begin
-          num_bins = num_bins - 8;
-          pattern = bin_pattern >> num_bins;
-          low = low << 8;
-          low = low + (range * pattern);
-          bin_pattern = bin_pattern - (pattern << num_bins);
-          bits_left = bits_left - 8;
-          st.core.low = low;
-          st.core.bits_left = bits_left[7:0];
-          if (bits_left < 12) begin
-            st = cabac_write_out(st);
-            low = st.core.low;
-            bits_left = st.core.bits_left;
-          end
-        end
-      end
-
-      low = low << num_bins;
-      low = low + (range * bin_pattern);
-      bits_left = bits_left - num_bins;
-      st.core.low = low;
-      st.core.bits_left = bits_left[7:0];
-      if (bits_left < 12) begin
-        st = cabac_write_out(st);
-      end
-      cabac_encode_bins_ep = st;
-    end
-  endfunction
-
-  function automatic cabac_writer_state_t cabac_append_pending_byte(
-    input cabac_writer_state_t st_in,
-    input logic [7:0] value
-  );
-    cabac_writer_state_t st;
-    logic [CABAC_PENDING_BITS - 1:0] shifted_value;
-    integer bit_offset;
-    begin
-      st = st_in;
-      if (st.stream.pending_count < CABAC_PENDING_BYTES[3:0]) begin
-        bit_offset = st.stream.pending_count * 8;
-        shifted_value = {{(CABAC_PENDING_BITS - 8){1'b0}}, value} << bit_offset;
-        st.stream.pending_bytes = st.stream.pending_bytes | shifted_value;
-        st.stream.pending_count = st.stream.pending_count + 4'd1;
-      end else begin
-        st.stream.overflow = 1'b1;
-      end
-      cabac_append_pending_byte = st;
-    end
-  endfunction
-
-  function automatic cabac_writer_state_t cabac_pop_pending_byte(input cabac_writer_state_t st_in);
-    cabac_writer_state_t st;
-    begin
-      st = st_in;
-      if (st.stream.pending_count != 4'd0) begin
-        st.stream.pending_bytes = st.stream.pending_bytes >> 8;
-        st.stream.pending_count = st.stream.pending_count - 4'd1;
-      end
-      cabac_pop_pending_byte = st;
-    end
-  endfunction
-
-  function automatic cabac_writer_state_t cabac_flush_partial_byte(input cabac_writer_state_t st_in);
-    cabac_writer_state_t st;
-    logic [2:0] pad_bits;
-    begin
-      st = st_in;
-      if (st.stream.partial_bit_count != 3'd0) begin
-        pad_bits = 3'd0 - st.stream.partial_bit_count;
-        st = cabac_append_pending_byte(st, st.stream.partial_byte << pad_bits);
-        st.stream.partial_byte = 8'd0;
-        st.stream.partial_bit_count = 3'd0;
-      end
-      cabac_flush_partial_byte = st;
-    end
-  endfunction
 endmodule

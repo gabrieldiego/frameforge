@@ -9,11 +9,26 @@ module ff_vvc_coding_tree_scheduler #(
   output logic [15:0] coded_width,
   output logic [15:0] coded_height
 );
-  import ff_vvc_geometry_pkg::*;
+  localparam int CODED_DIMENSION_GRANULARITY = 8;
 
   always_comb begin
-    coded_width = ff_vvc_coded_dimension(visible_width);
-    coded_height = ff_vvc_coded_dimension(visible_height);
+    if (visible_width <= CODED_DIMENSION_GRANULARITY[15:0]) begin
+      coded_width = CODED_DIMENSION_GRANULARITY[15:0];
+    end else begin
+      coded_width =
+        ((visible_width + CODED_DIMENSION_GRANULARITY[15:0] - 16'd1) /
+         CODED_DIMENSION_GRANULARITY[15:0]) *
+        CODED_DIMENSION_GRANULARITY[15:0];
+    end
+
+    if (visible_height <= CODED_DIMENSION_GRANULARITY[15:0]) begin
+      coded_height = CODED_DIMENSION_GRANULARITY[15:0];
+    end else begin
+      coded_height =
+        ((visible_height + CODED_DIMENSION_GRANULARITY[15:0] - 16'd1) /
+         CODED_DIMENSION_GRANULARITY[15:0]) *
+        CODED_DIMENSION_GRANULARITY[15:0];
+    end
   end
 
 endmodule

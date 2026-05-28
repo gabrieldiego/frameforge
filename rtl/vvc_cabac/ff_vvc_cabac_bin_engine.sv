@@ -21,8 +21,11 @@ module ff_vvc_cabac_bin_engine (
   logic [15:0] range_next;
   logic [7:0] bits_left_next;
   logic [3:0] renorm;
+  logic [15:0] ctx_lps_ext;
 
-  always @* begin
+  assign ctx_lps_ext = {7'd0, ctx_lps};
+
+  always_comb begin
     low_next = low_in;
     range_next = range_in;
     bits_left_next = bits_left_in;
@@ -32,7 +35,25 @@ module ff_vvc_cabac_bin_engine (
       CABAC_BIN_CTX: begin
         range_next = range_in - ctx_lps;
         if (bin_value != ctx_mps) begin
-          renorm = renorm_bits(ctx_lps);
+          if (ctx_lps[8]) begin
+            renorm = 4'd0;
+          end else if (ctx_lps[7]) begin
+            renorm = 4'd1;
+          end else if (ctx_lps[6]) begin
+            renorm = 4'd2;
+          end else if (ctx_lps[5]) begin
+            renorm = 4'd3;
+          end else if (ctx_lps[4]) begin
+            renorm = 4'd4;
+          end else if (ctx_lps[3]) begin
+            renorm = 4'd5;
+          end else if (ctx_lps[2]) begin
+            renorm = 4'd6;
+          end else if (ctx_lps[1]) begin
+            renorm = 4'd7;
+          end else begin
+            renorm = 4'd8;
+          end
           bits_left_next = bits_left_in - {4'd0, renorm};
           low_next = (low_in + range_next) << renorm;
           range_next = ctx_lps << renorm;
@@ -68,22 +89,4 @@ module ff_vvc_cabac_bin_engine (
     bits_left_out = bits_left_next;
     write_out = bits_left_next < 8'd12;
   end
-
-  function automatic logic [3:0] floor_log2_u16(input logic [15:0] value);
-    integer i;
-    begin
-      floor_log2_u16 = 4'd0;
-      for (i = 0; i < 16; i = i + 1) begin
-        if (value[i]) begin
-          floor_log2_u16 = i[3:0];
-        end
-      end
-    end
-  endfunction
-
-  function automatic logic [3:0] renorm_bits(input logic [15:0] range_value);
-    begin
-      renorm_bits = (range_value >= 16'd256) ? 4'd0 : (4'd8 - floor_log2_u16(range_value));
-    end
-  endfunction
 endmodule

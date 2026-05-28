@@ -44,6 +44,7 @@ module ff_vvc_cabac_symbol_binarizer (
   logic [8:0]  lps_q;
   logic        mps_q;
   logic        last_q;
+  logic [2:0]  symbol_kind_mapped;
 
   assign s_axis_ready = !valid_q || m_axis_ready;
   assign m_axis_valid = valid_q;
@@ -56,6 +57,16 @@ module ff_vvc_cabac_symbol_binarizer (
   assign m_axis_lps = lps_q;
   assign m_axis_mps = mps_q;
   assign m_axis_last = last_q;
+
+  always_comb begin
+    case (s_axis_kind)
+      SYMBOL_BIN_TRM: symbol_kind_mapped = CABAC_BIN_TRM;
+      SYMBOL_BIN_CTX,
+      SYMBOL_BIN_CTX_DIRECT: symbol_kind_mapped = CABAC_BIN_CTX;
+      SYMBOL_BINS_EP: symbol_kind_mapped = CABAC_BINS_EP;
+      default: symbol_kind_mapped = CABAC_BIN_EP;
+    endcase
+  end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -82,7 +93,7 @@ module ff_vvc_cabac_symbol_binarizer (
       last_q <= 1'b0;
     end else if (s_axis_ready) begin
       valid_q <= s_axis_valid;
-      kind_q <= symbol_to_bin_kind(s_axis_kind);
+      kind_q <= symbol_kind_mapped;
       bin_q <= s_axis_data[0];
       bins_pattern_q <= (s_axis_kind == SYMBOL_BINS_EP) ? (s_axis_data >> 6) : {31'd0, s_axis_data[0]};
       bins_count_q <= (s_axis_kind == SYMBOL_BINS_EP) ? s_axis_data[5:0] : 6'd1;
@@ -93,16 +104,4 @@ module ff_vvc_cabac_symbol_binarizer (
       last_q <= s_axis_last;
     end
   end
-
-  function automatic logic [2:0] symbol_to_bin_kind(input logic [7:0] symbol_kind);
-    begin
-      case (symbol_kind)
-        SYMBOL_BIN_TRM: symbol_to_bin_kind = CABAC_BIN_TRM;
-        SYMBOL_BIN_CTX,
-        SYMBOL_BIN_CTX_DIRECT: symbol_to_bin_kind = CABAC_BIN_CTX;
-        SYMBOL_BINS_EP: symbol_to_bin_kind = CABAC_BINS_EP;
-        default: symbol_to_bin_kind = CABAC_BIN_EP;
-      endcase
-    end
-  endfunction
 endmodule

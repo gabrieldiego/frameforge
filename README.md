@@ -100,14 +100,6 @@ cargo run -- vvc-eos --output /tmp/frameforge-eos.vvc
 
 This writes only an EOS NAL unit. It is useful for testing VVC NAL header packing and Annex-B output, but it does not contain parameter sets or a picture.
 
-Generate a larger VVC-shaped scaffold stream:
-
-```sh
-cargo run -- vvc-skeleton --output /tmp/frameforge-skeleton.vvc
-```
-
-This writes VPS, SPS, PPS, IDR_N_LP, EOS, and EOB NAL units with correct Annex-B start codes and VVC NAL unit headers. The RBSP payloads are deliberately placeholder `rbsp_trailing_bits` only, so this is not a decodable VVC picture stream yet.
-
 Generate a one-frame VVC validation stream:
 
 ```sh
@@ -146,7 +138,6 @@ Internal reconstruction is always the reconstruction represented by the emitted 
 Inspect NAL headers in any Annex-B VVC stream:
 
 ```sh
-cargo run -- vvc-list --input /tmp/frameforge-skeleton.vvc
 cargo run -- vvc-list --input /tmp/frameforge-reference-4x4.vvc
 ```
 
@@ -165,12 +156,6 @@ The initial simulator target is Icarus Verilog through cocotb:
 
 ```sh
 make rtl-test
-```
-
-Run the RTL VVC skeleton byte-format check:
-
-```sh
-make rtl-test DUT=vvc-skeleton
 ```
 
 Run the RTL generated VVC stream check:
@@ -208,7 +193,7 @@ make rtl-test SIM=icarus TOPLEVEL_LANG=verilog
 
 ## External Decoder Validation
 
-External decoder validation is partially wired. The `vvc-eos` command emits only a VVC EOS NAL unit, and `vvc-skeleton` uses placeholder RBSP payloads. The `vvc-encode` command assembles a tiny VTM-accepted stream for geometries up to 32x32 from internally scheduled sequence and picture NALs, a color-derived Filler Data NAL, and slice entropy syntax. The 16x16 and 32x32 coding-tree bodies are generated from geometry-specific body emitters while the clean-room syntax writer catches up. Larger VVC geometries currently validate software/RTL byte alignment only; they are an incremental input-drain and parameter-set path, not complete clean-room VVC picture syntax yet.
+External decoder validation is partially wired. The `vvc-eos` command emits only a VVC EOS NAL unit. The `vvc-encode` command assembles a tiny VTM-accepted stream for geometries up to 32x32 from internally scheduled sequence and picture NALs, a color-derived Filler Data NAL, and slice entropy syntax. The 16x16 and 32x32 coding-tree bodies are generated from geometry-specific body emitters while the clean-room syntax writer catches up. Larger VVC geometries currently validate software/RTL byte alignment only; they are an incremental input-drain and parameter-set path, not complete clean-room VVC picture syntax yet.
 
 FrameForge looks for decoder resources in this order:
 

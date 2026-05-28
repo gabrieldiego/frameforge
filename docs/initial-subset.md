@@ -29,7 +29,6 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - Reference-decoder setup helper that uses local decoder settings first and can clone/build VTM under `verification/reference`.
 - SystemVerilog RTL stubs with AXI-stream-style handshakes.
 - Minimum RTL encoder shell that drains an input stream and emits a fixed placeholder output packet.
-- RTL VVC skeleton emitter that matches Rust `vvc-skeleton` byte-for-byte.
 - RTL VVC generator that drains a parameterized planar YUV input stream up to 64x64, samples color, and emits sequence headers, quantized residual payloads, per-picture Annex-B start codes, VVC NAL headers, and NAL payload bytes to match the Rust VVC stream.
 - cocotb/Icarus verification skeleton.
 - Local contribution and license files for an open-source starting point.

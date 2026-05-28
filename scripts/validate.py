@@ -20,7 +20,7 @@ DEFAULT_OUT_DIR = Path("verification/generated/checksums")
 RTL_SUPPORTED_FORMAT = "yuv420p8"
 
 # Keep this in sync with frameforge::vvc::VVC_CODED_DIMENSION_GRANULARITY and
-# rtl/ff_vvc_geometry_pkg.sv. It is the current validation-path coded-picture
+# the RTL coded-dimension logic. It is the current validation-path coded-picture
 # luma dimension alignment, not a general statement about every VVC profile.
 VVC_CODED_DIMENSION_GRANULARITY = 8
 VVC_32X32_SCRIPTED_RECON_ZLIB_B64 = (
@@ -84,6 +84,16 @@ def main() -> int:
     parser.add_argument("--frames", type=int)
     parser.add_argument("--format", default=None)
     parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
+    parser.add_argument(
+        "--synth-dut",
+        default="vvc-cabac-pipeline",
+        help="synthesizable RTL block to check during validation",
+    )
+    parser.add_argument(
+        "--skip-synth",
+        action="store_true",
+        help="skip the default synthesis preflight",
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input).resolve()
@@ -132,6 +142,9 @@ def main() -> int:
             str(sw_bitstream),
         ]
     )
+
+    if not args.skip_synth:
+        run(["make", "synth", f"SYNTH_DUT={args.synth_dut}"])
 
     env = os.environ.copy()
     rtl_sample_bits = format_bit_depth(info.fmt) if format_chroma_sampling(info.fmt) == "444" else 8

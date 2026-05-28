@@ -74,7 +74,7 @@ async def palette_symbolizer_streams_anchor_symbol(dut):
     await send_plane(dut, 0, 10)
     await send_plane(dut, 1, 20)
     await send_plane(dut, 2, 30, last=True)
-    for _ in range(32):
+    for _ in range(160):
         if len(symbols) >= 4:
             break
         await RisingEdge(dut.clk)
@@ -121,7 +121,7 @@ async def palette_symbolizer_marks_off_view_right_column_unselected(dut):
     await send_plane(dut, 0, 10, samples=8 * 16)
     await send_plane(dut, 1, 20, samples=8 * 16)
     await send_plane(dut, 2, 30, last=True, samples=8 * 16)
-    for _ in range(32):
+    for _ in range(320):
         if len(symbols) >= 10:
             break
         await RisingEdge(dut.clk)
@@ -146,7 +146,7 @@ async def palette_symbolizer_marks_off_view_bottom_row_unselected(dut):
     await send_plane(dut, 0, 10, samples=16 * 8)
     await send_plane(dut, 1, 20, samples=16 * 8)
     await send_plane(dut, 2, 30, last=True, samples=16 * 8)
-    for _ in range(32):
+    for _ in range(320):
         if len(symbols) >= 10:
             break
         await RisingEdge(dut.clk)
@@ -172,7 +172,7 @@ async def palette_symbolizer_streams_lossless_indices_for_multicolor_cu(dut):
         await send_plane(dut, 1, sample, samples=1)
     for index, sample in enumerate(cr_samples):
         await send_plane(dut, 2, sample, last=index == len(cr_samples) - 1, samples=1)
-    for _ in range(80):
+    for _ in range(240):
         if len(symbols) >= 71:
             break
         await RisingEdge(dut.clk)

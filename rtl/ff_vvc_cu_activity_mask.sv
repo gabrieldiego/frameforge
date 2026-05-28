@@ -12,35 +12,21 @@ module ff_vvc_cu_activity_mask #(
   output logic [CU_COUNT - 1:0] cu_active_mask
 );
   always_comb begin
-    cu_active_mask = '0;
-    for (int i = 0; i < CU_COUNT; i = i + 1) begin
-      cu_active_mask[CU_COUNT - 1 - i] = cu_origin_is_visible(i[7:0]);
-    end
-  end
-
-  function automatic logic cu_origin_is_visible(input logic [7:0] index);
-    logic [31:0] pos;
-    begin
-      pos = coding_order_position(index);
-      cu_origin_is_visible =
-        (pos[31:16] < visible_width) && (pos[15:0] < visible_height);
-    end
-  endfunction
-
-  function automatic logic [31:0] coding_order_position(input logic [7:0] index);
     logic [15:0] origin_x;
     logic [15:0] origin_y;
-    logic [7:0]  index_in_32;
-    logic [7:0]  index_in_16;
-    begin
+    logic [7:0] index_in_32;
+    logic [7:0] index_in_16;
+
+    cu_active_mask = '0;
+    for (int i = 0; i < CU_COUNT; i = i + 1) begin
       origin_x = 16'd0;
       origin_y = 16'd0;
       if (CTU_SIZE == 64) begin
-        origin_x = index[4] ? 16'd32 : 16'd0;
-        origin_y = index[5] ? 16'd32 : 16'd0;
-        index_in_32 = {4'd0, index[3:0]};
+        origin_x = i[4] ? 16'd32 : 16'd0;
+        origin_y = i[5] ? 16'd32 : 16'd0;
+        index_in_32 = {4'd0, i[3:0]};
       end else begin
-        index_in_32 = index;
+        index_in_32 = i[7:0];
       end
 
       if (CTU_SIZE >= 32) begin
@@ -59,7 +45,8 @@ module ff_vvc_cu_activity_mask #(
         origin_y = index_in_16[5:3] * CU_SIZE;
       end
 
-      coding_order_position = {origin_x, origin_y};
+      cu_active_mask[CU_COUNT - 1 - i] =
+        (origin_x < visible_width) && (origin_y < visible_height);
     end
-  endfunction
+  end
 endmodule

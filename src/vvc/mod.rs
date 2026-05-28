@@ -13,7 +13,7 @@ mod nal;
 mod palette;
 mod residual;
 mod syntax;
-use cabac::{VvcCabacEncoder, VvcCtxEvent};
+use cabac::{VvcCabacDumpSymbol, VvcCabacEncoder, VvcCtxEvent};
 pub use nal::{
     nal_unit_header_bytes, parse_annex_b_nal_units, write_annex_b, write_nal_unit_header,
     VvcNalHeader, VvcNalInfo, VvcNalUnit, VvcNalUnitType,
@@ -336,39 +336,6 @@ pub fn eos_annex_b() -> Vec<u8> {
     write_annex_b(&[VvcNalUnit::eos()]).expect("hard-coded EOS NAL should be valid")
 }
 
-pub fn skeleton_annex_b() -> Vec<u8> {
-    let placeholder_rbsp = placeholder_rbsp();
-    write_annex_b(&[
-        VvcNalUnit {
-            nal_unit_type: VvcNalUnitType::Vps,
-            layer_id: 0,
-            temporal_id: 0,
-            rbsp_payload: placeholder_rbsp.clone(),
-        },
-        VvcNalUnit {
-            nal_unit_type: VvcNalUnitType::Sps,
-            layer_id: 0,
-            temporal_id: 0,
-            rbsp_payload: placeholder_rbsp.clone(),
-        },
-        VvcNalUnit {
-            nal_unit_type: VvcNalUnitType::Pps,
-            layer_id: 0,
-            temporal_id: 0,
-            rbsp_payload: placeholder_rbsp.clone(),
-        },
-        VvcNalUnit {
-            nal_unit_type: VvcNalUnitType::IdrNLp,
-            layer_id: 0,
-            temporal_id: 0,
-            rbsp_payload: placeholder_rbsp,
-        },
-        VvcNalUnit::eos(),
-        VvcNalUnit::eob(),
-    ])
-    .expect("hard-coded skeleton NAL units should be valid")
-}
-
 pub fn vvc_black_yuv420p8_annex_b(params: VvcEncodeParams) -> Result<Vec<u8>, String> {
     validate_vvc_frame_count(params)?;
     vvc_yuv420p8_annex_b(
@@ -434,6 +401,35 @@ pub fn vvc_yuv_annex_b_from_input_with_limits(
     }
     let compat_frame = source_frame.decoder_compat_frame();
     vvc_annex_b(params, compat_frame)
+}
+
+pub fn vvc_yuv420_cabac_vector_dump_json(
+    input: &[u8],
+    params: VvcEncodeParams,
+    geometry: VvcVideoGeometry,
+    format: PixelFormat,
+) -> Result<String, String> {
+    if format.chroma_sampling() != Some(ChromaSampling::Cs420) {
+        return Err(format!(
+            "VVC CABAC vector dump currently expects 4:2:0 input; got {format}"
+        ));
+    }
+    let source_frame = sample_vvc_yuv_frame(input, params, geometry, format)?;
+    let compat_frame = source_frame.decoder_compat_frame();
+    let color = quantize_vvc_4x4_color(compat_frame.sampled_color());
+    let params = vvc_ctu_partition_params(compat_frame.geometry, color).ok_or_else(|| {
+        format!(
+            "VVC CABAC vector dump has no generated CTU path for coded geometry {}x{}",
+            compat_frame.geometry.coded_width(),
+            compat_frame.geometry.coded_height()
+        )
+    })?;
+    let dump = vvc_ctu_partition_cabac_dump(params);
+    Ok(vvc_cabac_vector_dump_json(
+        compat_frame.geometry,
+        &dump.symbols,
+        &dump.bits,
+    ))
 }
 
 pub fn sample_vvc_first_yuv420p8(
@@ -1674,6 +1670,75 @@ fn vvc_ctu_partition_cabac_bits(params: VvcCtuPartitionParams) -> Vec<bool> {
     encode_ctu_partition_body(&mut cabac, params);
     cabac.encode_bin_trm(true);
     cabac.finish()
+}
+
+struct VvcCtuCabacDump {
+    symbols: Vec<VvcCabacDumpSymbol>,
+    bits: Vec<bool>,
+}
+
+fn vvc_ctu_partition_cabac_dump(params: VvcCtuPartitionParams) -> VvcCtuCabacDump {
+    debug_assert!((8..=64).contains(&params.root_width));
+    debug_assert!((8..=64).contains(&params.root_height));
+    debug_assert!(params.visible_width >= 8 && params.visible_height >= 8);
+    debug_assert!(params.luma_leaf_count > 0);
+
+    let mut cabac = VvcCabacEncoder::new();
+    cabac.start();
+    encode_ctu_partition_body(&mut cabac, params);
+    cabac.encode_bin_trm(true);
+    let symbols = cabac.dump_symbols.clone();
+    let bits = cabac.finish();
+    VvcCtuCabacDump { symbols, bits }
+}
+
+fn vvc_cabac_vector_dump_json(
+    geometry: VvcVideoGeometry,
+    symbols: &[VvcCabacDumpSymbol],
+    bits: &[bool],
+) -> String {
+    let mut json = String::new();
+    json.push_str("{\"kind\":\"frameforge.vvc.cabac_vector.v1\"");
+    json.push_str(&format!(",\"width\":{}", geometry.width));
+    json.push_str(&format!(",\"height\":{}", geometry.height));
+    json.push_str(",\"format\":\"yuv420p8\"");
+    json.push_str(",\"symbol_record_bytes\":5");
+    json.push_str(",\"symbol_encoding\":\"kind_u8_data_u32be_hex\"");
+    json.push_str(&format!(",\"cabac_bit_len\":{}", bits.len()));
+    json.push_str(",\"cabac_bytes_hex\":\"");
+    append_hex_bytes(&mut json, bits);
+    json.push_str("\",\"symbols_hex\":\"");
+    append_symbol_records_hex(&mut json, symbols);
+    json.push_str("\"}\n");
+    json
+}
+
+fn append_hex_bytes(out: &mut String, bits: &[bool]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for chunk in bits.chunks(8) {
+        let mut byte = 0u8;
+        for bit in chunk {
+            byte = (byte << 1) | u8::from(*bit);
+        }
+        byte <<= 8 - chunk.len();
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+}
+
+fn append_symbol_records_hex(out: &mut String, symbols: &[VvcCabacDumpSymbol]) {
+    for symbol in symbols {
+        append_byte_hex(out, symbol.kind);
+        for byte in symbol.data.to_be_bytes() {
+            append_byte_hex(out, byte);
+        }
+    }
+}
+
+fn append_byte_hex(out: &mut String, byte: u8) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    out.push(HEX[(byte >> 4) as usize] as char);
+    out.push(HEX[(byte & 0x0f) as usize] as char);
 }
 
 fn encode_ctu_partition_body(cabac: &mut VvcCabacEncoder, params: VvcCtuPartitionParams) {
@@ -3463,14 +3528,6 @@ impl VvcCtuCabacGenerator {
         self.contexts
             .encode(cabac, VvcCabacContext::IntraChromaPredMode(1), false);
     }
-}
-
-fn placeholder_rbsp() -> Vec<u8> {
-    // TODO(vvc): Replace this rbsp_trailing_bits-only payload with real VPS,
-    // SPS, PPS, and slice RBSP syntax from a clean-room implementation.
-    let mut writer = VvcSyntaxWriter::new();
-    writer.rbsp_trailing_bits();
-    writer.into_bytes()
 }
 
 #[cfg(test)]
