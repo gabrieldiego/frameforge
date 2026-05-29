@@ -1,4 +1,4 @@
-.PHONY: help check-tools build test fmt lint decoder-setup validate validate-decode rtl-test synth-env synth-check synth synth-postsim synth-vivado synth-vivado-remote yosys vivado vivado-prepare vivado-config vivado-auth vivado-install vivado-host-deps clean
+.PHONY: help check-tools build test fmt lint decoder-setup validate validate-vtm-synth validate-decode rtl-test synth-env synth-check synth synth-postsim synth-vivado synth-vivado-remote yosys vivado vivado-prepare vivado-config vivado-auth vivado-install vivado-host-deps clean
 
 SIM ?= icarus
 TOPLEVEL_LANG ?= verilog
@@ -21,8 +21,10 @@ SYNTH_CLOCK_MHZ ?= 50
 SYNTH_TOOL ?= $(or $(filter yosys vivado,$(MAKECMDGOALS)),yosys)
 VIVADO_REMOTE ?= gabriel@192.168.50.55
 VIVADO_REMOTE_ROOT ?= /media/gabriel/Gabriel8TB/Development/frameforge
+VIVADO_REMOTE_SSH ?= ssh -F /dev/null
 VALIDATE_SYNTH ?= 1
 VALIDATE_SYNTH_DUT ?= vvc-cabac-pipeline
+VALIDATE_SYNTH_BACKEND ?= yosys
 VIVADO_INSTALLER ?=
 VIVADO_LICENSE ?=
 VIVADO_INSTALL_LOG ?= .tools/vivado-install-run.log
@@ -36,6 +38,7 @@ help:
 	@printf '%s\n' '  make lint      - run Rust Clippy lints'
 	@printf '%s\n' '  make decoder-setup - find or build external VTM decoder'
 	@printf '%s\n' '  make validate INPUT=in.yuv [WIDTH=<w> HEIGHT=<h> MAX_WIDTH=64 MAX_HEIGHT=64 FRAMES=1 FORMAT=yuv420p8|yuv422p8|yuv444p8|... VALIDATE_SYNTH_DUT=vvc-cabac-pipeline VALIDATE_SYNTH=1|0]'
+	@printf '%s\n' '  make validate-vtm-synth INPUT=in.yuv [WIDTH=<w> HEIGHT=<h> FRAMES=1 FORMAT=yuv420p8 VALIDATE_SYNTH_DUT=vvc-cabac-pipeline VALIDATE_SYNTH_BACKEND=yosys|vivado-remote|none] - compare software stream with VTM, then run synthesis'
 	@printf '%s\n' '  make validate-decode BITSTREAM=out.vvc [DECODED=out.yuv]'
 	@printf '%s\n' '  make rtl-test  - run cocotb RTL tests'
 	@printf '%s\n' '  make rtl-test DUT=encoder - run minimum encoder RTL smoke test'
@@ -50,7 +53,7 @@ help:
 	@printf '%s\n' '  make synth [yosys|vivado] [SYNTH_DUT=vvc-cabac-stream-writer SYNTH_BOARD=synth/boards/arty-z7-10.env SYNTH_TOP=<override> SYNTH_FILELIST=<override> SYNTH_CLOCK_MHZ=50] - run selected synthesis estimate plus critical-path report'
 	@printf '%s\n' '  make synth-postsim - run Yosys synthesis and a post-synthesis smoke sim when supported'
 	@printf '%s\n' '  make synth-vivado - run optional Vivado synthesis/timing if Vivado is installed'
-	@printf '%s\n' '  make synth-vivado-remote [VIVADO_REMOTE=user@host VIVADO_REMOTE_ROOT=/path/to/frameforge] - run Vivado synthesis/timing over SSH'
+	@printf '%s\n' '  make synth-vivado-remote [VIVADO_REMOTE=user@host VIVADO_REMOTE_ROOT=/path/to/frameforge VIVADO_REMOTE_SSH="ssh -F /dev/null"] - run Vivado synthesis/timing over SSH'
 	@printf '%s\n' '  make vivado-prepare [VIVADO_LICENSE=~/Downloads/Xilinx.lic] - create local .tools Vivado directories and ~/.Xilinx cache symlink'
 	@printf '%s\n' '  make vivado-config - generate a host-local Vivado install config from the tracked template'
 	@printf '%s\n' '  make vivado-auth - run AMD xsetup AuthTokenGen'
@@ -80,6 +83,10 @@ validate:
 	@test -n "$(INPUT)" || { echo 'usage: make validate INPUT=path/to/input_64x64_1f_yuv420p8.yuv [WIDTH=<w> HEIGHT=<h> MAX_WIDTH=64 MAX_HEIGHT=64 FRAMES=1 FORMAT=yuv420p8|yuv422p8|yuv444p8|...]'; exit 2; }
 	python3 scripts/validate.py "$(INPUT)" $(if $(WIDTH),--width "$(WIDTH)") $(if $(HEIGHT),--height "$(HEIGHT)") --max-width "$(MAX_WIDTH)" --max-height "$(MAX_HEIGHT)" $(if $(FRAMES),--frames "$(FRAMES)") $(if $(FORMAT),--format "$(FORMAT)") --synth-dut "$(VALIDATE_SYNTH_DUT)" $(if $(filter 0,$(VALIDATE_SYNTH)),--skip-synth)
 
+validate-vtm-synth:
+	@test -n "$(INPUT)" || { echo 'usage: make validate-vtm-synth INPUT=path/to/input_16x16_1f_yuv420p8.yuv [WIDTH=<w> HEIGHT=<h> FRAMES=1 FORMAT=yuv420p8 VALIDATE_SYNTH_DUT=vvc-cabac-pipeline VALIDATE_SYNTH_BACKEND=yosys|vivado-remote|none]'; exit 2; }
+	python3 scripts/validate_vtm_synth.py "$(INPUT)" $(if $(WIDTH),--width "$(WIDTH)") $(if $(HEIGHT),--height "$(HEIGHT)") --max-width "$(MAX_WIDTH)" --max-height "$(MAX_HEIGHT)" $(if $(FRAMES),--frames "$(FRAMES)") $(if $(FORMAT),--format "$(FORMAT)") --synth-dut "$(VALIDATE_SYNTH_DUT)" --synth-backend "$(VALIDATE_SYNTH_BACKEND)" --clock-mhz "$(SYNTH_CLOCK_MHZ)"
+
 validate-decode:
 	@test -n "$(BITSTREAM)" || { echo 'usage: make validate-decode BITSTREAM=path/to/stream.vvc [DECODED=decoded.yuv]'; exit 2; }
 	python3 scripts/validate_decode.py "$(BITSTREAM)" $(if $(DECODED),--output "$(DECODED)")
@@ -107,7 +114,7 @@ synth-vivado:
 	python3 scripts/run_synth.py --tool vivado --dut "$(SYNTH_DUT)" --board "$(SYNTH_BOARD)" $(if $(SYNTH_FILELIST),--filelist "$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),--top "$(SYNTH_TOP)") --clock-mhz "$(SYNTH_CLOCK_MHZ)"
 
 synth-vivado-remote:
-	ssh "$(VIVADO_REMOTE)" 'cd "$(VIVADO_REMOTE_ROOT)" && make synth-vivado SYNTH_DUT="$(SYNTH_DUT)" SYNTH_BOARD="$(SYNTH_BOARD)" SYNTH_CLOCK_MHZ="$(SYNTH_CLOCK_MHZ)" $(if $(SYNTH_FILELIST),SYNTH_FILELIST="$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),SYNTH_TOP="$(SYNTH_TOP)")'
+	$(VIVADO_REMOTE_SSH) "$(VIVADO_REMOTE)" 'cd "$(VIVADO_REMOTE_ROOT)" && make synth-vivado SYNTH_DUT="$(SYNTH_DUT)" SYNTH_BOARD="$(SYNTH_BOARD)" SYNTH_CLOCK_MHZ="$(SYNTH_CLOCK_MHZ)" $(if $(SYNTH_FILELIST),SYNTH_FILELIST="$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),SYNTH_TOP="$(SYNTH_TOP)")'
 
 yosys vivado:
 	@:
