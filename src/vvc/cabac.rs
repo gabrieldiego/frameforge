@@ -5,6 +5,15 @@ pub(super) struct VvcCtxEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct VvcCabacDumpContextEvent {
+    pub(super) ctx_id: u8,
+    pub(super) bin: bool,
+    pub(super) range: u16,
+    pub(super) lps: u16,
+    pub(super) mps: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct VvcCabacDumpSymbol {
     pub(super) kind: u8,
     pub(super) data: u32,
@@ -13,6 +22,7 @@ pub(super) struct VvcCabacDumpSymbol {
 impl VvcCabacDumpSymbol {
     const BIN_EP: u8 = 0;
     const BIN_TRM: u8 = 1;
+    const BIN_CTX: u8 = 2;
     const BIN_CTX_DIRECT: u8 = 3;
     const BINS_EP: u8 = 4;
 
@@ -27,6 +37,13 @@ impl VvcCabacDumpSymbol {
         Self {
             kind: Self::BIN_TRM,
             data: u32::from(bin),
+        }
+    }
+
+    pub(super) fn bin_ctx(bin: bool, ctx_id: u8) -> Self {
+        Self {
+            kind: Self::BIN_CTX,
+            data: u32::from(bin) | (u32::from(ctx_id) << 8),
         }
     }
 
@@ -49,6 +66,8 @@ impl VvcCabacDumpSymbol {
 pub(super) struct VvcCabacEncoder {
     pub(super) bits: Vec<bool>,
     pub(super) dump_symbols: Vec<VvcCabacDumpSymbol>,
+    pub(super) semantic_symbols: Vec<VvcCabacDumpSymbol>,
+    pub(super) context_events: Vec<VvcCabacDumpContextEvent>,
     pub(super) low: u32,
     pub(super) range: u32,
     pub(super) buffered_byte: u32,
@@ -61,6 +80,8 @@ impl VvcCabacEncoder {
         Self {
             bits: Vec::new(),
             dump_symbols: Vec::new(),
+            semantic_symbols: Vec::new(),
+            context_events: Vec::new(),
             low: 0,
             range: 0,
             buffered_byte: 0,
@@ -107,6 +128,7 @@ impl VvcCabacEncoder {
 
     pub(super) fn encode_bin_ep(&mut self, bin: bool) {
         self.dump_symbols.push(VvcCabacDumpSymbol::bin_ep(bin));
+        self.semantic_symbols.push(VvcCabacDumpSymbol::bin_ep(bin));
         self.low <<= 1;
         if bin {
             self.low += self.range;
@@ -119,6 +141,8 @@ impl VvcCabacEncoder {
 
     pub(super) fn encode_bins_ep(&mut self, bins: u32, num_bins: u32) {
         self.dump_symbols
+            .push(VvcCabacDumpSymbol::bins_ep(bins, num_bins));
+        self.semantic_symbols
             .push(VvcCabacDumpSymbol::bins_ep(bins, num_bins));
         if self.range == 256 {
             self.encode_aligned_bins_ep(bins, num_bins);
@@ -173,6 +197,7 @@ impl VvcCabacEncoder {
 
     pub(super) fn encode_bin_trm(&mut self, bin: bool) {
         self.dump_symbols.push(VvcCabacDumpSymbol::bin_trm(bin));
+        self.semantic_symbols.push(VvcCabacDumpSymbol::bin_trm(bin));
         self.range -= 2;
         if bin {
             self.low += self.range;

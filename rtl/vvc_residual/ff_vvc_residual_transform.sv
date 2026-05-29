@@ -30,11 +30,11 @@ module ff_vvc_residual_transform #(
   localparam logic [7:0] SYMBOL_BIN_EP  = 8'd0;
   localparam logic [7:0] SYMBOL_BIN_CTX = 8'd2;
   localparam logic [7:0] SYMBOL_BINS_EP = 8'd4;
-  localparam logic [4:0] CTX_LAST_SIG_COEFF_X_PREFIX_0 = 5'd0;
-  localparam logic [4:0] CTX_LAST_SIG_COEFF_Y_PREFIX_0 = 5'd1;
-  localparam logic [4:0] CTX_ABS_LEVEL_GTX_0 = 5'd2;
-  localparam logic [4:0] CTX_PAR_LEVEL_0 = 5'd3;
-  localparam logic [4:0] CTX_ABS_LEVEL_GTX_32 = 5'd4;
+  localparam logic [4:0] CTX_LAST_SIG_COEFF_X_PREFIX_3 = 5'd6;
+  localparam logic [4:0] CTX_LAST_SIG_COEFF_Y_PREFIX_3 = 5'd7;
+  localparam logic [4:0] CTX_ABS_LEVEL_GTX_0 = 5'd10;
+  localparam logic [4:0] CTX_PAR_LEVEL_0 = 5'd11;
+  localparam logic [4:0] CTX_ABS_LEVEL_GTX_32 = 5'd12;
 
   logic signed [9:0] dc_coeff;
   logic signed [9:0] quantized_dc_coeff;
@@ -59,9 +59,14 @@ module ff_vvc_residual_transform #(
   logic signed [9:0] stream_recon_dc_coeff;
   logic stream_negative;
   logic [4:0] stream_abs_remainder_value;
+  logic [4:0] stream_abs_remainder_code_value;
+  logic [2:0] stream_abs_remainder_prefix_extra_len;
+  logic [5:0] stream_abs_remainder_prefix_count;
+  logic [31:0] stream_abs_remainder_prefix_pattern;
+  logic [5:0] stream_abs_remainder_suffix_count;
+  logic [31:0] stream_abs_remainder_suffix_pattern;
   logic [3:0] stream_last_packet_index;
   logic [40:0] residual_packet_next;
-  logic [31:0] rem_abs_ep_payload;
   integer sample_i;
   logic signed [9:0] ac_coeff;
   logic [8:0] ac_abs_coeff;
@@ -140,23 +145,38 @@ module ff_vvc_residual_transform #(
   assign stream_recon_dc_coeff = $signed({2'b00, stream_recon_from_rem}) - 10'sd114;
   assign stream_negative = (stream_quant_luma_rem != 5'd0) && (stream_recon_dc_coeff < 10'sd0);
   assign stream_abs_remainder_value =
-    (stream_quant_luma_rem > 5'd1) ? (stream_quant_luma_rem - 5'd2) : 5'd0;
+    (stream_quant_luma_rem > 5'd3) ? ((stream_quant_luma_rem - 5'd4) >> 1) : 5'd0;
+  assign stream_abs_remainder_code_value = stream_abs_remainder_value - 5'd5;
+  assign stream_abs_remainder_prefix_extra_len =
+    (stream_abs_remainder_code_value <= 5'd0) ? 3'd0 :
+    ((stream_abs_remainder_code_value <= 5'd2) ? 3'd1 :
+    ((stream_abs_remainder_code_value <= 5'd6) ? 3'd2 : 3'd3));
+  assign stream_abs_remainder_prefix_count =
+    (stream_abs_remainder_value < 5'd5) ? {1'b0, stream_abs_remainder_value + 5'd1} :
+    {3'd0, stream_abs_remainder_prefix_extra_len} + 6'd5;
+  assign stream_abs_remainder_prefix_pattern =
+    (stream_abs_remainder_value < 5'd5) ?
+    ((32'd1 << stream_abs_remainder_prefix_count) - 32'd2) :
+    ((32'd1 << stream_abs_remainder_prefix_count) - 32'd1);
+  assign stream_abs_remainder_suffix_count =
+    (stream_abs_remainder_value < 5'd5) ? 6'd0 :
+    {3'd0, stream_abs_remainder_prefix_extra_len} + 6'd1;
+  assign stream_abs_remainder_suffix_pattern =
+    (stream_abs_remainder_value < 5'd5) ? 32'd0 :
+    (stream_abs_remainder_code_value - ((32'd1 << stream_abs_remainder_prefix_extra_len) - 32'd1));
   assign stream_last_packet_index =
     (stream_quant_luma_rem == 5'd0) ? 4'd1 :
     ((stream_quant_luma_rem <= 5'd1) ? 4'd3 :
-    ((stream_quant_luma_rem <= 5'd3) ? 4'd5 : 4'd6));
+    ((stream_quant_luma_rem <= 5'd3) ? 4'd5 : 4'd7));
   assign cu_active = cu_active_mask[CU_ACTIVE_COUNT - 1 - cu_index];
-  assign rem_abs_ep_payload =
-    (((32'd1 << (((stream_quant_luma_rem - 5'd4) >> 1) + 6'd1)) - 32'd2) << 6) |
-    {26'd0, (((stream_quant_luma_rem - 5'd4) >> 1) + 6'd1)};
 
   always_comb begin
     case (stream_packet_index_q)
       4'd0: residual_packet_next = {
-        SYMBOL_BIN_CTX, 19'd0, CTX_LAST_SIG_COEFF_X_PREFIX_0, 8'd0, 1'b0
+        SYMBOL_BIN_CTX, 19'd0, CTX_LAST_SIG_COEFF_X_PREFIX_3, 8'd0, 1'b0
       };
       4'd1: residual_packet_next = {
-        SYMBOL_BIN_CTX, 19'd0, CTX_LAST_SIG_COEFF_Y_PREFIX_0, 8'd0, stream_last_packet_index == 4'd1
+        SYMBOL_BIN_CTX, 19'd0, CTX_LAST_SIG_COEFF_Y_PREFIX_3, 8'd0, stream_last_packet_index == 4'd1
       };
       4'd2: residual_packet_next = {
         SYMBOL_BIN_CTX, 19'd0, CTX_ABS_LEVEL_GTX_0, 7'd0, stream_quant_luma_rem > 5'd1, 1'b0
@@ -178,9 +198,20 @@ module ff_vvc_residual_transform #(
         if (stream_last_packet_index == 4'd5) begin
           residual_packet_next = {SYMBOL_BIN_EP, 31'd0, stream_negative, 1'b1};
         end else begin
-          residual_packet_next = {SYMBOL_BINS_EP, rem_abs_ep_payload, 1'b0};
+          residual_packet_next = {
+            SYMBOL_BINS_EP,
+            (stream_abs_remainder_prefix_pattern << 6) |
+              {26'd0, stream_abs_remainder_prefix_count},
+            1'b0
+          };
         end
       end
+      4'd6: residual_packet_next = {
+        SYMBOL_BINS_EP,
+        (stream_abs_remainder_suffix_pattern << 6) |
+          {26'd0, stream_abs_remainder_suffix_count},
+        1'b0
+      };
       default: residual_packet_next = {SYMBOL_BIN_EP, 31'd0, stream_negative, 1'b1};
     endcase
   end

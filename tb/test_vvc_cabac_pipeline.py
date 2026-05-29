@@ -39,7 +39,7 @@ def pack_ctx(bit, ctx_id=0, lps=4, mps=0):
     return (bit & 1) | ((ctx_id & 0x1F) << 8) | ((lps & 0x1FF) << 16) | ((mps & 1) << 25)
 
 
-def load_rust_cabac_vector(width=8, height=8, y=64, u=128, v=128):
+def load_rust_cabac_vector(width=8, height=8, y=64, u=128, v=128, semantic=True):
     with tempfile.TemporaryDirectory(prefix="frameforge-cabac-vector-") as tmpdir:
         tmp = Path(tmpdir)
         luma_samples = width * height
@@ -72,7 +72,12 @@ def load_rust_cabac_vector(width=8, height=8, y=64, u=128, v=128):
         )
         vector = json.loads(output_json.read_text())
 
-    raw_symbols = bytes.fromhex(vector["symbols_hex"])
+    if semantic:
+        assert len(bytes.fromhex(vector["semantic_symbols_hex"])) == len(
+            bytes.fromhex(vector["symbols_hex"])
+        )
+    symbol_key = "semantic_symbols_hex" if semantic else "symbols_hex"
+    raw_symbols = bytes.fromhex(vector[symbol_key])
     record_bytes = vector["symbol_record_bytes"]
     assert record_bytes == 5
     assert len(raw_symbols) % record_bytes == 0
@@ -156,3 +161,37 @@ async def cabac_pipeline_matches_rust_encoder_vector(dut):
         int(dut.stream_last_byte_bits.value),
         expected_last_bits,
     )
+
+
+@cocotb.test()
+async def cabac_pipeline_matches_multiple_rust_encoder_vectors(dut):
+    cases = [
+        (8, 8, 0, 128, 128),
+        (16, 16, 0, 128, 128),
+        (16, 16, 64, 128, 128),
+        (32, 16, 0, 128, 128),
+        (16, 32, 0, 128, 128),
+        (32, 32, 0, 128, 128),
+    ]
+    for width, height, y, u, v in cases:
+        await reset_dut(dut)
+        await start_pipeline(dut)
+        symbols, expected_bytes, expected_last_bits = load_rust_cabac_vector(
+            width=width, height=height, y=y, u=u, v=v
+        )
+        observed = await drive_symbols_and_collect(dut, symbols, max_cycles=8192)
+        assert observed == expected_bytes, (
+            width,
+            height,
+            y,
+            observed.hex(),
+            expected_bytes.hex(),
+        )
+        assert int(dut.stream_last_byte_bits.value) == expected_last_bits, (
+            width,
+            height,
+            y,
+            int(dut.stream_last_byte_bits.value),
+            expected_last_bits,
+        )
+        await Timer(1, unit="ps")

@@ -307,6 +307,7 @@ module ff_vvc_encoder #(
     .start(cabac_start_q && !ctu_has_palette_cu),
     .abs_level(quant_luma_rem_q),
     .negative(quant_luma_rem_q != 5'd0),
+    .log2_tb_size((coding_tree_coded_width >= 16'd16 || coding_tree_coded_height >= 16'd16) ? 3'd4 : 3'd3),
     .m_axis_valid(m_axis_residual_valid),
     .m_axis_ready(m_axis_residual_ready),
     .m_axis_kind(m_axis_residual_kind),

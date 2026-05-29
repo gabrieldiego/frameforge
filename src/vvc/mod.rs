@@ -13,7 +13,7 @@ mod nal;
 mod palette;
 mod residual;
 mod syntax;
-use cabac::{VvcCabacDumpSymbol, VvcCabacEncoder, VvcCtxEvent};
+use cabac::{VvcCabacDumpContextEvent, VvcCabacDumpSymbol, VvcCabacEncoder, VvcCtxEvent};
 pub use nal::{
     nal_unit_header_bytes, parse_annex_b_nal_units, write_annex_b, write_nal_unit_header,
     VvcNalHeader, VvcNalInfo, VvcNalUnit, VvcNalUnitType,
@@ -427,7 +427,10 @@ pub fn vvc_yuv420_cabac_vector_dump_json(
     let dump = vvc_ctu_partition_cabac_dump(params);
     Ok(vvc_cabac_vector_dump_json(
         compat_frame.geometry,
+        params,
         &dump.symbols,
+        &dump.semantic_symbols,
+        &dump.context_events,
         &dump.bits,
     ))
 }
@@ -920,6 +923,33 @@ enum VvcCabacContext {
 }
 
 impl VvcCabacContext {
+    fn rtl_context_id(self) -> Option<u8> {
+        match self {
+            VvcCabacContext::SplitFlag(0) => Some(0),
+            VvcCabacContext::SplitFlag(6) => Some(1),
+            VvcCabacContext::SplitQtFlag(3) => Some(2),
+            VvcCabacContext::MttSplitCuVerticalFlag(3) => Some(3),
+            VvcCabacContext::IntraLumaMpmFlag => Some(4),
+            VvcCabacContext::QtCbfY(0) => Some(5),
+            VvcCabacContext::LastSigCoeffXPrefix(3) => Some(6),
+            VvcCabacContext::LastSigCoeffYPrefix(3) => Some(7),
+            VvcCabacContext::LastSigCoeffXPrefix(6) => Some(8),
+            VvcCabacContext::LastSigCoeffYPrefix(6) => Some(9),
+            VvcCabacContext::AbsLevelGtxFlag(0) => Some(10),
+            VvcCabacContext::ParLevelFlag(0) => Some(11),
+            VvcCabacContext::AbsLevelGtxFlag(32) => Some(12),
+            VvcCabacContext::CclmModeFlag => Some(13),
+            VvcCabacContext::IntraChromaPredMode(1) => Some(14),
+            VvcCabacContext::QtCbfCb(0) => Some(15),
+            VvcCabacContext::QtCbfCr(0) => Some(16),
+            VvcCabacContext::LastSigCoeffXPrefix(10) => Some(17),
+            VvcCabacContext::LastSigCoeffYPrefix(10) => Some(18),
+            VvcCabacContext::SplitFlag(7) => Some(19),
+            VvcCabacContext::SplitQtFlag(0) => Some(20),
+            _ => None,
+        }
+    }
+
     fn init_value(self) -> u8 {
         match self {
             // ITU-T H.266 CABAC context initialization tables, I-slice
@@ -1301,42 +1331,50 @@ impl VvcCabacContexts {
     }
 
     fn encode(&mut self, cabac: &mut VvcCabacEncoder, ctx: VvcCabacContext, bin: bool) {
+        let model = match ctx {
+            VvcCabacContext::SplitFlag(idx) => &self.split_flag[idx as usize],
+            VvcCabacContext::SplitQtFlag(idx) => &self.split_qt_flag[idx as usize],
+            VvcCabacContext::MttSplitCuVerticalFlag(idx) => {
+                &self.mtt_split_cu_vertical_flag[idx as usize]
+            }
+            VvcCabacContext::MttSplitCuBinaryFlag(idx) => {
+                &self.mtt_split_cu_binary_flag[idx as usize]
+            }
+            VvcCabacContext::MultiRefLineIdx(idx) => &self.multi_ref_line_idx[idx as usize],
+            VvcCabacContext::IntraLumaMpmFlag => &self.intra_luma_mpm_flag,
+            VvcCabacContext::IntraLumaPlanarFlag(idx) => &self.intra_luma_planar_flag[idx as usize],
+            VvcCabacContext::CclmModeFlag => &self.cclm_mode_flag,
+            VvcCabacContext::IntraChromaPredMode(idx) => &self.intra_chroma_pred_mode[idx as usize],
+            VvcCabacContext::QtCbfY(idx) => &self.qt_cbf_y[idx as usize],
+            VvcCabacContext::QtCbfCb(idx) => &self.qt_cbf_cb[idx as usize],
+            VvcCabacContext::QtCbfCr(idx) => &self.qt_cbf_cr[idx as usize],
+            VvcCabacContext::TransformSkipFlag(idx) => &self.transform_skip_flag[idx as usize],
+            VvcCabacContext::MtsIdx(idx) => &self.mts_idx[idx as usize],
+            VvcCabacContext::LastSigCoeffXPrefix(idx) => {
+                &self.last_sig_coeff_x_prefix[idx as usize]
+            }
+            VvcCabacContext::LastSigCoeffYPrefix(idx) => {
+                &self.last_sig_coeff_y_prefix[idx as usize]
+            }
+            VvcCabacContext::SbCodedFlag(idx) => &self.sb_coded_flag[idx as usize],
+            VvcCabacContext::SigCoeffFlag(idx) => &self.sig_coeff_flag[idx as usize],
+            VvcCabacContext::ParLevelFlag(idx) => &self.par_level_flag[idx as usize],
+            VvcCabacContext::AbsLevelGtxFlag(idx) => &self.abs_level_gtx_flag[idx as usize],
+            VvcCabacContext::CoeffSignFlag(idx) => &self.coeff_sign_flag[idx as usize],
+        };
+        if let Some(ctx_id) = ctx.rtl_context_id() {
+            cabac
+                .semantic_symbols
+                .push(VvcCabacDumpSymbol::bin_ctx(bin, ctx_id));
+            cabac.context_events.push(VvcCabacDumpContextEvent {
+                ctx_id,
+                bin,
+                range: cabac.range as u16,
+                lps: model.lps(cabac.range),
+                mps: model.mps(),
+            });
+        }
         if std::env::var_os("FRAMEFORGE_CABAC_TRACE").is_some() {
-            let model = match ctx {
-                VvcCabacContext::SplitFlag(idx) => &self.split_flag[idx as usize],
-                VvcCabacContext::SplitQtFlag(idx) => &self.split_qt_flag[idx as usize],
-                VvcCabacContext::MttSplitCuVerticalFlag(idx) => {
-                    &self.mtt_split_cu_vertical_flag[idx as usize]
-                }
-                VvcCabacContext::MttSplitCuBinaryFlag(idx) => {
-                    &self.mtt_split_cu_binary_flag[idx as usize]
-                }
-                VvcCabacContext::MultiRefLineIdx(idx) => &self.multi_ref_line_idx[idx as usize],
-                VvcCabacContext::IntraLumaMpmFlag => &self.intra_luma_mpm_flag,
-                VvcCabacContext::IntraLumaPlanarFlag(idx) => {
-                    &self.intra_luma_planar_flag[idx as usize]
-                }
-                VvcCabacContext::CclmModeFlag => &self.cclm_mode_flag,
-                VvcCabacContext::IntraChromaPredMode(idx) => {
-                    &self.intra_chroma_pred_mode[idx as usize]
-                }
-                VvcCabacContext::QtCbfY(idx) => &self.qt_cbf_y[idx as usize],
-                VvcCabacContext::QtCbfCb(idx) => &self.qt_cbf_cb[idx as usize],
-                VvcCabacContext::QtCbfCr(idx) => &self.qt_cbf_cr[idx as usize],
-                VvcCabacContext::TransformSkipFlag(idx) => &self.transform_skip_flag[idx as usize],
-                VvcCabacContext::MtsIdx(idx) => &self.mts_idx[idx as usize],
-                VvcCabacContext::LastSigCoeffXPrefix(idx) => {
-                    &self.last_sig_coeff_x_prefix[idx as usize]
-                }
-                VvcCabacContext::LastSigCoeffYPrefix(idx) => {
-                    &self.last_sig_coeff_y_prefix[idx as usize]
-                }
-                VvcCabacContext::SbCodedFlag(idx) => &self.sb_coded_flag[idx as usize],
-                VvcCabacContext::SigCoeffFlag(idx) => &self.sig_coeff_flag[idx as usize],
-                VvcCabacContext::ParLevelFlag(idx) => &self.par_level_flag[idx as usize],
-                VvcCabacContext::AbsLevelGtxFlag(idx) => &self.abs_level_gtx_flag[idx as usize],
-                VvcCabacContext::CoeffSignFlag(idx) => &self.coeff_sign_flag[idx as usize],
-            };
             eprintln!(
                 "FF_CABAC {:?} range={} lps={} mps={} bin={}",
                 ctx,
@@ -1674,6 +1712,8 @@ fn vvc_ctu_partition_cabac_bits(params: VvcCtuPartitionParams) -> Vec<bool> {
 
 struct VvcCtuCabacDump {
     symbols: Vec<VvcCabacDumpSymbol>,
+    semantic_symbols: Vec<VvcCabacDumpSymbol>,
+    context_events: Vec<VvcCabacDumpContextEvent>,
     bits: Vec<bool>,
 }
 
@@ -1687,14 +1727,24 @@ fn vvc_ctu_partition_cabac_dump(params: VvcCtuPartitionParams) -> VvcCtuCabacDum
     cabac.start();
     encode_ctu_partition_body(&mut cabac, params);
     cabac.encode_bin_trm(true);
+    let semantic_symbols = cabac.semantic_symbols.clone();
+    let context_events = cabac.context_events.clone();
     let symbols = cabac.dump_symbols.clone();
     let bits = cabac.finish();
-    VvcCtuCabacDump { symbols, bits }
+    VvcCtuCabacDump {
+        symbols,
+        semantic_symbols,
+        context_events,
+        bits,
+    }
 }
 
 fn vvc_cabac_vector_dump_json(
     geometry: VvcVideoGeometry,
+    params: VvcCtuPartitionParams,
     symbols: &[VvcCabacDumpSymbol],
+    semantic_symbols: &[VvcCabacDumpSymbol],
+    context_events: &[VvcCabacDumpContextEvent],
     bits: &[bool],
 ) -> String {
     let mut json = String::new();
@@ -1702,6 +1752,27 @@ fn vvc_cabac_vector_dump_json(
     json.push_str(&format!(",\"width\":{}", geometry.width));
     json.push_str(&format!(",\"height\":{}", geometry.height));
     json.push_str(",\"format\":\"yuv420p8\"");
+    json.push_str(&format!(
+        ",\"luma_dc_abs_level\":{}",
+        params.luma_dc_abs_level
+    ));
+    json.push_str(&format!(
+        ",\"luma_dc_negative\":{}",
+        if params.luma_dc_negative {
+            "true"
+        } else {
+            "false"
+        }
+    ));
+    json.push_str(&format!(",\"cb_dc_abs_level\":{}", params.cb_dc_abs_level));
+    json.push_str(&format!(
+        ",\"cb_dc_negative\":{}",
+        if params.cb_dc_negative {
+            "true"
+        } else {
+            "false"
+        }
+    ));
     json.push_str(",\"symbol_record_bytes\":5");
     json.push_str(",\"symbol_encoding\":\"kind_u8_data_u32be_hex\"");
     json.push_str(&format!(",\"cabac_bit_len\":{}", bits.len()));
@@ -1709,8 +1780,30 @@ fn vvc_cabac_vector_dump_json(
     append_hex_bytes(&mut json, bits);
     json.push_str("\",\"symbols_hex\":\"");
     append_symbol_records_hex(&mut json, symbols);
+    json.push_str("\",\"semantic_symbols_hex\":\"");
+    append_symbol_records_hex(&mut json, semantic_symbols);
+    json.push_str("\",\"context_event_record_bytes\":7");
+    json.push_str(
+        ",\"context_event_encoding\":\"ctx_id_u8_bin_u8_range_u16be_lps_u16be_mps_u8_hex\"",
+    );
+    json.push_str(",\"context_events_hex\":\"");
+    append_context_event_records_hex(&mut json, context_events);
     json.push_str("\"}\n");
     json
+}
+
+fn append_context_event_records_hex(out: &mut String, events: &[VvcCabacDumpContextEvent]) {
+    for event in events {
+        append_byte_hex(out, event.ctx_id);
+        append_byte_hex(out, u8::from(event.bin));
+        for byte in event.range.to_be_bytes() {
+            append_byte_hex(out, byte);
+        }
+        for byte in event.lps.to_be_bytes() {
+            append_byte_hex(out, byte);
+        }
+        append_byte_hex(out, u8::from(event.mps));
+    }
 }
 
 fn append_hex_bytes(out: &mut String, bits: &[bool]) {
