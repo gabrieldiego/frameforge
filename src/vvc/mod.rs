@@ -3257,7 +3257,12 @@ impl VvcCtuCabacOp {
     }
 
     fn visible_luma_leaf_split_ctx(node: VvcCodingTreeNode) -> u8 {
-        if node.mtt_depth == 0 {
+        if node.mtt_depth == 0 && node.cqt_depth >= 3 {
+            let left_deeper = !node.x.is_multiple_of(16);
+            let above_deeper = !node.y.is_multiple_of(16);
+            VvcSplitCtxInput::min_qt_leaf_with_deeper_neighbours(left_deeper, above_deeper)
+                .split_cu_flag_ctx()
+        } else if node.mtt_depth == 0 {
             VvcSplitCtxInput::full_child_without_smaller_neighbours().split_cu_flag_ctx()
         } else {
             VvcSplitCtxInput::bt_leaf_without_smaller_neighbours().split_cu_flag_ctx()

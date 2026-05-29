@@ -35,6 +35,7 @@ module ff_vvc_420_ctu_symbolizer (
   logic min_axis_visible;
   logic extra_luma_leaf_visible;
   logic extra_luma_leaf_is_below;
+  logic small_square_visible;
   logic [4:0] rem_abs_value;
   logic [4:0] rem_code_value;
   logic [2:0] rem_prefix_extra_len;
@@ -57,6 +58,8 @@ module ff_vvc_420_ctu_symbolizer (
     ((visible_height > BASE_VISIBLE_AXIS) && (visible_width == BASE_VISIBLE_AXIS));
   assign extra_luma_leaf_is_below =
     (visible_height > BASE_VISIBLE_AXIS) && (visible_width == BASE_VISIBLE_AXIS);
+  assign small_square_visible =
+    (visible_width <= MIN_VISIBLE_AXIS) && (visible_height <= MIN_VISIBLE_AXIS);
   assign luma_base_count = min_axis_visible ? 6'd5 : 6'd4;
   assign residual_start = luma_base_count;
   assign residual_count =
@@ -69,6 +72,7 @@ module ff_vvc_420_ctu_symbolizer (
   assign chroma_leaf1_start = chroma_start + (min_axis_visible ? 6'd1 : 6'd2);
   assign chroma_leaf2_start = chroma_start + 6'd6;
   assign last_index =
+    small_square_visible ? (chroma_start + 6'd4) :
     extra_luma_leaf_visible ? (chroma_start + 6'd11) :
     (min_axis_visible ? (chroma_start + 6'd4) : (chroma_start + 6'd5));
   assign residual_index = index_q - residual_start;
@@ -99,7 +103,11 @@ module ff_vvc_420_ctu_symbolizer (
     end else if (min_axis_visible && index_q == 6'd1) begin
       symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd3, 7'd0, 1'b0, 1'b0};
     end else if (!min_axis_visible && index_q == 6'd0) begin
-      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd1, 7'd0, 1'b0, 1'b0};
+      symbol_next = {
+        SYMBOL_BIN_CTX, 19'd0,
+        ((visible_width <= MIN_VISIBLE_AXIS) && (visible_height <= MIN_VISIBLE_AXIS)) ? 5'd0 : 5'd1,
+        7'd0, 1'b0, 1'b0
+      };
     end else if (index_q == (min_axis_visible ? 6'd2 : 6'd1)) begin
       symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd4, 7'd0, 1'b0, 1'b0};
     end else if (index_q == (min_axis_visible ? 6'd3 : 6'd2)) begin
@@ -144,6 +152,14 @@ module ff_vvc_420_ctu_symbolizer (
                                                       : {SYMBOL_BIN_CTX, 19'd0, 5'd5, 7'd0, 1'b0, 1'b0};
         default: symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd5, 7'd0, 1'b0, 1'b0};
       endcase
+    end else if (small_square_visible && index_q == chroma_start) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd13, 7'd0, 1'b0, 1'b0};
+    end else if (small_square_visible && index_q == chroma_start + 6'd1) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd14, 7'd0, 1'b0, 1'b0};
+    end else if (small_square_visible && index_q == chroma_start + 6'd2) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd15, 7'd0, 1'b0, 1'b0};
+    end else if (small_square_visible && index_q == chroma_start + 6'd3) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd16, 7'd0, 1'b0, 1'b0};
     end else if (!min_axis_visible && index_q == chroma_start) begin
       symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd1, 7'd0, 1'b0, 1'b0};
     end else if (min_axis_visible && index_q == chroma_start) begin

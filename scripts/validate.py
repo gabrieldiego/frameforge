@@ -526,7 +526,9 @@ def vvc_luma_reconstruction_from_sample(sample: int, info: InputInfo) -> int:
     rem = quantized_luma_remainder(sample)
     # Mirrors the currently emitted VVC residual subset: planar intra prediction
     # around the neutral sample with one negative DC coefficient level.
-    if min(info.width, info.height) == 8 and max(info.width, info.height) >= 16:
+    if info.width == 8 and info.height == 8:
+        residual_delta = (rem * 57 + 8) // 16
+    elif min(info.width, info.height) == 8 and max(info.width, info.height) >= 16:
         residual_delta = (rem * 40) // 16
     else:
         residual_delta = (rem * 28 + 8) // 16
