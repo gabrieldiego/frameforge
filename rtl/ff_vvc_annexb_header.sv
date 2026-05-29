@@ -22,11 +22,7 @@ module ff_vvc_annexb_header (
   localparam logic [3:0] FIELD_PPS_START_CODE      = 4'd3;
   localparam logic [3:0] FIELD_PPS_NAL_HEADER      = 4'd4;
   localparam logic [3:0] FIELD_PPS_RBSP            = 4'd5;
-  localparam logic [3:0] FIELD_SLICE_START_CODE    = 4'd6;
-  localparam logic [3:0] FIELD_SLICE_NAL_HEADER    = 4'd7;
-  localparam logic [3:0] FIELD_SLICE_HEADER_PREFIX = 4'd8;
   localparam logic [4:0] NAL_UNIT_TYPE_TRAIL       = 5'd0;
-  localparam logic [4:0] NAL_UNIT_TYPE_IDR_W_RADL  = 5'd8;
   localparam logic [4:0] NAL_UNIT_TYPE_SPS         = 5'd15;
   localparam logic [4:0] NAL_UNIT_TYPE_PPS         = 5'd16;
   localparam logic [5:0] NAL_LAYER_ID              = 6'd0;
@@ -55,21 +51,18 @@ module ff_vvc_annexb_header (
   assign m_axis_valid = active_q;
   assign m_axis_data = active_q ? byte_next : 8'h00;
   assign m_axis_last = active_q &&
-                       (field_q == FIELD_SLICE_HEADER_PREFIX) &&
+                       (field_q == FIELD_PPS_RBSP) &&
                        (field_byte_index_q == field_len - 6'd1);
 
   always_comb begin
     field_len = 6'd1;
     case (field_q)
       FIELD_SPS_START_CODE,
-      FIELD_PPS_START_CODE,
-      FIELD_SLICE_START_CODE: field_len = 6'd4;
+      FIELD_PPS_START_CODE: field_len = 6'd4;
       FIELD_SPS_NAL_HEADER,
-      FIELD_PPS_NAL_HEADER,
-      FIELD_SLICE_NAL_HEADER: field_len = 6'd2;
+      FIELD_PPS_NAL_HEADER: field_len = 6'd2;
       FIELD_SPS_RBSP: field_len = 6'd31;
       FIELD_PPS_RBSP: field_len = 6'd14;
-      FIELD_SLICE_HEADER_PREFIX: field_len = 6'd3;
       default: field_len = 6'd1;
     endcase
   end
@@ -82,10 +75,7 @@ module ff_vvc_annexb_header (
       FIELD_SPS_RBSP: field_next = FIELD_PPS_START_CODE;
       FIELD_PPS_START_CODE: field_next = FIELD_PPS_NAL_HEADER;
       FIELD_PPS_NAL_HEADER: field_next = FIELD_PPS_RBSP;
-      FIELD_PPS_RBSP: field_next = FIELD_SLICE_START_CODE;
-      FIELD_SLICE_START_CODE: field_next = FIELD_SLICE_NAL_HEADER;
-      FIELD_SLICE_NAL_HEADER: field_next = FIELD_SLICE_HEADER_PREFIX;
-      FIELD_SLICE_HEADER_PREFIX: field_next = FIELD_SPS_START_CODE;
+      FIELD_PPS_RBSP: field_next = FIELD_SPS_START_CODE;
       default: field_next = FIELD_SPS_START_CODE;
     endcase
   end
@@ -95,7 +85,6 @@ module ff_vvc_annexb_header (
     case (field_q)
       FIELD_SPS_NAL_HEADER: nal_unit_type = NAL_UNIT_TYPE_SPS;
       FIELD_PPS_NAL_HEADER: nal_unit_type = NAL_UNIT_TYPE_PPS;
-      FIELD_SLICE_NAL_HEADER: nal_unit_type = NAL_UNIT_TYPE_IDR_W_RADL;
       default: nal_unit_type = NAL_UNIT_TYPE_TRAIL;
     endcase
   end
@@ -104,8 +93,7 @@ module ff_vvc_annexb_header (
     byte_next = 8'h00;
     case (field_q)
       FIELD_SPS_START_CODE,
-      FIELD_PPS_START_CODE,
-      FIELD_SLICE_START_CODE: begin
+      FIELD_PPS_START_CODE: begin
         case (field_byte_index_q)
           6'd0, 6'd1, 6'd2: byte_next = 8'h00;
           6'd3: byte_next = 8'h01;
@@ -113,8 +101,7 @@ module ff_vvc_annexb_header (
         endcase
       end
       FIELD_SPS_NAL_HEADER,
-      FIELD_PPS_NAL_HEADER,
-      FIELD_SLICE_NAL_HEADER: begin
+      FIELD_PPS_NAL_HEADER: begin
         if (field_byte_index_q == 6'd0) begin
           byte_next = {2'b00, NAL_LAYER_ID};
         end else begin
@@ -175,14 +162,6 @@ module ff_vvc_annexb_header (
           6'd11: byte_next = min_axis_visible ? 8'h65 : 8'h59;
           6'd12: byte_next = min_axis_visible ? 8'h16 : 8'h45;
           6'd13: byte_next = min_axis_visible ? 8'h20 : 8'h88;
-          default: byte_next = 8'h00;
-        endcase
-      end
-      FIELD_SLICE_HEADER_PREFIX: begin
-        case (field_byte_index_q)
-          6'd0: byte_next = 8'hc4;
-          6'd1: byte_next = 8'h00;
-          6'd2: byte_next = 8'h70;
           default: byte_next = 8'h00;
         endcase
       end

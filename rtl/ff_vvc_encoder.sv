@@ -50,6 +50,8 @@ module ff_vvc_encoder #(
   localparam logic [2:0] GENERATED_OUT_IDLE     = 3'd0;
   localparam logic [2:0] GENERATED_OUT_PREAMBLE = 3'd1;
   localparam logic [2:0] GENERATED_OUT_CABAC    = 3'd2;
+  localparam logic [4:0] VVC_NAL_UNIT_TYPE_IDR_W_RADL = 5'd8;
+  localparam logic [4:0] VVC_NAL_UNIT_TYPE_CRA = 5'd9;
 
   logic [INPUT_COUNT_BITS - 1:0] input_count_q;
   logic [INPUT_COUNT_BITS - 1:0] input_len_q;
@@ -94,8 +96,18 @@ module ff_vvc_encoder #(
   logic        rbsp_payload_valid;
   logic        rbsp_payload_ready;
   logic        rbsp_output_ready;
+  logic        rbsp_ep_input_ready;
+  logic        rbsp_palette_ep_input_ready;
   logic [7:0]  rbsp_payload_data;
   logic        rbsp_payload_last;
+  logic        rbsp_protected_valid;
+  logic        rbsp_protected_ready;
+  logic [7:0]  rbsp_protected_data;
+  logic        rbsp_protected_last;
+  logic        slice_stream_ready;
+  logic        slice_stream_valid;
+  logic [7:0]  slice_stream_data;
+  logic        slice_stream_last;
   logic        cabac_start_q;
   logic        pending_output_q;
   logic [1:0]  palette_out_state_q;
@@ -174,6 +186,8 @@ module ff_vvc_encoder #(
     ctu_has_palette_cu
       ? ((palette_out_state_q == PALETTE_OUT_CABAC) && (!m_axis_valid || m_axis_ready))
       : ((generated_out_state_q == GENERATED_OUT_CABAC) && (!m_axis_valid || m_axis_ready));
+  assign rbsp_protected_ready = ctu_has_palette_cu ? rbsp_output_ready : 1'b0;
+  assign rbsp_ep_input_ready = ctu_has_palette_cu ? rbsp_palette_ep_input_ready : slice_stream_ready;
   assign palette_stream_ready = ctu_has_palette_cu && cabac_symbol_ready;
   assign m_axis_residual_ready = !ctu_has_palette_cu && cabac_symbol_ready;
 
@@ -296,10 +310,42 @@ module ff_vvc_encoder #(
     .s_axis_data(cabac_stream_data),
     .s_axis_last(cabac_stream_last),
     .s_axis_last_byte_bits(cabac_stream_last_byte_bits),
-    .m_axis_ready(rbsp_output_ready),
+    .m_axis_ready(rbsp_ep_input_ready),
     .m_axis_valid(rbsp_payload_valid),
     .m_axis_data(rbsp_payload_data),
     .m_axis_last(rbsp_payload_last),
+    .done()
+  );
+
+  ff_vvc_emulation_prevention_stream rbsp_emulation_prevention (
+    .clk(clk),
+    .rst_n(rst_n),
+    .clear(cabac_start_q),
+    .s_axis_valid(ctu_has_palette_cu && rbsp_payload_valid),
+    .s_axis_ready(rbsp_palette_ep_input_ready),
+    .s_axis_data(rbsp_payload_data),
+    .s_axis_last(rbsp_payload_last),
+    .m_axis_ready(rbsp_protected_ready),
+    .m_axis_valid(rbsp_protected_valid),
+    .m_axis_data(rbsp_protected_data),
+    .m_axis_last(rbsp_protected_last),
+    .done()
+  );
+
+  ff_vvc_annexb_slice_stream annexb_slice_stream (
+    .clk(clk),
+    .rst_n(rst_n),
+    .clear(start && !busy),
+    .start(cabac_start_q && !ctu_has_palette_cu),
+    .nal_unit_type(generated_slice_cra_q ? VVC_NAL_UNIT_TYPE_CRA : VVC_NAL_UNIT_TYPE_IDR_W_RADL),
+    .s_axis_ready(slice_stream_ready),
+    .s_axis_valid(!ctu_has_palette_cu && rbsp_payload_valid),
+    .s_axis_data(rbsp_payload_data),
+    .s_axis_last(rbsp_payload_last),
+    .m_axis_ready(rbsp_output_ready),
+    .m_axis_valid(slice_stream_valid),
+    .m_axis_data(slice_stream_data),
+    .m_axis_last(slice_stream_last),
     .done()
   );
 
@@ -467,11 +513,11 @@ module ff_vvc_encoder #(
             palette_out_state_q <= PALETTE_OUT_CABAC;
           end
           PALETTE_OUT_CABAC: begin
-            if (rbsp_payload_valid) begin
+            if (rbsp_protected_valid) begin
               m_axis_valid <= 1'b1;
-              m_axis_data <= rbsp_payload_data;
-              m_axis_last <= rbsp_payload_last;
-              if (rbsp_payload_last) begin
+              m_axis_data <= rbsp_protected_data;
+              m_axis_last <= rbsp_protected_last;
+              if (rbsp_protected_last) begin
                 palette_out_state_q <= PALETTE_OUT_IDLE;
               end
             end else begin
@@ -507,11 +553,11 @@ module ff_vvc_encoder #(
             end
           end
           GENERATED_OUT_CABAC: begin
-            if (rbsp_payload_valid) begin
+            if (slice_stream_valid) begin
               m_axis_valid <= 1'b1;
-              m_axis_data <= rbsp_payload_data;
-              m_axis_last <= rbsp_payload_last && ((frame_count != 2'd2) || generated_slice_cra_q);
-              if (rbsp_payload_last) begin
+              m_axis_data <= slice_stream_data;
+              m_axis_last <= slice_stream_last && ((frame_count != 2'd2) || generated_slice_cra_q);
+              if (slice_stream_last) begin
                 if ((frame_count != 2'd2) || generated_slice_cra_q) begin
                   generated_out_state_q <= GENERATED_OUT_IDLE;
                 end else begin
