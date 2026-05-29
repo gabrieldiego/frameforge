@@ -78,6 +78,7 @@ pub struct VvcEncodeParams {
 /// not a claim about all legal VVC profiles or future FrameForge codec paths.
 pub const VVC_CODED_DIMENSION_GRANULARITY: usize = 8;
 const VVC_CTU_SIZE: usize = 64;
+const VVC_CURRENT_MAX_LUMA_LEAF_SIZE: u16 = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VvcVideoGeometry {
@@ -940,7 +941,7 @@ impl VvcCabacContext {
             VvcCabacContext::ParLevelFlag(0) => Some(11),
             VvcCabacContext::AbsLevelGtxFlag(32) => Some(12),
             VvcCabacContext::CclmModeFlag => Some(13),
-            VvcCabacContext::IntraChromaPredMode(1) => Some(14),
+            VvcCabacContext::IntraChromaPredMode(0) => Some(14),
             VvcCabacContext::QtCbfCb(0) => Some(15),
             VvcCabacContext::QtCbfCr(0) => Some(16),
             VvcCabacContext::LastSigCoeffXPrefix(10) => Some(17),
@@ -983,7 +984,7 @@ impl VvcCabacContext {
             }
             VvcCabacContext::CclmModeFlag => 59,
             VvcCabacContext::IntraChromaPredMode(ctx) => {
-                const I_SLICE_INIT: [u8; 2] = [44, 34];
+                const I_SLICE_INIT: [u8; 2] = [34, 34];
                 I_SLICE_INIT[ctx as usize]
             }
             VvcCabacContext::QtCbfY(ctx) => {
@@ -991,7 +992,7 @@ impl VvcCabacContext {
                 I_SLICE_INIT[ctx as usize]
             }
             VvcCabacContext::QtCbfCb(ctx) => {
-                const I_SLICE_INIT: [u8; 2] = [12, 12];
+                const I_SLICE_INIT: [u8; 2] = [12, 21];
                 I_SLICE_INIT[ctx as usize]
             }
             VvcCabacContext::QtCbfCr(ctx) => {
@@ -1092,7 +1093,7 @@ impl VvcCabacContext {
                 LOG2_WINDOW[ctx as usize]
             }
             VvcCabacContext::QtCbfCb(ctx) => {
-                const LOG2_WINDOW: [u8; 2] = [5, 4];
+                const LOG2_WINDOW: [u8; 2] = [5, 0];
                 LOG2_WINDOW[ctx as usize]
             }
             VvcCabacContext::QtCbfCr(ctx) => {
@@ -1642,8 +1643,8 @@ fn vvc_ctu_partition_params(
             .filter(|step| matches!(step, VvcCodingTreeStep::ChromaTransformUnit { .. }))
             .count();
         return Some(VvcCtuPartitionParams {
-            root_width: coded.width,
-            root_height: coded.height,
+            root_width: VVC_CTU_SIZE,
+            root_height: VVC_CTU_SIZE,
             visible_width: coded.width,
             visible_height: coded.height,
             chroma_sampling,
@@ -2262,6 +2263,17 @@ enum VvcCtuCabacOp {
         mtt_binary_ctx: u8,
         mtt_binary_value: bool,
     },
+    ImplicitBtSplit {
+        node: VvcCodingTreeNode,
+        vertical: bool,
+        write_qt_flag: bool,
+        qt_ctx: u8,
+        write_mtt_vertical_flag: bool,
+        mtt_vertical_ctx: u8,
+        write_binary_flag: bool,
+        mtt_binary_ctx: u8,
+        mtt_binary_value: bool,
+    },
     LumaLeaf {
         node: VvcCodingTreeNode,
     },
@@ -2309,12 +2321,12 @@ impl VvcCtuCabacOp {
         } else if params.visible_width <= VVC_CTU_SIZE / 2
             && params.visible_height <= VVC_CTU_SIZE / 2
         {
-            Self::append_visible_qt_luma_subtree(
+            Self::append_visible_luma_subtree(
                 &mut ops,
-                root.qt_child(0),
+                root,
                 params.visible_width as u16,
                 params.visible_height as u16,
-                (VVC_CTU_SIZE / 2) as u16,
+                VVC_CURRENT_MAX_LUMA_LEAF_SIZE,
             );
         } else if params.visible_width == params.root_width {
             for child_idx in [0_u8, 1] {
@@ -3111,7 +3123,7 @@ impl VvcCtuCabacOp {
         ops
     }
 
-    fn append_visible_qt_luma_subtree(
+    fn append_visible_luma_subtree(
         ops: &mut Vec<Self>,
         node: VvcCodingTreeNode,
         visible_width: u16,
@@ -3127,26 +3139,26 @@ impl VvcCtuCabacOp {
         {
             ops.push(Self::LumaLeafWithSplitCtx {
                 node,
-                split_ctx: VvcSplitCtxInput::full_child_without_smaller_neighbours()
-                    .split_cu_flag_ctx(),
+                split_ctx: Self::visible_luma_leaf_split_ctx(node),
             });
             return;
         }
 
         if !node.fits_visible(visible_width, visible_height) {
-            for child_idx in 0..4 {
-                Self::append_visible_qt_luma_subtree(
-                    ops,
-                    node.qt_child(child_idx),
-                    visible_width,
-                    visible_height,
-                    max_leaf_size,
-                );
-            }
+            Self::append_implicit_boundary_luma_children(
+                ops,
+                node,
+                visible_width,
+                visible_height,
+                max_leaf_size,
+            );
             return;
         }
 
-        debug_assert!(node.width > 16 || node.height > 16);
+        debug_assert!(
+            node.width > VVC_CURRENT_MAX_LUMA_LEAF_SIZE
+                || node.height > VVC_CURRENT_MAX_LUMA_LEAF_SIZE
+        );
         let left_deeper = false;
         let above_deeper = false;
         ops.push(Self::QtSplit {
@@ -3166,13 +3178,88 @@ impl VvcCtuCabacOp {
             .split_qt_flag_ctx(),
         });
         for child_idx in 0..4 {
-            Self::append_visible_qt_luma_subtree(
+            Self::append_visible_luma_subtree(
                 ops,
                 node.qt_child(child_idx),
                 visible_width,
                 visible_height,
                 max_leaf_size,
             );
+        }
+    }
+
+    fn append_implicit_boundary_luma_children(
+        ops: &mut Vec<Self>,
+        node: VvcCodingTreeNode,
+        visible_width: u16,
+        visible_height: u16,
+        max_leaf_size: u16,
+    ) {
+        let bottom_left_in_pic =
+            node.x < visible_width && node.y + node.height - 1 < visible_height;
+        let top_right_in_pic = node.x + node.width - 1 < visible_width && node.y < visible_height;
+        if !bottom_left_in_pic && !top_right_in_pic {
+            for child_idx in 0..4 {
+                Self::append_visible_luma_subtree(
+                    ops,
+                    node.qt_child(child_idx),
+                    visible_width,
+                    visible_height,
+                    max_leaf_size,
+                );
+            }
+        } else if !bottom_left_in_pic {
+            ops.push(Self::ImplicitBtSplit {
+                node,
+                vertical: false,
+                write_qt_flag: true,
+                qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node)
+                    .split_qt_flag_ctx(),
+                write_mtt_vertical_flag: false,
+                mtt_vertical_ctx: 4,
+                write_binary_flag: false,
+                mtt_binary_ctx: 3,
+                mtt_binary_value: true,
+            });
+            for child_idx in 0..2 {
+                Self::append_visible_luma_subtree(
+                    ops,
+                    node.mtt_child(false, child_idx),
+                    visible_width,
+                    visible_height,
+                    max_leaf_size,
+                );
+            }
+        } else if !top_right_in_pic {
+            ops.push(Self::ImplicitBtSplit {
+                node,
+                vertical: true,
+                write_qt_flag: true,
+                qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node)
+                    .split_qt_flag_ctx(),
+                write_mtt_vertical_flag: false,
+                mtt_vertical_ctx: 4,
+                write_binary_flag: false,
+                mtt_binary_ctx: 3,
+                mtt_binary_value: true,
+            });
+            for child_idx in 0..2 {
+                Self::append_visible_luma_subtree(
+                    ops,
+                    node.mtt_child(true, child_idx),
+                    visible_width,
+                    visible_height,
+                    max_leaf_size,
+                );
+            }
+        }
+    }
+
+    fn visible_luma_leaf_split_ctx(node: VvcCodingTreeNode) -> u8 {
+        if node.mtt_depth == 0 {
+            VvcSplitCtxInput::full_child_without_smaller_neighbours().split_cu_flag_ctx()
+        } else {
+            VvcSplitCtxInput::bt_leaf_without_smaller_neighbours().split_cu_flag_ctx()
         }
     }
 }
@@ -3222,6 +3309,7 @@ impl VvcCtuCabacGenerator {
                 qt_ctx,
             ),
             op @ VvcCtuCabacOp::BtSplit { .. } => self.emit_bt_split(cabac, op),
+            op @ VvcCtuCabacOp::ImplicitBtSplit { .. } => self.emit_implicit_bt_split(cabac, op),
             VvcCtuCabacOp::LumaLeaf { node } => {
                 self.emit_luma_leaf_split(cabac, node);
                 self.emit_luma_multi_ref_line(cabac, node);
@@ -3262,6 +3350,42 @@ impl VvcCtuCabacGenerator {
         debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
         self.contexts
             .encode(cabac, VvcCabacContext::SplitFlag(split_ctx), true);
+        if write_qt_flag {
+            self.contexts
+                .encode(cabac, VvcCabacContext::SplitQtFlag(qt_ctx), false);
+        }
+        if write_mtt_vertical_flag {
+            self.contexts.encode(
+                cabac,
+                VvcCabacContext::MttSplitCuVerticalFlag(mtt_vertical_ctx),
+                vertical,
+            );
+        }
+        if write_binary_flag {
+            self.contexts.encode(
+                cabac,
+                VvcCabacContext::MttSplitCuBinaryFlag(mtt_binary_ctx),
+                mtt_binary_value,
+            );
+        }
+    }
+
+    fn emit_implicit_bt_split(&mut self, cabac: &mut VvcCabacEncoder, op: VvcCtuCabacOp) {
+        let VvcCtuCabacOp::ImplicitBtSplit {
+            node,
+            vertical,
+            write_qt_flag,
+            qt_ctx,
+            write_mtt_vertical_flag,
+            mtt_vertical_ctx,
+            write_binary_flag,
+            mtt_binary_ctx,
+            mtt_binary_value,
+        } = op
+        else {
+            unreachable!("emit_implicit_bt_split expects an implicit binary split operation");
+        };
+        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
         if write_qt_flag {
             self.contexts
                 .encode(cabac, VvcCabacContext::SplitQtFlag(qt_ctx), false);
@@ -3389,7 +3513,11 @@ impl VvcCtuCabacGenerator {
     }
 
     fn emit_luma_residual(&mut self, cabac: &mut VvcCabacEncoder, node: VvcCodingTreeNode) {
-        let cbf = self.luma_dc_abs_level != 0;
+        // The current residual subset anchors the input-derived DC level in
+        // the first luma CU. Later CUs are reconstructed from intra prediction
+        // until the software model grows a full per-CU prediction/residual loop.
+        let anchor_cu = node.x == 0 && node.y == 0;
+        let cbf = anchor_cu && self.luma_dc_abs_level != 0;
         self.emit_luma_cbf(cabac, node, cbf);
         if !cbf {
             return;
@@ -3471,54 +3599,25 @@ impl VvcCtuCabacGenerator {
         if !node.intersects_visible(visible_width, visible_height) {
             return;
         }
-        if node.fits_visible(visible_width, visible_height) && node.width == 8 && node.height == 8 {
-            let split_ctx = if node.y >= 8 { 7 } else { 6 };
-            self.contexts
-                .encode(cabac, VvcCabacContext::SplitFlag(split_ctx), true);
-            self.contexts
-                .encode(cabac, VvcCabacContext::SplitQtFlag(3), false);
-            self.contexts
-                .encode(cabac, VvcCabacContext::MttSplitCuVerticalFlag(3), true);
-            self.emit_chroma_transform_only_leaf_with_split_ctx(
-                cabac,
-                node.mtt_child(true, 0),
-                0,
-                0,
-            );
-            self.contexts
-                .encode(cabac, VvcCabacContext::SplitFlag(0), true);
-            self.emit_chroma_transform_only_leaf_with_split_ctx(
-                cabac,
-                node.mtt_child(true, 1).mtt_child(false, 0),
-                0,
-                0,
-            );
-            self.emit_chroma_transform_only_leaf_with_split_ctx(
-                cabac,
-                node.mtt_child(true, 1).mtt_child(false, 1),
-                0,
-                0,
-            );
-            return;
-        }
-        if node.fits_visible(visible_width, visible_height)
-            && node.width <= min_leaf_size
-            && node.height <= min_leaf_size
+        if node.fits_visible(visible_width, visible_height) && (node.width <= 8 || node.height <= 8)
         {
-            self.emit_chroma_transform_only_leaf_with_split_ctx(cabac, node, 0, 0);
+            self.emit_chroma_transform_only_leaf_with_split_ctx(
+                cabac,
+                node,
+                Self::visible_chroma_leaf_split_ctx(node),
+                0,
+            );
             return;
         }
 
         if !node.fits_visible(visible_width, visible_height) {
-            for child_idx in 0..4 {
-                self.emit_chroma_visible_qt_subtree(
-                    cabac,
-                    node.qt_child(child_idx),
-                    visible_width,
-                    visible_height,
-                    min_leaf_size,
-                );
-            }
+            self.emit_chroma_implicit_boundary_children(
+                cabac,
+                node,
+                visible_width,
+                visible_height,
+                min_leaf_size,
+            );
             return;
         }
 
@@ -3531,6 +3630,66 @@ impl VvcCtuCabacGenerator {
                 visible_height,
                 min_leaf_size,
             );
+        }
+    }
+
+    fn emit_chroma_implicit_boundary_children(
+        &mut self,
+        cabac: &mut VvcCabacEncoder,
+        node: VvcCodingTreeNode,
+        visible_width: u16,
+        visible_height: u16,
+        min_leaf_size: u16,
+    ) {
+        let bottom_left_in_pic =
+            node.x < visible_width && node.y + node.height - 1 < visible_height;
+        let top_right_in_pic = node.x + node.width - 1 < visible_width && node.y < visible_height;
+        if !bottom_left_in_pic && !top_right_in_pic {
+            for child_idx in 0..4 {
+                self.emit_chroma_visible_qt_subtree(
+                    cabac,
+                    node.qt_child(child_idx),
+                    visible_width,
+                    visible_height,
+                    min_leaf_size,
+                );
+            }
+        } else if !bottom_left_in_pic {
+            self.contexts.encode(
+                cabac,
+                VvcCabacContext::SplitQtFlag(
+                    VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node)
+                        .split_qt_flag_ctx(),
+                ),
+                false,
+            );
+            for child_idx in 0..2 {
+                self.emit_chroma_visible_qt_subtree(
+                    cabac,
+                    node.mtt_child(false, child_idx),
+                    visible_width,
+                    visible_height,
+                    min_leaf_size,
+                );
+            }
+        } else if !top_right_in_pic {
+            self.contexts.encode(
+                cabac,
+                VvcCabacContext::SplitQtFlag(
+                    VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node)
+                        .split_qt_flag_ctx(),
+                ),
+                false,
+            );
+            for child_idx in 0..2 {
+                self.emit_chroma_visible_qt_subtree(
+                    cabac,
+                    node.mtt_child(true, child_idx),
+                    visible_width,
+                    visible_height,
+                    min_leaf_size,
+                );
+            }
         }
     }
 
@@ -3585,7 +3744,7 @@ impl VvcCtuCabacGenerator {
         self.contexts
             .encode(cabac, VvcCabacContext::SplitFlag(split_ctx), false);
         self.contexts
-            .encode(cabac, VvcCabacContext::IntraChromaPredMode(1), false);
+            .encode(cabac, VvcCabacContext::IntraChromaPredMode(0), false);
         let cbf_cb = node.width == 4 && node.height == 4 && self.cb_dc_abs_level != 0;
         self.contexts
             .encode(cabac, VvcCabacContext::QtCbfCb(cbf_cb_ctx), cbf_cb);
@@ -3616,7 +3775,7 @@ impl VvcCtuCabacGenerator {
         self.contexts
             .encode(cabac, VvcCabacContext::CclmModeFlag, false);
         self.contexts
-            .encode(cabac, VvcCabacContext::IntraChromaPredMode(1), false);
+            .encode(cabac, VvcCabacContext::IntraChromaPredMode(0), false);
         let cbf_cb = node.width == 4 && node.height == 4 && self.cb_dc_abs_level != 0;
         self.contexts
             .encode(cabac, VvcCabacContext::QtCbfCb(cbf_cb_ctx), cbf_cb);
@@ -3657,7 +3816,17 @@ impl VvcCtuCabacGenerator {
         self.contexts
             .encode(cabac, VvcCabacContext::CclmModeFlag, false);
         self.contexts
-            .encode(cabac, VvcCabacContext::IntraChromaPredMode(1), false);
+            .encode(cabac, VvcCabacContext::IntraChromaPredMode(0), false);
+    }
+
+    fn visible_chroma_leaf_split_ctx(node: VvcCodingTreeNode) -> u8 {
+        if node.width == 4 || node.height == 4 {
+            0
+        } else if node.y >= 8 {
+            7
+        } else {
+            6
+        }
     }
 }
 

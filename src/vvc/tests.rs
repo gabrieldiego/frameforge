@@ -721,8 +721,8 @@ fn vvc_ctu_partition_params_are_geometry_derived() {
             black
         ),
         Some(VvcCtuPartitionParams {
-            root_width: 32,
-            root_height: 32,
+            root_width: 64,
+            root_height: 64,
             visible_width: 32,
             visible_height: 32,
             chroma_sampling: ChromaSampling::Cs420,
@@ -743,8 +743,8 @@ fn vvc_ctu_partition_params_are_geometry_derived() {
             black
         ),
         Some(VvcCtuPartitionParams {
-            root_width: 16,
-            root_height: 16,
+            root_width: 64,
+            root_height: 64,
             visible_width: 16,
             visible_height: 16,
             chroma_sampling: ChromaSampling::Cs420,
