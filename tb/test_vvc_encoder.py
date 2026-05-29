@@ -199,7 +199,15 @@ def quantized_luma_remainder(sample):
 
 def vvc_luma_reconstruction_from_sample(sample):
     rem = quantized_luma_remainder(sample_to_8bit(sample))
-    return max(0, min(255, 128 - ((rem * 28 + 8) // 16)))
+    narrow_transform = (
+        min(rtl_visible_width(), rtl_visible_height()) == 8
+        and max(rtl_visible_width(), rtl_visible_height()) >= 16
+    )
+    if narrow_transform:
+        residual_delta = (rem * 40) // 16
+    else:
+        residual_delta = (rem * 28 + 8) // 16
+    return max(0, min(255, 128 - residual_delta))
 
 
 def reconstructed_chroma(u, v):

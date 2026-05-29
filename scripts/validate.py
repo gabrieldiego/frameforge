@@ -365,7 +365,7 @@ def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes
         chroma = reconstructed_chroma(frame[luma_len], frame[luma_len + chroma_len])
     else:
         luma = bytes(
-            [vvc_luma_reconstruction_from_sample(frame[0] if frame else 0)] * luma_len
+            [vvc_luma_reconstruction_from_sample(frame[0] if frame else 0, info)] * luma_len
         )
         chroma = 128
     # This is the reconstruction of the emitted VVC bitstream, not the
@@ -522,11 +522,15 @@ def quantized_luma_remainder(sample: int) -> int:
     )
 
 
-def vvc_luma_reconstruction_from_sample(sample: int) -> int:
+def vvc_luma_reconstruction_from_sample(sample: int, info: InputInfo) -> int:
     rem = quantized_luma_remainder(sample)
     # Mirrors the currently emitted VVC residual subset: planar intra prediction
     # around the neutral sample with one negative DC coefficient level.
-    return max(0, min(255, 128 - ((rem * 28 + 8) // 16)))
+    if min(info.width, info.height) == 8 and max(info.width, info.height) >= 16:
+        residual_delta = (rem * 40) // 16
+    else:
+        residual_delta = (rem * 28 + 8) // 16
+    return max(0, min(255, 128 - residual_delta))
 
 
 def reconstructed_chroma(u: int, v: int) -> int:
