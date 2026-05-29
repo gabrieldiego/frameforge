@@ -57,7 +57,7 @@ module ff_vvc_420_ctu_symbolizer (
     (luma_abs_level == 5'd0) ? 6'd0 :
     ((luma_abs_level <= 5'd1) ? 6'd3 :
     ((luma_abs_level <= 5'd3) ? 6'd5 : 6'd7));
-  assign luma_tail_count = narrow_shape ? 6'd2 : 6'd1;
+  assign luma_tail_count = narrow_shape ? 6'd3 : 6'd1;
   assign second_luma_count = (wide24_shape || tall24_shape) ? 6'd6 : 6'd0;
   assign chroma_start = luma_base_count + residual_count + luma_tail_count + second_luma_count;
   assign chroma_leaf1_start = chroma_start + (narrow_shape ? 6'd1 : 6'd2);

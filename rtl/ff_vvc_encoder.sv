@@ -104,10 +104,13 @@ module ff_vvc_encoder #(
   logic        generated_hold_valid_q;
   logic [7:0]  generated_hold_byte_q;
   logic        generated_tail_extra_q;
-  logic [7:0]  generated_header_index_q;
+  logic        generated_header_start_q;
+  logic        generated_header_ready_w;
+  logic        generated_header_valid_w;
   logic [7:0]  generated_header_byte_w;
-  logic [7:0]  generated_header_byte_count_w;
+  logic        generated_header_last_w;
   logic        generated_header_supported_w;
+  logic        generated_header_done_w;
   logic        ctu_has_palette_cu;
   logic [1:0]  chroma_subsample_x_w;
   logic [1:0]  chroma_subsample_y_w;
@@ -211,13 +214,24 @@ module ff_vvc_encoder #(
   );
 
   ff_vvc_annexb_header annexb_header (
+    .clk(clk),
+    .rst_n(rst_n),
+    .clear(start && !busy),
+    .start(generated_header_start_q),
     .visible_width(visible_width),
     .visible_height(visible_height),
-    .index(generated_header_index_q),
-    .byte_value(generated_header_byte_w),
-    .byte_count(generated_header_byte_count_w),
-    .supported(generated_header_supported_w)
+    .m_axis_ready(generated_header_ready_w),
+    .m_axis_valid(generated_header_valid_w),
+    .m_axis_data(generated_header_byte_w),
+    .m_axis_last(generated_header_last_w),
+    .supported(generated_header_supported_w),
+    .done(generated_header_done_w)
   );
+
+  assign generated_header_ready_w =
+    !ctu_has_palette_cu &&
+    (generated_out_state_q == GENERATED_OUT_PREAMBLE) &&
+    (!m_axis_valid || m_axis_ready);
 
   always @* begin
     palette_sample_valid = 1'b0;
@@ -382,9 +396,10 @@ module ff_vvc_encoder #(
       generated_hold_valid_q <= 1'b0;
       generated_hold_byte_q <= 8'd0;
       generated_tail_extra_q <= 1'b0;
-      generated_header_index_q <= 8'd0;
+      generated_header_start_q <= 1'b0;
     end else begin
       cabac_start_q <= 1'b0;
+      generated_header_start_q <= 1'b0;
       if (start && !busy) begin
         input_active_q <= 1'b1;
         s_axis_ready   <= 1'b1;
@@ -408,7 +423,7 @@ module ff_vvc_encoder #(
         generated_hold_valid_q <= 1'b0;
         generated_hold_byte_q <= 8'd0;
         generated_tail_extra_q <= 1'b0;
-        generated_header_index_q <= 8'd0;
+        generated_header_start_q <= 1'b0;
       end else if (input_active_q && s_axis_valid && s_axis_ready) begin
         if (s_axis_last != (input_count_q == input_len_q - 1'b1)) begin
           input_error <= 1'b1;
@@ -457,7 +472,7 @@ module ff_vvc_encoder #(
         generated_hold_valid_q <= 1'b0;
         generated_hold_byte_q <= 8'd0;
         generated_tail_extra_q <= 1'b0;
-        generated_header_index_q <= 8'd0;
+        generated_header_start_q <= 1'b1;
         m_axis_valid <= 1'b0;
         m_axis_data <= 8'd0;
         m_axis_last <= 1'b0;
@@ -521,23 +536,22 @@ module ff_vvc_encoder #(
           (!m_axis_valid || m_axis_ready)) begin
         case (generated_out_state_q)
           GENERATED_OUT_PREAMBLE: begin
-            if (generated_header_supported_w && generated_header_index_q < generated_header_byte_count_w) begin
+            if (generated_header_valid_w) begin
               m_axis_valid <= 1'b1;
               m_axis_data <= generated_header_byte_w;
               m_axis_last <= 1'b0;
-              if (generated_header_index_q == generated_header_byte_count_w - 8'd1) begin
-                generated_header_index_q <= 8'd0;
+              if (generated_header_last_w && generated_header_ready_w) begin
                 cabac_start_q <= 1'b1;
                 generated_out_state_q <= GENERATED_OUT_CABAC;
-              end else begin
-                generated_header_index_q <= generated_header_index_q + 8'd1;
               end
+            end else if (generated_header_done_w || !generated_header_supported_w) begin
+              m_axis_valid <= 1'b0;
+              m_axis_last <= 1'b0;
+              cabac_start_q <= 1'b1;
+              generated_out_state_q <= GENERATED_OUT_CABAC;
             end else begin
               m_axis_valid <= 1'b0;
               m_axis_last <= 1'b0;
-              generated_header_index_q <= 8'd0;
-              cabac_start_q <= 1'b1;
-              generated_out_state_q <= GENERATED_OUT_CABAC;
             end
           end
           GENERATED_OUT_CABAC: begin
@@ -576,6 +590,7 @@ module ff_vvc_encoder #(
                 generated_out_state_q <= GENERATED_OUT_IDLE;
               end else begin
                 generated_out_state_q <= GENERATED_OUT_PREAMBLE;
+                generated_header_start_q <= 1'b1;
                 generated_slice_cra_q <= 1'b1;
               end
             end else begin
@@ -587,6 +602,7 @@ module ff_vvc_encoder #(
                 generated_out_state_q <= GENERATED_OUT_IDLE;
               end else begin
                 generated_out_state_q <= GENERATED_OUT_PREAMBLE;
+                generated_header_start_q <= 1'b1;
                 generated_slice_cra_q <= 1'b1;
               end
             end

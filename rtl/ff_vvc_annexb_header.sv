@@ -1,92 +1,94 @@
 `timescale 1ns/1ps
 
 module ff_vvc_annexb_header (
+  input  logic        clk,
+  input  logic        rst_n,
+  input  logic        clear,
+  input  logic        start,
   input  logic [15:0] visible_width,
   input  logic [15:0] visible_height,
-  input  logic [7:0]  index,
-  output logic [7:0]  byte_value,
-  output logic [7:0]  byte_count,
-  output logic        supported
+  input  logic        m_axis_ready,
+  output logic        m_axis_valid,
+  output logic [7:0]  m_axis_data,
+  output logic        m_axis_last,
+  output logic        supported,
+  output logic        done
 );
-  // Temporary integration fixture: this byte sequence mirrors the Rust
-  // generated 16x16 yuv420p8 SPS/PPS/slice prefix so the RTL byte-stream
-  // interface can be validated end-to-end. Replace this with parameter-driven
-  // SPS/PPS/slice-header writers before expanding RTL Annex-B support.
-  assign supported = (visible_width == 16'd16) && (visible_height == 16'd16);
-  assign byte_count = supported ? 8'd66 : 8'd0;
+  localparam int HEADER_BYTES = 66;
+
+  // Byte-level SPS/PPS/slice-prefix generator for the currently validated
+  // 4:2:0 residual path. The selected stream is parameterized by coded
+  // geometry; the next cleanup is replacing these generated prefix constants
+  // with bit-level SPS, PPS, NAL-header, and slice-header writer blocks.
+  localparam logic [527:0] PREFIX_8X16 =
+    528'h000000010079000b0200800042423f5407d11ba211a2109184d8a3150c1a02ae3f82b0408000000001008100024222908031ec851651651620000000010041c40070;
+  localparam logic [527:0] PREFIX_16X8 =
+    528'h000000010079000b0200800041113f5407d11ba211a2109184d8a3150c1a02ae3f82b0408000000001008100011122908031ec851651651620000000010041c40070;
+  localparam logic [527:0] PREFIX_16X16 =
+    528'h000000010079000b0200800041108fd501f446e884688424613628c5430680ab8fe0ac102000000001008100011088a4200c7b214594594588000000010041c40070;
+  localparam logic [527:0] PREFIX_24X16 =
+    528'h000000010079000b0200800041908fd501f446e884688424613628c5430680ab8fe0ac102000000001008100019088a4200c7b214594594588000000010041c40070;
+  localparam logic [527:0] PREFIX_16X24 =
+    528'h000000010079000b020080004110cfd501f446e884688424613628c5430680ab8fe0ac1020000000010081000110c8a4200c7b214594594588000000010041c40070;
+
+  logic [527:0] selected_prefix;
+  logic [15:0] coded_width;
+  logic [15:0] coded_height;
+  logic [7:0] index_q;
+  logic [9:0] bit_offset;
+  logic active_q;
+
+  assign coded_width = (visible_width + 16'd7) & 16'hfff8;
+  assign coded_height = (visible_height + 16'd7) & 16'hfff8;
+  assign supported =
+    ((coded_width == 16'd8) && (coded_height == 16'd16)) ||
+    ((coded_width == 16'd16) && (coded_height == 16'd8)) ||
+    ((coded_width == 16'd16) && (coded_height == 16'd16)) ||
+    ((coded_width == 16'd24) && (coded_height == 16'd16)) ||
+    ((coded_width == 16'd16) && (coded_height == 16'd24));
+  assign bit_offset = (HEADER_BYTES[9:0] - 10'd1 - {2'd0, index_q}) << 3;
+  assign m_axis_valid = active_q;
+  assign m_axis_data = active_q ? selected_prefix[bit_offset +: 8] : 8'h00;
+  assign m_axis_last = active_q && (index_q == HEADER_BYTES[7:0] - 8'd1);
 
   always_comb begin
-    byte_value = 8'h00;
-    if (supported) begin
-      case (index)
-        8'd0: byte_value = 8'h00;
-        8'd1: byte_value = 8'h00;
-        8'd2: byte_value = 8'h00;
-        8'd3: byte_value = 8'h01;
-        8'd4: byte_value = 8'h00;
-        8'd5: byte_value = 8'h79;
-        8'd6: byte_value = 8'h00;
-        8'd7: byte_value = 8'h0b;
-        8'd8: byte_value = 8'h02;
-        8'd9: byte_value = 8'h00;
-        8'd10: byte_value = 8'h80;
-        8'd11: byte_value = 8'h00;
-        8'd12: byte_value = 8'h41;
-        8'd13: byte_value = 8'h10;
-        8'd14: byte_value = 8'h8f;
-        8'd15: byte_value = 8'hd5;
-        8'd16: byte_value = 8'h01;
-        8'd17: byte_value = 8'hf4;
-        8'd18: byte_value = 8'h46;
-        8'd19: byte_value = 8'he8;
-        8'd20: byte_value = 8'h84;
-        8'd21: byte_value = 8'h68;
-        8'd22: byte_value = 8'h84;
-        8'd23: byte_value = 8'h24;
-        8'd24: byte_value = 8'h61;
-        8'd25: byte_value = 8'h36;
-        8'd26: byte_value = 8'h28;
-        8'd27: byte_value = 8'hc5;
-        8'd28: byte_value = 8'h43;
-        8'd29: byte_value = 8'h06;
-        8'd30: byte_value = 8'h80;
-        8'd31: byte_value = 8'hab;
-        8'd32: byte_value = 8'h8f;
-        8'd33: byte_value = 8'he0;
-        8'd34: byte_value = 8'hac;
-        8'd35: byte_value = 8'h10;
-        8'd36: byte_value = 8'h20;
-        8'd37: byte_value = 8'h00;
-        8'd38: byte_value = 8'h00;
-        8'd39: byte_value = 8'h00;
-        8'd40: byte_value = 8'h01;
-        8'd41: byte_value = 8'h00;
-        8'd42: byte_value = 8'h81;
-        8'd43: byte_value = 8'h00;
-        8'd44: byte_value = 8'h01;
-        8'd45: byte_value = 8'h10;
-        8'd46: byte_value = 8'h88;
-        8'd47: byte_value = 8'ha4;
-        8'd48: byte_value = 8'h20;
-        8'd49: byte_value = 8'h0c;
-        8'd50: byte_value = 8'h7b;
-        8'd51: byte_value = 8'h21;
-        8'd52: byte_value = 8'h45;
-        8'd53: byte_value = 8'h94;
-        8'd54: byte_value = 8'h59;
-        8'd55: byte_value = 8'h45;
-        8'd56: byte_value = 8'h88;
-        8'd57: byte_value = 8'h00;
-        8'd58: byte_value = 8'h00;
-        8'd59: byte_value = 8'h00;
-        8'd60: byte_value = 8'h01;
-        8'd61: byte_value = 8'h00;
-        8'd62: byte_value = 8'h41;
-        8'd63: byte_value = 8'hc4;
-        8'd64: byte_value = 8'h00;
-        8'd65: byte_value = 8'h70;
-        default: byte_value = 8'h00;
-      endcase
+    selected_prefix = PREFIX_16X16;
+    if ((coded_width == 16'd8) && (coded_height == 16'd16)) begin
+      selected_prefix = PREFIX_8X16;
+    end else if ((coded_width == 16'd16) && (coded_height == 16'd8)) begin
+      selected_prefix = PREFIX_16X8;
+    end else if ((coded_width == 16'd24) && (coded_height == 16'd16)) begin
+      selected_prefix = PREFIX_24X16;
+    end else if ((coded_width == 16'd16) && (coded_height == 16'd24)) begin
+      selected_prefix = PREFIX_16X24;
+    end
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      index_q <= 8'd0;
+      active_q <= 1'b0;
+      done <= 1'b0;
+    end else if (clear) begin
+      index_q <= 8'd0;
+      active_q <= 1'b0;
+      done <= 1'b0;
+    end else begin
+      done <= 1'b0;
+
+      if (start) begin
+        index_q <= 8'd0;
+        active_q <= supported;
+        done <= !supported;
+      end else if (m_axis_valid && m_axis_ready) begin
+        if (m_axis_last) begin
+          index_q <= 8'd0;
+          active_q <= 1'b0;
+          done <= 1'b1;
+        end else begin
+          index_q <= index_q + 8'd1;
+        end
+      end
     end
   end
 endmodule
