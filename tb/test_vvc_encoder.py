@@ -424,16 +424,33 @@ async def collect_stream(dut, frames):
     assert int(dut.sampled_v.value) == samples[v_sample_index()]
     assert int(dut.luma_samples_q.value) == packed_rtl_luma_value(data)
     observed = bytearray()
+    symbol_records = []
     if dut.m_axis_valid.value == 1:
         observed.append(int(dut.m_axis_data.value))
 
     for cycle in range(8000):
         await RisingEdge(dut.clk)
         await ReadOnly()
+        if (
+            hasattr(dut, "ctu_symbol_valid")
+            and int(dut.ctu_symbol_valid.value) == 1
+            and int(dut.ctu_symbol_ready.value) == 1
+        ):
+            symbol_records.append(
+                (
+                    int(dut.ctu_symbol_kind.value),
+                    int(dut.ctu_symbol_data.value),
+                    int(dut.ctu_symbol_last.value),
+                )
+            )
         if dut.m_axis_valid.value == 1:
             observed.append(int(dut.m_axis_data.value))
             if dut.m_axis_last.value == 1:
                 break
+
+    if path := os.environ.get(f"FRAMEFORGE_RTL_CTU_SYMBOLS_OUT_{frames}F"):
+        lines = [f"{kind:02x} {data:08x} {last:d}\n" for kind, data, last in symbol_records]
+        Path(path).write_text("".join(lines))
 
     return bytes(observed), data
 

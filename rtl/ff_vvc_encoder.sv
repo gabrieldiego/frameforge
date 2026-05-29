@@ -48,10 +48,10 @@ module ff_vvc_encoder #(
   localparam logic [1:0] PALETTE_OUT_PREAMBLE = 2'd1;
   localparam logic [1:0] PALETTE_OUT_CABAC    = 2'd2;
   localparam logic [1:0] PALETTE_OUT_TRAIL    = 2'd3;
-  localparam logic [1:0] GENERATED_OUT_IDLE     = 2'd0;
-  localparam logic [1:0] GENERATED_OUT_PREAMBLE = 2'd1;
-  localparam logic [1:0] GENERATED_OUT_CABAC    = 2'd2;
-  localparam logic [1:0] GENERATED_OUT_TRAIL    = 2'd3;
+  localparam logic [2:0] GENERATED_OUT_IDLE     = 3'd0;
+  localparam logic [2:0] GENERATED_OUT_PREAMBLE = 3'd1;
+  localparam logic [2:0] GENERATED_OUT_CABAC    = 3'd2;
+  localparam logic [2:0] GENERATED_OUT_TRAIL    = 3'd3;
 
   logic [INPUT_COUNT_BITS - 1:0] input_count_q;
   logic [INPUT_COUNT_BITS - 1:0] input_len_q;
@@ -82,6 +82,11 @@ module ff_vvc_encoder #(
   logic [7:0]  m_axis_residual_kind;
   logic [31:0] m_axis_residual_data;
   logic        m_axis_residual_last;
+  logic        ctu_symbol_valid;
+  logic        ctu_symbol_ready;
+  logic [7:0]  ctu_symbol_kind;
+  logic [31:0] ctu_symbol_data;
+  logic        ctu_symbol_last;
   logic        cabac_symbol_ready;
   logic        cabac_stream_valid;
   logic        cabac_stream_ready;
@@ -94,11 +99,15 @@ module ff_vvc_encoder #(
   logic        palette_hold_valid_q;
   logic [7:0]  palette_hold_byte_q;
   logic        palette_tail_extra_q;
-  logic [1:0]  generated_out_state_q;
+  logic [2:0]  generated_out_state_q;
   logic        generated_slice_cra_q;
   logic        generated_hold_valid_q;
   logic [7:0]  generated_hold_byte_q;
   logic        generated_tail_extra_q;
+  logic [7:0]  generated_header_index_q;
+  logic [7:0]  generated_header_byte_w;
+  logic [7:0]  generated_header_byte_count_w;
+  logic        generated_header_supported_w;
   logic        ctu_has_palette_cu;
   logic [1:0]  chroma_subsample_x_w;
   logic [1:0]  chroma_subsample_y_w;
@@ -201,6 +210,15 @@ module ff_vvc_encoder #(
     .coded_height(coding_tree_coded_height)
   );
 
+  ff_vvc_annexb_header annexb_header (
+    .visible_width(visible_width),
+    .visible_height(visible_height),
+    .index(generated_header_index_q),
+    .byte_value(generated_header_byte_w),
+    .byte_count(generated_header_byte_count_w),
+    .supported(generated_header_supported_w)
+  );
+
   always @* begin
     palette_sample_valid = 1'b0;
     palette_sample_plane = 2'd0;
@@ -261,11 +279,11 @@ module ff_vvc_encoder #(
     .cb_rem(quant_cb_rem_q),
     .cr_rem(quant_cr_rem_q),
     .symbol_count(palette_symbol_count),
-    .s_axis_valid(ctu_has_palette_cu ? palette_stream_valid : m_axis_residual_valid),
+    .s_axis_valid(ctu_has_palette_cu ? palette_stream_valid : ctu_symbol_valid),
     .s_axis_ready(cabac_symbol_ready),
-    .s_axis_kind(ctu_has_palette_cu ? 8'd1 : m_axis_residual_kind),
-    .s_axis_data(ctu_has_palette_cu ? palette_stream_data : m_axis_residual_data),
-    .s_axis_last(ctu_has_palette_cu ? palette_stream_last : m_axis_residual_last),
+    .s_axis_kind(ctu_has_palette_cu ? 8'd1 : ctu_symbol_kind),
+    .s_axis_data(ctu_has_palette_cu ? palette_stream_data : ctu_symbol_data),
+    .s_axis_last(ctu_has_palette_cu ? palette_stream_last : ctu_symbol_last),
     .m_axis_ready(cabac_stream_ready),
     .m_axis_valid(cabac_stream_valid),
     .m_axis_data(cabac_stream_data),
@@ -316,6 +334,25 @@ module ff_vvc_encoder #(
     .busy()
   );
 
+  ff_vvc_420_ctu_symbolizer ctu_420_symbols (
+    .clk(clk),
+    .rst_n(rst_n),
+    .clear(start && !busy),
+    .start(cabac_start_q && !ctu_has_palette_cu),
+    .visible_width(visible_width),
+    .visible_height(visible_height),
+    .luma_abs_level(quant_luma_rem_q),
+    .luma_negative(quant_luma_rem_q != 5'd0),
+    .m_axis_valid(ctu_symbol_valid),
+    .m_axis_ready(ctu_symbol_ready),
+    .m_axis_kind(ctu_symbol_kind),
+    .m_axis_data(ctu_symbol_data),
+    .m_axis_last(ctu_symbol_last),
+    .busy()
+  );
+
+  assign ctu_symbol_ready = !ctu_has_palette_cu && cabac_symbol_ready;
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       input_count_q <= '0;
@@ -345,6 +382,7 @@ module ff_vvc_encoder #(
       generated_hold_valid_q <= 1'b0;
       generated_hold_byte_q <= 8'd0;
       generated_tail_extra_q <= 1'b0;
+      generated_header_index_q <= 8'd0;
     end else begin
       cabac_start_q <= 1'b0;
       if (start && !busy) begin
@@ -370,6 +408,7 @@ module ff_vvc_encoder #(
         generated_hold_valid_q <= 1'b0;
         generated_hold_byte_q <= 8'd0;
         generated_tail_extra_q <= 1'b0;
+        generated_header_index_q <= 8'd0;
       end else if (input_active_q && s_axis_valid && s_axis_ready) begin
         if (s_axis_last != (input_count_q == input_len_q - 1'b1)) begin
           input_error <= 1'b1;
@@ -418,6 +457,7 @@ module ff_vvc_encoder #(
         generated_hold_valid_q <= 1'b0;
         generated_hold_byte_q <= 8'd0;
         generated_tail_extra_q <= 1'b0;
+        generated_header_index_q <= 8'd0;
         m_axis_valid <= 1'b0;
         m_axis_data <= 8'd0;
         m_axis_last <= 1'b0;
@@ -481,10 +521,24 @@ module ff_vvc_encoder #(
           (!m_axis_valid || m_axis_ready)) begin
         case (generated_out_state_q)
           GENERATED_OUT_PREAMBLE: begin
-            m_axis_valid <= 1'b0;
-            m_axis_last <= 1'b0;
-            cabac_start_q <= 1'b1;
-            generated_out_state_q <= GENERATED_OUT_CABAC;
+            if (generated_header_supported_w && generated_header_index_q < generated_header_byte_count_w) begin
+              m_axis_valid <= 1'b1;
+              m_axis_data <= generated_header_byte_w;
+              m_axis_last <= 1'b0;
+              if (generated_header_index_q == generated_header_byte_count_w - 8'd1) begin
+                generated_header_index_q <= 8'd0;
+                cabac_start_q <= 1'b1;
+                generated_out_state_q <= GENERATED_OUT_CABAC;
+              end else begin
+                generated_header_index_q <= generated_header_index_q + 8'd1;
+              end
+            end else begin
+              m_axis_valid <= 1'b0;
+              m_axis_last <= 1'b0;
+              generated_header_index_q <= 8'd0;
+              cabac_start_q <= 1'b1;
+              generated_out_state_q <= GENERATED_OUT_CABAC;
+            end
           end
           GENERATED_OUT_CABAC: begin
             if (cabac_stream_valid) begin
