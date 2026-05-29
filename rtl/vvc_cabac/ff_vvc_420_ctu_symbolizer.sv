@@ -35,6 +35,7 @@ module ff_vvc_420_ctu_symbolizer (
   logic min_axis_visible;
   logic extra_luma_leaf_visible;
   logic extra_luma_leaf_is_below;
+  logic both_axes_extra_visible;
   logic small_square_visible;
   logic [4:0] rem_abs_value;
   logic [4:0] rem_code_value;
@@ -58,6 +59,8 @@ module ff_vvc_420_ctu_symbolizer (
     ((visible_height > BASE_VISIBLE_AXIS) && (visible_width == BASE_VISIBLE_AXIS));
   assign extra_luma_leaf_is_below =
     (visible_height > BASE_VISIBLE_AXIS) && (visible_width == BASE_VISIBLE_AXIS);
+  assign both_axes_extra_visible =
+    (visible_width > BASE_VISIBLE_AXIS) && (visible_height > BASE_VISIBLE_AXIS);
   assign small_square_visible =
     (visible_width <= MIN_VISIBLE_AXIS) && (visible_height <= MIN_VISIBLE_AXIS);
   assign luma_base_count = min_axis_visible ? 6'd5 : 6'd4;
@@ -67,12 +70,16 @@ module ff_vvc_420_ctu_symbolizer (
     ((luma_abs_level <= 5'd1) ? 6'd3 :
     ((luma_abs_level <= 5'd3) ? 6'd5 : 6'd7));
   assign luma_tail_count = min_axis_visible ? 6'd3 : 6'd1;
-  assign extra_luma_count = extra_luma_leaf_visible ? 6'd6 : 6'd0;
+  assign extra_luma_count =
+    both_axes_extra_visible ? 6'd16 :
+    !extra_luma_leaf_visible ? 6'd0 :
+    (extra_luma_leaf_is_below ? 6'd6 : 6'd5);
   assign chroma_start = luma_base_count + residual_count + luma_tail_count + extra_luma_count;
   assign chroma_leaf1_start = chroma_start + (min_axis_visible ? 6'd1 : 6'd2);
   assign chroma_leaf2_start = chroma_start + 6'd6;
   assign last_index =
     small_square_visible ? (chroma_start + 6'd4) :
+    both_axes_extra_visible ? (chroma_start + 6'd21) :
     extra_luma_leaf_visible ? (chroma_start + 6'd11) :
     (min_axis_visible ? (chroma_start + 6'd4) : (chroma_start + 6'd5));
   assign residual_index = index_q - residual_start;
@@ -140,6 +147,25 @@ module ff_vvc_420_ctu_symbolizer (
       symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd2, 7'd0, 1'b0, 1'b0};
     end else if (min_axis_visible && index_q == (residual_start + residual_count + 6'd2)) begin
       symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd0, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q >= (chroma_start - extra_luma_count) && index_q < chroma_start) begin
+      case (extra_luma_index)
+        6'd0:  symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd2, 7'd0, 1'b0, 1'b0};
+        6'd1:  symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd3, 7'd0, 1'b0, 1'b0};
+        6'd2:  symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd4, 7'd0, 1'b0, 1'b0};
+        6'd3:  symbol_next = {SYMBOL_BINS_EP, (32'd26 << 6) | 32'd6, 1'b0};
+        6'd4:  symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd5, 7'd0, 1'b0, 1'b0};
+        6'd5:  symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd2, 7'd0, 1'b0, 1'b0};
+        6'd6:  symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd3, 7'd0, 1'b0, 1'b0};
+        6'd7:  symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd21, 7'd0, 1'b0, 1'b0};
+        6'd8:  symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd4, 7'd0, 1'b0, 1'b0};
+        6'd9:  symbol_next = {SYMBOL_BINS_EP, (32'd26 << 6) | 32'd6, 1'b0};
+        6'd10: symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd5, 7'd0, 1'b0, 1'b0};
+        6'd11: symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd0, 7'd0, 1'b0, 1'b0};
+        6'd12: symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd21, 7'd0, 1'b0, 1'b0};
+        6'd13: symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd4, 7'd0, 1'b0, 1'b0};
+        6'd14: symbol_next = {SYMBOL_BINS_EP, (32'd26 << 6) | 32'd6, 1'b0};
+        default: symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd5, 7'd0, 1'b0, 1'b0};
+      endcase
     end else if (extra_luma_leaf_visible && index_q >= (chroma_start - extra_luma_count) && index_q < chroma_start) begin
       case (extra_luma_index)
         6'd0: symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd2, 7'd0, 1'b0, 1'b0};
@@ -160,13 +186,56 @@ module ff_vvc_420_ctu_symbolizer (
       symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd15, 7'd0, 1'b0, 1'b0};
     end else if (small_square_visible && index_q == chroma_start + 6'd3) begin
       symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd16, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd1, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start + 6'd1) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd13, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start + 6'd2) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd14, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start + 6'd3) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd15, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start + 6'd4) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd16, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start + 6'd5) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd2, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start + 6'd6) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd0, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start + 6'd7) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd13, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start + 6'd8) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd14, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start + 6'd9) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd15, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start + 6'd10) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd16, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start + 6'd11) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd2, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start + 6'd12) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd0, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start + 6'd13) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd13, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start + 6'd14) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd14, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start + 6'd15) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd15, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start + 6'd16) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd16, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start + 6'd17) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd13, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start + 6'd18) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd14, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start + 6'd19) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd15, 7'd0, 1'b0, 1'b0};
+    end else if (both_axes_extra_visible && index_q == chroma_start + 6'd20) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd16, 7'd0, 1'b0, 1'b0};
     end else if (!min_axis_visible && index_q == chroma_start) begin
       symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd1, 7'd0, 1'b0, 1'b0};
     end else if (min_axis_visible && index_q == chroma_start) begin
       symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd13, 7'd0, 1'b0, 1'b0};
     end else if (!min_axis_visible && index_q == chroma_start + 6'd1) begin
       symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd13, 7'd0, 1'b0, 1'b0};
-    end else if (index_q >= chroma_leaf1_start && index_q < chroma_leaf1_start + 6'd4) begin
+    end else if (index_q >= chroma_leaf1_start &&
+                 index_q < chroma_leaf1_start + (extra_luma_leaf_visible ? 6'd3 : 6'd4)) begin
       case (index_q - chroma_leaf1_start)
         6'd0: symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd14, 7'd0, 1'b0, 1'b0};
         6'd1: symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd15, 7'd0, 1'b0, 1'b0};
