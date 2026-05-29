@@ -36,6 +36,7 @@ module ff_vvc_420_ctu_symbolizer (
   logic extra_luma_leaf_visible;
   logic extra_luma_leaf_is_below;
   logic both_axes_extra_visible;
+  logic wide_luma_leaf_visible;
   logic small_square_visible;
   logic [4:0] rem_abs_value;
   logic [4:0] rem_code_value;
@@ -47,6 +48,9 @@ module ff_vvc_420_ctu_symbolizer (
   logic [5:0] residual_count;
   logic [5:0] residual_start;
   logic [5:0] residual_index;
+  logic [5:0] wide_leaf_chroma_start;
+  logic [5:0] wide_leaf_residual_count;
+  logic [5:0] wide_leaf_residual_index;
   logic [5:0] extra_luma_index;
   logic [40:0] symbol_next;
 
@@ -61,6 +65,8 @@ module ff_vvc_420_ctu_symbolizer (
     (visible_height > BASE_VISIBLE_AXIS) && (visible_width == BASE_VISIBLE_AXIS);
   assign both_axes_extra_visible =
     (visible_width > BASE_VISIBLE_AXIS) && (visible_height > BASE_VISIBLE_AXIS);
+  assign wide_luma_leaf_visible =
+    (visible_width == 16'd32) && (visible_height == BASE_VISIBLE_AXIS);
   assign small_square_visible =
     (visible_width <= MIN_VISIBLE_AXIS) && (visible_height <= MIN_VISIBLE_AXIS);
   assign luma_base_count = min_axis_visible ? 6'd5 : 6'd4;
@@ -77,12 +83,16 @@ module ff_vvc_420_ctu_symbolizer (
   assign chroma_start = luma_base_count + residual_count + luma_tail_count + extra_luma_count;
   assign chroma_leaf1_start = chroma_start + (min_axis_visible ? 6'd1 : 6'd2);
   assign chroma_leaf2_start = chroma_start + 6'd6;
+  assign wide_leaf_residual_count = residual_count + ((luma_abs_level == 5'd0) ? 6'd0 : 6'd1);
+  assign wide_leaf_chroma_start = 6'd5 + wide_leaf_residual_count;
   assign last_index =
+    wide_luma_leaf_visible ? (wide_leaf_chroma_start + 6'd6) :
     small_square_visible ? (chroma_start + 6'd4) :
     both_axes_extra_visible ? (chroma_start + 6'd21) :
     extra_luma_leaf_visible ? (chroma_start + 6'd11) :
     (min_axis_visible ? (chroma_start + 6'd4) : (chroma_start + 6'd5));
   assign residual_index = index_q - residual_start;
+  assign wide_leaf_residual_index = index_q - 6'd5;
   assign extra_luma_index = index_q - (chroma_start - extra_luma_count);
 
   assign rem_abs_value = (luma_abs_level - 5'd4) >> 1;
@@ -105,7 +115,43 @@ module ff_vvc_420_ctu_symbolizer (
   always_comb begin
     symbol_next = {SYMBOL_BIN_TRM, 31'd0, 1'b1, 1'b1};
 
-    if (min_axis_visible && index_q == 6'd0) begin
+    if (wide_luma_leaf_visible && index_q == 6'd0) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd20, 7'd0, 1'b0, 1'b0};
+    end else if (wide_luma_leaf_visible && index_q == 6'd1) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd3, 7'd0, 1'b0, 1'b0};
+    end else if (wide_luma_leaf_visible && index_q == 6'd2) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd4, 7'd0, 1'b0, 1'b0};
+    end else if (wide_luma_leaf_visible && index_q == 6'd3) begin
+      symbol_next = {SYMBOL_BINS_EP, (32'd26 << 6) | 32'd6, 1'b0};
+    end else if (wide_luma_leaf_visible && index_q == 6'd4) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd5, 7'd0, luma_abs_level != 5'd0, 1'b0};
+    end else if (wide_luma_leaf_visible &&
+                 index_q >= 6'd5 && index_q < (6'd5 + wide_leaf_residual_count)) begin
+      case (wide_leaf_residual_index)
+        6'd0: symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd17, 7'd0, 1'b0, 1'b0};
+        6'd1: symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd9, 7'd0, residual_count == 6'd2, 1'b0};
+        6'd2: symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd10, 7'd0, luma_abs_level > 5'd1, 1'b0};
+        6'd3: symbol_next =
+          (residual_count == 6'd3) ? {SYMBOL_BIN_EP, 31'd0, luma_negative, 1'b0} :
+          {SYMBOL_BIN_CTX, 19'd0, 5'd11, 7'd0, luma_abs_level[0], 1'b0};
+        6'd4: symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd12, 7'd0, luma_abs_level > 5'd3, 1'b0};
+        6'd5: symbol_next = {SYMBOL_BINS_EP, (rem_prefix_pattern << 6) | {26'd0, rem_prefix_count}, 1'b0};
+        6'd6: symbol_next = {SYMBOL_BINS_EP, (rem_suffix_pattern << 6) | {26'd0, rem_suffix_count}, 1'b0};
+        default: symbol_next = {SYMBOL_BIN_EP, 31'd0, luma_negative, 1'b0};
+      endcase
+    end else if (wide_luma_leaf_visible && index_q == wide_leaf_chroma_start) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd20, 7'd0, 1'b0, 1'b0};
+    end else if (wide_luma_leaf_visible && index_q == wide_leaf_chroma_start + 6'd1) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd3, 7'd0, 1'b0, 1'b0};
+    end else if (wide_luma_leaf_visible && index_q == wide_leaf_chroma_start + 6'd2) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd13, 7'd0, 1'b0, 1'b0};
+    end else if (wide_luma_leaf_visible && index_q == wide_leaf_chroma_start + 6'd3) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd14, 7'd0, 1'b0, 1'b0};
+    end else if (wide_luma_leaf_visible && index_q == wide_leaf_chroma_start + 6'd4) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd15, 7'd0, 1'b0, 1'b0};
+    end else if (wide_luma_leaf_visible && index_q == wide_leaf_chroma_start + 6'd5) begin
+      symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd16, 7'd0, 1'b0, 1'b0};
+    end else if (min_axis_visible && index_q == 6'd0) begin
       symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd2, 7'd0, 1'b0, 1'b0};
     end else if (min_axis_visible && index_q == 6'd1) begin
       symbol_next = {SYMBOL_BIN_CTX, 19'd0, 5'd3, 7'd0, 1'b0, 1'b0};

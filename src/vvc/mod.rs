@@ -78,7 +78,8 @@ pub struct VvcEncodeParams {
 /// not a claim about all legal VVC profiles or future FrameForge codec paths.
 pub const VVC_CODED_DIMENSION_GRANULARITY: usize = 8;
 const VVC_CTU_SIZE: usize = 64;
-const VVC_CURRENT_MAX_LUMA_LEAF_SIZE: u16 = 16;
+const VVC_CURRENT_MAX_LUMA_LEAF_SIZE: u16 = 32;
+const VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT: u16 = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VvcVideoGeometry {
@@ -3136,7 +3137,7 @@ impl VvcCtuCabacOp {
         }
         if node.fits_visible(visible_width, visible_height)
             && node.width <= max_leaf_size
-            && node.height <= max_leaf_size
+            && node.height <= VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT
         {
             ops.push(Self::LumaLeafWithSplitCtx {
                 node,
@@ -3158,8 +3159,18 @@ impl VvcCtuCabacOp {
 
         debug_assert!(
             node.width > VVC_CURRENT_MAX_LUMA_LEAF_SIZE
-                || node.height > VVC_CURRENT_MAX_LUMA_LEAF_SIZE
+                || node.height > VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT
         );
+        if node.mtt_depth > 0 {
+            Self::append_visible_luma_mtt_subtree(
+                ops,
+                node,
+                visible_width,
+                visible_height,
+                max_leaf_size,
+            );
+            return;
+        }
         let left_deeper = false;
         let above_deeper = false;
         ops.push(Self::QtSplit {
@@ -3182,6 +3193,39 @@ impl VvcCtuCabacOp {
             Self::append_visible_luma_subtree(
                 ops,
                 node.qt_child(child_idx),
+                visible_width,
+                visible_height,
+                max_leaf_size,
+            );
+        }
+    }
+
+    fn append_visible_luma_mtt_subtree(
+        ops: &mut Vec<Self>,
+        node: VvcCodingTreeNode,
+        visible_width: u16,
+        visible_height: u16,
+        max_leaf_size: u16,
+    ) {
+        let vertical = node.width > max_leaf_size
+            && (node.height <= max_leaf_size || node.width >= node.height);
+        ops.push(Self::BtSplit {
+            node,
+            vertical,
+            split_ctx: VvcSplitCtxInput::bt_leaf_without_smaller_neighbours().split_cu_flag_ctx(),
+            write_qt_flag: true,
+            qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node)
+                .split_qt_flag_ctx(),
+            write_mtt_vertical_flag: true,
+            mtt_vertical_ctx: 0,
+            write_binary_flag: false,
+            mtt_binary_ctx: if vertical { 3 } else { 1 },
+            mtt_binary_value: true,
+        });
+        for child_idx in 0..2 {
+            Self::append_visible_luma_subtree(
+                ops,
+                node.mtt_child(vertical, child_idx),
                 visible_width,
                 visible_height,
                 max_leaf_size,
@@ -3828,6 +3872,8 @@ impl VvcCtuCabacGenerator {
     fn visible_chroma_leaf_split_ctx(node: VvcCodingTreeNode) -> u8 {
         if node.width == 4 || node.height == 4 {
             0
+        } else if node.mtt_depth > 0 {
+            3
         } else if node.y >= 8 {
             7
         } else {

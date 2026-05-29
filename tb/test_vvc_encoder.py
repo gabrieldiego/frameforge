@@ -203,6 +203,8 @@ def vvc_luma_reconstruction_from_sample(sample):
         residual_delta = (rem * 57 + 8) // 16
     elif min(rtl_visible_width(), rtl_visible_height()) == 8 and max(rtl_visible_width(), rtl_visible_height()) >= 16:
         residual_delta = (rem * 40) // 16
+    elif min(rtl_visible_width(), rtl_visible_height()) == 16 and max(rtl_visible_width(), rtl_visible_height()) >= 32:
+        residual_delta = (rem * 20 + 8) // 16
     else:
         residual_delta = (rem * 28 + 8) // 16
     return max(0, min(255, 128 - residual_delta))
