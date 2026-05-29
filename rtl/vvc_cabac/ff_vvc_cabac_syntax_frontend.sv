@@ -47,17 +47,18 @@ module ff_vvc_cabac_syntax_frontend (
 
   localparam logic [3:0] ST_IDLE = 4'd0;
   localparam logic [3:0] ST_SPLIT = 4'd1;
-  localparam logic [3:0] ST_MPM = 4'd2;
-  localparam logic [3:0] ST_LUMA_MODE = 4'd3;
-  localparam logic [3:0] ST_CBF = 4'd4;
-  localparam logic [3:0] ST_LAST_X = 4'd5;
-  localparam logic [3:0] ST_LAST_Y = 4'd6;
-  localparam logic [3:0] ST_GTX0 = 4'd7;
-  localparam logic [3:0] ST_PAR = 4'd8;
-  localparam logic [3:0] ST_GTX32 = 4'd9;
-  localparam logic [3:0] ST_REM_PREFIX = 4'd10;
-  localparam logic [3:0] ST_REM_SUFFIX = 4'd11;
-  localparam logic [3:0] ST_SIGN = 4'd12;
+  localparam logic [3:0] ST_SPLIT_LEAF = 4'd2;
+  localparam logic [3:0] ST_MPM = 4'd3;
+  localparam logic [3:0] ST_LUMA_MODE = 4'd4;
+  localparam logic [3:0] ST_CBF = 4'd5;
+  localparam logic [3:0] ST_LAST_X = 4'd6;
+  localparam logic [3:0] ST_LAST_Y = 4'd7;
+  localparam logic [3:0] ST_GTX0 = 4'd8;
+  localparam logic [3:0] ST_PAR = 4'd9;
+  localparam logic [3:0] ST_GTX32 = 4'd10;
+  localparam logic [3:0] ST_REM_PREFIX = 4'd11;
+  localparam logic [3:0] ST_REM_SUFFIX = 4'd12;
+  localparam logic [3:0] ST_SIGN = 4'd13;
 
   logic ctu_path_active_q;
   logic [3:0] ctu_state_q;
@@ -76,6 +77,8 @@ module ff_vvc_cabac_syntax_frontend (
   logic [31:0] ctu_symbol_data;
   logic ctu_symbol_last;
   logic ctu_symbol_valid;
+  logic [4:0] first_luma_split_ctx;
+  logic split_leaf_needed;
   logic raw_path_selected;
   logic ctu_transfer;
   logic luma_only_q;
@@ -90,6 +93,11 @@ module ff_vvc_cabac_syntax_frontend (
   assign last_sig_y_ctx =
     (ctu_visible_height >= 16'd32) ? CTX_LAST_SIG_Y_PREFIX_10 :
     ((ctu_visible_height >= 16'd16) ? CTX_LAST_SIG_Y_PREFIX_6 : CTX_LAST_SIG_Y_PREFIX_3);
+  assign first_luma_split_ctx =
+    (((ctu_visible_width == 16'd8) && (ctu_visible_height >= 16'd16)) ||
+     ((ctu_visible_height == 16'd8) && (ctu_visible_width >= 16'd16))) ?
+    5'd2 : CTX_SPLIT_FLAG_6;
+  assign split_leaf_needed = first_luma_split_ctx == 5'd2;
   assign rem_abs_value = (luma_abs_q - 5'd4) >> 1;
   assign rem_code_value = rem_abs_value - 5'd5;
   assign rem_prefix_extra_len =
@@ -120,7 +128,10 @@ module ff_vvc_cabac_syntax_frontend (
     ctu_symbol_last = 1'b0;
     case (ctu_state_q)
       ST_SPLIT: begin
-        ctu_symbol_data = {19'd0, CTX_SPLIT_FLAG_6, 7'd0, 1'b0};
+        ctu_symbol_data = {19'd0, first_luma_split_ctx, 7'd0, 1'b0};
+      end
+      ST_SPLIT_LEAF: begin
+        ctu_symbol_data = {19'd0, 5'd3, 7'd0, 1'b0};
       end
       ST_MPM: begin
         ctu_symbol_data = {19'd0, CTX_INTRA_LUMA_MPM_FLAG, 7'd0, 1'b0};
@@ -191,7 +202,8 @@ module ff_vvc_cabac_syntax_frontend (
         luma_only_q <= ctu_luma_only;
       end else if (ctu_transfer) begin
         case (ctu_state_q)
-          ST_SPLIT: ctu_state_q <= ST_MPM;
+          ST_SPLIT: ctu_state_q <= split_leaf_needed ? ST_SPLIT_LEAF : ST_MPM;
+          ST_SPLIT_LEAF: ctu_state_q <= ST_MPM;
           ST_MPM: ctu_state_q <= ST_LUMA_MODE;
           ST_LUMA_MODE: ctu_state_q <= ST_CBF;
           ST_CBF: begin

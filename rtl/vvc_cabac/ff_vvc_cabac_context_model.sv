@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 module ff_vvc_cabac_context_model #(
-  parameter int VVC_CTX_COUNT = 21,
+  parameter int VVC_CTX_COUNT = 22,
   parameter int VVC_CTX_QP = 32
 ) (
   input  logic        clk,
@@ -25,7 +25,7 @@ module ff_vvc_cabac_context_model #(
   localparam int VVC_CTX_SPLIT_FLAG_0             = 0;
   localparam int VVC_CTX_SPLIT_FLAG_6             = 1;
   localparam int VVC_CTX_SPLIT_QT_FLAG_3          = 2;
-  localparam int VVC_CTX_MTT_SPLIT_VERTICAL_3     = 3;
+  localparam int VVC_CTX_SPLIT_FLAG_3             = 3;
   localparam int VVC_CTX_INTRA_LUMA_MPM_FLAG      = 4;
   localparam int VVC_CTX_QT_CBF_Y_0               = 5;
   localparam int VVC_CTX_LAST_SIG_X_PREFIX_3      = 6;
@@ -36,23 +36,25 @@ module ff_vvc_cabac_context_model #(
   localparam int VVC_CTX_PAR_LEVEL_FLAG_0         = 11;
   localparam int VVC_CTX_ABS_LEVEL_GTX_FLAG_32    = 12;
   localparam int VVC_CTX_CCLM_MODE_FLAG           = 13;
-  localparam int VVC_CTX_INTRA_CHROMA_PRED_MODE_1 = 14;
+  localparam int VVC_CTX_INTRA_CHROMA_PRED_MODE_0 = 14;
   localparam int VVC_CTX_QT_CBF_CB_0              = 15;
   localparam int VVC_CTX_QT_CBF_CR_0              = 16;
   localparam int VVC_CTX_LAST_SIG_X_PREFIX_10     = 17;
   localparam int VVC_CTX_LAST_SIG_Y_PREFIX_10     = 18;
   localparam int VVC_CTX_SPLIT_FLAG_7             = 19;
   localparam int VVC_CTX_SPLIT_QT_FLAG_0          = 20;
+  localparam int VVC_CTX_MULTI_REF_LINE_IDX_0     = 21;
   localparam logic [4:0] VVC_CTX_COUNT_LIMIT = VVC_CTX_COUNT;
 
   localparam logic [(VVC_CTX_COUNT * 8) - 1:0] INIT_VALUE_LUT = {
+    8'd25, // 21: MultiRefLineIdx(0)
     8'd27, // 20: SplitQtFlag(0)
     8'd30, // 19: SplitFlag(7)
     8'd14, // 18: LastSigCoeffYPrefix(10)
     8'd14, // 17: LastSigCoeffXPrefix(10)
     8'd33, // 16: QtCbfCr(0)
     8'd12, // 15: QtCbfCb(0)
-    8'd34, // 14: IntraChromaPredMode(1)
+    8'd34, // 14: IntraChromaPredMode(0)
     8'd59, // 13: CclmModeFlag
     8'd25, // 12: AbsLevelGtxFlag(32)
     8'd33, // 11: ParLevelFlag(0)
@@ -63,19 +65,20 @@ module ff_vvc_cabac_context_model #(
     8'd21, //  6: LastSigCoeffXPrefix(3)
     8'd15, //  5: QtCbfY(0)
     8'd45, //  4: IntraLumaMpmFlag
-    8'd27, //  3: MttSplitCuVerticalFlag(3)
+    8'd27, //  3: SplitFlag(3)
     8'd25, //  2: SplitQtFlag(3)
     8'd20, //  1: SplitFlag(6)
     8'd19  //  0: SplitFlag(0)
   };
   localparam logic [(VVC_CTX_COUNT * 4) - 1:0] LOG2_WINDOW_LUT = {
+    4'd5,  // 21: MultiRefLineIdx(0)
     4'd0,  // 20: SplitQtFlag(0)
     4'd9,  // 19: SplitFlag(7)
     4'd5,  // 18: LastSigCoeffYPrefix(10)
     4'd4,  // 17: LastSigCoeffXPrefix(10)
     4'd2,  // 16: QtCbfCr(0)
     4'd5,  // 15: QtCbfCb(0)
-    4'd5,  // 14: IntraChromaPredMode(1)
+    4'd5,  // 14: IntraChromaPredMode(0)
     4'd4,  // 13: CclmModeFlag
     4'd1,  // 12: AbsLevelGtxFlag(32)
     4'd8,  // 11: ParLevelFlag(0)
@@ -86,7 +89,7 @@ module ff_vvc_cabac_context_model #(
     4'd5,  //  6: LastSigCoeffXPrefix(3)
     4'd5,  //  5: QtCbfY(0)
     4'd6,  //  4: IntraLumaMpmFlag
-    4'd8,  //  3: MttSplitCuVerticalFlag(3)
+    4'd8,  //  3: SplitFlag(3)
     4'd12, //  2: SplitQtFlag(3)
     4'd5,  //  1: SplitFlag(6)
     4'd12  //  0: SplitFlag(0)

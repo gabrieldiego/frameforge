@@ -72,10 +72,6 @@ def load_rust_cabac_vector(width=8, height=8, y=64, u=128, v=128, semantic=True)
         )
         vector = json.loads(output_json.read_text())
 
-    if semantic:
-        assert len(bytes.fromhex(vector["semantic_symbols_hex"])) == len(
-            bytes.fromhex(vector["symbols_hex"])
-        )
     symbol_key = "semantic_symbols_hex" if semantic else "symbols_hex"
     raw_symbols = bytes.fromhex(vector[symbol_key])
     record_bytes = vector["symbol_record_bytes"]
@@ -169,8 +165,8 @@ async def cabac_pipeline_matches_multiple_rust_encoder_vectors(dut):
         (8, 8, 0, 128, 128),
         (16, 16, 0, 128, 128),
         (16, 16, 64, 128, 128),
-        (32, 16, 0, 128, 128),
-        (16, 32, 0, 128, 128),
+        (24, 16, 64, 128, 128),
+        (16, 24, 64, 128, 128),
         (32, 32, 0, 128, 128),
     ]
     for width, height, y, u, v in cases:

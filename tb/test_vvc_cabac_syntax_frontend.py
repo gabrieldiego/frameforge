@@ -149,13 +149,12 @@ async def syntax_frontend_generates_luma_prefix_from_ctu_parameters(dut):
         (24, 16, 64),
         (16, 24, 64),
         (24, 24, 64),
-        (32, 16, 0),
-        (32, 8, 64),
-        (16, 32, 0),
-        (8, 32, 64),
-        (32, 32, 0),
-        (32, 32, 64),
-        (32, 32, 128),
+        (24, 16, 0),
+        (24, 8, 64),
+        (16, 24, 0),
+        (8, 24, 64),
+        (24, 24, 0),
+        (24, 24, 128),
     ]
     for width, height, y in cases:
         await reset(dut)

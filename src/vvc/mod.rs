@@ -930,7 +930,7 @@ impl VvcCabacContext {
             VvcCabacContext::SplitFlag(0) => Some(0),
             VvcCabacContext::SplitFlag(6) => Some(1),
             VvcCabacContext::SplitQtFlag(3) => Some(2),
-            VvcCabacContext::MttSplitCuVerticalFlag(3) => Some(3),
+            VvcCabacContext::SplitFlag(3) => Some(3),
             VvcCabacContext::IntraLumaMpmFlag => Some(4),
             VvcCabacContext::QtCbfY(0) => Some(5),
             VvcCabacContext::LastSigCoeffXPrefix(3) => Some(6),
@@ -948,6 +948,7 @@ impl VvcCabacContext {
             VvcCabacContext::LastSigCoeffYPrefix(10) => Some(18),
             VvcCabacContext::SplitFlag(7) => Some(19),
             VvcCabacContext::SplitQtFlag(0) => Some(20),
+            VvcCabacContext::MultiRefLineIdx(0) => Some(21),
             _ => None,
         }
     }
