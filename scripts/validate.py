@@ -4,13 +4,11 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import os
 import re
 import subprocess
 import sys
-import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,12 +21,6 @@ RTL_SUPPORTED_FORMAT = "yuv420p8"
 # the RTL coded-dimension logic. It is the current validation-path coded-picture
 # luma dimension alignment, not a general statement about every VVC profile.
 VVC_CODED_DIMENSION_GRANULARITY = 8
-VVC_32X32_SCRIPTED_RECON_ZLIB_B64 = (
-    "eNo1lOlz2gYWwP+wnZ1JN20d3wZs8AlufNvggI0xp4QAXUhCAt23QAgf2DXEjl2TJj5qp023s5N2nWzafOp/UmU6+768efN7b945b97zxT8e9Q/1PXrU75vbyOsX9zdne067c9K5ePP+0+//nRv71z+/eDLU/1XfSGA+DEqd73udlsufn17e//bx48OU58njx32DwyPeqdByFGSbJ5120z44OT1/efvzrw8Pk+Njg31f948FQktrm4kCozb3Wo2663B2cfnq7pd3M7Mz/uG+J57gWjSeBFFGNGynrqlmq3102D69fvvN0uqCf7Df9zSWBiCEYHjNbtVllpUNXRLrz1+HY4mtxYmxyZXdAoITFMPrzp7Fl1GiQsAw0+juZCBwe3EmuJHBqApFVjjdaRkMnIcgIJVGxCZQIqlSYn01CpAsx3zmdl3AgVRyNx6LA6SIkJzEoqlYPE9LMsdURd2UyPzudiy6GdlKlwhOMhqWgGbTxZpmKoKg6EolH4+sry4vr0a2U1nb2T9wNLoEYZxuabKi6wKeiizOB+dCT1fDz2LnZ92jls6RRIWXVVlSjM98LRgYH/dPzy8sLf/0Q++kqQocx3O1Wo2TdF2icuvTo4NDo17/1Gzw4T833YYsKppcLWNEVdJNtQZtBNx9DQyPeiam/nh4c2bLsmGpNFwqs6ppajVo3ff1476BgYEhT+DTh7cXLU2rNzQaRijJsAy5klsa/fLL/qGBJwNj/k8ffu4dWmajabAEybrlyTU0MT/yVd/w6FC/y39/eNtr182G01B5lhNEoUZCW/OewWGvb2x42Bt4/+7+fN/UzGbL1gSGIimqXIgvTfrGA5N+t8epX3581bFlQbZaLYvHi0V3S2h2c2Fudi4UCgWDodcvXxzqNYqWGo7JIkAepWuVUjKyvLi4sraxsb7WPmo3pTJUICVLZzGoWK5y1XJ+NxqOxBLpTDqlmM06V0wkIEbRBBrHiQpDE3BuN76TAmG8TBCsrlXS4XAS41VFqFIYgpUJrAhkcgWM5hU9Twg8HFtY2irVZE3lqRKYRwgCLRRKeIVT7YNEHkeTyzOhCEgJiiqQUBZEqQqB4WSVk8yDzrOdTHJjzj+zlkIYUeYIyD24WpUiKqwoytbhc7eL1ZDfN7kQBQhOZIlSiWB5lqY5Rde0xvGL+VBw2u/zTsys7KKsxJEIRgsCW2WVesOyWt3edMDn9Xi93olQDOYVnkRxxuWs6M7TttsXNwHfyMiYz+fxTG/CoiZQLuc5llPs/X3H+fb7N+UyjqEwDIsG657ycRdDEbhULBRIjqlJerNdLBagPAAACF3BKYbWISgP5rKZLEKTnzVRcDEI5HIIVdrdjm4Bf4dDBXcq4ZWV8BZFEp8zYGU0sTg793S5VmXoClEmSSIVGg9MzV49V1mOQCo1IjntC0xMv+rqnMiRZby0HZyanZr983/3vau7872DI5OEEQR5+PDT+cu3t+ff9U5butnav393d3z247/veuffnR53L287l0faXu/uuvvti9Pui96d45iqfXp7c/X6+urq+ubOUGRFO769+7+gIpECgK1YNLwTj0W+CcYxKAFhUCGzk0zEIqtPV7Kp7RJD0flUCkgnk5ubRSBeJBAsn8zAKIZnCyyeBPOJBJCGSLrKILhMpXPZ6LMMSPCSxDPZCrybL2UyWZBU65amrOey8SJVJrMAYbaatrW4mQJABC+CRdpqNZuNlc00mAOLMIzVjLpZt1BSUAVWNjXJ2Dvc39tXlfqho5t2XTedA/eTHtoH5x3bsBynYTsNTThpdy67Tc1oNnVdkwX64uLl1eWRZZqGqsiiwL66vr5+3TUNXXNtSRT/AhplPes="
-)
-VVC_32X32_SCRIPTED_RECON = zlib.decompress(
-    base64.b64decode(VVC_32X32_SCRIPTED_RECON_ZLIB_B64)
-)
 SUPPORTED_FORMATS = {
     "i420": "yuv420p8",
     "yuv420p8": "yuv420p8",
@@ -365,35 +357,33 @@ def sha256(path: Path) -> str:
 def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes:
     if format_chroma_sampling(info.fmt) == "444":
         return palette_444_tile_reconstruction(input_path, info)
-    if is_vvc_16x16_generated_path(info):
-        return cropped_vvc_16x16_generated_recon(info) * info.frames
-    if is_vvc_32x32_generated_path(info):
-        return cropped_vvc_32x32_generated_recon(info) * info.frames
-    if is_vvc_64x64_generated_path(info):
-        return cropped_vvc_64x64_generated_recon(info) * info.frames
     frame = normalized_first_frame_to_yuv420p8(input_path, info)
     luma_len = info.width * info.height
     chroma_len = luma_len // 4
-    chroma = reconstructed_chroma(frame[luma_len], frame[luma_len + chroma_len])
     if uses_capacity_tu_grid(frame, info):
-        recon = bytearray(luma_len)
-        for origin_y in range(0, info.height, 4):
-            for origin_x in range(0, info.width, 4):
-                block = residual_luma_block(frame, info, origin_x, origin_y)
-                y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(block)))
-                width = min(4, info.width - origin_x)
-                for y_off in range(min(4, info.height - origin_y)):
-                    row = (origin_y + y_off) * info.width + origin_x
-                    recon[row : row + width] = bytes([y] * width)
-        recon.extend([chroma] * chroma_len)
-        recon.extend([chroma] * chroma_len)
-        return bytes(recon) * info.frames
-
-    y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(first_residual_luma_block(frame, info))))
+        luma = capacity_tu_grid_reconstruction(frame, info)
+        chroma = reconstructed_chroma(frame[luma_len], frame[luma_len + chroma_len])
+    else:
+        luma = bytes(
+            [vvc_luma_reconstruction_from_sample(frame[0] if frame else 0)] * luma_len
+        )
+        chroma = 128
     # This is the reconstruction of the emitted VVC bitstream, not the
     # original input. Keep this matched to VTM decode output after quantization.
-    frame = bytes([y] * luma_len + [chroma] * chroma_len + [chroma] * chroma_len)
-    return frame * info.frames
+    return bytes(luma + bytes([chroma] * chroma_len) + bytes([chroma] * chroma_len)) * info.frames
+
+
+def capacity_tu_grid_reconstruction(frame: bytes, info: InputInfo) -> bytes:
+    recon = bytearray(info.width * info.height)
+    for origin_y in range(0, info.height, 4):
+        for origin_x in range(0, info.width, 4):
+            block = residual_luma_block(frame, info, origin_x, origin_y)
+            y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(block)))
+            width = min(4, info.width - origin_x)
+            for y_off in range(min(4, info.height - origin_y)):
+                row = (origin_y + y_off) * info.width + origin_x
+                recon[row : row + width] = bytes([y] * width)
+    return bytes(recon)
 
 
 def palette_444_tile_reconstruction(input_path: Path, info: InputInfo) -> bytes:
@@ -424,36 +414,11 @@ def palette_444_tile_reconstruction(input_path: Path, info: InputInfo) -> bytes:
 
 
 def uses_capacity_tu_grid(frame: bytes, info: InputInfo) -> bool:
-    return not (
-        (info.width, info.height) == (8, 8)
-        or is_vvc_16x16_generated_path(info)
-        or is_vvc_32x32_generated_path(info)
-        or is_vvc_64x64_generated_path(info)
-    )
-
-
-def cropped_vvc_16x16_generated_recon(info: InputInfo) -> bytes:
-    luma_len = info.width * info.height
-    chroma_len = luma_len // 4
-    return bytes([100] * luma_len + [128] * chroma_len + [128] * chroma_len)
-
-
-def cropped_vvc_32x32_generated_recon(info: InputInfo) -> bytes:
-    return crop_yuv420p8_frame(
-        VVC_32X32_SCRIPTED_RECON,
-        coded_width=32,
-        coded_height=32,
-        visible_width=info.width,
-        visible_height=info.height,
-    )
-
-
-def cropped_vvc_64x64_generated_recon(info: InputInfo) -> bytes:
-    # The current 64x64 path emits planar intra prediction with no residuals.
-    # VTM reconstructs the neutral 8-bit sample value for Y, Cb, and Cr.
-    luma_len = info.width * info.height
-    chroma_len = luma_len // 4
-    return bytes([128] * (luma_len + 2 * chroma_len))
+    # The standards-facing path emits a single residual level for each luma leaf
+    # of the generated coding tree. Keep per-4x4 reconstruction only for the
+    # raw capacity-grid path that is not currently VTM-facing.
+    del frame
+    return not vtm_decode_supported(Path("unused"), info)
 
 
 def tile_yuv420p8_frame(
@@ -548,6 +513,20 @@ def quantized_luma_dc(dc_coeff: int) -> int:
 
 def inverse_transform_luma_dc(dc_coeff: int) -> int:
     return max(0, min(255, dc_coeff + 114))
+
+
+def quantized_luma_remainder(sample: int) -> int:
+    return min(
+        range(17),
+        key=lambda rem: abs((((16 - rem) * 114 + 8) // 16) - sample),
+    )
+
+
+def vvc_luma_reconstruction_from_sample(sample: int) -> int:
+    rem = quantized_luma_remainder(sample)
+    # Mirrors the currently emitted VVC residual subset: planar intra prediction
+    # around the neutral sample with one negative DC coefficient level.
+    return max(0, min(255, 128 - ((rem * 28 + 8) // 16)))
 
 
 def reconstructed_chroma(u: int, v: int) -> int:

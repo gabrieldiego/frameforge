@@ -14,6 +14,21 @@ pub(super) struct VvcCabacDumpContextEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct VvcCabacDumpBinEngineEvent {
+    pub(super) kind: u8,
+    pub(super) bin: bool,
+    pub(super) lps: u16,
+    pub(super) mps: bool,
+    pub(super) low_in: u32,
+    pub(super) range_in: u16,
+    pub(super) bits_left_in: u8,
+    pub(super) low_out: u32,
+    pub(super) range_out: u16,
+    pub(super) bits_left_out: u8,
+    pub(super) write_out: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct VvcCabacDumpSymbol {
     pub(super) kind: u8,
     pub(super) data: u32,
@@ -68,6 +83,7 @@ pub(super) struct VvcCabacEncoder {
     pub(super) dump_symbols: Vec<VvcCabacDumpSymbol>,
     pub(super) semantic_symbols: Vec<VvcCabacDumpSymbol>,
     pub(super) context_events: Vec<VvcCabacDumpContextEvent>,
+    pub(super) bin_engine_events: Vec<VvcCabacDumpBinEngineEvent>,
     pub(super) low: u32,
     pub(super) range: u32,
     pub(super) buffered_byte: u32,
@@ -82,6 +98,7 @@ impl VvcCabacEncoder {
             dump_symbols: Vec::new(),
             semantic_symbols: Vec::new(),
             context_events: Vec::new(),
+            bin_engine_events: Vec::new(),
             low: 0,
             range: 0,
             buffered_byte: 0,
@@ -101,6 +118,9 @@ impl VvcCabacEncoder {
     pub(super) fn encode_bin(&mut self, bin: bool, event: VvcCtxEvent) {
         self.dump_symbols
             .push(VvcCabacDumpSymbol::bin_ctx_direct(bin, event));
+        let low_in = self.low;
+        let range_in = self.range as u16;
+        let bits_left_in = self.bits_left as u8;
         let lps = event.lps as u32;
         self.range -= lps;
         if bin != event.mps {
@@ -109,9 +129,6 @@ impl VvcCabacEncoder {
             self.low += self.range;
             self.low <<= num_bits;
             self.range = lps << num_bits;
-            if self.bits_left < 12 {
-                self.write_out();
-            }
         } else if self.range < 256 {
             // VVC BinProbModel_Std::getRenormBitsRange() is fixed to 1 for
             // MPS renormalization. LPS renormalization still uses the table
@@ -120,20 +137,50 @@ impl VvcCabacEncoder {
             self.bits_left -= num_bits;
             self.low <<= num_bits;
             self.range <<= num_bits;
-            if self.bits_left < 12 {
-                self.write_out();
-            }
+        }
+        let write_out = self.bits_left < 12;
+        self.bin_engine_events.push(VvcCabacDumpBinEngineEvent {
+            kind: VvcCabacDumpSymbol::BIN_CTX,
+            bin,
+            lps: event.lps,
+            mps: event.mps,
+            low_in,
+            range_in,
+            bits_left_in,
+            low_out: self.low,
+            range_out: self.range as u16,
+            bits_left_out: self.bits_left as u8,
+            write_out,
+        });
+        if write_out {
+            self.write_out();
         }
     }
 
     pub(super) fn encode_bin_ep(&mut self, bin: bool) {
         self.dump_symbols.push(VvcCabacDumpSymbol::bin_ep(bin));
         self.semantic_symbols.push(VvcCabacDumpSymbol::bin_ep(bin));
+        let low_in = self.low;
+        let range_in = self.range as u16;
+        let bits_left_in = self.bits_left as u8;
         self.low <<= 1;
         if bin {
             self.low += self.range;
         }
         self.bits_left -= 1;
+        self.bin_engine_events.push(VvcCabacDumpBinEngineEvent {
+            kind: VvcCabacDumpSymbol::BIN_EP,
+            bin,
+            lps: 0,
+            mps: false,
+            low_in,
+            range_in,
+            bits_left_in,
+            low_out: self.low,
+            range_out: self.range as u16,
+            bits_left_out: self.bits_left as u8,
+            write_out: self.bits_left < 12,
+        });
         if self.bits_left < 12 {
             self.write_out();
         }
@@ -198,6 +245,9 @@ impl VvcCabacEncoder {
     pub(super) fn encode_bin_trm(&mut self, bin: bool) {
         self.dump_symbols.push(VvcCabacDumpSymbol::bin_trm(bin));
         self.semantic_symbols.push(VvcCabacDumpSymbol::bin_trm(bin));
+        let low_in = self.low;
+        let range_in = self.range as u16;
+        let bits_left_in = self.bits_left as u8;
         self.range -= 2;
         if bin {
             self.low += self.range;
@@ -209,7 +259,21 @@ impl VvcCabacEncoder {
             self.range <<= 1;
             self.bits_left -= 1;
         }
-        if self.bits_left < 12 {
+        let write_out = self.bits_left < 12;
+        self.bin_engine_events.push(VvcCabacDumpBinEngineEvent {
+            kind: VvcCabacDumpSymbol::BIN_TRM,
+            bin,
+            lps: 0,
+            mps: false,
+            low_in,
+            range_in,
+            bits_left_in,
+            low_out: self.low,
+            range_out: self.range as u16,
+            bits_left_out: self.bits_left as u8,
+            write_out,
+        });
+        if write_out {
             self.write_out();
         }
     }

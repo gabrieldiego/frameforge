@@ -431,6 +431,7 @@ pub fn vvc_yuv420_cabac_vector_dump_json(
         &dump.symbols,
         &dump.semantic_symbols,
         &dump.context_events,
+        &dump.bin_engine_events,
         &dump.bits,
     ))
 }
@@ -1714,6 +1715,7 @@ struct VvcCtuCabacDump {
     symbols: Vec<VvcCabacDumpSymbol>,
     semantic_symbols: Vec<VvcCabacDumpSymbol>,
     context_events: Vec<VvcCabacDumpContextEvent>,
+    bin_engine_events: Vec<cabac::VvcCabacDumpBinEngineEvent>,
     bits: Vec<bool>,
 }
 
@@ -1729,12 +1731,14 @@ fn vvc_ctu_partition_cabac_dump(params: VvcCtuPartitionParams) -> VvcCtuCabacDum
     cabac.encode_bin_trm(true);
     let semantic_symbols = cabac.semantic_symbols.clone();
     let context_events = cabac.context_events.clone();
+    let bin_engine_events = cabac.bin_engine_events.clone();
     let symbols = cabac.dump_symbols.clone();
     let bits = cabac.finish();
     VvcCtuCabacDump {
         symbols,
         semantic_symbols,
         context_events,
+        bin_engine_events,
         bits,
     }
 }
@@ -1745,6 +1749,7 @@ fn vvc_cabac_vector_dump_json(
     symbols: &[VvcCabacDumpSymbol],
     semantic_symbols: &[VvcCabacDumpSymbol],
     context_events: &[VvcCabacDumpContextEvent],
+    bin_engine_events: &[cabac::VvcCabacDumpBinEngineEvent],
     bits: &[bool],
 ) -> String {
     let mut json = String::new();
@@ -1788,8 +1793,41 @@ fn vvc_cabac_vector_dump_json(
     );
     json.push_str(",\"context_events_hex\":\"");
     append_context_event_records_hex(&mut json, context_events);
+    json.push_str("\",\"bin_engine_event_record_bytes\":20");
+    json.push_str(",\"bin_engine_event_encoding\":\"kind_u8_bin_u8_lps_u16be_mps_u8_low_in_u32be_range_in_u16be_bits_left_in_u8_low_out_u32be_range_out_u16be_bits_left_out_u8_write_out_u8_hex\"");
+    json.push_str(",\"bin_engine_events_hex\":\"");
+    append_bin_engine_event_records_hex(&mut json, bin_engine_events);
     json.push_str("\"}\n");
     json
+}
+
+fn append_bin_engine_event_records_hex(
+    out: &mut String,
+    events: &[cabac::VvcCabacDumpBinEngineEvent],
+) {
+    for event in events {
+        append_byte_hex(out, event.kind);
+        append_byte_hex(out, u8::from(event.bin));
+        for byte in event.lps.to_be_bytes() {
+            append_byte_hex(out, byte);
+        }
+        append_byte_hex(out, u8::from(event.mps));
+        for byte in event.low_in.to_be_bytes() {
+            append_byte_hex(out, byte);
+        }
+        for byte in event.range_in.to_be_bytes() {
+            append_byte_hex(out, byte);
+        }
+        append_byte_hex(out, event.bits_left_in);
+        for byte in event.low_out.to_be_bytes() {
+            append_byte_hex(out, byte);
+        }
+        for byte in event.range_out.to_be_bytes() {
+            append_byte_hex(out, byte);
+        }
+        append_byte_hex(out, event.bits_left_out);
+        append_byte_hex(out, u8::from(event.write_out));
+    }
 }
 
 fn append_context_event_records_hex(out: &mut String, events: &[VvcCabacDumpContextEvent]) {
