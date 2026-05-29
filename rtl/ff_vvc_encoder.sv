@@ -47,11 +47,9 @@ module ff_vvc_encoder #(
   localparam logic [1:0] PALETTE_OUT_IDLE     = 2'd0;
   localparam logic [1:0] PALETTE_OUT_PREAMBLE = 2'd1;
   localparam logic [1:0] PALETTE_OUT_CABAC    = 2'd2;
-  localparam logic [1:0] PALETTE_OUT_TRAIL    = 2'd3;
   localparam logic [2:0] GENERATED_OUT_IDLE     = 3'd0;
   localparam logic [2:0] GENERATED_OUT_PREAMBLE = 3'd1;
   localparam logic [2:0] GENERATED_OUT_CABAC    = 3'd2;
-  localparam logic [2:0] GENERATED_OUT_TRAIL    = 3'd3;
 
   logic [INPUT_COUNT_BITS - 1:0] input_count_q;
   logic [INPUT_COUNT_BITS - 1:0] input_len_q;
@@ -93,17 +91,16 @@ module ff_vvc_encoder #(
   logic [7:0]  cabac_stream_data;
   logic        cabac_stream_last;
   logic [2:0]  cabac_stream_last_byte_bits;
+  logic        rbsp_payload_valid;
+  logic        rbsp_payload_ready;
+  logic        rbsp_output_ready;
+  logic [7:0]  rbsp_payload_data;
+  logic        rbsp_payload_last;
   logic        cabac_start_q;
   logic        pending_output_q;
   logic [1:0]  palette_out_state_q;
-  logic        palette_hold_valid_q;
-  logic [7:0]  palette_hold_byte_q;
-  logic        palette_tail_extra_q;
   logic [2:0]  generated_out_state_q;
   logic        generated_slice_cra_q;
-  logic        generated_hold_valid_q;
-  logic [7:0]  generated_hold_byte_q;
-  logic        generated_tail_extra_q;
   logic        generated_header_start_q;
   logic        generated_header_ready_w;
   logic        generated_header_valid_w;
@@ -130,7 +127,6 @@ module ff_vvc_encoder #(
   logic [8:0]  sampled_v_clamped_w;
   logic [8:0]  quant_cb_level_w;
   logic [8:0]  quant_cr_level_w;
-  logic [7:0]  cabac_tail_byte_w;
 
   // Current subset policy: 4:4:4 input selects palette for every visible CU.
   // This is deliberately represented as a CU mask so later mixed
@@ -170,24 +166,12 @@ module ff_vvc_encoder #(
   assign quant_cb_level_w = (sampled_u_clamped_w + 9'd4) >> 3;
   assign quant_cr_level_w = (sampled_v_clamped_w + 9'd4) >> 3;
 
-  always_comb begin
-    case (cabac_stream_last_byte_bits)
-      3'd1: cabac_tail_byte_w = (generated_hold_byte_q & 8'b1000_0000) | 8'h40;
-      3'd2: cabac_tail_byte_w = (generated_hold_byte_q & 8'b1100_0000) | 8'h20;
-      3'd3: cabac_tail_byte_w = (generated_hold_byte_q & 8'b1110_0000) | 8'h10;
-      3'd4: cabac_tail_byte_w = (generated_hold_byte_q & 8'b1111_0000) | 8'h08;
-      3'd5: cabac_tail_byte_w = (generated_hold_byte_q & 8'b1111_1000) | 8'h04;
-      3'd6: cabac_tail_byte_w = (generated_hold_byte_q & 8'b1111_1100) | 8'h02;
-      3'd7: cabac_tail_byte_w = (generated_hold_byte_q & 8'b1111_1110) | 8'h01;
-      default: cabac_tail_byte_w = 8'h80;
-    endcase
-  end
-
   assign busy = input_active_q || pending_output_q || m_axis_valid ||
                 (palette_out_state_q != PALETTE_OUT_IDLE) ||
                 (generated_out_state_q != GENERATED_OUT_IDLE);
   assign cabac_enable = 1'b1;
-  assign cabac_stream_ready =
+  assign cabac_stream_ready = rbsp_payload_ready;
+  assign rbsp_output_ready =
     ctu_has_palette_cu
       ? ((palette_out_state_q == PALETTE_OUT_CABAC) && (!m_axis_valid || m_axis_ready))
       : ((generated_out_state_q == GENERATED_OUT_CABAC) && (!m_axis_valid || m_axis_ready));
@@ -305,6 +289,22 @@ module ff_vvc_encoder #(
     .stream_last_byte_bits(cabac_stream_last_byte_bits)
   );
 
+  ff_vvc_rbsp_payload_stream rbsp_payload_stream (
+    .clk(clk),
+    .rst_n(rst_n),
+    .clear(cabac_start_q),
+    .s_axis_valid(cabac_stream_valid),
+    .s_axis_ready(rbsp_payload_ready),
+    .s_axis_data(cabac_stream_data),
+    .s_axis_last(cabac_stream_last),
+    .s_axis_last_byte_bits(cabac_stream_last_byte_bits),
+    .m_axis_ready(rbsp_output_ready),
+    .m_axis_valid(rbsp_payload_valid),
+    .m_axis_data(rbsp_payload_data),
+    .m_axis_last(rbsp_payload_last),
+    .done()
+  );
+
   ff_vvc_residual_transform #(
     .SAMPLE_BITS(SAMPLE_BITS),
     .LUMA_CB_SIZE(VVC_RESIDUAL_CB_SIZE),
@@ -388,14 +388,8 @@ module ff_vvc_encoder #(
       cabac_start_q <= 1'b0;
       pending_output_q <= 1'b0;
       palette_out_state_q <= PALETTE_OUT_IDLE;
-      palette_hold_valid_q <= 1'b0;
-      palette_hold_byte_q <= 8'd0;
-      palette_tail_extra_q <= 1'b0;
       generated_out_state_q <= GENERATED_OUT_IDLE;
       generated_slice_cra_q <= 1'b0;
-      generated_hold_valid_q <= 1'b0;
-      generated_hold_byte_q <= 8'd0;
-      generated_tail_extra_q <= 1'b0;
       generated_header_start_q <= 1'b0;
     end else begin
       cabac_start_q <= 1'b0;
@@ -415,14 +409,8 @@ module ff_vvc_encoder #(
         m_axis_last    <= 1'b0;
         pending_output_q <= 1'b0;
         palette_out_state_q <= PALETTE_OUT_IDLE;
-        palette_hold_valid_q <= 1'b0;
-        palette_hold_byte_q <= 8'd0;
-        palette_tail_extra_q <= 1'b0;
         generated_out_state_q <= GENERATED_OUT_IDLE;
         generated_slice_cra_q <= 1'b0;
-        generated_hold_valid_q <= 1'b0;
-        generated_hold_byte_q <= 8'd0;
-        generated_tail_extra_q <= 1'b0;
         generated_header_start_q <= 1'b0;
       end else if (input_active_q && s_axis_valid && s_axis_ready) begin
         if (s_axis_last != (input_count_q == input_len_q - 1'b1)) begin
@@ -458,9 +446,6 @@ module ff_vvc_encoder #(
                    (palette_out_state_q == PALETTE_OUT_IDLE)) begin
         pending_output_q <= 1'b0;
         palette_out_state_q <= PALETTE_OUT_PREAMBLE;
-        palette_hold_valid_q <= 1'b0;
-        palette_hold_byte_q <= 8'd0;
-        palette_tail_extra_q <= 1'b0;
         m_axis_valid <= 1'b0;
         m_axis_data <= 8'd0;
         m_axis_last <= 1'b0;
@@ -469,9 +454,6 @@ module ff_vvc_encoder #(
         pending_output_q <= 1'b0;
         generated_out_state_q <= GENERATED_OUT_PREAMBLE;
         generated_slice_cra_q <= 1'b0;
-        generated_hold_valid_q <= 1'b0;
-        generated_hold_byte_q <= 8'd0;
-        generated_tail_extra_q <= 1'b0;
         generated_header_start_q <= 1'b1;
         m_axis_valid <= 1'b0;
         m_axis_data <= 8'd0;
@@ -487,44 +469,16 @@ module ff_vvc_encoder #(
             palette_out_state_q <= PALETTE_OUT_CABAC;
           end
           PALETTE_OUT_CABAC: begin
-            if (cabac_stream_valid) begin
-              if (palette_hold_valid_q) begin
-                m_axis_valid <= 1'b1;
-                m_axis_data <= palette_hold_byte_q;
-                m_axis_last <= 1'b0;
-              end else begin
-                m_axis_valid <= 1'b0;
-                m_axis_last <= 1'b0;
-              end
-              palette_hold_valid_q <= 1'b1;
-              palette_hold_byte_q <= cabac_stream_data;
-              if (cabac_stream_last) begin
-                palette_out_state_q <= PALETTE_OUT_TRAIL;
-                palette_tail_extra_q <= (cabac_stream_last_byte_bits == 3'd0);
+            if (rbsp_payload_valid) begin
+              m_axis_valid <= 1'b1;
+              m_axis_data <= rbsp_payload_data;
+              m_axis_last <= rbsp_payload_last;
+              if (rbsp_payload_last) begin
+                palette_out_state_q <= PALETTE_OUT_IDLE;
               end
             end else begin
               m_axis_valid <= 1'b0;
               m_axis_last <= 1'b0;
-            end
-          end
-          PALETTE_OUT_TRAIL: begin
-            if (palette_tail_extra_q && palette_hold_valid_q) begin
-              m_axis_valid <= 1'b1;
-              m_axis_data <= palette_hold_byte_q;
-              m_axis_last <= 1'b0;
-              palette_hold_valid_q <= 1'b0;
-            end else if (palette_tail_extra_q) begin
-              m_axis_valid <= 1'b1;
-              m_axis_data <= 8'h80;
-              m_axis_last <= 1'b1;
-              palette_tail_extra_q <= 1'b0;
-              palette_out_state_q <= PALETTE_OUT_IDLE;
-            end else begin
-              m_axis_valid <= 1'b1;
-              m_axis_data <= cabac_tail_byte_w;
-              m_axis_last <= 1'b1;
-              palette_hold_valid_q <= 1'b0;
-              palette_out_state_q <= PALETTE_OUT_IDLE;
             end
           end
           default: begin
@@ -555,56 +509,22 @@ module ff_vvc_encoder #(
             end
           end
           GENERATED_OUT_CABAC: begin
-            if (cabac_stream_valid) begin
-              if (generated_hold_valid_q) begin
-                m_axis_valid <= 1'b1;
-                m_axis_data <= generated_hold_byte_q;
-                m_axis_last <= 1'b0;
-              end else begin
-                m_axis_valid <= 1'b0;
-                m_axis_last <= 1'b0;
-              end
-              generated_hold_valid_q <= 1'b1;
-              generated_hold_byte_q <= cabac_stream_data;
-              if (cabac_stream_last) begin
-                generated_out_state_q <= GENERATED_OUT_TRAIL;
-                generated_tail_extra_q <= (cabac_stream_last_byte_bits == 3'd0);
+            if (rbsp_payload_valid) begin
+              m_axis_valid <= 1'b1;
+              m_axis_data <= rbsp_payload_data;
+              m_axis_last <= rbsp_payload_last && ((frame_count != 2'd2) || generated_slice_cra_q);
+              if (rbsp_payload_last) begin
+                if ((frame_count != 2'd2) || generated_slice_cra_q) begin
+                  generated_out_state_q <= GENERATED_OUT_IDLE;
+                end else begin
+                  generated_out_state_q <= GENERATED_OUT_PREAMBLE;
+                  generated_header_start_q <= 1'b1;
+                  generated_slice_cra_q <= 1'b1;
+                end
               end
             end else begin
               m_axis_valid <= 1'b0;
               m_axis_last <= 1'b0;
-            end
-          end
-          GENERATED_OUT_TRAIL: begin
-            if (generated_tail_extra_q && generated_hold_valid_q) begin
-              m_axis_valid <= 1'b1;
-              m_axis_data <= generated_hold_byte_q;
-              m_axis_last <= 1'b0;
-              generated_hold_valid_q <= 1'b0;
-            end else if (generated_tail_extra_q) begin
-              m_axis_valid <= 1'b1;
-              m_axis_data <= 8'h80;
-              m_axis_last <= (frame_count != 2'd2) || generated_slice_cra_q;
-              generated_tail_extra_q <= 1'b0;
-              if ((frame_count != 2'd2) || generated_slice_cra_q) begin
-                generated_out_state_q <= GENERATED_OUT_IDLE;
-              end else begin
-                generated_out_state_q <= GENERATED_OUT_PREAMBLE;
-                generated_header_start_q <= 1'b1;
-                generated_slice_cra_q <= 1'b1;
-              end
-            end else begin
-              m_axis_valid <= 1'b1;
-              m_axis_data <= cabac_tail_byte_w;
-              m_axis_last <= (frame_count != 2'd2) || generated_slice_cra_q;
-              generated_hold_valid_q <= 1'b0;
-              if ((frame_count != 2'd2) || generated_slice_cra_q) begin
-                generated_out_state_q <= GENERATED_OUT_IDLE;
-              end else begin
-                generated_out_state_q <= GENERATED_OUT_PREAMBLE;
-                generated_header_start_q <= 1'b1;
-                generated_slice_cra_q <= 1'b1;
-              end
             end
           end
           default: begin
