@@ -106,7 +106,6 @@ module ff_vvc_encoder #(
   logic        generated_header_valid_w;
   logic [7:0]  generated_header_byte_w;
   logic        generated_header_last_w;
-  logic        generated_header_supported_w;
   logic        generated_header_done_w;
   logic        ctu_has_palette_cu;
   logic [1:0]  chroma_subsample_x_w;
@@ -208,7 +207,6 @@ module ff_vvc_encoder #(
     .m_axis_valid(generated_header_valid_w),
     .m_axis_data(generated_header_byte_w),
     .m_axis_last(generated_header_last_w),
-    .supported(generated_header_supported_w),
     .done(generated_header_done_w)
   );
 
@@ -498,7 +496,7 @@ module ff_vvc_encoder #(
                 cabac_start_q <= 1'b1;
                 generated_out_state_q <= GENERATED_OUT_CABAC;
               end
-            end else if (generated_header_done_w || !generated_header_supported_w) begin
+            end else if (generated_header_done_w) begin
               m_axis_valid <= 1'b0;
               m_axis_last <= 1'b0;
               cabac_start_q <= 1'b1;
