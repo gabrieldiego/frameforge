@@ -11,6 +11,8 @@ module ff_vvc_420_ctu_symbolizer #(
   input  logic [15:0] visible_height,
   input  logic [4:0]  luma_abs_level,
   input  logic        luma_negative,
+  input  logic [4:0]  cb_abs_level,
+  input  logic        cb_negative,
   input  logic [2:0]  luma_log2_tb_width,
   input  logic [2:0]  luma_log2_tb_height,
 
@@ -84,7 +86,8 @@ module ff_vvc_420_ctu_symbolizer #(
   localparam logic [4:0] ST_CHROMA_MODE = 5'd16;
   localparam logic [4:0] ST_CHROMA_CBF_CB = 5'd17;
   localparam logic [4:0] ST_CHROMA_CBF_CR = 5'd18;
-  localparam logic [4:0] ST_DONE = 5'd19;
+  localparam logic [4:0] ST_CHROMA_RESIDUAL = 5'd19;
+  localparam logic [4:0] ST_DONE = 5'd20;
 
   logic [4:0] state_q;
   logic [5:0] stack_count_q;
@@ -125,6 +128,7 @@ module ff_vvc_420_ctu_symbolizer #(
   logic [4:0] split_binary_ctx_q;
 
   logic leaf_cbf_q;
+  logic chroma_cbf_cb_q;
   logic [3:0] residual_step_q;
   logic [4:0] rem_abs_value;
   logic [4:0] rem_code_value;
@@ -133,6 +137,12 @@ module ff_vvc_420_ctu_symbolizer #(
   logic [31:0] rem_prefix_pattern;
   logic [5:0] rem_suffix_count;
   logic [31:0] rem_suffix_pattern;
+  logic [4:0] cb_rem_code_value;
+  logic [2:0] cb_rem_prefix_extra_len;
+  logic [5:0] cb_rem_prefix_count;
+  logic [31:0] cb_rem_prefix_pattern;
+  logic [5:0] cb_rem_suffix_count;
+  logic [31:0] cb_rem_suffix_pattern;
   logic [4:0] cur_last_sig_x_ctx;
   logic [4:0] cur_last_sig_y_ctx;
   logic [4:0] cur_leaf_split_ctx;
@@ -251,6 +261,23 @@ module ff_vvc_420_ctu_symbolizer #(
     (rem_abs_value < 5'd5) ? 32'd0 :
     (rem_code_value - ((32'd1 << rem_prefix_extra_len) - 32'd1));
 
+  assign cb_rem_code_value = cb_abs_level - 5'd5;
+  assign cb_rem_prefix_extra_len =
+    (cb_rem_code_value <= 5'd0) ? 3'd0 :
+    ((cb_rem_code_value <= 5'd2) ? 3'd1 :
+    ((cb_rem_code_value <= 5'd6) ? 3'd2 : 3'd3));
+  assign cb_rem_prefix_count =
+    (cb_abs_level < 5'd5) ? {1'b0, cb_abs_level + 5'd1} : {3'd0, cb_rem_prefix_extra_len} + 6'd5;
+  assign cb_rem_prefix_pattern =
+    (cb_abs_level < 5'd5) ?
+    ((32'd1 << cb_rem_prefix_count) - 32'd2) :
+    ((32'd1 << cb_rem_prefix_count) - 32'd1);
+  assign cb_rem_suffix_count =
+    (cb_abs_level < 5'd5) ? 6'd0 : {3'd0, cb_rem_prefix_extra_len} + 6'd1;
+  assign cb_rem_suffix_pattern =
+    (cb_abs_level < 5'd5) ? 32'd0 :
+    (cb_rem_code_value - ((32'd1 << cb_rem_prefix_extra_len) - 32'd1));
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       state_q <= ST_IDLE;
@@ -286,6 +313,7 @@ module ff_vvc_420_ctu_symbolizer #(
       split_write_binary_q <= 1'b0;
       split_binary_ctx_q <= 5'd0;
       leaf_cbf_q <= 1'b0;
+      chroma_cbf_cb_q <= 1'b0;
       residual_step_q <= 4'd0;
     end else if (clear) begin
       state_q <= ST_IDLE;
@@ -646,13 +674,15 @@ module ff_vvc_420_ctu_symbolizer #(
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_CTX;
           m_axis_data <= {19'd0, CTX_INTRA_CHROMA_PRED_MODE_0, 7'd0, 1'b0};
+          chroma_cbf_cb_q <= (cur_w_q == 16'd4) && (cur_h_q == 16'd4) && (cb_abs_level != 5'd0);
+          residual_step_q <= 4'd0;
           state_q <= ST_CHROMA_CBF_CB;
         end
 
         ST_CHROMA_CBF_CB: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_CTX;
-          m_axis_data <= {19'd0, CTX_QT_CBF_CB_0, 7'd0, 1'b0};
+          m_axis_data <= {19'd0, CTX_QT_CBF_CB_0, 7'd0, chroma_cbf_cb_q};
           state_q <= ST_CHROMA_CBF_CR;
         end
 
@@ -660,7 +690,28 @@ module ff_vvc_420_ctu_symbolizer #(
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_CTX;
           m_axis_data <= {19'd0, CTX_QT_CBF_CR_0, 7'd0, 1'b0};
-          state_q <= ST_POP;
+          state_q <= chroma_cbf_cb_q ? ST_CHROMA_RESIDUAL : ST_POP;
+        end
+
+        ST_CHROMA_RESIDUAL: begin
+          m_axis_valid <= 1'b1;
+          case (residual_step_q)
+            4'd0: begin
+              m_axis_kind <= SYMBOL_BINS_EP;
+              m_axis_data <= (cb_rem_prefix_pattern << 6) | {26'd0, cb_rem_prefix_count};
+              residual_step_q <= 4'd1;
+            end
+            4'd1: begin
+              m_axis_kind <= SYMBOL_BINS_EP;
+              m_axis_data <= (cb_rem_suffix_pattern << 6) | {26'd0, cb_rem_suffix_count};
+              residual_step_q <= 4'd2;
+            end
+            default: begin
+              m_axis_kind <= SYMBOL_BIN_EP;
+              m_axis_data <= {31'd0, cb_negative};
+              state_q <= ST_POP;
+            end
+          endcase
         end
 
         ST_DONE: begin

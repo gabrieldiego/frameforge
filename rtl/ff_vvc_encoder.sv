@@ -62,6 +62,7 @@ module ff_vvc_encoder #(
   logic [4:0] quant_luma_rem_q;
   logic [4:0] quant_cb_rem_q;
   logic [4:0] quant_cr_rem_q;
+  logic       quant_cb_negative_q;
   logic [4:0] residual_quant_luma_rem;
   logic [7:0] residual_recon_luma_sample;
   logic [15:0] coding_tree_coded_width;
@@ -423,6 +424,8 @@ module ff_vvc_encoder #(
     .visible_height(visible_height),
     .luma_abs_level(quant_luma_rem_q),
     .luma_negative(quant_luma_rem_q != 5'd0),
+    .cb_abs_level(quant_cb_rem_q),
+    .cb_negative(quant_cb_negative_q && (quant_cb_rem_q != 5'd0)),
     .luma_log2_tb_width(luma_log2_tb_width_w),
     .luma_log2_tb_height(luma_log2_tb_height_w),
     .m_axis_valid(ctu_symbol_valid),
@@ -450,6 +453,7 @@ module ff_vvc_encoder #(
       quant_luma_rem_q <= 5'd16;
       quant_cb_rem_q <= 5'd16;
       quant_cr_rem_q <= 5'd16;
+      quant_cb_negative_q <= 1'b1;
       m_axis_valid <= 1'b0;
       m_axis_data  <= '0;
       m_axis_last  <= 1'b0;
@@ -473,6 +477,7 @@ module ff_vvc_encoder #(
         quant_luma_rem_q <= 5'd16;
         quant_cb_rem_q <= 5'd16;
         quant_cr_rem_q <= 5'd16;
+        quant_cb_negative_q <= 1'b1;
         m_axis_valid   <= 1'b0;
         m_axis_last    <= 1'b0;
         pending_output_q <= 1'b0;
@@ -495,6 +500,9 @@ module ff_vvc_encoder #(
         end
         if (input_count_q == luma_samples_w) begin
           sampled_u <= s_axis_data;
+          quant_cb_negative_q <=
+            ((SAMPLE_BITS <= 8) ? s_axis_data[7:0] :
+             (s_axis_data >> (SAMPLE_BITS - 8))) < 8'd128;
         end
         if (input_count_q == v_sample_index_w) begin
           sampled_v <= s_axis_data;

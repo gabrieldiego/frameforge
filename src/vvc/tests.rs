@@ -754,6 +754,27 @@ fn vvc_ctu_partition_params_are_geometry_derived() {
 }
 
 #[test]
+fn vvc_ctu_partition_params_cover_all_8_sample_geometries_up_to_64() {
+    let black = quantize_vvc_4x4_color(Vvc4x4SampledColor { y: 0, u: 0, v: 0 });
+    for width in (8..=64).step_by(8) {
+        for height in (8..=64).step_by(8) {
+            let geometry = VvcVideoGeometry { width, height };
+            let params = vvc_ctu_partition_params(geometry, black)
+                .unwrap_or_else(|| panic!("missing CTU params for {width}x{height}"));
+            assert_eq!(params.root_width, 64);
+            assert_eq!(params.root_height, 64);
+            assert_eq!(params.visible_width, width);
+            assert_eq!(params.visible_height, height);
+            assert_eq!(params.chroma_tu_count, (width * height) / 64);
+            assert_eq!(
+                vvc_cabac_bits(geometry, black),
+                vvc_ctu_partition_cabac_bits(params)
+            );
+        }
+    }
+}
+
+#[test]
 fn vvc_contexts_derive_split_probability_from_init_tables() {
     let mut ctx = VvcCabacContexts::new();
     let split0 = &ctx.split_flag[0];

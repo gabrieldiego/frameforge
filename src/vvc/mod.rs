@@ -1668,10 +1668,6 @@ fn vvc_ctu_partition_params(
             cb_dc_negative: color.u < 128 && color.cb_rem != 0,
         });
     }
-    if coded.width != VVC_CTU_SIZE && coded.height != VVC_CTU_SIZE {
-        return None;
-    }
-
     let chroma_tu_count = vvc_coding_tree_plan(geometry)
         .iter()
         .filter(|step| matches!(step, VvcCodingTreeStep::ChromaTransformUnit { .. }))
