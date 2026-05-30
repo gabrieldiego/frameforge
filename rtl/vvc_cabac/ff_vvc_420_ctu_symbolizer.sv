@@ -217,9 +217,19 @@ module ff_vvc_420_ctu_symbolizer #(
     cur_leaf_split_ctx = CTX_SPLIT_FLAG_3;
     if (cur_chroma_q) begin
       cur_leaf_writes_split = (cur_w_q != 16'd4) || (cur_h_q != 16'd4);
-      if ((cur_w_q == 16'd4) || (cur_h_q == 16'd4)) begin
+      if ((cur_mtt_q != 3'd0) && ((cur_w_q > CHROMA_MAX_LEAF_SIZE) || (cur_h_q > CHROMA_MAX_LEAF_SIZE))) begin
         cur_leaf_split_ctx = CTX_SPLIT_FLAG_0;
-      end else if ((cur_mtt_q != 3'd0) && ((cur_w_q > CHROMA_MAX_LEAF_SIZE) || (cur_h_q > CHROMA_MAX_LEAF_SIZE))) begin
+      end else if ((cur_mtt_q != 3'd0) && (cur_h_q == 16'd4)) begin
+        // Split availability is derived in luma units for 4:2:0 chroma.
+        // A flat 16x4-equivalent chroma leaf still has enough BT/TT
+        // alternatives to use ctxInc 3, while 8x4 and wider boundary leaves
+        // use ctxInc 0.
+        if ((cur_mtt_q < 3'd3) && (cur_w_q > 16'd4) && (cur_w_q <= 16'd16) && (cur_w_q != 16'd8)) begin
+          cur_leaf_split_ctx = CTX_SPLIT_FLAG_3;
+        end else begin
+          cur_leaf_split_ctx = CTX_SPLIT_FLAG_0;
+        end
+      end else if ((cur_w_q == 16'd4) || (cur_h_q == 16'd4)) begin
         cur_leaf_split_ctx = CTX_SPLIT_FLAG_0;
       end else if (cur_mtt_q != 3'd0) begin
         cur_leaf_split_ctx = CTX_SPLIT_FLAG_3;
@@ -674,7 +684,7 @@ module ff_vvc_420_ctu_symbolizer #(
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_CTX;
           m_axis_data <= {19'd0, CTX_INTRA_CHROMA_PRED_MODE_0, 7'd0, 1'b0};
-          chroma_cbf_cb_q <= (cur_w_q == 16'd4) && (cur_h_q == 16'd4) && (cb_abs_level != 5'd0);
+          chroma_cbf_cb_q <= 1'b0;
           residual_step_q <= 4'd0;
           state_q <= ST_CHROMA_CBF_CB;
         end

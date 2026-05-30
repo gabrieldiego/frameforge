@@ -2778,7 +2778,10 @@ impl VvcCtuCabacGenerator {
         }
         self.contexts
             .encode(cabac, VvcCabacContext::IntraChromaPredMode(0), false);
-        let cbf_cb = node.width == 4 && node.height == 4 && self.cb_dc_abs_level != 0;
+        // Chroma coefficient coding is not wired through the spec-shaped
+        // residual encoder yet. Keep chroma residual disabled instead of
+        // emitting a shortcut rem_abs payload that desynchronizes VTM.
+        let cbf_cb = false;
         self.contexts
             .encode(cabac, VvcCabacContext::QtCbfCb(cbf_cb_ctx), cbf_cb);
         self.contexts
@@ -2805,18 +2808,52 @@ impl VvcCtuCabacGenerator {
     }
 
     fn visible_chroma_leaf_split_ctx(node: VvcCodingTreeNode) -> u8 {
-        if node.width == 4 || node.height == 4 {
-            0
-        } else if node.mtt_depth > 0
+        if node.mtt_depth > 0
             && (node.width > VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE
                 || node.height > VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE)
         {
+            0
+        } else if node.mtt_depth > 0 && node.height == 4 {
+            Self::chroma_boundary_flat_leaf_split_ctx(node)
+        } else if node.width == 4 || node.height == 4 {
             0
         } else if node.mtt_depth > 0 {
             3
         } else {
             VvcSplitCtxInput::full_child_without_smaller_neighbours().split_cu_flag_ctx()
         }
+    }
+
+    fn chroma_boundary_flat_leaf_split_ctx(node: VvcCodingTreeNode) -> u8 {
+        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
+        // VTM derives split_cu_flag context from split availability in luma
+        // units even when the current coding tree is chroma. For 4:2:0 flat
+        // boundary leaves, an 8x4 chroma leaf cannot use TT vertical, while a
+        // 16x4 leaf still has BT-H/BT-V/TT-V alternatives and therefore uses
+        // context set 1 (ctxInc 3) when no neighbours are available. Wider
+        // leaves exceed the current chroma BT/TT size and fall back to ctx 0.
+        let luma_width = node.width * 2;
+        let luma_height = node.height * 2;
+        let chroma_area = node.width * node.height;
+        let can_btt =
+            node.mtt_depth < 3 && luma_width <= 32 && luma_height <= 32 && chroma_area > 16;
+        let allow_bt_horizontal = can_btt && luma_height > 4;
+        let allow_bt_vertical = can_btt && luma_width > 4 && node.width != 4;
+        let allow_tt_horizontal = false;
+        let allow_tt_vertical =
+            can_btt && luma_width > 8 && luma_width <= 32 && luma_height <= 32 && node.width != 8;
+        VvcSplitCtxInput {
+            available_left: false,
+            available_above: false,
+            condition_left: false,
+            condition_above: false,
+            allow_bt_vertical,
+            allow_bt_horizontal,
+            allow_tt_vertical,
+            allow_tt_horizontal,
+            allow_qt: false,
+        }
+        .split_cu_flag_ctx()
     }
 }
 
