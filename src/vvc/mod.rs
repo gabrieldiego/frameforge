@@ -79,7 +79,8 @@ pub struct VvcEncodeParams {
 pub const VVC_CODED_DIMENSION_GRANULARITY: usize = 8;
 const VVC_CTU_SIZE: usize = 64;
 const VVC_CURRENT_MAX_LUMA_LEAF_SIZE: u16 = 32;
-const VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT: u16 = 16;
+const VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT: u16 = VVC_CURRENT_MAX_LUMA_LEAF_SIZE;
+const VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE: u16 = VVC_CURRENT_MAX_LUMA_LEAF_SIZE / 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VvcVideoGeometry {
@@ -277,7 +278,6 @@ struct VvcCtuPartitionParams {
     visible_width: usize,
     visible_height: usize,
     chroma_sampling: ChromaSampling,
-    luma_leaf_count: usize,
     chroma_tu_count: usize,
     luma_dc_abs_level: u8,
     luma_dc_negative: bool,
@@ -952,6 +952,12 @@ impl VvcCabacContext {
             VvcCabacContext::MultiRefLineIdx(0) => Some(21),
             VvcCabacContext::LastSigCoeffXPrefix(15) => Some(22),
             VvcCabacContext::LastSigCoeffYPrefix(15) => Some(23),
+            VvcCabacContext::MttSplitCuVerticalFlag(3) => Some(24),
+            VvcCabacContext::MttSplitCuBinaryFlag(1) => Some(25),
+            VvcCabacContext::MttSplitCuBinaryFlag(3) => Some(26),
+            VvcCabacContext::SplitFlag(1) => Some(27),
+            VvcCabacContext::SplitFlag(2) => Some(28),
+            VvcCabacContext::MttSplitCuVerticalFlag(0) => Some(29),
             _ => None,
         }
     }
@@ -1652,7 +1658,6 @@ fn vvc_ctu_partition_params(
             visible_width: coded.width,
             visible_height: coded.height,
             chroma_sampling,
-            luma_leaf_count: 1,
             chroma_tu_count,
             luma_dc_abs_level: color.luma_rem,
             luma_dc_negative: color.y < VVC_LUMA_DC_BASE as u8 && color.luma_rem != 0,
@@ -1664,19 +1669,6 @@ fn vvc_ctu_partition_params(
         return None;
     }
 
-    let luma_leaf_count = if coded.width == VVC_CTU_SIZE && coded.height == VVC_CTU_SIZE {
-        1
-    } else if coded.width == VVC_CTU_SIZE {
-        // The top-right visible 16x16 corner uses horizontal BT splits on two
-        // 8x16 halves to match the neighbour-derived partition constraints.
-        52
-    } else {
-        // Rectangular 64-sample CTU views currently split each visible 16x16
-        // area into position-dependent 8x8 edge patterns. The current 64x32
-        // subset has one 7-leaf region, one 8-leaf region, and two 9-leaf
-        // regions per visible half-CTU child.
-        ((coded.width * coded.height) / (half_ctu * half_ctu)) * half_ctu
-    };
     let chroma_tu_count = vvc_coding_tree_plan(geometry)
         .iter()
         .filter(|step| matches!(step, VvcCodingTreeStep::ChromaTransformUnit { .. }))
@@ -1687,7 +1679,6 @@ fn vvc_ctu_partition_params(
         visible_width: coded.width,
         visible_height: coded.height,
         chroma_sampling,
-        luma_leaf_count,
         chroma_tu_count,
         luma_dc_abs_level: color.luma_rem,
         luma_dc_negative: color.y < VVC_LUMA_DC_BASE as u8 && color.luma_rem != 0,
@@ -1699,15 +1690,7 @@ fn vvc_ctu_partition_params(
 fn vvc_ctu_partition_cabac_bits(params: VvcCtuPartitionParams) -> Vec<bool> {
     debug_assert!((8..=64).contains(&params.root_width));
     debug_assert!((8..=64).contains(&params.root_height));
-    debug_assert!(
-        (params.visible_width == params.root_width && params.visible_height == params.root_height)
-            || params.visible_width == VVC_CTU_SIZE
-            || params.visible_height == VVC_CTU_SIZE
-            || (params.visible_width <= VVC_CTU_SIZE / 2
-                && params.visible_height <= VVC_CTU_SIZE / 2)
-    );
     debug_assert!(params.visible_width >= 8 && params.visible_height >= 8);
-    debug_assert!(params.luma_leaf_count > 0);
 
     let mut cabac = VvcCabacEncoder::new();
     cabac.start();
@@ -1728,7 +1711,6 @@ fn vvc_ctu_partition_cabac_dump(params: VvcCtuPartitionParams) -> VvcCtuCabacDum
     debug_assert!((8..=64).contains(&params.root_width));
     debug_assert!((8..=64).contains(&params.root_height));
     debug_assert!(params.visible_width >= 8 && params.visible_height >= 8);
-    debug_assert!(params.luma_leaf_count > 0);
 
     let mut cabac = VvcCabacEncoder::new();
     cabac.start();
@@ -2003,12 +1985,6 @@ impl VvcCodingTreeNode {
         }
     }
 
-    fn raster_child_idx(self) -> u8 {
-        let col = u8::from(self.x != 0);
-        let row = u8::from(self.y != 0);
-        row * 2 + col
-    }
-
     fn intersects_visible(self, visible_width: u16, visible_height: u16) -> bool {
         self.x < visible_width && self.y < visible_height
     }
@@ -2032,7 +2008,7 @@ struct VvcSplitCtxInput {
 }
 
 impl VvcSplitCtxInput {
-    fn qt_only_root() -> Self {
+    fn qt_split_without_neighbours() -> Self {
         Self {
             available_left: false,
             available_above: false,
@@ -2074,62 +2050,6 @@ impl VvcSplitCtxInput {
         }
     }
 
-    fn single_bt_leaf_without_smaller_neighbours() -> Self {
-        Self {
-            available_left: false,
-            available_above: false,
-            condition_left: false,
-            condition_above: false,
-            allow_bt_vertical: true,
-            allow_bt_horizontal: false,
-            allow_tt_vertical: false,
-            allow_tt_horizontal: false,
-            allow_qt: false,
-        }
-    }
-
-    fn bt_only_split_without_smaller_neighbours() -> Self {
-        Self {
-            available_left: false,
-            available_above: false,
-            condition_left: false,
-            condition_above: false,
-            allow_bt_vertical: true,
-            allow_bt_horizontal: true,
-            allow_tt_vertical: false,
-            allow_tt_horizontal: false,
-            allow_qt: false,
-        }
-    }
-
-    fn bt_only_split_with_deeper_neighbours(left_deeper: bool, above_deeper: bool) -> Self {
-        Self {
-            available_left: left_deeper,
-            available_above: above_deeper,
-            condition_left: left_deeper,
-            condition_above: above_deeper,
-            allow_bt_vertical: true,
-            allow_bt_horizontal: true,
-            allow_tt_vertical: false,
-            allow_tt_horizontal: false,
-            allow_qt: false,
-        }
-    }
-
-    fn mtt_only_split_with_deeper_neighbours(left_deeper: bool, above_deeper: bool) -> Self {
-        Self {
-            available_left: left_deeper,
-            available_above: above_deeper,
-            condition_left: left_deeper,
-            condition_above: above_deeper,
-            allow_bt_vertical: true,
-            allow_bt_horizontal: true,
-            allow_tt_vertical: false,
-            allow_tt_horizontal: false,
-            allow_qt: false,
-        }
-    }
-
     fn min_qt_leaf_with_deeper_neighbours(left_deeper: bool, above_deeper: bool) -> Self {
         Self {
             available_left: left_deeper,
@@ -2141,20 +2061,6 @@ impl VvcSplitCtxInput {
             allow_tt_vertical: false,
             allow_tt_horizontal: false,
             allow_qt: true,
-        }
-    }
-
-    fn chroma_root_without_smaller_neighbours() -> Self {
-        Self {
-            available_left: false,
-            available_above: false,
-            condition_left: false,
-            condition_above: false,
-            allow_bt_vertical: true,
-            allow_bt_horizontal: true,
-            allow_tt_vertical: true,
-            allow_tt_horizontal: true,
-            allow_qt: false,
         }
     }
 
@@ -2259,6 +2165,7 @@ enum VvcCtuCabacOp {
         node: VvcCodingTreeNode,
         vertical: bool,
         split_ctx: u8,
+        write_split_flag: bool,
         write_qt_flag: bool,
         qt_ctx: u8,
         write_mtt_vertical_flag: bool,
@@ -2266,20 +2173,6 @@ enum VvcCtuCabacOp {
         write_binary_flag: bool,
         mtt_binary_ctx: u8,
         mtt_binary_value: bool,
-    },
-    ImplicitBtSplit {
-        node: VvcCodingTreeNode,
-        vertical: bool,
-        write_qt_flag: bool,
-        qt_ctx: u8,
-        write_mtt_vertical_flag: bool,
-        mtt_vertical_ctx: u8,
-        write_binary_flag: bool,
-        mtt_binary_ctx: u8,
-        mtt_binary_value: bool,
-    },
-    LumaLeaf {
-        node: VvcCodingTreeNode,
     },
     LumaLeafWithSplitCtx {
         node: VvcCodingTreeNode,
@@ -2300,825 +2193,14 @@ impl VvcCtuCabacOp {
             VvcTreeType::DualTreeLuma,
         );
         let chroma = params.ctu_chroma_root();
-        let mut ops = Vec::with_capacity(params.luma_leaf_count + 2);
-        let root_split_ctx = VvcSplitCtxInput::qt_only_root().split_cu_flag_ctx();
-        ops.push(Self::QtSplit {
-            node: root,
-            split_ctx: root_split_ctx,
-            write_split_flag: false,
-            write_qt_flag: false,
-            qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(root)
-                .split_qt_flag_ctx(),
-        });
-        if params.visible_width == params.root_width && params.visible_height == params.root_height
-        {
-            let half_ctu = VVC_CTU_SIZE / 2;
-            let split_ctx = if params.root_width <= half_ctu && params.root_height <= half_ctu {
-                VvcSplitCtxInput::full_child_without_smaller_neighbours().split_cu_flag_ctx()
-            } else {
-                VvcSplitCtxInput::qt_only_root().split_cu_flag_ctx()
-            };
-            ops.push(Self::LumaLeafWithSplitCtx {
-                node: root,
-                split_ctx,
-            });
-        } else if params.visible_width <= VVC_CTU_SIZE / 2
-            && params.visible_height <= VVC_CTU_SIZE / 2
-        {
-            Self::append_visible_luma_subtree(
-                &mut ops,
-                root,
-                params.visible_width as u16,
-                params.visible_height as u16,
-                VVC_CURRENT_MAX_LUMA_LEAF_SIZE,
-            );
-        } else if params.visible_width == params.root_width {
-            for child_idx in [0_u8, 1] {
-                let child = root.qt_child(child_idx);
-                let child_left_deeper = child.x > 0;
-                let child_above_deeper = child.y > 0;
-                ops.push(Self::QtSplit {
-                    node: child,
-                    split_ctx: VvcSplitCtxInput::full_child_with_deeper_neighbours(
-                        child_left_deeper,
-                        child_above_deeper,
-                    )
-                    .split_cu_flag_ctx(),
-                    write_split_flag: true,
-                    write_qt_flag: true,
-                    qt_ctx: VvcQtSplitCtxInput::from_node_with_deeper_neighbours(
-                        child,
-                        child_left_deeper,
-                        child_above_deeper,
-                    )
-                    .split_qt_flag_ctx(),
-                });
-                for grandchild_idx in 0..4 {
-                    let grandchild = child.qt_child(grandchild_idx);
-                    let left_deeper = grandchild.x > 0;
-                    let above_deeper = grandchild.y > 0;
-                    let split_ctx = VvcSplitCtxInput::full_child_with_deeper_neighbours(
-                        left_deeper,
-                        above_deeper,
-                    )
-                    .split_cu_flag_ctx();
-                    let qt_ctx = VvcQtSplitCtxInput::from_node_with_deeper_neighbours(
-                        grandchild,
-                        left_deeper,
-                        above_deeper,
-                    )
-                    .split_qt_flag_ctx();
-                    if child_idx == 1 && grandchild_idx == 1 {
-                        ops.push(Self::BtSplit {
-                            node: grandchild,
-                            vertical: true,
-                            split_ctx,
-                            write_qt_flag: true,
-                            qt_ctx,
-                            write_mtt_vertical_flag: true,
-                            mtt_vertical_ctx: 0,
-                            write_binary_flag: true,
-                            mtt_binary_ctx: 2,
-                            mtt_binary_value: true,
-                        });
-                        let left_bt = grandchild.mtt_child(true, 0);
-                        ops.push(Self::BtSplit {
-                            node: left_bt,
-                            vertical: false,
-                            split_ctx: 4,
-                            write_qt_flag: false,
-                            qt_ctx: 4,
-                            write_mtt_vertical_flag: true,
-                            mtt_vertical_ctx: 3,
-                            write_binary_flag: true,
-                            mtt_binary_ctx: 0,
-                            mtt_binary_value: true,
-                        });
-                        for bt_child_idx in 0..2 {
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: left_bt.mtt_child(false, bt_child_idx),
-                                split_ctx: if bt_child_idx == 0 { 0 } else { 1 },
-                            });
-                        }
-                        let right_bt = grandchild.mtt_child(true, 1);
-                        ops.push(Self::BtSplit {
-                            node: right_bt,
-                            vertical: false,
-                            split_ctx: 4,
-                            write_qt_flag: false,
-                            qt_ctx: 3,
-                            write_mtt_vertical_flag: true,
-                            mtt_vertical_ctx: 3,
-                            write_binary_flag: true,
-                            mtt_binary_ctx: 0,
-                            mtt_binary_value: true,
-                        });
-                        for bt_child_idx in 0..2 {
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: right_bt.mtt_child(false, bt_child_idx),
-                                split_ctx: 0,
-                            });
-                        }
-                        continue;
-                    }
-                    if child_idx == 1 && grandchild_idx == 3 {
-                        ops.push(Self::BtSplit {
-                            node: grandchild,
-                            vertical: true,
-                            split_ctx,
-                            write_qt_flag: true,
-                            qt_ctx: 4,
-                            write_mtt_vertical_flag: true,
-                            mtt_vertical_ctx: 0,
-                            write_binary_flag: true,
-                            mtt_binary_ctx: 2,
-                            mtt_binary_value: true,
-                        });
-                        let left_bt = grandchild.mtt_child(true, 0);
-                        ops.push(Self::BtSplit {
-                            node: left_bt,
-                            vertical: false,
-                            split_ctx: 4,
-                            write_qt_flag: false,
-                            qt_ctx: 4,
-                            write_mtt_vertical_flag: true,
-                            mtt_vertical_ctx: 3,
-                            write_binary_flag: true,
-                            mtt_binary_ctx: 0,
-                            mtt_binary_value: true,
-                        });
-                        for bt_child_idx in 0..2 {
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: left_bt.mtt_child(false, bt_child_idx),
-                                split_ctx: 0,
-                            });
-                        }
-                        let right_bt = grandchild.mtt_child(true, 1);
-                        ops.push(Self::BtSplit {
-                            node: right_bt,
-                            vertical: false,
-                            split_ctx: 4,
-                            write_qt_flag: false,
-                            qt_ctx: 3,
-                            write_mtt_vertical_flag: true,
-                            mtt_vertical_ctx: 3,
-                            write_binary_flag: true,
-                            mtt_binary_ctx: 0,
-                            mtt_binary_value: true,
-                        });
-                        for bt_child_idx in 0..2 {
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: right_bt.mtt_child(false, bt_child_idx),
-                                split_ctx: 0,
-                            });
-                        }
-                        continue;
-                    }
-                    ops.push(Self::QtSplit {
-                        node: grandchild,
-                        split_ctx,
-                        write_split_flag: true,
-                        write_qt_flag: true,
-                        qt_ctx,
-                    });
-                    for great_idx in 0..4 {
-                        let leaf = grandchild.qt_child(great_idx);
-                        if child_idx == 1 && grandchild_idx == 2 {
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: leaf,
-                                split_ctx: if matches!(great_idx, 0 | 2) { 1 } else { 0 },
-                            });
-                            continue;
-                        }
-                        if great_idx == 2
-                            && (matches!(grandchild_idx, 1 | 3)
-                                || (child_idx == 1 && grandchild_idx == 0))
-                        {
-                            ops.push(Self::BtSplit {
-                                node: leaf,
-                                vertical: true,
-                                split_ctx: VvcSplitCtxInput::bt_only_split_with_deeper_neighbours(
-                                    true, true,
-                                )
-                                .split_cu_flag_ctx(),
-                                write_qt_flag: false,
-                                qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(
-                                    leaf,
-                                )
-                                .split_qt_flag_ctx(),
-                                write_mtt_vertical_flag: true,
-                                mtt_vertical_ctx: 0,
-                                write_binary_flag: false,
-                                mtt_binary_ctx: 3,
-                                mtt_binary_value: true,
-                            });
-                            let left_half = leaf.mtt_child(true, 0);
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: left_half,
-                                split_ctx: VvcSplitCtxInput::mtt_only_split_with_deeper_neighbours(
-                                    false, true,
-                                )
-                                .split_cu_flag_ctx(),
-                            });
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: leaf.mtt_child(true, 1),
-                                split_ctx: VvcSplitCtxInput::mtt_only_split_with_deeper_neighbours(
-                                    false, false,
-                                )
-                                .split_cu_flag_ctx(),
-                            });
-                            continue;
-                        }
-                        if great_idx == 3 && grandchild_idx <= 1 {
-                            ops.push(Self::BtSplit {
-                                node: leaf,
-                                vertical: false,
-                                split_ctx:
-                                    VvcSplitCtxInput::bt_only_split_without_smaller_neighbours()
-                                        .split_cu_flag_ctx(),
-                                write_qt_flag: false,
-                                qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(
-                                    leaf,
-                                )
-                                .split_qt_flag_ctx(),
-                                write_mtt_vertical_flag: true,
-                                mtt_vertical_ctx: 0,
-                                write_binary_flag: false,
-                                mtt_binary_ctx: 1,
-                                mtt_binary_value: true,
-                            });
-                            for mtt_child_idx in 0..2 {
-                                ops.push(Self::LumaLeaf {
-                                    node: leaf.mtt_child(false, mtt_child_idx),
-                                });
-                            }
-                            continue;
-                        }
-                        if great_idx == 3 && matches!(grandchild_idx, 2 | 3) {
-                            ops.push(Self::BtSplit {
-                                node: leaf,
-                                vertical: false,
-                                split_ctx:
-                                    VvcSplitCtxInput::bt_only_split_without_smaller_neighbours()
-                                        .split_cu_flag_ctx(),
-                                write_qt_flag: false,
-                                qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(
-                                    leaf,
-                                )
-                                .split_qt_flag_ctx(),
-                                write_mtt_vertical_flag: true,
-                                mtt_vertical_ctx: 0,
-                                write_binary_flag: false,
-                                mtt_binary_ctx: 1,
-                                mtt_binary_value: true,
-                            });
-                            let top_half = leaf.mtt_child(false, 0);
-                            ops.push(Self::LumaLeaf { node: top_half });
-                            let bottom_half = leaf.mtt_child(false, 1);
-                            ops.push(Self::BtSplit {
-                                node: bottom_half,
-                                vertical: true,
-                                split_ctx:
-                                    VvcSplitCtxInput::single_bt_leaf_without_smaller_neighbours()
-                                        .split_cu_flag_ctx(),
-                                write_qt_flag: false,
-                                qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(
-                                    bottom_half,
-                                )
-                                .split_qt_flag_ctx(),
-                                // For this constrained 8x4 node the split process infers the
-                                // vertical split direction; no
-                                // mtt_split_cu_vertical_flag bin is coded.
-                                write_mtt_vertical_flag: false,
-                                mtt_vertical_ctx: 4,
-                                write_binary_flag: false,
-                                mtt_binary_ctx: 3,
-                                mtt_binary_value: true,
-                            });
-                            for mtt_child_idx in 0..2 {
-                                ops.push(Self::LumaLeaf {
-                                    node: bottom_half.mtt_child(true, mtt_child_idx),
-                                });
-                            }
-                            continue;
-                        }
-                        if great_idx != 0 {
-                            ops.push(Self::LumaLeaf { node: leaf });
-                            continue;
-                        }
-                        let corner_split_ctx = if grandchild_idx == 3 {
-                            VvcSplitCtxInput::bt_only_split_with_deeper_neighbours(true, false)
-                                .split_cu_flag_ctx()
-                        } else {
-                            VvcSplitCtxInput::bt_only_split_without_smaller_neighbours()
-                                .split_cu_flag_ctx()
-                        };
-                        ops.push(Self::BtSplit {
-                            node: leaf,
-                            vertical: true,
-                            split_ctx: corner_split_ctx,
-                            write_qt_flag: false,
-                            qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(leaf)
-                                .split_qt_flag_ctx(),
-                            write_mtt_vertical_flag: true,
-                            mtt_vertical_ctx: if grandchild_idx == 3 { 2 } else { 0 },
-                            write_binary_flag: false,
-                            mtt_binary_ctx: 3,
-                            mtt_binary_value: true,
-                        });
-                        let split_half_idx = match great_idx {
-                            0 | 3 => 1,
-                            1 | 2 => 0,
-                            _ => unreachable!(),
-                        };
-                        for bt_child_idx in 0..2 {
-                            let half = leaf.mtt_child(true, bt_child_idx);
-                            if bt_child_idx == split_half_idx {
-                                ops.push(Self::BtSplit {
-                                    node: half,
-                                    vertical: false,
-                                    split_ctx:
-                                        VvcSplitCtxInput::single_bt_leaf_without_smaller_neighbours(
-                                        )
-                                        .split_cu_flag_ctx(),
-                                    write_qt_flag: false,
-                                    qt_ctx:
-                                        VvcQtSplitCtxInput::from_node_without_deeper_neighbours(
-                                            half,
-                                        )
-                                        .split_qt_flag_ctx(),
-                                    write_mtt_vertical_flag: false,
-                                    mtt_vertical_ctx: 3,
-                                    write_binary_flag: false,
-                                    mtt_binary_ctx: 1,
-                                    mtt_binary_value: true,
-                                });
-                                for mtt_child_idx in 0..2 {
-                                    ops.push(Self::LumaLeaf {
-                                        node: half.mtt_child(false, mtt_child_idx),
-                                    });
-                                }
-                            } else {
-                                ops.push(Self::LumaLeaf { node: half });
-                            }
-                        }
-                    }
-                }
-            }
-        } else if params.visible_height == params.root_height {
-            for child_idx in [0_u8, 2] {
-                let child = root.qt_child(child_idx);
-                let child_left_deeper = child.x > 0;
-                let child_above_deeper = child.y > 0;
-                ops.push(Self::QtSplit {
-                    node: child,
-                    split_ctx: VvcSplitCtxInput::full_child_with_deeper_neighbours(
-                        child_left_deeper,
-                        child_above_deeper,
-                    )
-                    .split_cu_flag_ctx(),
-                    write_split_flag: true,
-                    write_qt_flag: true,
-                    qt_ctx: VvcQtSplitCtxInput::from_node_with_deeper_neighbours(
-                        child,
-                        child_left_deeper,
-                        child_above_deeper,
-                    )
-                    .split_qt_flag_ctx(),
-                });
-                for grandchild_idx in 0..4 {
-                    let grandchild = child.qt_child(grandchild_idx);
-                    let left_deeper = grandchild.x > 0;
-                    let above_deeper = grandchild.y > 0;
-                    let split_ctx = VvcSplitCtxInput::full_child_with_deeper_neighbours(
-                        left_deeper,
-                        above_deeper,
-                    )
-                    .split_cu_flag_ctx();
-                    let qt_ctx = VvcQtSplitCtxInput::from_node_with_deeper_neighbours(
-                        grandchild,
-                        left_deeper,
-                        above_deeper,
-                    )
-                    .split_qt_flag_ctx();
-                    ops.push(Self::QtSplit {
-                        node: grandchild,
-                        split_ctx,
-                        write_split_flag: true,
-                        write_qt_flag: true,
-                        qt_ctx,
-                    });
-                    for great_idx in 0..4 {
-                        let leaf = grandchild.qt_child(great_idx);
-                        if child_idx == 2 && grandchild_idx == 0 && great_idx == 1 {
-                            ops.push(Self::BtSplit {
-                                node: leaf,
-                                vertical: true,
-                                split_ctx: VvcSplitCtxInput::bt_only_split_with_deeper_neighbours(
-                                    true, true,
-                                )
-                                .split_cu_flag_ctx(),
-                                write_qt_flag: false,
-                                qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(
-                                    leaf,
-                                )
-                                .split_qt_flag_ctx(),
-                                write_mtt_vertical_flag: true,
-                                mtt_vertical_ctx: 0,
-                                write_binary_flag: false,
-                                mtt_binary_ctx: 3,
-                                mtt_binary_value: true,
-                            });
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: leaf.mtt_child(true, 0),
-                                split_ctx: VvcSplitCtxInput::mtt_only_split_with_deeper_neighbours(
-                                    true, false,
-                                )
-                                .split_cu_flag_ctx(),
-                            });
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: leaf.mtt_child(true, 1),
-                                split_ctx:
-                                    VvcSplitCtxInput::single_bt_leaf_without_smaller_neighbours()
-                                        .split_cu_flag_ctx(),
-                            });
-                            continue;
-                        }
-                        if child_idx == 2 && grandchild_idx == 0 && great_idx == 3 {
-                            ops.push(Self::BtSplit {
-                                node: leaf,
-                                vertical: true,
-                                split_ctx: VvcSplitCtxInput::bt_only_split_with_deeper_neighbours(
-                                    true, false,
-                                )
-                                .split_cu_flag_ctx(),
-                                write_qt_flag: false,
-                                qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(
-                                    leaf,
-                                )
-                                .split_qt_flag_ctx(),
-                                write_mtt_vertical_flag: true,
-                                mtt_vertical_ctx: 2,
-                                write_binary_flag: false,
-                                mtt_binary_ctx: 3,
-                                mtt_binary_value: true,
-                            });
-                            let left_half = leaf.mtt_child(true, 0);
-                            ops.push(Self::BtSplit {
-                                node: left_half,
-                                vertical: false,
-                                split_ctx:
-                                    VvcSplitCtxInput::single_bt_leaf_without_smaller_neighbours()
-                                        .split_cu_flag_ctx(),
-                                write_qt_flag: false,
-                                qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(
-                                    left_half,
-                                )
-                                .split_qt_flag_ctx(),
-                                write_mtt_vertical_flag: false,
-                                mtt_vertical_ctx: 3,
-                                write_binary_flag: false,
-                                mtt_binary_ctx: 1,
-                                mtt_binary_value: true,
-                            });
-                            for mtt_child_idx in 0..2 {
-                                ops.push(Self::LumaLeaf {
-                                    node: left_half.mtt_child(false, mtt_child_idx),
-                                });
-                            }
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: leaf.mtt_child(true, 1),
-                                split_ctx: VvcSplitCtxInput::mtt_only_split_with_deeper_neighbours(
-                                    true, false,
-                                )
-                                .split_cu_flag_ctx(),
-                            });
-                            continue;
-                        }
-                        if child_idx == 2 && grandchild_idx == 1 && great_idx == 0 {
-                            ops.push(Self::BtSplit {
-                                node: leaf,
-                                vertical: true,
-                                split_ctx: VvcSplitCtxInput::bt_only_split_with_deeper_neighbours(
-                                    true, false,
-                                )
-                                .split_cu_flag_ctx(),
-                                write_qt_flag: false,
-                                qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(
-                                    leaf,
-                                )
-                                .split_qt_flag_ctx(),
-                                write_mtt_vertical_flag: true,
-                                mtt_vertical_ctx: 2,
-                                write_binary_flag: false,
-                                mtt_binary_ctx: 3,
-                                mtt_binary_value: true,
-                            });
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: leaf.mtt_child(true, 0),
-                                split_ctx:
-                                    VvcSplitCtxInput::single_bt_leaf_without_smaller_neighbours()
-                                        .split_cu_flag_ctx(),
-                            });
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: leaf.mtt_child(true, 1),
-                                split_ctx:
-                                    VvcSplitCtxInput::single_bt_leaf_without_smaller_neighbours()
-                                        .split_cu_flag_ctx(),
-                            });
-                            continue;
-                        }
-                        if child_idx == 2 && grandchild_idx == 1 && great_idx == 2 {
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: leaf,
-                                split_ctx: VvcSplitCtxInput::mtt_only_split_with_deeper_neighbours(
-                                    true, false,
-                                )
-                                .split_cu_flag_ctx(),
-                            });
-                            continue;
-                        }
-                        if child_idx == 2 && grandchild_idx == 2 && great_idx == 1 {
-                            ops.push(Self::BtSplit {
-                                node: leaf,
-                                vertical: true,
-                                split_ctx: VvcSplitCtxInput::bt_only_split_with_deeper_neighbours(
-                                    true, true,
-                                )
-                                .split_cu_flag_ctx(),
-                                write_qt_flag: false,
-                                qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(
-                                    leaf,
-                                )
-                                .split_qt_flag_ctx(),
-                                write_mtt_vertical_flag: true,
-                                mtt_vertical_ctx: 0,
-                                write_binary_flag: false,
-                                mtt_binary_ctx: 3,
-                                mtt_binary_value: true,
-                            });
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: leaf.mtt_child(true, 0),
-                                split_ctx: VvcSplitCtxInput::mtt_only_split_with_deeper_neighbours(
-                                    true, false,
-                                )
-                                .split_cu_flag_ctx(),
-                            });
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: leaf.mtt_child(true, 1),
-                                split_ctx:
-                                    VvcSplitCtxInput::single_bt_leaf_without_smaller_neighbours()
-                                        .split_cu_flag_ctx(),
-                            });
-                            continue;
-                        }
-                        if great_idx == 2 && matches!(grandchild_idx, 1 | 3) {
-                            ops.push(Self::BtSplit {
-                                node: leaf,
-                                vertical: true,
-                                split_ctx: VvcSplitCtxInput::bt_only_split_with_deeper_neighbours(
-                                    true, true,
-                                )
-                                .split_cu_flag_ctx(),
-                                write_qt_flag: false,
-                                qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(
-                                    leaf,
-                                )
-                                .split_qt_flag_ctx(),
-                                write_mtt_vertical_flag: true,
-                                mtt_vertical_ctx: 0,
-                                write_binary_flag: false,
-                                mtt_binary_ctx: 3,
-                                mtt_binary_value: true,
-                            });
-                            let left_half = leaf.mtt_child(true, 0);
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: left_half,
-                                split_ctx: VvcSplitCtxInput::mtt_only_split_with_deeper_neighbours(
-                                    false, true,
-                                )
-                                .split_cu_flag_ctx(),
-                            });
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: leaf.mtt_child(true, 1),
-                                split_ctx:
-                                    VvcSplitCtxInput::single_bt_leaf_without_smaller_neighbours()
-                                        .split_cu_flag_ctx(),
-                            });
-                            continue;
-                        }
-                        if great_idx == 3 && grandchild_idx <= 1 {
-                            ops.push(Self::BtSplit {
-                                node: leaf,
-                                vertical: false,
-                                split_ctx:
-                                    VvcSplitCtxInput::bt_only_split_without_smaller_neighbours()
-                                        .split_cu_flag_ctx(),
-                                write_qt_flag: false,
-                                qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(
-                                    leaf,
-                                )
-                                .split_qt_flag_ctx(),
-                                write_mtt_vertical_flag: true,
-                                mtt_vertical_ctx: 0,
-                                write_binary_flag: false,
-                                mtt_binary_ctx: 1,
-                                mtt_binary_value: true,
-                            });
-                            for mtt_child_idx in 0..2 {
-                                ops.push(Self::LumaLeaf {
-                                    node: leaf.mtt_child(false, mtt_child_idx),
-                                });
-                            }
-                            continue;
-                        }
-                        if child_idx == 2 && grandchild_idx == 3 && great_idx == 0 {
-                            ops.push(Self::BtSplit {
-                                node: leaf,
-                                vertical: true,
-                                split_ctx:
-                                    VvcSplitCtxInput::single_bt_leaf_without_smaller_neighbours()
-                                        .split_cu_flag_ctx(),
-                                write_qt_flag: false,
-                                qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(
-                                    leaf,
-                                )
-                                .split_qt_flag_ctx(),
-                                write_mtt_vertical_flag: true,
-                                mtt_vertical_ctx: 0,
-                                write_binary_flag: false,
-                                mtt_binary_ctx: 3,
-                                mtt_binary_value: true,
-                            });
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: leaf.mtt_child(true, 0),
-                                split_ctx:
-                                    VvcSplitCtxInput::single_bt_leaf_without_smaller_neighbours()
-                                        .split_cu_flag_ctx(),
-                            });
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: leaf.mtt_child(true, 1),
-                                split_ctx:
-                                    VvcSplitCtxInput::single_bt_leaf_without_smaller_neighbours()
-                                        .split_cu_flag_ctx(),
-                            });
-                            continue;
-                        }
-                        if child_idx == 2 && grandchild_idx == 3 && great_idx == 1 {
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: leaf,
-                                split_ctx:
-                                    VvcSplitCtxInput::single_bt_leaf_without_smaller_neighbours()
-                                        .split_cu_flag_ctx(),
-                            });
-                            continue;
-                        }
-                        if child_idx == 2 && grandchild_idx == 2 && great_idx == 3 {
-                            ops.push(Self::BtSplit {
-                                node: leaf,
-                                vertical: false,
-                                split_ctx: VvcSplitCtxInput::mtt_only_split_with_deeper_neighbours(
-                                    true, false,
-                                )
-                                .split_cu_flag_ctx(),
-                                write_qt_flag: false,
-                                qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(
-                                    leaf,
-                                )
-                                .split_qt_flag_ctx(),
-                                write_mtt_vertical_flag: true,
-                                mtt_vertical_ctx: 2,
-                                write_binary_flag: false,
-                                mtt_binary_ctx: 1,
-                                mtt_binary_value: true,
-                            });
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: leaf.mtt_child(false, 0),
-                                split_ctx: VvcSplitCtxInput::mtt_only_split_with_deeper_neighbours(
-                                    true, false,
-                                )
-                                .split_cu_flag_ctx(),
-                            });
-                            ops.push(Self::LumaLeafWithSplitCtx {
-                                node: leaf.mtt_child(false, 1),
-                                split_ctx:
-                                    VvcSplitCtxInput::single_bt_leaf_without_smaller_neighbours()
-                                        .split_cu_flag_ctx(),
-                            });
-                            continue;
-                        }
-                        if great_idx == 3 && matches!(grandchild_idx, 2 | 3) {
-                            ops.push(Self::BtSplit {
-                                node: leaf,
-                                vertical: false,
-                                split_ctx:
-                                    VvcSplitCtxInput::bt_only_split_without_smaller_neighbours()
-                                        .split_cu_flag_ctx(),
-                                write_qt_flag: false,
-                                qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(
-                                    leaf,
-                                )
-                                .split_qt_flag_ctx(),
-                                write_mtt_vertical_flag: true,
-                                mtt_vertical_ctx: 0,
-                                write_binary_flag: false,
-                                mtt_binary_ctx: 1,
-                                mtt_binary_value: true,
-                            });
-                            let top_half = leaf.mtt_child(false, 0);
-                            ops.push(Self::LumaLeaf { node: top_half });
-                            let bottom_half = leaf.mtt_child(false, 1);
-                            ops.push(Self::BtSplit {
-                                node: bottom_half,
-                                vertical: true,
-                                split_ctx:
-                                    VvcSplitCtxInput::single_bt_leaf_without_smaller_neighbours()
-                                        .split_cu_flag_ctx(),
-                                write_qt_flag: false,
-                                qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(
-                                    bottom_half,
-                                )
-                                .split_qt_flag_ctx(),
-                                // For this constrained 8x4 node the split process infers the
-                                // vertical split direction; no
-                                // mtt_split_cu_vertical_flag bin is coded.
-                                write_mtt_vertical_flag: false,
-                                mtt_vertical_ctx: 4,
-                                write_binary_flag: false,
-                                mtt_binary_ctx: 3,
-                                mtt_binary_value: true,
-                            });
-                            for mtt_child_idx in 0..2 {
-                                ops.push(Self::LumaLeaf {
-                                    node: bottom_half.mtt_child(true, mtt_child_idx),
-                                });
-                            }
-                            continue;
-                        }
-                        if great_idx != 0 {
-                            ops.push(Self::LumaLeaf { node: leaf });
-                            continue;
-                        }
-                        let corner_split_ctx = if grandchild_idx == 3 {
-                            VvcSplitCtxInput::bt_only_split_with_deeper_neighbours(true, false)
-                                .split_cu_flag_ctx()
-                        } else {
-                            VvcSplitCtxInput::bt_only_split_without_smaller_neighbours()
-                                .split_cu_flag_ctx()
-                        };
-                        ops.push(Self::BtSplit {
-                            node: leaf,
-                            vertical: true,
-                            split_ctx: corner_split_ctx,
-                            write_qt_flag: false,
-                            qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(leaf)
-                                .split_qt_flag_ctx(),
-                            write_mtt_vertical_flag: true,
-                            mtt_vertical_ctx: if grandchild_idx == 3 { 2 } else { 0 },
-                            write_binary_flag: false,
-                            mtt_binary_ctx: 3,
-                            mtt_binary_value: true,
-                        });
-                        let split_half_idx = match great_idx {
-                            0 | 3 => 1,
-                            1 | 2 => 0,
-                            _ => unreachable!(),
-                        };
-                        for bt_child_idx in 0..2 {
-                            let half = leaf.mtt_child(true, bt_child_idx);
-                            if bt_child_idx == split_half_idx {
-                                ops.push(Self::BtSplit {
-                                    node: half,
-                                    vertical: false,
-                                    split_ctx:
-                                        VvcSplitCtxInput::single_bt_leaf_without_smaller_neighbours(
-                                        )
-                                        .split_cu_flag_ctx(),
-                                    write_qt_flag: false,
-                                    qt_ctx:
-                                        VvcQtSplitCtxInput::from_node_without_deeper_neighbours(
-                                            half,
-                                        )
-                                        .split_qt_flag_ctx(),
-                                    write_mtt_vertical_flag: false,
-                                    mtt_vertical_ctx: 3,
-                                    write_binary_flag: false,
-                                    mtt_binary_ctx: 1,
-                                    mtt_binary_value: true,
-                                });
-                                for mtt_child_idx in 0..2 {
-                                    ops.push(Self::LumaLeaf {
-                                        node: half.mtt_child(false, mtt_child_idx),
-                                    });
-                                }
-                            } else {
-                                ops.push(Self::LumaLeaf { node: half });
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let mut ops = Vec::new();
+        Self::append_visible_luma_subtree(
+            &mut ops,
+            root,
+            params.visible_width as u16,
+            params.visible_height as u16,
+            VVC_CURRENT_MAX_LUMA_LEAF_SIZE,
+        );
         ops.push(Self::ChromaTree {
             node: chroma,
             visible_width: params.visible_chroma_width(),
@@ -3172,15 +2254,17 @@ impl VvcCtuCabacOp {
         }
         let left_deeper = false;
         let above_deeper = false;
+        let split_ctx = if node.cqt_depth == 0 && node.mtt_depth == 0 {
+            VvcSplitCtxInput::qt_split_without_neighbours().split_cu_flag_ctx()
+        } else {
+            VvcSplitCtxInput::full_child_with_deeper_neighbours(left_deeper, above_deeper)
+                .split_cu_flag_ctx()
+        };
         ops.push(Self::QtSplit {
             node,
-            split_ctx: VvcSplitCtxInput::full_child_with_deeper_neighbours(
-                left_deeper,
-                above_deeper,
-            )
-            .split_cu_flag_ctx(),
+            split_ctx,
             write_split_flag: true,
-            write_qt_flag: true,
+            write_qt_flag: !(node.cqt_depth == 0 && node.mtt_depth == 0),
             qt_ctx: VvcQtSplitCtxInput::from_node_with_deeper_neighbours(
                 node,
                 left_deeper,
@@ -3212,6 +2296,7 @@ impl VvcCtuCabacOp {
             node,
             vertical,
             split_ctx: VvcSplitCtxInput::bt_leaf_without_smaller_neighbours().split_cu_flag_ctx(),
+            write_split_flag: true,
             write_qt_flag: true,
             qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node)
                 .split_qt_flag_ctx(),
@@ -3253,16 +2338,19 @@ impl VvcCtuCabacOp {
                 );
             }
         } else if !bottom_left_in_pic {
-            ops.push(Self::ImplicitBtSplit {
+            ops.push(Self::BtSplit {
                 node,
                 vertical: false,
+                split_ctx: VvcSplitCtxInput::bt_leaf_without_smaller_neighbours()
+                    .split_cu_flag_ctx(),
+                write_split_flag: false,
                 write_qt_flag: true,
                 qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node)
                     .split_qt_flag_ctx(),
                 write_mtt_vertical_flag: false,
-                mtt_vertical_ctx: 4,
+                mtt_vertical_ctx: 3,
                 write_binary_flag: false,
-                mtt_binary_ctx: 3,
+                mtt_binary_ctx: 1,
                 mtt_binary_value: true,
             });
             for child_idx in 0..2 {
@@ -3275,14 +2363,17 @@ impl VvcCtuCabacOp {
                 );
             }
         } else if !top_right_in_pic {
-            ops.push(Self::ImplicitBtSplit {
+            ops.push(Self::BtSplit {
                 node,
                 vertical: true,
+                split_ctx: VvcSplitCtxInput::bt_leaf_without_smaller_neighbours()
+                    .split_cu_flag_ctx(),
+                write_split_flag: false,
                 write_qt_flag: true,
                 qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node)
                     .split_qt_flag_ctx(),
                 write_mtt_vertical_flag: false,
-                mtt_vertical_ctx: 4,
+                mtt_vertical_ctx: 3,
                 write_binary_flag: false,
                 mtt_binary_ctx: 3,
                 mtt_binary_value: true,
@@ -3358,13 +2449,6 @@ impl VvcCtuCabacGenerator {
                 qt_ctx,
             ),
             op @ VvcCtuCabacOp::BtSplit { .. } => self.emit_bt_split(cabac, op),
-            op @ VvcCtuCabacOp::ImplicitBtSplit { .. } => self.emit_implicit_bt_split(cabac, op),
-            VvcCtuCabacOp::LumaLeaf { node } => {
-                self.emit_luma_leaf_split(cabac, node);
-                self.emit_luma_multi_ref_line(cabac, node);
-                self.emit_luma_intra_prediction_mode(cabac, node);
-                self.emit_luma_residual(cabac, node);
-            }
             VvcCtuCabacOp::LumaLeafWithSplitCtx { node, split_ctx } => {
                 self.emit_luma_leaf_split_with_ctx(cabac, node, split_ctx);
                 self.emit_luma_multi_ref_line(cabac, node);
@@ -3384,6 +2468,7 @@ impl VvcCtuCabacGenerator {
             node,
             vertical,
             split_ctx,
+            write_split_flag,
             write_qt_flag,
             qt_ctx,
             write_mtt_vertical_flag,
@@ -3395,46 +2480,12 @@ impl VvcCtuCabacGenerator {
         else {
             unreachable!("emit_bt_split expects a binary split operation");
         };
-        debug_assert!(node.cqt_depth >= 1 || (node.x == 0 && node.y == 0));
+        debug_assert!(node.cqt_depth >= 1 || node.mtt_depth > 0 || (node.x == 0 && node.y == 0));
         debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
-        self.contexts
-            .encode(cabac, VvcCabacContext::SplitFlag(split_ctx), true);
-        if write_qt_flag {
+        if write_split_flag {
             self.contexts
-                .encode(cabac, VvcCabacContext::SplitQtFlag(qt_ctx), false);
+                .encode(cabac, VvcCabacContext::SplitFlag(split_ctx), true);
         }
-        if write_mtt_vertical_flag {
-            self.contexts.encode(
-                cabac,
-                VvcCabacContext::MttSplitCuVerticalFlag(mtt_vertical_ctx),
-                vertical,
-            );
-        }
-        if write_binary_flag {
-            self.contexts.encode(
-                cabac,
-                VvcCabacContext::MttSplitCuBinaryFlag(mtt_binary_ctx),
-                mtt_binary_value,
-            );
-        }
-    }
-
-    fn emit_implicit_bt_split(&mut self, cabac: &mut VvcCabacEncoder, op: VvcCtuCabacOp) {
-        let VvcCtuCabacOp::ImplicitBtSplit {
-            node,
-            vertical,
-            write_qt_flag,
-            qt_ctx,
-            write_mtt_vertical_flag,
-            mtt_vertical_ctx,
-            write_binary_flag,
-            mtt_binary_ctx,
-            mtt_binary_value,
-        } = op
-        else {
-            unreachable!("emit_implicit_bt_split expects an implicit binary split operation");
-        };
-        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
         if write_qt_flag {
             self.contexts
                 .encode(cabac, VvcCabacContext::SplitQtFlag(qt_ctx), false);
@@ -3480,44 +2531,13 @@ impl VvcCtuCabacGenerator {
         }
     }
 
-    fn emit_luma_leaf_split(&mut self, cabac: &mut VvcCabacEncoder, node: VvcCodingTreeNode) {
-        debug_assert!(node.cqt_depth >= 1 || (node.x == 0 && node.y == 0));
-        debug_assert!(node.mtt_depth <= 3);
-        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
-        let _child_idx = node.raster_child_idx();
-        if node.width == 4 && node.height == 4 {
-            return;
-        }
-        // VVC 7.3.11.4 reaches coding_unit when split_cu_flag is false. The
-        // split_cu_flag context index is derived from VVC 9.3.4.2.2 using the
-        // split modes available for this CTU child.
-        let split_ctx = if node.mtt_depth == 0 {
-            if node.cqt_depth >= 3 {
-                let left_deeper = !node.x.is_multiple_of(16);
-                let above_deeper = !node.y.is_multiple_of(16);
-                VvcSplitCtxInput::min_qt_leaf_with_deeper_neighbours(left_deeper, above_deeper)
-                    .split_cu_flag_ctx()
-            } else {
-                VvcSplitCtxInput::full_child_without_smaller_neighbours().split_cu_flag_ctx()
-            }
-        } else if node.mtt_depth == 1 && node.width == 4 && node.height == 8 && node.x % 8 == 4 {
-            VvcSplitCtxInput::mtt_only_split_with_deeper_neighbours(true, false).split_cu_flag_ctx()
-        } else if node.width <= 4 || node.height <= 4 {
-            VvcSplitCtxInput::single_bt_leaf_without_smaller_neighbours().split_cu_flag_ctx()
-        } else {
-            VvcSplitCtxInput::bt_leaf_without_smaller_neighbours().split_cu_flag_ctx()
-        };
-        self.contexts
-            .encode(cabac, VvcCabacContext::SplitFlag(split_ctx), false);
-    }
-
     fn emit_luma_leaf_split_with_ctx(
         &mut self,
         cabac: &mut VvcCabacEncoder,
         node: VvcCodingTreeNode,
         split_ctx: u8,
     ) {
-        debug_assert!(node.cqt_depth >= 1 || (node.x == 0 && node.y == 0));
+        debug_assert!(node.cqt_depth >= 1 || node.mtt_depth > 0 || (node.x == 0 && node.y == 0));
         debug_assert!(node.mtt_depth <= 3);
         debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
         if node.width == 4 && node.height == 4 {
@@ -3595,45 +2615,7 @@ impl VvcCtuCabacGenerator {
         visible_height: u16,
     ) {
         debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
-        if visible_width <= 16 && visible_height <= 16 {
-            self.emit_chroma_visible_qt_subtree(cabac, node, visible_width, visible_height, 4);
-            return;
-        }
-        if visible_width == node.width && visible_height * 2 == node.height {
-            self.contexts
-                .encode(cabac, VvcCabacContext::SplitQtFlag(0), false);
-            self.emit_chroma_leaf_with_split_ctx(cabac, node.mtt_child(false, 0), 0, true, 1);
-            return;
-        }
-        if visible_width * 2 == node.width && visible_height == node.height {
-            self.contexts
-                .encode(cabac, VvcCabacContext::SplitQtFlag(0), false);
-            self.contexts
-                .encode(cabac, VvcCabacContext::SplitFlag(0), true);
-            self.contexts
-                .encode(cabac, VvcCabacContext::MttSplitCuVerticalFlag(0), false);
-            self.emit_chroma_leaf_without_cclm_with_split_ctx(
-                cabac,
-                node.mtt_child(false, 0),
-                3,
-                1,
-            );
-            self.emit_chroma_leaf_without_cclm_with_split_ctx(
-                cabac,
-                node.mtt_child(false, 1),
-                3,
-                1,
-            );
-            return;
-        }
-        let _ = (visible_width, visible_height);
-        self.emit_chroma_leaf(cabac, node);
-    }
-
-    fn emit_chroma_leaf(&mut self, cabac: &mut VvcCabacEncoder, node: VvcCodingTreeNode) {
-        self.emit_chroma_leaf_split(cabac, node);
-        self.emit_chroma_dm_mode(cabac, node);
-        self.emit_chroma_cbfs(cabac, node, false, false);
+        self.emit_chroma_visible_qt_subtree(cabac, node, visible_width, visible_height, 4);
     }
 
     fn emit_chroma_visible_qt_subtree(
@@ -3648,7 +2630,9 @@ impl VvcCtuCabacGenerator {
         if !node.intersects_visible(visible_width, visible_height) {
             return;
         }
-        if node.fits_visible(visible_width, visible_height) && (node.width <= 8 || node.height <= 8)
+        if node.fits_visible(visible_width, visible_height)
+            && node.width <= VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE
+            && node.height <= VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE
         {
             self.emit_chroma_transform_only_leaf_with_split_ctx(
                 cabac,
@@ -3704,14 +2688,7 @@ impl VvcCtuCabacGenerator {
                 );
             }
         } else if !bottom_left_in_pic {
-            self.contexts.encode(
-                cabac,
-                VvcCabacContext::SplitQtFlag(
-                    VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node)
-                        .split_qt_flag_ctx(),
-                ),
-                false,
-            );
+            self.emit_chroma_boundary_bt_split(cabac, node, false);
             for child_idx in 0..2 {
                 self.emit_chroma_visible_qt_subtree(
                     cabac,
@@ -3722,14 +2699,7 @@ impl VvcCtuCabacGenerator {
                 );
             }
         } else if !top_right_in_pic {
-            self.contexts.encode(
-                cabac,
-                VvcCabacContext::SplitQtFlag(
-                    VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node)
-                        .split_qt_flag_ctx(),
-                ),
-                false,
-            );
+            self.emit_chroma_boundary_bt_split(cabac, node, true);
             for child_idx in 0..2 {
                 self.emit_chroma_visible_qt_subtree(
                     cabac,
@@ -3747,12 +2717,10 @@ impl VvcCtuCabacGenerator {
         cabac: &mut VvcCabacEncoder,
         node: VvcCodingTreeNode,
     ) {
-        let split_ctx = if node.cqt_depth < 2 {
-            0
-        } else if node.y >= 8 {
-            7
+        let split_ctx = if node.cqt_depth == 0 {
+            VvcSplitCtxInput::bt_leaf_without_smaller_neighbours().split_cu_flag_ctx()
         } else {
-            6
+            VvcSplitCtxInput::full_child_without_smaller_neighbours().split_cu_flag_ctx()
         };
         let qt_ctx = if node.cqt_depth >= 2 { 3 } else { 0 };
         self.contexts
@@ -3761,47 +2729,19 @@ impl VvcCtuCabacGenerator {
             .encode(cabac, VvcCabacContext::SplitQtFlag(qt_ctx), true);
     }
 
-    fn emit_chroma_leaf_with_split_ctx(
+    fn emit_chroma_boundary_bt_split(
         &mut self,
         cabac: &mut VvcCabacEncoder,
         node: VvcCodingTreeNode,
-        split_ctx: u8,
-        cclm_mode: bool,
-        cbf_cb_ctx: u8,
+        _vertical: bool,
     ) {
-        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
-        self.contexts
-            .encode(cabac, VvcCabacContext::SplitFlag(split_ctx), false);
-        self.contexts
-            .encode(cabac, VvcCabacContext::CclmModeFlag, cclm_mode);
-        self.contexts
-            .encode(cabac, VvcCabacContext::IntraChromaPredMode(0), cclm_mode);
-        self.contexts
-            .encode(cabac, VvcCabacContext::QtCbfCb(cbf_cb_ctx), false);
-        self.contexts
-            .encode(cabac, VvcCabacContext::QtCbfCr(0), false);
-    }
-
-    fn emit_chroma_leaf_without_cclm_with_split_ctx(
-        &mut self,
-        cabac: &mut VvcCabacEncoder,
-        node: VvcCodingTreeNode,
-        split_ctx: u8,
-        cbf_cb_ctx: u8,
-    ) {
-        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
-        self.contexts
-            .encode(cabac, VvcCabacContext::SplitFlag(split_ctx), false);
-        self.contexts
-            .encode(cabac, VvcCabacContext::IntraChromaPredMode(0), false);
-        let cbf_cb = node.width == 4 && node.height == 4 && self.cb_dc_abs_level != 0;
-        self.contexts
-            .encode(cabac, VvcCabacContext::QtCbfCb(cbf_cb_ctx), cbf_cb);
-        self.contexts
-            .encode(cabac, VvcCabacContext::QtCbfCr(0), false);
-        if cbf_cb {
-            self.emit_chroma_cb_residual(cabac);
-        }
+        self.contexts.encode(
+            cabac,
+            VvcCabacContext::SplitQtFlag(
+                VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node).split_qt_flag_ctx(),
+            ),
+            false,
+        );
     }
 
     fn emit_chroma_cb_residual(&mut self, cabac: &mut VvcCabacEncoder) {
@@ -3835,48 +2775,13 @@ impl VvcCtuCabacGenerator {
         }
     }
 
-    fn emit_chroma_leaf_split(&mut self, cabac: &mut VvcCabacEncoder, node: VvcCodingTreeNode) {
-        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
-        let split_ctx =
-            VvcSplitCtxInput::chroma_root_without_smaller_neighbours().split_cu_flag_ctx();
-        self.contexts
-            .encode(cabac, VvcCabacContext::SplitFlag(split_ctx), false);
-    }
-
-    fn emit_chroma_cbfs(
-        &mut self,
-        cabac: &mut VvcCabacEncoder,
-        node: VvcCodingTreeNode,
-        cbf_cb: bool,
-        cbf_cr: bool,
-    ) {
-        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
-        self.contexts
-            .encode(cabac, VvcCabacContext::QtCbfCb(0), cbf_cb);
-        self.contexts
-            .encode(cabac, VvcCabacContext::QtCbfCr(u8::from(cbf_cb)), cbf_cr);
-    }
-
-    fn emit_chroma_dm_mode(&mut self, cabac: &mut VvcCabacEncoder, node: VvcCodingTreeNode) {
-        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
-        // For the current dual-tree 4:2:0 path, choose derived chroma mode:
-        // CCLM disabled for this CU (cclm_mode_flag=0), then
-        // intra_chroma_pred_mode=0 to select DM_CHROMA_IDX.
-        self.contexts
-            .encode(cabac, VvcCabacContext::CclmModeFlag, false);
-        self.contexts
-            .encode(cabac, VvcCabacContext::IntraChromaPredMode(0), false);
-    }
-
     fn visible_chroma_leaf_split_ctx(node: VvcCodingTreeNode) -> u8 {
         if node.width == 4 || node.height == 4 {
             0
         } else if node.mtt_depth > 0 {
             3
-        } else if node.y >= 8 {
-            7
         } else {
-            6
+            VvcSplitCtxInput::full_child_without_smaller_neighbours().split_cu_flag_ctx()
         }
     }
 }

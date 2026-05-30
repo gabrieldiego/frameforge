@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 module ff_vvc_cabac_context_model #(
-  parameter int VVC_CTX_COUNT = 24,
+  parameter int VVC_CTX_COUNT = 30,
   parameter int VVC_CTX_QP = 32
 ) (
   input  logic        clk,
@@ -46,9 +46,21 @@ module ff_vvc_cabac_context_model #(
   localparam int VVC_CTX_MULTI_REF_LINE_IDX_0     = 21;
   localparam int VVC_CTX_LAST_SIG_X_PREFIX_15     = 22;
   localparam int VVC_CTX_LAST_SIG_Y_PREFIX_15     = 23;
+  localparam int VVC_CTX_MTT_SPLIT_CU_VERTICAL_3  = 24;
+  localparam int VVC_CTX_MTT_SPLIT_CU_BINARY_1    = 25;
+  localparam int VVC_CTX_MTT_SPLIT_CU_BINARY_3    = 26;
+  localparam int VVC_CTX_SPLIT_FLAG_1             = 27;
+  localparam int VVC_CTX_SPLIT_FLAG_2             = 28;
+  localparam int VVC_CTX_MTT_SPLIT_CU_VERTICAL_0  = 29;
   localparam logic [4:0] VVC_CTX_COUNT_LIMIT = VVC_CTX_COUNT;
 
   localparam logic [(VVC_CTX_COUNT * 8) - 1:0] INIT_VALUE_LUT = {
+    8'd43, // 29: MttSplitCuVerticalFlag(0)
+    8'd38, // 28: SplitFlag(2)
+    8'd28, // 27: SplitFlag(1)
+    8'd45, // 26: MttSplitCuBinaryFlag(3)
+    8'd45, // 25: MttSplitCuBinaryFlag(1)
+    8'd27, // 24: MttSplitCuVerticalFlag(3)
     8'd6,  // 23: LastSigCoeffYPrefix(15)
     8'd21, // 22: LastSigCoeffXPrefix(15)
     8'd25, // 21: MultiRefLineIdx(0)
@@ -75,6 +87,12 @@ module ff_vvc_cabac_context_model #(
     8'd19  //  0: SplitFlag(0)
   };
   localparam logic [(VVC_CTX_COUNT * 4) - 1:0] LOG2_WINDOW_LUT = {
+    4'd9,  // 29: MttSplitCuVerticalFlag(0)
+    4'd8,  // 28: SplitFlag(2)
+    4'd13, // 27: SplitFlag(1)
+    4'd13, // 26: MttSplitCuBinaryFlag(3)
+    4'd13, // 25: MttSplitCuBinaryFlag(1)
+    4'd8,  // 24: MttSplitCuVerticalFlag(3)
     4'd1,  // 23: LastSigCoeffYPrefix(15)
     4'd0,  // 22: LastSigCoeffXPrefix(15)
     4'd5,  // 21: MultiRefLineIdx(0)

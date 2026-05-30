@@ -660,7 +660,6 @@ fn vvc_ctu_partition_params_are_geometry_derived() {
             visible_width: 64,
             visible_height: 64,
             chroma_sampling: ChromaSampling::Cs420,
-            luma_leaf_count: 1,
             chroma_tu_count: 64,
             luma_dc_abs_level: 16,
             luma_dc_negative: true,
@@ -682,7 +681,6 @@ fn vvc_ctu_partition_params_are_geometry_derived() {
             visible_width: 64,
             visible_height: 32,
             chroma_sampling: ChromaSampling::Cs420,
-            luma_leaf_count: 52,
             chroma_tu_count: 32,
             luma_dc_abs_level: 16,
             luma_dc_negative: true,
@@ -704,7 +702,6 @@ fn vvc_ctu_partition_params_are_geometry_derived() {
             visible_width: 32,
             visible_height: 64,
             chroma_sampling: ChromaSampling::Cs420,
-            luma_leaf_count: 64,
             chroma_tu_count: 32,
             luma_dc_abs_level: 16,
             luma_dc_negative: true,
@@ -726,7 +723,6 @@ fn vvc_ctu_partition_params_are_geometry_derived() {
             visible_width: 32,
             visible_height: 32,
             chroma_sampling: ChromaSampling::Cs420,
-            luma_leaf_count: 1,
             chroma_tu_count: 16,
             luma_dc_abs_level: 16,
             luma_dc_negative: true,
@@ -748,7 +744,6 @@ fn vvc_ctu_partition_params_are_geometry_derived() {
             visible_width: 16,
             visible_height: 16,
             chroma_sampling: ChromaSampling::Cs420,
-            luma_leaf_count: 1,
             chroma_tu_count: 4,
             luma_dc_abs_level: 16,
             luma_dc_negative: true,
@@ -1051,7 +1046,21 @@ fn vvc_residual_symbol_stream_emits_through_context_models() {
 
 #[test]
 fn vvc_split_cu_flag_context_uses_spec_ctx_set_formula() {
-    assert_eq!(VvcSplitCtxInput::qt_only_root().split_cu_flag_ctx(), 0);
+    assert_eq!(
+        VvcSplitCtxInput {
+            available_left: false,
+            available_above: false,
+            condition_left: false,
+            condition_above: false,
+            allow_bt_vertical: false,
+            allow_bt_horizontal: false,
+            allow_tt_vertical: false,
+            allow_tt_horizontal: false,
+            allow_qt: true,
+        }
+        .split_cu_flag_ctx(),
+        0
+    );
     assert_eq!(
         VvcSplitCtxInput::full_child_without_smaller_neighbours().split_cu_flag_ctx(),
         6
@@ -1202,120 +1211,33 @@ fn vvc_residual_transform_skip_sign_context_is_separate_from_bypass_signs() {
 }
 
 #[test]
-fn vvc_ctu_cabac_generator_names_64x64_operation_sequence() {
-    let params = VvcCtuPartitionParams {
-        root_width: 64,
-        root_height: 64,
-        visible_width: 64,
-        visible_height: 64,
-        chroma_sampling: ChromaSampling::Cs420,
-        luma_leaf_count: 1,
-        chroma_tu_count: 64,
-        luma_dc_abs_level: 0,
-        luma_dc_negative: false,
-        cb_dc_abs_level: 0,
-        cb_dc_negative: false,
-    };
-    let root = VvcCodingTreeNode::root(64, 64, VvcTreeType::DualTreeLuma);
-    assert_eq!(
-        VvcCtuCabacOp::yuv420_ctu_partition(params),
-        vec![
-            VvcCtuCabacOp::QtSplit {
-                node: root,
-                split_ctx: VvcSplitCtxInput::qt_only_root().split_cu_flag_ctx(),
-                write_split_flag: false,
-                write_qt_flag: false,
-                qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(root)
-                    .split_qt_flag_ctx()
-            },
-            VvcCtuCabacOp::LumaLeafWithSplitCtx {
-                node: root,
-                split_ctx: VvcSplitCtxInput::qt_only_root().split_cu_flag_ctx()
-            },
-            VvcCtuCabacOp::ChromaTree {
+fn vvc_ctu_cabac_generator_uses_one_recursive_luma_base() {
+    for (visible_width, visible_height) in [(16, 16), (32, 16), (16, 32), (32, 32), (64, 64)] {
+        let params = VvcCtuPartitionParams {
+            root_width: 64,
+            root_height: 64,
+            visible_width,
+            visible_height,
+            chroma_sampling: ChromaSampling::Cs420,
+            chroma_tu_count: (visible_width * visible_height) / 16,
+            luma_dc_abs_level: 0,
+            luma_dc_negative: false,
+            cb_dc_abs_level: 0,
+            cb_dc_negative: false,
+        };
+        let ops = VvcCtuCabacOp::yuv420_ctu_partition(params);
+        assert_eq!(
+            ops.last(),
+            Some(&VvcCtuCabacOp::ChromaTree {
                 node: params.ctu_chroma_root(),
                 visible_width: params.visible_chroma_width(),
-                visible_height: params.visible_chroma_height()
-            }
-        ]
-    );
-}
-
-#[test]
-fn vvc_ctu_cabac_generator_names_rectangular_64_sample_operation_sequence() {
-    let params = VvcCtuPartitionParams {
-        root_width: 64,
-        root_height: 64,
-        visible_width: 64,
-        visible_height: 32,
-        chroma_sampling: ChromaSampling::Cs420,
-        luma_leaf_count: 52,
-        chroma_tu_count: 32,
-        luma_dc_abs_level: 0,
-        luma_dc_negative: false,
-        cb_dc_abs_level: 0,
-        cb_dc_negative: false,
-    };
-    let root = VvcCodingTreeNode::root(64, 64, VvcTreeType::DualTreeLuma);
-    let ops = VvcCtuCabacOp::yuv420_ctu_partition(params);
-    assert_eq!(
-        ops.first(),
-        Some(&VvcCtuCabacOp::QtSplit {
-            node: root,
-            split_ctx: VvcSplitCtxInput::qt_only_root().split_cu_flag_ctx(),
-            write_split_flag: false,
-            write_qt_flag: false,
-            qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(root)
-                .split_qt_flag_ctx(),
-        })
-    );
-    assert_eq!(
-        ops.last(),
-        Some(&VvcCtuCabacOp::ChromaTree {
-            node: params.ctu_chroma_root(),
-            visible_width: params.visible_chroma_width(),
-            visible_height: params.visible_chroma_height(),
-        })
-    );
-    assert_eq!(
-        ops.iter()
-            .filter(|op| {
-                matches!(
-                    op,
-                    VvcCtuCabacOp::LumaLeaf { .. } | VvcCtuCabacOp::LumaLeafWithSplitCtx { .. }
-                )
+                visible_height: params.visible_chroma_height(),
             })
-            .count(),
-        52
-    );
-    assert!(ops.iter().any(|op| matches!(
-        op,
-        VvcCtuCabacOp::BtSplit {
-            node: VvcCodingTreeNode {
-                width: 8,
-                height: 8,
-                ..
-            },
-            vertical: true,
-            write_qt_flag: false,
-            write_binary_flag: false,
-            ..
-        }
-    )));
-    assert!(ops.iter().any(|op| matches!(
-        op,
-        VvcCtuCabacOp::BtSplit {
-            node: VvcCodingTreeNode {
-                width: 4,
-                height: 8,
-                ..
-            },
-            vertical: false,
-            write_qt_flag: false,
-            write_binary_flag: false,
-            ..
-        }
-    )));
+        );
+        assert!(ops
+            .iter()
+            .any(|op| matches!(op, VvcCtuCabacOp::LumaLeafWithSplitCtx { .. })));
+    }
 }
 
 #[test]

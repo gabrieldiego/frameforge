@@ -36,10 +36,6 @@ else ifeq ($(DUT),vvc-coding-tree-scheduler)
 VERILOG_SOURCES := $(RTL_DIR)/ff_vvc_coding_tree_scheduler.sv
 TOPLEVEL := ff_vvc_coding_tree_scheduler
 COCOTB_TEST_MODULES := test_vvc_coding_tree_scheduler
-else ifeq ($(DUT),vvc-luma-partition)
-VERILOG_SOURCES := $(RTL_DIR)/ff_vvc_luma_partition.sv
-TOPLEVEL := ff_vvc_luma_partition
-COCOTB_TEST_MODULES := test_vvc_luma_partition
 else ifeq ($(DUT),vvc-palette-cabac)
 VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_bit_writer.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_cabac.sv
 TOPLEVEL := ff_vvc_palette_cabac

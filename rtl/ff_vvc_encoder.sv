@@ -40,7 +40,8 @@ module ff_vvc_encoder #(
   localparam int INPUT_COUNT_BITS = $clog2((MAX_FRAME_SAMPLES * 2) + 1);
   localparam int VVC_RESIDUAL_CB_SIZE = 4;
   localparam int VVC_RESIDUAL_LUMA_SAMPLES = VVC_RESIDUAL_CB_SIZE * VVC_RESIDUAL_CB_SIZE;
-  localparam int VVC_CURRENT_LUMA_LEAF_SIZE = 16;
+  localparam int VVC_CURRENT_MIN_LUMA_LEAF_SIZE = 16;
+  localparam int VVC_CURRENT_MAX_LUMA_LEAF_SIZE = 32;
   localparam int PALETTE_CU_SIZE = 8;
   localparam int MAX_CTU_PALETTE_SYMBOLS =
     ((CTU_SIZE + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE) *
@@ -142,7 +143,6 @@ module ff_vvc_encoder #(
   logic [2:0]  luma_log2_tb_width_w;
   logic [2:0]  luma_log2_tb_height_w;
   logic        luma_anchor_full_ctu_w;
-  logic        luma_anchor_wide_leaf_w;
 
   // Current subset policy: 4:4:4 input selects palette for every visible CU.
   // This is deliberately represented as a CU mask so later mixed
@@ -187,16 +187,14 @@ module ff_vvc_encoder #(
   // selection; future AC work should carry the same metadata with each TU.
   assign luma_anchor_full_ctu_w =
     (visible_width == CTU_SIZE[15:0]) && (visible_height == CTU_SIZE[15:0]);
-  assign luma_anchor_wide_leaf_w =
-    (visible_width == (VVC_CURRENT_LUMA_LEAF_SIZE * 2)) &&
-    (visible_height == VVC_CURRENT_LUMA_LEAF_SIZE[15:0]);
   assign luma_log2_tb_width_w =
     luma_anchor_full_ctu_w ? 3'd6 :
-    (luma_anchor_wide_leaf_w ? 3'd5 :
-    ((visible_width >= VVC_CURRENT_LUMA_LEAF_SIZE[15:0]) ? 3'd4 : 3'd3));
+    ((visible_width >= VVC_CURRENT_MAX_LUMA_LEAF_SIZE[15:0]) ? 3'd5 :
+    ((visible_width >= VVC_CURRENT_MIN_LUMA_LEAF_SIZE[15:0]) ? 3'd4 : 3'd3));
   assign luma_log2_tb_height_w =
     luma_anchor_full_ctu_w ? 3'd6 :
-    ((visible_height >= VVC_CURRENT_LUMA_LEAF_SIZE[15:0]) ? 3'd4 : 3'd3);
+    ((visible_height >= VVC_CURRENT_MAX_LUMA_LEAF_SIZE[15:0]) ? 3'd5 :
+    ((visible_height >= VVC_CURRENT_MIN_LUMA_LEAF_SIZE[15:0]) ? 3'd4 : 3'd3));
 
   assign busy = input_active_q || pending_output_q || m_axis_valid ||
                 (palette_out_state_q != PALETTE_OUT_IDLE) ||

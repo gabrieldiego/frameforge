@@ -1,5 +1,6 @@
 import subprocess
 import tempfile
+import math
 import os
 from pathlib import Path
 
@@ -198,17 +199,14 @@ def quantized_luma_remainder(sample):
 
 
 VVC_CURRENT_CTU_SIZE = 64
-VVC_CURRENT_LUMA_LEAF_SIZE = 16
+VVC_CURRENT_MIN_LUMA_LEAF_SIZE = 16
+VVC_CURRENT_MAX_LUMA_LEAF_SIZE = 32
 
 
 def current_anchor_luma_tb_log2(width, height):
-    if width == VVC_CURRENT_CTU_SIZE and height == VVC_CURRENT_CTU_SIZE:
-        return (6, 6)
-    if width == VVC_CURRENT_LUMA_LEAF_SIZE * 2 and height == VVC_CURRENT_LUMA_LEAF_SIZE:
-        return (5, 4)
     return (
-        4 if width >= VVC_CURRENT_LUMA_LEAF_SIZE else 3,
-        4 if height >= VVC_CURRENT_LUMA_LEAF_SIZE else 3,
+        5 if width >= VVC_CURRENT_MAX_LUMA_LEAF_SIZE else (4 if width >= VVC_CURRENT_MIN_LUMA_LEAF_SIZE else 3),
+        5 if height >= VVC_CURRENT_MAX_LUMA_LEAF_SIZE else (4 if height >= VVC_CURRENT_MIN_LUMA_LEAF_SIZE else 3),
     )
 
 
@@ -217,16 +215,10 @@ def vvc_luma_reconstruction_from_sample(sample):
     log2_tb_width, log2_tb_height = current_anchor_luma_tb_log2(
         rtl_visible_width(), rtl_visible_height()
     )
-    if log2_tb_width == 3 and log2_tb_height == 3:
-        residual_delta = (rem * 57 + 8) // 16
-    elif min(log2_tb_width, log2_tb_height) == 3:
-        residual_delta = (rem * 40) // 16
-    elif log2_tb_width >= 6 and log2_tb_height >= 6:
-        residual_delta = (rem * 7 + 8) // 16
-    elif log2_tb_width >= 5 and log2_tb_height >= 4:
-        residual_delta = (rem * 20 + 8) // 16
-    else:
-        residual_delta = (rem * 28 + 8) // 16
+    tb_area = 1 << (log2_tb_width + log2_tb_height)
+    effective_side = max(8.0, math.sqrt(tb_area))
+    dc_scale = max(1, round(456 / effective_side))
+    residual_delta = (rem * dc_scale + 8) // 16
     return max(0, min(255, 128 - residual_delta))
 
 
