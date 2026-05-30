@@ -81,6 +81,9 @@ const VVC_CTU_SIZE: usize = 64;
 const VVC_CURRENT_MAX_LUMA_LEAF_SIZE: u16 = 32;
 const VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT: u16 = VVC_CURRENT_MAX_LUMA_LEAF_SIZE;
 const VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE: u16 = VVC_CURRENT_MAX_LUMA_LEAF_SIZE / 2;
+const VVC_CURRENT_MAX_CHROMA_420_BOUNDARY_LEAF_SIZE: u16 = VVC_CURRENT_MAX_LUMA_LEAF_SIZE;
+const VVC_CURRENT_MIN_LUMA_QT_SIZE: u16 = 8;
+const VVC_CURRENT_MIN_CHROMA_420_QT_SIZE: u16 = VVC_CURRENT_MIN_LUMA_QT_SIZE / 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VvcVideoGeometry {
@@ -2297,7 +2300,7 @@ impl VvcCtuCabacOp {
             vertical,
             split_ctx: VvcSplitCtxInput::bt_leaf_without_smaller_neighbours().split_cu_flag_ctx(),
             write_split_flag: true,
-            write_qt_flag: true,
+            write_qt_flag: Self::qt_flag_can_be_signaled(node),
             qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node)
                 .split_qt_flag_ctx(),
             write_mtt_vertical_flag: true,
@@ -2327,7 +2330,9 @@ impl VvcCtuCabacOp {
         let bottom_left_in_pic =
             node.x < visible_width && node.y + node.height - 1 < visible_height;
         let top_right_in_pic = node.x + node.width - 1 < visible_width && node.y < visible_height;
-        if !bottom_left_in_pic && !top_right_in_pic {
+        let implicit_bt_allowed =
+            node.width <= max_leaf_size && node.height <= VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT;
+        if (!bottom_left_in_pic && !top_right_in_pic) || !implicit_bt_allowed {
             for child_idx in 0..4 {
                 Self::append_visible_luma_subtree(
                     ops,
@@ -2344,7 +2349,7 @@ impl VvcCtuCabacOp {
                 split_ctx: VvcSplitCtxInput::bt_leaf_without_smaller_neighbours()
                     .split_cu_flag_ctx(),
                 write_split_flag: false,
-                write_qt_flag: true,
+                write_qt_flag: Self::qt_flag_can_be_signaled(node),
                 qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node)
                     .split_qt_flag_ctx(),
                 write_mtt_vertical_flag: false,
@@ -2369,7 +2374,7 @@ impl VvcCtuCabacOp {
                 split_ctx: VvcSplitCtxInput::bt_leaf_without_smaller_neighbours()
                     .split_cu_flag_ctx(),
                 write_split_flag: false,
-                write_qt_flag: true,
+                write_qt_flag: Self::qt_flag_can_be_signaled(node),
                 qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node)
                     .split_qt_flag_ctx(),
                 write_mtt_vertical_flag: false,
@@ -2388,6 +2393,14 @@ impl VvcCtuCabacOp {
                 );
             }
         }
+    }
+
+    fn qt_flag_can_be_signaled(node: VvcCodingTreeNode) -> bool {
+        let min_qt_size = match node.tree_type {
+            VvcTreeType::SingleTree | VvcTreeType::DualTreeLuma => VVC_CURRENT_MIN_LUMA_QT_SIZE,
+            VvcTreeType::DualTreeChroma => VVC_CURRENT_MIN_CHROMA_420_QT_SIZE,
+        };
+        node.mtt_depth == 0 && node.width > min_qt_size && node.height > min_qt_size
     }
 
     fn visible_luma_leaf_split_ctx(node: VvcCodingTreeNode) -> u8 {
@@ -2630,10 +2643,7 @@ impl VvcCtuCabacGenerator {
         if !node.intersects_visible(visible_width, visible_height) {
             return;
         }
-        if node.fits_visible(visible_width, visible_height)
-            && node.width <= VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE
-            && node.height <= VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE
-        {
+        if node.fits_visible(visible_width, visible_height) && Self::chroma_leaf_allowed(node) {
             self.emit_chroma_transform_only_leaf_with_split_ctx(
                 cabac,
                 node,
@@ -2677,7 +2687,9 @@ impl VvcCtuCabacGenerator {
         let bottom_left_in_pic =
             node.x < visible_width && node.y + node.height - 1 < visible_height;
         let top_right_in_pic = node.x + node.width - 1 < visible_width && node.y < visible_height;
-        if !bottom_left_in_pic && !top_right_in_pic {
+        let implicit_bt_allowed = node.width <= VVC_CURRENT_MAX_CHROMA_420_BOUNDARY_LEAF_SIZE
+            && node.height <= VVC_CURRENT_MAX_CHROMA_420_BOUNDARY_LEAF_SIZE;
+        if (!bottom_left_in_pic && !top_right_in_pic) || !implicit_bt_allowed {
             for child_idx in 0..4 {
                 self.emit_chroma_visible_qt_subtree(
                     cabac,
@@ -2735,6 +2747,9 @@ impl VvcCtuCabacGenerator {
         node: VvcCodingTreeNode,
         _vertical: bool,
     ) {
+        if !VvcCtuCabacOp::qt_flag_can_be_signaled(node) {
+            return;
+        }
         self.contexts.encode(
             cabac,
             VvcCabacContext::SplitQtFlag(
@@ -2761,8 +2776,10 @@ impl VvcCtuCabacGenerator {
             self.contexts
                 .encode(cabac, VvcCabacContext::SplitFlag(split_ctx), false);
         }
-        self.contexts
-            .encode(cabac, VvcCabacContext::CclmModeFlag, false);
+        if Self::chroma_cclm_allowed(node) {
+            self.contexts
+                .encode(cabac, VvcCabacContext::CclmModeFlag, false);
+        }
         self.contexts
             .encode(cabac, VvcCabacContext::IntraChromaPredMode(0), false);
         let cbf_cb = node.width == 4 && node.height == 4 && self.cb_dc_abs_level != 0;
@@ -2775,8 +2792,29 @@ impl VvcCtuCabacGenerator {
         }
     }
 
+    fn chroma_leaf_allowed(node: VvcCodingTreeNode) -> bool {
+        (node.width <= VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE
+            && node.height <= VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE)
+            || (node.mtt_depth > 0
+                && node.width <= VVC_CURRENT_MAX_CHROMA_420_BOUNDARY_LEAF_SIZE
+                && node.height <= VVC_CURRENT_MAX_CHROMA_420_BOUNDARY_LEAF_SIZE)
+    }
+
+    fn chroma_cclm_allowed(node: VvcCodingTreeNode) -> bool {
+        (node.width <= VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE
+            && node.height <= VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE)
+            || (node.mtt_depth == 1
+                && node.width > VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE
+                && node.height == VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE)
+    }
+
     fn visible_chroma_leaf_split_ctx(node: VvcCodingTreeNode) -> u8 {
         if node.width == 4 || node.height == 4 {
+            0
+        } else if node.mtt_depth > 0
+            && (node.width > VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE
+                || node.height > VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE)
+        {
             0
         } else if node.mtt_depth > 0 {
             3

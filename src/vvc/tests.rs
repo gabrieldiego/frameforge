@@ -1269,6 +1269,92 @@ fn vvc_ctu_cabac_generator_is_embedded_in_ctu_body() {
 }
 
 #[test]
+fn vvc_boundary_partition_uses_qt_until_implicit_bt_is_allowed_for_thin_shapes() {
+    let black = quantize_vvc_4x4_color(Vvc4x4SampledColor { y: 0, u: 0, v: 0 });
+    for geometry in [
+        VvcVideoGeometry {
+            width: 64,
+            height: 32,
+        },
+        VvcVideoGeometry {
+            width: 32,
+            height: 64,
+        },
+        VvcVideoGeometry {
+            width: 64,
+            height: 16,
+        },
+        VvcVideoGeometry {
+            width: 16,
+            height: 64,
+        },
+        VvcVideoGeometry {
+            width: 64,
+            height: 8,
+        },
+        VvcVideoGeometry {
+            width: 8,
+            height: 64,
+        },
+    ] {
+        let params = vvc_ctu_partition_params(geometry, black).expect("thin rectangular params");
+        let ops = VvcCtuCabacOp::yuv420_ctu_partition(params);
+        assert!(
+            !ops.iter().any(|op| matches!(
+                op,
+                VvcCtuCabacOp::BtSplit {
+                    node,
+                    write_split_flag: false,
+                    ..
+                } if node.x == 0 && node.y == 0 && node.width == 64 && node.height == 64
+            )),
+            "{geometry:?} must not force an implicit root BT before max-BT-size permits it"
+        );
+        assert!(
+            !ops.iter().any(|op| matches!(
+                op,
+                VvcCtuCabacOp::BtSplit {
+                    node,
+                    write_qt_flag: true,
+                    ..
+                } if node.mtt_depth > 0
+            )),
+            "{geometry:?} must not signal split_qt_flag below a BT split"
+        );
+    }
+}
+
+#[test]
+fn vvc_boundary_qt_flag_guard_handles_thin_chroma_bt_children() {
+    for (width, height) in [(32, 16), (16, 32), (32, 8), (8, 32)] {
+        let node = VvcCodingTreeNode {
+            x: 0,
+            y: 0,
+            width,
+            height,
+            cqt_depth: 0,
+            mtt_depth: 1,
+            tree_type: VvcTreeType::DualTreeChroma,
+        };
+        assert!(
+            !VvcCtuCabacOp::qt_flag_can_be_signaled(node),
+            "chroma {width}x{height} below BT must not signal split_qt_flag"
+        );
+    }
+
+    let root_chroma = VvcCodingTreeNode {
+        x: 0,
+        y: 0,
+        width: 32,
+        height: 32,
+        cqt_depth: 0,
+        mtt_depth: 0,
+        tree_type: VvcTreeType::DualTreeChroma,
+    };
+    assert!(VvcCtuCabacOp::qt_flag_can_be_signaled(root_chroma));
+}
+
+#[test]
 fn vvc_ctu_cabac_generator_handles_rectangular_64_sample_bodies() {
     let black = quantize_vvc_4x4_color(Vvc4x4SampledColor { y: 0, u: 0, v: 0 });
     for geometry in [

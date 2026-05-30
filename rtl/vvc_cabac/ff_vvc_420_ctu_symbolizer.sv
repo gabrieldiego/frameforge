@@ -29,6 +29,9 @@ module ff_vvc_420_ctu_symbolizer #(
   localparam logic [15:0] CTU_SIZE_L = CTU_SIZE;
   localparam logic [15:0] LUMA_MAX_LEAF_SIZE = 16'd32;
   localparam logic [15:0] CHROMA_MAX_LEAF_SIZE = 16'd16;
+  localparam logic [15:0] CHROMA_BOUNDARY_LEAF_SIZE = 16'd32;
+  localparam logic [15:0] LUMA_MIN_QT_SIZE = 16'd8;
+  localparam logic [15:0] CHROMA_MIN_QT_SIZE = 16'd4;
   localparam int STACK_DEPTH = 32;
 
   localparam logic [4:0] CTX_SPLIT_FLAG_0 = 5'd0;
@@ -137,12 +140,18 @@ module ff_vvc_420_ctu_symbolizer #(
   logic [15:0] cur_visible_width;
   logic [15:0] cur_visible_height;
   logic [15:0] cur_leaf_max;
+  logic [15:0] cur_boundary_leaf_max;
+  logic [15:0] cur_min_qt_size;
+  logic cur_leaf_allowed;
+  logic cur_chroma_cclm_allowed;
+  logic cur_qt_flag_can_be_signaled;
   logic [16:0] cur_right;
   logic [16:0] cur_bottom;
   logic cur_intersects;
   logic cur_fits;
   logic cur_bottom_left_in_pic;
   logic cur_top_right_in_pic;
+  logic cur_implicit_bt_allowed;
   logic fits_split_vertical;
   logic [2:0] unused_luma_log2;
 
@@ -150,12 +159,24 @@ module ff_vvc_420_ctu_symbolizer #(
   assign cur_visible_width = cur_chroma_q ? (visible_width >> 1) : visible_width;
   assign cur_visible_height = cur_chroma_q ? (visible_height >> 1) : visible_height;
   assign cur_leaf_max = cur_chroma_q ? CHROMA_MAX_LEAF_SIZE : LUMA_MAX_LEAF_SIZE;
+  assign cur_boundary_leaf_max = cur_chroma_q ? CHROMA_BOUNDARY_LEAF_SIZE : LUMA_MAX_LEAF_SIZE;
+  assign cur_min_qt_size = cur_chroma_q ? CHROMA_MIN_QT_SIZE : LUMA_MIN_QT_SIZE;
+  assign cur_qt_flag_can_be_signaled = (cur_mtt_q == 3'd0) &&
+    (cur_w_q > cur_min_qt_size) && (cur_h_q > cur_min_qt_size);
+  assign cur_leaf_allowed = cur_chroma_q ?
+    (((cur_w_q <= CHROMA_MAX_LEAF_SIZE) && (cur_h_q <= CHROMA_MAX_LEAF_SIZE)) ||
+     ((cur_mtt_q != 3'd0) && (cur_w_q <= CHROMA_BOUNDARY_LEAF_SIZE) && (cur_h_q <= CHROMA_BOUNDARY_LEAF_SIZE))) :
+    ((cur_w_q <= LUMA_MAX_LEAF_SIZE) && (cur_h_q <= LUMA_MAX_LEAF_SIZE));
+  assign cur_chroma_cclm_allowed =
+    ((cur_w_q <= CHROMA_MAX_LEAF_SIZE) && (cur_h_q <= CHROMA_MAX_LEAF_SIZE)) ||
+    ((cur_mtt_q == 3'd1) && (cur_w_q > CHROMA_MAX_LEAF_SIZE) && (cur_h_q == CHROMA_MAX_LEAF_SIZE));
   assign cur_right = {1'b0, cur_x_q} + {1'b0, cur_w_q} - 17'd1;
   assign cur_bottom = {1'b0, cur_y_q} + {1'b0, cur_h_q} - 17'd1;
   assign cur_intersects = (cur_x_q < cur_visible_width) && (cur_y_q < cur_visible_height);
   assign cur_fits = (cur_right < {1'b0, cur_visible_width}) && (cur_bottom < {1'b0, cur_visible_height});
   assign cur_bottom_left_in_pic = (cur_x_q < cur_visible_width) && (cur_bottom < {1'b0, cur_visible_height});
   assign cur_top_right_in_pic = (cur_right < {1'b0, cur_visible_width}) && (cur_y_q < cur_visible_height);
+  assign cur_implicit_bt_allowed = (cur_w_q <= cur_boundary_leaf_max) && (cur_h_q <= cur_boundary_leaf_max);
   assign fits_split_vertical = (cur_w_q > cur_leaf_max) && ((cur_h_q <= cur_leaf_max) || (cur_w_q >= cur_h_q));
   assign unused_luma_log2 = luma_log2_tb_width ^ luma_log2_tb_height;
 
@@ -187,6 +208,8 @@ module ff_vvc_420_ctu_symbolizer #(
     if (cur_chroma_q) begin
       cur_leaf_writes_split = (cur_w_q != 16'd4) || (cur_h_q != 16'd4);
       if ((cur_w_q == 16'd4) || (cur_h_q == 16'd4)) begin
+        cur_leaf_split_ctx = CTX_SPLIT_FLAG_0;
+      end else if ((cur_mtt_q != 3'd0) && ((cur_w_q > CHROMA_MAX_LEAF_SIZE) || (cur_h_q > CHROMA_MAX_LEAF_SIZE))) begin
         cur_leaf_split_ctx = CTX_SPLIT_FLAG_0;
       end else if (cur_mtt_q != 3'd0) begin
         cur_leaf_split_ctx = CTX_SPLIT_FLAG_3;
@@ -328,12 +351,12 @@ module ff_vvc_420_ctu_symbolizer #(
         ST_DISPATCH: begin
           if (!cur_intersects) begin
             state_q <= ST_POP;
-          end else if (cur_fits && (cur_w_q <= cur_leaf_max) && (cur_h_q <= cur_leaf_max)) begin
+          end else if (cur_fits && cur_leaf_allowed) begin
             leaf_cbf_q <= !cur_chroma_q && (cur_x_q == 16'd0) && (cur_y_q == 16'd0) && (luma_abs_level != 5'd0);
             residual_step_q <= 4'd0;
             state_q <= cur_chroma_q ? ST_CHROMA_SPLIT : ST_LUMA_SPLIT;
           end else if (!cur_fits) begin
-            if (!cur_bottom_left_in_pic && !cur_top_right_in_pic) begin
+            if ((!cur_bottom_left_in_pic && !cur_top_right_in_pic) || !cur_implicit_bt_allowed) begin
               split_is_qt_q <= 1'b1;
               split_chroma_q <= cur_chroma_q;
               split_x_q <= cur_x_q;
@@ -357,7 +380,7 @@ module ff_vvc_420_ctu_symbolizer #(
               split_write_split_q <= 1'b0;
               split_qt_ctx_q <= (cur_cqt_q >= 3'd2) ? CTX_SPLIT_QT_FLAG_3 : CTX_SPLIT_QT_FLAG_0;
               split_qt_bin_q <= 1'b0;
-              split_write_qt_q <= 1'b1;
+              split_write_qt_q <= cur_qt_flag_can_be_signaled;
               split_write_mtt_q <= 1'b0;
               split_mtt_ctx_q <= CTX_MTT_SPLIT_CU_VERTICAL_3;
               split_write_binary_q <= 1'b0;
@@ -378,7 +401,7 @@ module ff_vvc_420_ctu_symbolizer #(
             split_write_split_q <= 1'b1;
             split_qt_ctx_q <= (cur_cqt_q >= 3'd2) ? CTX_SPLIT_QT_FLAG_3 : CTX_SPLIT_QT_FLAG_0;
             split_qt_bin_q <= 1'b0;
-            split_write_qt_q <= 1'b1;
+            split_write_qt_q <= cur_qt_flag_can_be_signaled;
             split_write_mtt_q <= 1'b1;
             split_mtt_ctx_q <= CTX_MTT_SPLIT_CU_VERTICAL_0;
             split_write_binary_q <= 1'b0;
@@ -609,7 +632,7 @@ module ff_vvc_420_ctu_symbolizer #(
             m_axis_kind <= SYMBOL_BIN_CTX;
             m_axis_data <= {19'd0, cur_leaf_split_ctx, 7'd0, 1'b0};
           end
-          state_q <= ST_CHROMA_CCLM;
+          state_q <= cur_chroma_cclm_allowed ? ST_CHROMA_CCLM : ST_CHROMA_MODE;
         end
 
         ST_CHROMA_CCLM: begin
