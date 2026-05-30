@@ -40,6 +40,7 @@ module ff_vvc_encoder #(
   localparam int INPUT_COUNT_BITS = $clog2((MAX_FRAME_SAMPLES * 2) + 1);
   localparam int VVC_RESIDUAL_CB_SIZE = 4;
   localparam int VVC_RESIDUAL_LUMA_SAMPLES = VVC_RESIDUAL_CB_SIZE * VVC_RESIDUAL_CB_SIZE;
+  localparam int VVC_CURRENT_LUMA_LEAF_SIZE = 16;
   localparam int PALETTE_CU_SIZE = 8;
   localparam int MAX_CTU_PALETTE_SYMBOLS =
     ((CTU_SIZE + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE) *
@@ -138,6 +139,10 @@ module ff_vvc_encoder #(
   logic [8:0]  sampled_v_clamped_w;
   logic [8:0]  quant_cb_level_w;
   logic [8:0]  quant_cr_level_w;
+  logic [2:0]  luma_log2_tb_width_w;
+  logic [2:0]  luma_log2_tb_height_w;
+  logic        luma_anchor_full_ctu_w;
+  logic        luma_anchor_wide_leaf_w;
 
   // Current subset policy: 4:4:4 input selects palette for every visible CU.
   // This is deliberately represented as a CU mask so later mixed
@@ -176,6 +181,22 @@ module ff_vvc_encoder #(
   assign sampled_v_clamped_w = (sampled_v_8bit_w > 8'd128) ? 9'd128 : {1'b0, sampled_v_8bit_w};
   assign quant_cb_level_w = (sampled_u_clamped_w + 9'd4) >> 3;
   assign quant_cr_level_w = (sampled_v_clamped_w + 9'd4) >> 3;
+
+  // Current residual subset emits one DC coefficient for the first luma TU.
+  // These dimensions describe that TU for last-significant-coefficient context
+  // selection; future AC work should carry the same metadata with each TU.
+  assign luma_anchor_full_ctu_w =
+    (visible_width == CTU_SIZE[15:0]) && (visible_height == CTU_SIZE[15:0]);
+  assign luma_anchor_wide_leaf_w =
+    (visible_width == (VVC_CURRENT_LUMA_LEAF_SIZE * 2)) &&
+    (visible_height == VVC_CURRENT_LUMA_LEAF_SIZE[15:0]);
+  assign luma_log2_tb_width_w =
+    luma_anchor_full_ctu_w ? 3'd6 :
+    (luma_anchor_wide_leaf_w ? 3'd5 :
+    ((visible_width >= VVC_CURRENT_LUMA_LEAF_SIZE[15:0]) ? 3'd4 : 3'd3));
+  assign luma_log2_tb_height_w =
+    luma_anchor_full_ctu_w ? 3'd6 :
+    ((visible_height >= VVC_CURRENT_LUMA_LEAF_SIZE[15:0]) ? 3'd4 : 3'd3);
 
   assign busy = input_active_q || pending_output_q || m_axis_valid ||
                 (palette_out_state_q != PALETTE_OUT_IDLE) ||
@@ -383,7 +404,8 @@ module ff_vvc_encoder #(
     .start(cabac_start_q && !ctu_has_palette_cu),
     .abs_level(quant_luma_rem_q),
     .negative(quant_luma_rem_q != 5'd0),
-    .log2_tb_size((coding_tree_coded_width >= 16'd16 || coding_tree_coded_height >= 16'd16) ? 3'd4 : 3'd3),
+    .log2_tb_width(luma_log2_tb_width_w),
+    .log2_tb_height(luma_log2_tb_height_w),
     .m_axis_valid(m_axis_residual_valid),
     .m_axis_ready(m_axis_residual_ready),
     .m_axis_kind(m_axis_residual_kind),
@@ -392,7 +414,9 @@ module ff_vvc_encoder #(
     .busy()
   );
 
-  ff_vvc_420_ctu_symbolizer ctu_420_symbols (
+  ff_vvc_420_ctu_symbolizer #(
+    .CTU_SIZE(CTU_SIZE)
+  ) ctu_420_symbols (
     .clk(clk),
     .rst_n(rst_n),
     .clear(start && !busy),
@@ -401,6 +425,8 @@ module ff_vvc_encoder #(
     .visible_height(visible_height),
     .luma_abs_level(quant_luma_rem_q),
     .luma_negative(quant_luma_rem_q != 5'd0),
+    .luma_log2_tb_width(luma_log2_tb_width_w),
+    .luma_log2_tb_height(luma_log2_tb_height_w),
     .m_axis_valid(ctu_symbol_valid),
     .m_axis_ready(ctu_symbol_ready),
     .m_axis_kind(ctu_symbol_kind),

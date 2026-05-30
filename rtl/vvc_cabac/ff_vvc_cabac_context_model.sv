@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 module ff_vvc_cabac_context_model #(
-  parameter int VVC_CTX_COUNT = 22,
+  parameter int VVC_CTX_COUNT = 24,
   parameter int VVC_CTX_QP = 32
 ) (
   input  logic        clk,
@@ -44,9 +44,13 @@ module ff_vvc_cabac_context_model #(
   localparam int VVC_CTX_SPLIT_FLAG_7             = 19;
   localparam int VVC_CTX_SPLIT_QT_FLAG_0          = 20;
   localparam int VVC_CTX_MULTI_REF_LINE_IDX_0     = 21;
+  localparam int VVC_CTX_LAST_SIG_X_PREFIX_15     = 22;
+  localparam int VVC_CTX_LAST_SIG_Y_PREFIX_15     = 23;
   localparam logic [4:0] VVC_CTX_COUNT_LIMIT = VVC_CTX_COUNT;
 
   localparam logic [(VVC_CTX_COUNT * 8) - 1:0] INIT_VALUE_LUT = {
+    8'd6,  // 23: LastSigCoeffYPrefix(15)
+    8'd21, // 22: LastSigCoeffXPrefix(15)
     8'd25, // 21: MultiRefLineIdx(0)
     8'd27, // 20: SplitQtFlag(0)
     8'd30, // 19: SplitFlag(7)
@@ -71,6 +75,8 @@ module ff_vvc_cabac_context_model #(
     8'd19  //  0: SplitFlag(0)
   };
   localparam logic [(VVC_CTX_COUNT * 4) - 1:0] LOG2_WINDOW_LUT = {
+    4'd1,  // 23: LastSigCoeffYPrefix(15)
+    4'd0,  // 22: LastSigCoeffXPrefix(15)
     4'd5,  // 21: MultiRefLineIdx(0)
     4'd0,  // 20: SplitQtFlag(0)
     4'd9,  // 19: SplitFlag(7)

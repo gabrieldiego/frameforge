@@ -5,7 +5,7 @@ from pathlib import Path
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ReadOnly, RisingEdge
+from cocotb.triggers import ReadOnly, RisingEdge, Timer
 
 SYMBOL_BIN_CTX = 2
 CTX_QT_CBF_Y_0 = 5
@@ -19,7 +19,8 @@ async def reset(dut):
     dut.start.value = 0
     dut.abs_level.value = 0
     dut.negative.value = 0
-    dut.log2_tb_size.value = 3
+    dut.log2_tb_width.value = 3
+    dut.log2_tb_height.value = 3
     dut.m_axis_ready.value = 1
     for _ in range(2):
         await RisingEdge(dut.clk)
@@ -27,10 +28,11 @@ async def reset(dut):
     await RisingEdge(dut.clk)
 
 
-async def collect_symbols(dut, abs_level, negative, log2_tb_size=3):
+async def collect_symbols(dut, abs_level, negative, log2_tb_width=3, log2_tb_height=3):
     dut.abs_level.value = abs_level
     dut.negative.value = int(negative)
-    dut.log2_tb_size.value = log2_tb_size
+    dut.log2_tb_width.value = log2_tb_width
+    dut.log2_tb_height.value = log2_tb_height
     dut.start.value = 1
     await RisingEdge(dut.clk)
     dut.start.value = 0
@@ -151,6 +153,27 @@ async def residual_dc_symbolizer_selects_16x16_last_sig_contexts(dut):
         dut,
         int(vector["luma_dc_abs_level"]),
         bool(vector["luma_dc_negative"]),
-        log2_tb_size=4,
+        log2_tb_width=4,
+        log2_tb_height=4,
     )
     assert symbols == expected, (symbols, expected)
+
+
+@cocotb.test()
+async def residual_dc_symbolizer_selects_rectangular_and_64x64_last_sig_contexts(dut):
+    for width, height, log2_width, log2_height in [
+        (32, 16, 5, 4),
+        (16, 32, 4, 4),
+        (64, 64, 6, 6),
+    ]:
+        await reset(dut)
+        vector, expected = rust_luma_residual_symbols(width, height, 64)
+        symbols = await collect_symbols(
+            dut,
+            int(vector["luma_dc_abs_level"]),
+            bool(vector["luma_dc_negative"]),
+            log2_tb_width=log2_width,
+            log2_tb_height=log2_height,
+        )
+        assert symbols == expected, (width, height, symbols, expected)
+        await Timer(1, unit="ps")

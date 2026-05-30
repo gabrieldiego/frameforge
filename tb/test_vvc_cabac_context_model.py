@@ -106,6 +106,7 @@ async def context_model_replays_rust_context_events(dut):
         (16, 24, 64),
         (32, 32, 0),
         (32, 32, 64),
+        (64, 64, 64),
     ]
     for width, height, y in cases:
         await reset(dut)

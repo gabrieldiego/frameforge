@@ -93,6 +93,7 @@ async def bin_engine_matches_rust_arithmetic_events(dut):
         (16, 24, 64),
         (32, 32, 0),
         (32, 32, 64),
+        (64, 64, 64),
     ]
     for width, height, y in cases:
         for event in load_rust_bin_engine_events(width, height, y):

@@ -7,7 +7,8 @@ module ff_vvc_residual_dc_symbolizer (
   input  logic       start,
   input  logic [4:0] abs_level,
   input  logic       negative,
-  input  logic [2:0] log2_tb_size,
+  input  logic [2:0] log2_tb_width,
+  input  logic [2:0] log2_tb_height,
 
   output logic        m_axis_valid,
   input  logic        m_axis_ready,
@@ -23,6 +24,10 @@ module ff_vvc_residual_dc_symbolizer (
   localparam logic [4:0] CTX_LAST_SIG_COEFF_Y_PREFIX_3 = 5'd7;
   localparam logic [4:0] CTX_LAST_SIG_COEFF_X_PREFIX_6 = 5'd8;
   localparam logic [4:0] CTX_LAST_SIG_COEFF_Y_PREFIX_6 = 5'd9;
+  localparam logic [4:0] CTX_LAST_SIG_COEFF_X_PREFIX_10 = 5'd17;
+  localparam logic [4:0] CTX_LAST_SIG_COEFF_Y_PREFIX_10 = 5'd18;
+  localparam logic [4:0] CTX_LAST_SIG_COEFF_X_PREFIX_15 = 5'd22;
+  localparam logic [4:0] CTX_LAST_SIG_COEFF_Y_PREFIX_15 = 5'd23;
   localparam logic [4:0] CTX_ABS_LEVEL_GTX_0 = 5'd10;
   localparam logic [4:0] CTX_PAR_LEVEL_0 = 5'd11;
   localparam logic [4:0] CTX_ABS_LEVEL_GTX_32 = 5'd12;
@@ -45,10 +50,27 @@ module ff_vvc_residual_dc_symbolizer (
     (abs_level == 5'd0) ? 4'd1 :
     ((abs_level <= 5'd1) ? 4'd3 :
     ((abs_level <= 5'd3) ? 4'd5 : 4'd7));
-  assign last_sig_x_ctx =
-    (log2_tb_size >= 3'd4) ? CTX_LAST_SIG_COEFF_X_PREFIX_6 : CTX_LAST_SIG_COEFF_X_PREFIX_3;
-  assign last_sig_y_ctx =
-    (log2_tb_size >= 3'd4) ? CTX_LAST_SIG_COEFF_Y_PREFIX_6 : CTX_LAST_SIG_COEFF_Y_PREFIX_3;
+  always_comb begin
+    if (log2_tb_width >= 3'd6) begin
+      last_sig_x_ctx = CTX_LAST_SIG_COEFF_X_PREFIX_15;
+    end else if (log2_tb_width >= 3'd5) begin
+      last_sig_x_ctx = CTX_LAST_SIG_COEFF_X_PREFIX_10;
+    end else if (log2_tb_width >= 3'd4) begin
+      last_sig_x_ctx = CTX_LAST_SIG_COEFF_X_PREFIX_6;
+    end else begin
+      last_sig_x_ctx = CTX_LAST_SIG_COEFF_X_PREFIX_3;
+    end
+
+    if (log2_tb_height >= 3'd6) begin
+      last_sig_y_ctx = CTX_LAST_SIG_COEFF_Y_PREFIX_15;
+    end else if (log2_tb_height >= 3'd5) begin
+      last_sig_y_ctx = CTX_LAST_SIG_COEFF_Y_PREFIX_10;
+    end else if (log2_tb_height >= 3'd4) begin
+      last_sig_y_ctx = CTX_LAST_SIG_COEFF_Y_PREFIX_6;
+    end else begin
+      last_sig_y_ctx = CTX_LAST_SIG_COEFF_Y_PREFIX_3;
+    end
+  end
   assign rem_abs_value = (abs_level - 5'd4) >> 1;
   assign rem_code_value = rem_abs_value - 5'd5;
   assign rem_prefix_extra_len =

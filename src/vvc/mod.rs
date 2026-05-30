@@ -950,6 +950,8 @@ impl VvcCabacContext {
             VvcCabacContext::SplitFlag(7) => Some(19),
             VvcCabacContext::SplitQtFlag(0) => Some(20),
             VvcCabacContext::MultiRefLineIdx(0) => Some(21),
+            VvcCabacContext::LastSigCoeffXPrefix(15) => Some(22),
+            VvcCabacContext::LastSigCoeffYPrefix(15) => Some(23),
             _ => None,
         }
     }
@@ -3157,10 +3159,7 @@ impl VvcCtuCabacOp {
             return;
         }
 
-        debug_assert!(
-            node.width > VVC_CURRENT_MAX_LUMA_LEAF_SIZE
-                || node.height > VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT
-        );
+        debug_assert!(node.width > max_leaf_size || node.height > VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT);
         if node.mtt_depth > 0 {
             Self::append_visible_luma_mtt_subtree(
                 ops,

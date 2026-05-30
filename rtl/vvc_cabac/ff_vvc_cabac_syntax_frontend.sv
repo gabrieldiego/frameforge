@@ -44,6 +44,10 @@ module ff_vvc_cabac_syntax_frontend (
   localparam logic [4:0] CTX_ABS_LEVEL_GTX_FLAG_32 = 5'd12;
   localparam logic [4:0] CTX_LAST_SIG_X_PREFIX_10 = 5'd17;
   localparam logic [4:0] CTX_LAST_SIG_Y_PREFIX_10 = 5'd18;
+  localparam logic [4:0] CTX_LAST_SIG_X_PREFIX_15 = 5'd22;
+  localparam logic [4:0] CTX_LAST_SIG_Y_PREFIX_15 = 5'd23;
+  localparam logic [15:0] CTU_SIZE = 16'd64;
+  localparam logic [15:0] CURRENT_LUMA_LEAF_SIZE = 16'd16;
 
   localparam logic [3:0] ST_IDLE = 4'd0;
   localparam logic [3:0] ST_SPLIT = 4'd1;
@@ -82,21 +86,31 @@ module ff_vvc_cabac_syntax_frontend (
   logic raw_path_selected;
   logic ctu_transfer;
   logic luma_only_q;
+  logic luma_anchor_full_ctu;
+  logic luma_anchor_wide_leaf;
   logic unused_position_inputs;
 
   assign raw_path_selected = !ctu_path_active_q;
   assign raw_symbol_ready = raw_path_selected && m_axis_ready;
   assign ctu_ready = !ctu_path_active_q && !raw_symbol_valid;
+  assign luma_anchor_full_ctu =
+    (ctu_visible_width == CTU_SIZE) && (ctu_visible_height == CTU_SIZE);
+  assign luma_anchor_wide_leaf =
+    (ctu_visible_width == (CURRENT_LUMA_LEAF_SIZE << 1)) &&
+    (ctu_visible_height == CURRENT_LUMA_LEAF_SIZE);
   assign last_sig_x_ctx =
-    (ctu_visible_width >= 16'd32) ? CTX_LAST_SIG_X_PREFIX_10 :
-    ((ctu_visible_width >= 16'd16) ? CTX_LAST_SIG_X_PREFIX_6 : CTX_LAST_SIG_X_PREFIX_3);
+    luma_anchor_full_ctu ? CTX_LAST_SIG_X_PREFIX_15 :
+    (luma_anchor_wide_leaf ? CTX_LAST_SIG_X_PREFIX_10 :
+    ((ctu_visible_width >= CURRENT_LUMA_LEAF_SIZE) ? CTX_LAST_SIG_X_PREFIX_6 : CTX_LAST_SIG_X_PREFIX_3));
   assign last_sig_y_ctx =
-    (ctu_visible_height >= 16'd32) ? CTX_LAST_SIG_Y_PREFIX_10 :
-    ((ctu_visible_height >= 16'd16) ? CTX_LAST_SIG_Y_PREFIX_6 : CTX_LAST_SIG_Y_PREFIX_3);
+    luma_anchor_full_ctu ? CTX_LAST_SIG_Y_PREFIX_15 :
+    ((ctu_visible_height >= CURRENT_LUMA_LEAF_SIZE) ? CTX_LAST_SIG_Y_PREFIX_6 : CTX_LAST_SIG_Y_PREFIX_3);
   assign first_luma_split_ctx =
-    (((ctu_visible_width == 16'd8) && (ctu_visible_height >= 16'd16)) ||
+    luma_anchor_full_ctu ? 5'd0 :
+    ((ctu_visible_width <= 16'd8) && (ctu_visible_height <= 16'd8)) ? 5'd0 :
+    ((((ctu_visible_width == 16'd8) && (ctu_visible_height >= 16'd16)) ||
      ((ctu_visible_height == 16'd8) && (ctu_visible_width >= 16'd16))) ?
-    5'd2 : CTX_SPLIT_FLAG_6;
+    5'd2 : CTX_SPLIT_FLAG_6);
   assign split_leaf_needed = first_luma_split_ctx == 5'd2;
   assign rem_abs_value = (luma_abs_q - 5'd4) >> 1;
   assign rem_code_value = rem_abs_value - 5'd5;

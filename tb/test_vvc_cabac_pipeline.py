@@ -168,6 +168,7 @@ async def cabac_pipeline_matches_multiple_rust_encoder_vectors(dut):
         (24, 16, 64, 128, 128),
         (16, 24, 64, 128, 128),
         (32, 32, 0, 128, 128),
+        (64, 64, 64, 128, 128),
     ]
     for width, height, y, u, v in cases:
         await reset_dut(dut)

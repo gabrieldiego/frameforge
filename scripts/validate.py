@@ -320,13 +320,7 @@ def vtm_decode_supported(input_path: Path, info: InputInfo) -> bool:
             and coded_dimension(info.width) <= 64
             and coded_dimension(info.height) <= 64
         )
-    if coded_dimension(info.width) == 8 and coded_dimension(info.height) == 8:
-        return True
-    return (
-        is_vvc_16x16_generated_path(info)
-        or is_vvc_32x32_generated_path(info)
-        or is_vvc_64x64_generated_path(info)
-    )
+    return vvc_generated_transform_path(info)
 
 
 def coded_dimension(value: int) -> int:
@@ -522,15 +516,33 @@ def quantized_luma_remainder(sample: int) -> int:
     )
 
 
+VVC_CURRENT_CTU_SIZE = 64
+VVC_CURRENT_LUMA_LEAF_SIZE = 16
+
+
+def current_anchor_luma_tb_log2(width: int, height: int) -> tuple[int, int]:
+    if width == VVC_CURRENT_CTU_SIZE and height == VVC_CURRENT_CTU_SIZE:
+        return (6, 6)
+    if width == VVC_CURRENT_LUMA_LEAF_SIZE * 2 and height == VVC_CURRENT_LUMA_LEAF_SIZE:
+        return (5, 4)
+    return (
+        4 if width >= VVC_CURRENT_LUMA_LEAF_SIZE else 3,
+        4 if height >= VVC_CURRENT_LUMA_LEAF_SIZE else 3,
+    )
+
+
 def vvc_luma_reconstruction_from_sample(sample: int, info: InputInfo) -> int:
     rem = quantized_luma_remainder(sample)
     # Mirrors the currently emitted VVC residual subset: planar intra prediction
     # around the neutral sample with one negative DC coefficient level.
-    if info.width == 8 and info.height == 8:
+    log2_tb_width, log2_tb_height = current_anchor_luma_tb_log2(info.width, info.height)
+    if log2_tb_width == 3 and log2_tb_height == 3:
         residual_delta = (rem * 57 + 8) // 16
-    elif min(info.width, info.height) == 8 and max(info.width, info.height) >= 16:
+    elif min(log2_tb_width, log2_tb_height) == 3:
         residual_delta = (rem * 40) // 16
-    elif min(info.width, info.height) == 16 and max(info.width, info.height) >= 32:
+    elif log2_tb_width >= 6 and log2_tb_height >= 6:
+        residual_delta = (rem * 7 + 8) // 16
+    elif log2_tb_width >= 5 and log2_tb_height >= 4:
         residual_delta = (rem * 20 + 8) // 16
     else:
         residual_delta = (rem * 28 + 8) // 16
@@ -564,36 +576,15 @@ def input_is_all_zero(path: Path) -> bool:
     return True
 
 
-def is_vvc_16x16_generated_path(info: InputInfo) -> bool:
+def vvc_generated_transform_path(info: InputInfo) -> bool:
     return (
-        info.width <= 16
-        and info.height <= 16
-        and (info.width > 8 or info.height > 8)
-    )
-
-
-def is_vvc_32x32_generated_path(info: InputInfo) -> bool:
-    return (
-        info.width <= 32
-        and info.height <= 32
-        and (info.width > 16 or info.height > 16)
-    )
-
-
-def is_vvc_64x64_generated_path(info: InputInfo) -> bool:
-    return (
-        info.width <= 64
-        and info.height <= 64
-        and (info.width > 32 or info.height > 32)
+        coded_dimension(info.width) <= VVC_CURRENT_CTU_SIZE
+        and coded_dimension(info.height) <= VVC_CURRENT_CTU_SIZE
     )
 
 
 def expects_zero_reconstruction(input_path: Path, info: InputInfo) -> bool:
-    return input_is_all_zero(input_path) and not (
-        is_vvc_16x16_generated_path(info)
-        or is_vvc_32x32_generated_path(info)
-        or is_vvc_64x64_generated_path(info)
-    )
+    return input_is_all_zero(input_path) and not vvc_generated_transform_path(info)
 
 
 def validate_zero_reconstruction(path: Path, label: str) -> None:

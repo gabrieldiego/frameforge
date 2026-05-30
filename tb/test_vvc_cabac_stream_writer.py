@@ -241,13 +241,20 @@ async def cabac_stream_writer_matches_rust_vectors(dut):
         (16, 24, 64),
         (32, 32, 0),
         (32, 32, 64),
+        (64, 64, 64),
     ]
     for width, height, y in cases:
         vector = load_rust_stream_vector(width, height, y)
         await reset_dut(dut)
         await start_writer(dut)
         observed = await drive_bins_and_collect(dut, vector["bins"], max_cycles=8192)
-        assert observed == vector["bytes"], (width, height, y, observed.hex(), vector["bytes"].hex())
+        assert observed == vector["bytes"], (
+            width,
+            height,
+            y,
+            observed.hex(),
+            vector["bytes"].hex(),
+        )
         assert int(dut.stream_last_byte_bits.value) == vector["last_bits"], (
             width,
             height,
