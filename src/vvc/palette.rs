@@ -3,7 +3,8 @@ use crate::picture::{ChromaSampling, PixelFormat};
 use super::{
     sample_vvc_yuv_frame, vvc_4x4_pps_unit, vvc_palette_444_sps_unit, write_annex_b,
     Vvc4x4PictureKind, Vvc4x4SampledColor, Vvc4x4SampledFrame, VvcCabacEncoder, VvcCabacProbModel,
-    VvcEncodeParams, VvcNalUnit, VvcNalUnitType, VvcSyntaxWriter, VvcVideoGeometry,
+    VvcEncodeParams, VvcNalUnit, VvcNalUnitType, VvcSliceSyntaxConfig, VvcSyntaxWriter,
+    VvcVideoGeometry,
 };
 
 const VVC_PALETTE_CTU_SIZE: u16 = 64;
@@ -139,6 +140,8 @@ fn vvc_palette_444_slice_payload(
     frame: &Vvc4x4SampledFrame,
 ) -> Vec<u8> {
     let mut writer = VvcSyntaxWriter::new();
+    let slice_config = VvcSliceSyntaxConfig::palette_444();
+    let tool_flags = slice_config.tools;
     writer.write_flag("sh_picture_header_in_slice_header_flag", true);
     writer.write_flag("ph_gdr_or_irap_pic_flag", true);
     writer.write_flag("ph_non_ref_pic_flag", false);
@@ -153,7 +156,12 @@ fn vvc_palette_444_slice_payload(
     writer.write_flag("ph_joint_cbcr_sign_flag", false);
     writer.write_flag("sh_no_output_of_prior_pics_flag", false);
     writer.write_se("sh_qp_delta", 0);
-    writer.write_flag("sh_dep_quant_used_flag", true);
+    if tool_flags.dependent_quantization_enabled {
+        writer.write_flag("sh_dep_quant_used_flag", true);
+    }
+    if tool_flags.sign_data_hiding_enabled && !tool_flags.dependent_quantization_enabled {
+        writer.write_flag("sh_sign_data_hiding_used_flag", true);
+    }
     writer.write_flag("cabac_alignment_one_bit", true);
     if picture_kind == Vvc4x4PictureKind::Cra {
         writer.write_flag("cabac_alignment_one_bit", true);

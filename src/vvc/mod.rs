@@ -29,12 +29,11 @@ use palette::{
 pub use residual::quantize_vvc_4x4_color;
 #[cfg(test)]
 use residual::{
-    first_residual_luma_block, inverse_transform_vvc_4x4_luma_dc, quantize_vvc_4x4_chroma,
-    quantize_vvc_4x4_chroma_sample, quantize_vvc_4x4_luma_dc, reconstruct_vvc_4x4_chroma,
-    second_residual_luma_block, transform_vvc_4x4_luma, Vvc4x4QuantizedTransformBlock,
-    Vvc4x4ReconstructedLumaBlock, Vvc4x4TransformBlock, VvcResidualCabacSymbol,
-    VvcResidualComponent, VvcResidualCtxConfig, VvcResidualLocalStats, VvcResidualPass1State,
-    MAX_VVC_LUMA_TUS,
+    inverse_transform_vvc_4x4_luma_dc, quantize_vvc_4x4_chroma, quantize_vvc_4x4_chroma_sample,
+    quantize_vvc_4x4_luma_dc, reconstruct_vvc_4x4_chroma, transform_vvc_tu,
+    Vvc4x4QuantizedTransformBlock, Vvc4x4ReconstructedLumaBlock, Vvc4x4TransformBlock,
+    VvcResidualCabacSymbol, VvcResidualComponent, VvcResidualCtxConfig, VvcResidualLocalStats,
+    VvcResidualPass1State, VvcTransformComponent, VvcTuTransformBlock, MAX_VVC_LUMA_TUS,
 };
 use residual::{
     quantize_vvc_4x4_frame, Vvc4x4QuantizedColor, VvcResidualCabacEncoder, VvcResidualCabacOptions,
@@ -78,12 +77,13 @@ pub struct VvcEncodeParams {
 /// not a claim about all legal VVC profiles or future FrameForge codec paths.
 pub const VVC_CODED_DIMENSION_GRANULARITY: usize = 8;
 const VVC_CTU_SIZE: usize = 64;
-const VVC_CURRENT_MAX_LUMA_LEAF_SIZE: u16 = 32;
+const VVC_MIN_CODING_BLOCK_SIZE: u16 = 4;
+const VVC_MAX_TB_SIZEY: u16 = 64;
+const VVC_CURRENT_MAX_LUMA_LEAF_SIZE: u16 = 8;
 const VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT: u16 = VVC_CURRENT_MAX_LUMA_LEAF_SIZE;
-const VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE: u16 = VVC_CURRENT_MAX_LUMA_LEAF_SIZE / 2;
-const VVC_CURRENT_MAX_CHROMA_420_BOUNDARY_LEAF_SIZE: u16 = VVC_CURRENT_MAX_LUMA_LEAF_SIZE;
+const VVC_CURRENT_MAX_LUMA_BOUNDARY_BT_SIZE: u16 = VVC_CURRENT_MAX_LUMA_LEAF_SIZE * 4;
+const VVC_CURRENT_DUAL_TREE_CHROMA_LUMA_CU_SIZE: u16 = 32;
 const VVC_CURRENT_MIN_LUMA_QT_SIZE: u16 = 8;
-const VVC_CURRENT_MIN_CHROMA_420_QT_SIZE: u16 = VVC_CURRENT_MIN_LUMA_QT_SIZE / 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VvcVideoGeometry {
@@ -228,18 +228,90 @@ impl VvcCodingTreeConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct VvcSyntaxToolFlags {
+    transform_skip_enabled: bool,
+    mts_enabled: bool,
+    explicit_mts_intra_enabled: bool,
+    lfnst_enabled: bool,
+    mrl_enabled: bool,
+    cclm_enabled: bool,
+    dependent_quantization_enabled: bool,
+    sign_data_hiding_enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct VvcSliceSyntaxConfig {
+    coding_tree: VvcCodingTreeConfig,
+    palette_enabled: bool,
+    tools: VvcSyntaxToolFlags,
+}
+
+impl VvcSyntaxToolFlags {
+    const fn from_slice_features(config: VvcCodingTreeConfig, palette_enabled: bool) -> Self {
+        Self {
+            transform_skip_enabled: false,
+            mts_enabled: false,
+            explicit_mts_intra_enabled: false,
+            lfnst_enabled: false,
+            mrl_enabled: !palette_enabled,
+            cclm_enabled: !palette_enabled
+                && !matches!(config.chroma_sampling, ChromaSampling::Monochrome),
+            dependent_quantization_enabled: false,
+            sign_data_hiding_enabled: false,
+        }
+    }
+}
+
+impl VvcSliceSyntaxConfig {
+    const fn new(coding_tree: VvcCodingTreeConfig, palette_enabled: bool) -> Self {
+        Self {
+            coding_tree,
+            palette_enabled,
+            tools: VvcSyntaxToolFlags::from_slice_features(coding_tree, palette_enabled),
+        }
+    }
+
+    const fn yuv420_residual() -> Self {
+        Self::new(VvcCodingTreeConfig::yuv420(), false)
+    }
+
+    const fn palette_444() -> Self {
+        Self::new(
+            VvcCodingTreeConfig {
+                chroma_sampling: ChromaSampling::Cs444,
+            },
+            true,
+        )
+    }
+
+    const fn residual_options(self) -> VvcResidualCabacOptions {
+        VvcResidualCabacOptions {
+            transform_skip_enabled: self.tools.transform_skip_enabled,
+            explicit_mts_intra_enabled: self.tools.explicit_mts_intra_enabled,
+            dependent_quantization_enabled: self.tools.dependent_quantization_enabled,
+            sign_data_hiding_enabled: self.tools.sign_data_hiding_enabled,
+            lfnst_enabled: self.tools.lfnst_enabled,
+            sbt_enabled: false,
+        }
+    }
+}
+
 impl Vvc4x4SampledFrame {
     fn solid(color: Vvc4x4SampledColor) -> Self {
         Self {
-            geometry: VvcVideoGeometry::four_by_four(),
+            geometry: VvcVideoGeometry {
+                width: 8,
+                height: 8,
+            },
             format: Vvc4x4PictureFormat {
                 chroma_sampling: ChromaSampling::Cs420,
                 bit_depth: SampleBitDepth::Eight,
             },
-            luma: vec![color.y; 16],
-            cb: vec![color.u; 4],
-            cr: vec![color.v; 4],
-            chroma_len: 4,
+            luma: vec![color.y; 64],
+            cb: vec![color.u; 16],
+            cr: vec![color.v; 16],
+            chroma_len: 16,
         }
     }
 
@@ -289,6 +361,14 @@ struct VvcCtuPartitionParams {
 }
 
 impl VvcCtuPartitionParams {
+    fn chroma_subsample_x(self) -> u16 {
+        chroma_subsample_x(self.chroma_sampling) as u16
+    }
+
+    fn chroma_subsample_y(self) -> u16 {
+        chroma_subsample_y(self.chroma_sampling) as u16
+    }
+
     fn visible_chroma_width(self) -> u16 {
         (self.visible_width / chroma_subsample_x(self.chroma_sampling)) as u16
     }
@@ -297,12 +377,50 @@ impl VvcCtuPartitionParams {
         (self.visible_height / chroma_subsample_y(self.chroma_sampling)) as u16
     }
 
-    fn ctu_chroma_root(self) -> VvcCodingTreeNode {
-        VvcCodingTreeNode::root(
-            (VVC_CTU_SIZE / chroma_subsample_x(self.chroma_sampling)) as u16,
-            (VVC_CTU_SIZE / chroma_subsample_y(self.chroma_sampling)) as u16,
-            VvcTreeType::DualTreeChroma,
-        )
+    fn current_chroma_tree_nodes(self) -> Vec<VvcCodingTreeNode> {
+        if self.chroma_sampling == ChromaSampling::Monochrome {
+            return Vec::new();
+        }
+
+        let mut nodes = Vec::new();
+        let visible_width = self.visible_chroma_width();
+        let visible_height = self.visible_chroma_height();
+        let step = VVC_CURRENT_DUAL_TREE_CHROMA_LUMA_CU_SIZE;
+        for luma_y in (0..self.root_height as u16).step_by(step as usize) {
+            for luma_x in (0..self.root_width as u16).step_by(step as usize) {
+                let node = self.chroma_tree_node_from_luma_region(luma_x, luma_y, step, step);
+                if node.intersects_visible(visible_width, visible_height) {
+                    nodes.push(node);
+                }
+            }
+        }
+        nodes
+    }
+
+    fn chroma_tree_node_from_luma_region(
+        self,
+        luma_x: u16,
+        luma_y: u16,
+        luma_width: u16,
+        luma_height: u16,
+    ) -> VvcCodingTreeNode {
+        let sx = self.chroma_subsample_x();
+        let sy = self.chroma_subsample_y();
+        debug_assert_eq!(luma_x % sx, 0);
+        debug_assert_eq!(luma_y % sy, 0);
+        debug_assert_eq!(luma_width % sx, 0);
+        debug_assert_eq!(luma_height % sy, 0);
+        VvcCodingTreeNode {
+            x: luma_x / sx,
+            y: luma_y / sy,
+            width: luma_width / sx,
+            height: luma_height / sy,
+            cqt_depth: 1,
+            mtt_depth: 0,
+            implicit_mtt_depth: 0,
+            tree_type: VvcTreeType::DualTreeChroma,
+            split_history: [VvcPartSplit::Quad, VvcPartSplit::None],
+        }
     }
 }
 
@@ -356,7 +474,10 @@ pub fn vvc_yuv420p8_annex_b_from_input(
     vvc_yuv_annex_b_from_input(
         input,
         params,
-        VvcVideoGeometry::four_by_four(),
+        VvcVideoGeometry {
+            width: 8,
+            height: 8,
+        },
         PixelFormat::Yuv420p8,
     )
 }
@@ -366,7 +487,15 @@ pub fn vvc_yuv420p_annex_b_from_input(
     params: VvcEncodeParams,
     format: PixelFormat,
 ) -> Result<Vec<u8>, String> {
-    vvc_yuv_annex_b_from_input(input, params, VvcVideoGeometry::four_by_four(), format)
+    vvc_yuv_annex_b_from_input(
+        input,
+        params,
+        VvcVideoGeometry {
+            width: 8,
+            height: 8,
+        },
+        format,
+    )
 }
 
 pub fn vvc_default_yuv_annex_b_from_input(
@@ -374,7 +503,15 @@ pub fn vvc_default_yuv_annex_b_from_input(
     params: VvcEncodeParams,
     format: PixelFormat,
 ) -> Result<Vec<u8>, String> {
-    vvc_yuv_annex_b_from_input(input, params, VvcVideoGeometry::four_by_four(), format)
+    vvc_yuv_annex_b_from_input(
+        input,
+        params,
+        VvcVideoGeometry {
+            width: 8,
+            height: 8,
+        },
+        format,
+    )
 }
 
 pub fn vvc_yuv_annex_b_from_input(
@@ -421,7 +558,7 @@ pub fn vvc_yuv420_cabac_vector_dump_json(
     }
     let source_frame = sample_vvc_yuv_frame(input, params, geometry, format)?;
     let compat_frame = source_frame.decoder_compat_frame();
-    let color = quantize_vvc_4x4_color(compat_frame.sampled_color());
+    let color = quantize_vvc_4x4_frame(compat_frame.clone());
     let params = vvc_ctu_partition_params(compat_frame.geometry, color).ok_or_else(|| {
         format!(
             "VVC CABAC vector dump has no generated CTU path for coded geometry {}x{}",
@@ -429,7 +566,7 @@ pub fn vvc_yuv420_cabac_vector_dump_json(
             compat_frame.geometry.coded_height()
         )
     })?;
-    let dump = vvc_ctu_partition_cabac_dump(params);
+    let dump = vvc_ctu_partition_cabac_dump(params, VvcSliceSyntaxConfig::yuv420_residual());
     Ok(vvc_cabac_vector_dump_json(
         compat_frame.geometry,
         params,
@@ -448,7 +585,10 @@ pub fn sample_vvc_first_yuv420p8(
     Ok(sample_vvc_yuv_frame(
         input,
         params,
-        VvcVideoGeometry::four_by_four(),
+        VvcVideoGeometry {
+            width: 8,
+            height: 8,
+        },
         PixelFormat::Yuv420p8,
     )?
     .sampled_color())
@@ -562,34 +702,20 @@ fn vvc_annex_b(params: VvcEncodeParams, frame: Vvc4x4SampledFrame) -> Result<Vec
     write_annex_b(&units)
 }
 
-fn encode_vvc_coeff_token(negative: bool, magnitude: u8) -> u8 {
-    0x40 | (u8::from(negative) << 5) | (magnitude & 0x1f)
-}
-
 fn vvc_4x4_sps_unit(geometry: VvcVideoGeometry) -> VvcNalUnit {
-    vvc_sps_unit(geometry, VvcCodingTreeConfig::yuv420(), false)
+    vvc_sps_unit(geometry, VvcSliceSyntaxConfig::yuv420_residual())
 }
 
 fn vvc_palette_444_sps_unit(geometry: VvcVideoGeometry) -> VvcNalUnit {
-    vvc_sps_unit(
-        geometry,
-        VvcCodingTreeConfig {
-            chroma_sampling: ChromaSampling::Cs444,
-        },
-        true,
-    )
+    vvc_sps_unit(geometry, VvcSliceSyntaxConfig::palette_444())
 }
 
-fn vvc_sps_unit(
-    geometry: VvcVideoGeometry,
-    config: VvcCodingTreeConfig,
-    palette_enabled: bool,
-) -> VvcNalUnit {
+fn vvc_sps_unit(geometry: VvcVideoGeometry, slice_config: VvcSliceSyntaxConfig) -> VvcNalUnit {
     VvcNalUnit {
         nal_unit_type: VvcNalUnitType::Sps,
         layer_id: 0,
         temporal_id: 0,
-        rbsp_payload: vvc_sps_payload(geometry, config, palette_enabled),
+        rbsp_payload: vvc_sps_payload(geometry, slice_config),
     }
 }
 
@@ -626,15 +752,18 @@ fn vvc_4x4_slice_unit(
 
 #[cfg(test)]
 fn vvc_4x4_sps_payload(geometry: VvcVideoGeometry) -> Vec<u8> {
-    vvc_sps_payload(geometry, VvcCodingTreeConfig::yuv420(), false)
+    vvc_sps_payload(geometry, VvcSliceSyntaxConfig::yuv420_residual())
 }
 
-fn vvc_sps_payload(
-    geometry: VvcVideoGeometry,
-    config: VvcCodingTreeConfig,
-    palette_enabled: bool,
-) -> Vec<u8> {
+fn vvc_sps_payload(geometry: VvcVideoGeometry, slice_config: VvcSliceSyntaxConfig) -> Vec<u8> {
+    vvc_sps_rbsp(geometry, slice_config).bytes
+}
+
+fn vvc_sps_rbsp(geometry: VvcVideoGeometry, slice_config: VvcSliceSyntaxConfig) -> VvcSyntaxRbsp {
     let mut writer = VvcSyntaxWriter::new();
+    let config = slice_config.coding_tree;
+    let palette_enabled = slice_config.palette_enabled;
+    let tool_flags = slice_config.tools;
     writer.write_u("sps_seq_parameter_set_id", 0, 4);
     writer.write_u("sps_video_parameter_set_id", 0, 4);
     writer.write_u("sps_max_sub_layers_minus1", 0, 3);
@@ -666,8 +795,14 @@ fn vvc_sps_payload(
     }
     writer.write_u("ptl_num_sub_profiles", 0, 8);
     writer.write_flag("sps_gdr_enabled_flag", false);
-    writer.write_flag("sps_ref_pic_resampling_enabled_flag", true);
-    writer.write_flag("sps_res_change_in_clvs_allowed_flag", false);
+    let ref_pic_resampling_enabled = false;
+    writer.write_flag(
+        "sps_ref_pic_resampling_enabled_flag",
+        ref_pic_resampling_enabled,
+    );
+    if ref_pic_resampling_enabled {
+        writer.write_flag("sps_res_change_in_clvs_allowed_flag", false);
+    }
     writer.write_ue(
         "sps_pic_width_max_in_luma_samples",
         geometry.coded_width() as u32,
@@ -690,7 +825,7 @@ fn vvc_sps_payload(
     writer.write_flag("sps_subpic_info_present_flag", false);
     writer.write_ue("sps_bitdepth_minus8", 0);
     writer.write_flag("sps_entropy_coding_sync_enabled_flag", false);
-    writer.write_flag("sps_entry_point_offsets_present_flag", true);
+    writer.write_flag("sps_entry_point_offsets_present_flag", false);
     writer.write_u("sps_log2_max_pic_order_cnt_lsb_minus4", 4, 4);
     writer.write_flag("sps_poc_msb_cycle_flag", false);
     writer.write_u("sps_num_extra_ph_bytes", 0, 2);
@@ -726,9 +861,23 @@ fn vvc_sps_payload(
         (ctu_log2_size - 3).min(3),
     );
     writer.write_flag("sps_max_luma_transform_size_64_flag", true);
-    writer.write_flag("sps_transform_skip_enabled_flag", false);
-    writer.write_flag("sps_mts_enabled_flag", false);
-    writer.write_flag("sps_lfnst_enabled_flag", false);
+    writer.write_flag(
+        "sps_transform_skip_enabled_flag",
+        tool_flags.transform_skip_enabled,
+    );
+    if tool_flags.transform_skip_enabled {
+        writer.write_ue("sps_log2_transform_skip_max_size_minus2", 0);
+        writer.write_flag("sps_bdpcm_enabled_flag", false);
+    }
+    writer.write_flag("sps_mts_enabled_flag", tool_flags.mts_enabled);
+    if tool_flags.mts_enabled {
+        writer.write_flag(
+            "sps_explicit_mts_intra_enabled_flag",
+            tool_flags.explicit_mts_intra_enabled,
+        );
+        writer.write_flag("sps_explicit_mts_inter_enabled_flag", false);
+    }
+    writer.write_flag("sps_lfnst_enabled_flag", tool_flags.lfnst_enabled);
     writer.write_flag("sps_joint_cbcr_enabled_flag", true);
     writer.write_flag("sps_same_qp_table_for_chroma_flag", true);
     writer.write_se("sps_qp_table_starts_minus26", -9);
@@ -750,29 +899,43 @@ fn vvc_sps_payload(
     writer.write_ue("sps_num_ref_pic_lists[0]", 1);
     writer.write_ue("num_ref_entries[listIdx][rplsIdx]", 0);
     writer.write_flag("sps_ref_wraparound_enabled_flag", false);
-    writer.write_flag("sps_temporal_mvp_enabled_flag", true);
-    writer.write_flag("sps_sbtmvp_enabled_flag", true);
-    writer.write_flag("sps_amvr_enabled_flag", true);
+    let temporal_mvp_enabled = false;
+    writer.write_flag("sps_temporal_mvp_enabled_flag", temporal_mvp_enabled);
+    if temporal_mvp_enabled {
+        writer.write_flag("sps_sbtmvp_enabled_flag", false);
+    }
+    let amvr_enabled = false;
+    writer.write_flag("sps_amvr_enabled_flag", amvr_enabled);
     writer.write_flag("sps_bdof_enabled_flag", false);
     writer.write_flag("sps_smvd_enabled_flag", false);
     writer.write_flag("sps_dmvr_enabled_flag", false);
-    writer.write_flag("sps_mmvd_enabled_flag", true);
-    writer.write_flag("sps_mmvd_fullpel_only_flag", true);
+    let mmvd_enabled = false;
+    writer.write_flag("sps_mmvd_enabled_flag", mmvd_enabled);
+    if mmvd_enabled {
+        writer.write_flag("sps_mmvd_fullpel_only_flag", false);
+    }
     writer.write_ue("sps_six_minus_max_num_merge_cand", 0);
-    writer.write_flag("sps_sbt_enabled_flag", true);
-    writer.write_flag("sps_affine_enabled_flag", true);
-    writer.write_ue("sps_five_minus_max_num_subblock_merge_cand", 0);
-    writer.write_flag("sps_affine_type_flag", true);
-    writer.write_flag("sps_affine_amvr_enabled_flag", false);
-    writer.write_flag("sps_affine_prof_enabled_flag", false);
+    writer.write_flag("sps_sbt_enabled_flag", false);
+    let affine_enabled = false;
+    writer.write_flag("sps_affine_enabled_flag", affine_enabled);
+    if affine_enabled {
+        writer.write_ue("sps_five_minus_max_num_subblock_merge_cand", 0);
+        writer.write_flag("sps_affine_type_flag", false);
+        if amvr_enabled {
+            writer.write_flag("sps_affine_amvr_enabled_flag", false);
+        }
+        writer.write_flag("sps_affine_prof_enabled_flag", false);
+    }
     writer.write_flag("sps_bcw_enabled_flag", false);
     writer.write_flag("sps_ciip_enabled_flag", false);
     writer.write_flag("sps_gpm_enabled_flag", false);
     writer.write_ue("sps_log2_parallel_merge_level_minus2", 0);
     writer.write_flag("sps_isp_enabled_flag", false);
-    writer.write_flag("sps_mrl_enabled_flag", true);
+    writer.write_flag("sps_mrl_enabled_flag", tool_flags.mrl_enabled);
     writer.write_flag("sps_mip_enabled_flag", false);
-    writer.write_flag("sps_cclm_enabled_flag", true);
+    if config.chroma_sampling != ChromaSampling::Monochrome {
+        writer.write_flag("sps_cclm_enabled_flag", tool_flags.cclm_enabled);
+    }
     if config.chroma_sampling == ChromaSampling::Cs420 {
         writer.write_flag("sps_chroma_horizontal_collocated_flag", true);
         writer.write_flag("sps_chroma_vertical_collocated_flag", false);
@@ -784,8 +947,14 @@ fn vvc_sps_payload(
     writer.write_flag("sps_ibc_enabled_flag", false);
     writer.write_flag("sps_ladf_enabled_flag", false);
     writer.write_flag("sps_explicit_scaling_list_enabled_flag", false);
-    writer.write_flag("sps_dep_quant_enabled_flag", true);
-    writer.write_flag("sps_sign_data_hiding_enabled_flag", false);
+    writer.write_flag(
+        "sps_dep_quant_enabled_flag",
+        tool_flags.dependent_quantization_enabled,
+    );
+    writer.write_flag(
+        "sps_sign_data_hiding_enabled_flag",
+        tool_flags.sign_data_hiding_enabled,
+    );
     writer.write_flag("sps_virtual_boundaries_enabled_flag", false);
     writer.write_flag("sps_timing_hrd_params_present_flag", false);
     writer.write_flag("sps_field_seq_flag", false);
@@ -793,7 +962,7 @@ fn vvc_sps_payload(
     writer.write_flag("sps_extension_present_flag", false);
     writer.rbsp_trailing_bits();
     debug_assert!(writer.is_byte_aligned());
-    writer.into_bytes()
+    writer.finish()
 }
 
 fn chroma_format_idc(chroma_sampling: ChromaSampling) -> u32 {
@@ -817,6 +986,10 @@ fn vvc_general_profile_idc(config: VvcCodingTreeConfig, palette_enabled: bool) -
 }
 
 fn vvc_4x4_pps_payload(geometry: VvcVideoGeometry) -> Vec<u8> {
+    vvc_4x4_pps_rbsp(geometry).bytes
+}
+
+fn vvc_4x4_pps_rbsp(geometry: VvcVideoGeometry) -> VvcSyntaxRbsp {
     let mut writer = VvcSyntaxWriter::new();
     writer.write_u("pps_pic_parameter_set_id", 0, 6);
     writer.write_u("pps_seq_parameter_set_id", 0, 4);
@@ -834,7 +1007,7 @@ fn vvc_4x4_pps_payload(geometry: VvcVideoGeometry) -> Vec<u8> {
     writer.write_flag("pps_output_flag_present_flag", false);
     writer.write_flag("pps_no_pic_partition_flag", true);
     writer.write_flag("pps_subpic_id_mapping_present_flag", false);
-    writer.write_flag("pps_cabac_init_present_flag", true);
+    writer.write_flag("pps_cabac_init_present_flag", false);
     writer.write_ue("pps_num_ref_idx_default_active_minus1[0]", 3);
     writer.write_ue("pps_num_ref_idx_default_active_minus1[1]", 3);
     writer.write_flag("pps_rpl1_idx_present_flag", false);
@@ -864,7 +1037,7 @@ fn vvc_4x4_pps_payload(geometry: VvcVideoGeometry) -> Vec<u8> {
     writer.write_flag("pps_extension_flag", false);
     writer.rbsp_trailing_bits();
     debug_assert!(writer.is_byte_aligned());
-    writer.into_bytes()
+    writer.finish()
 }
 
 fn vvc_4x4_slice_payload(
@@ -872,7 +1045,23 @@ fn vvc_4x4_slice_payload(
     geometry: VvcVideoGeometry,
     color: Vvc4x4QuantizedColor,
 ) -> Vec<u8> {
+    vvc_4x4_slice_rbsp(
+        picture_kind,
+        geometry,
+        color,
+        VvcSliceSyntaxConfig::yuv420_residual(),
+    )
+    .bytes
+}
+
+fn vvc_4x4_slice_rbsp(
+    picture_kind: Vvc4x4PictureKind,
+    geometry: VvcVideoGeometry,
+    color: Vvc4x4QuantizedColor,
+    slice_config: VvcSliceSyntaxConfig,
+) -> VvcSyntaxRbsp {
     let mut writer = VvcSyntaxWriter::new();
+    let tool_flags = slice_config.tools;
     writer.write_flag("sh_picture_header_in_slice_header_flag", true);
     writer.write_flag("ph_gdr_or_irap_pic_flag", true);
     writer.write_flag("ph_non_ref_pic_flag", false);
@@ -891,16 +1080,21 @@ fn vvc_4x4_slice_payload(
     writer.write_flag("ph_joint_cbcr_sign_flag", false);
     writer.write_flag("sh_no_output_of_prior_pics_flag", false);
     writer.write_se("sh_qp_delta", 0);
-    writer.write_flag("sh_dep_quant_used_flag", true);
+    if tool_flags.dependent_quantization_enabled {
+        writer.write_flag("sh_dep_quant_used_flag", true);
+    }
+    if tool_flags.sign_data_hiding_enabled && !tool_flags.dependent_quantization_enabled {
+        writer.write_flag("sh_sign_data_hiding_used_flag", true);
+    }
     writer.write_flag("cabac_alignment_one_bit", true);
     if picture_kind == Vvc4x4PictureKind::Cra {
         writer.write_flag("cabac_alignment_one_bit", true);
     }
     writer.byte_align_zero("cabac_alignment_zero_bit");
-    write_vvc_coding_tree_entropy(&mut writer, geometry, color);
+    write_vvc_coding_tree_entropy(&mut writer, geometry, color, slice_config);
     writer.rbsp_trailing_bits();
     debug_assert!(writer.is_byte_aligned());
-    writer.into_bytes()
+    writer.finish()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -958,9 +1152,19 @@ impl VvcCabacContext {
             VvcCabacContext::MttSplitCuVerticalFlag(3) => Some(24),
             VvcCabacContext::MttSplitCuBinaryFlag(1) => Some(25),
             VvcCabacContext::MttSplitCuBinaryFlag(3) => Some(26),
+            VvcCabacContext::MttSplitCuBinaryFlag(0) => Some(31),
+            VvcCabacContext::MttSplitCuBinaryFlag(2) => Some(32),
             VvcCabacContext::SplitFlag(1) => Some(27),
             VvcCabacContext::SplitFlag(2) => Some(28),
             VvcCabacContext::MttSplitCuVerticalFlag(0) => Some(29),
+            VvcCabacContext::MttSplitCuVerticalFlag(4) => Some(30),
+            VvcCabacContext::SplitFlag(4) => Some(33),
+            VvcCabacContext::SplitQtFlag(1) => Some(34),
+            VvcCabacContext::SplitQtFlag(2) => Some(35),
+            VvcCabacContext::SplitQtFlag(4) => Some(36),
+            VvcCabacContext::SplitQtFlag(5) => Some(37),
+            VvcCabacContext::SplitFlag(5) => Some(38),
+            VvcCabacContext::SplitFlag(8) => Some(39),
             _ => None,
         }
     }
@@ -983,7 +1187,8 @@ impl VvcCabacContext {
                 I_SLICE_INIT[ctx as usize]
             }
             VvcCabacContext::MttSplitCuBinaryFlag(ctx) => {
-                const I_SLICE_INIT: [u8; 12] = [45, 45, 45, 45, 43, 37, 21, 22, 28, 29, 28, 29];
+                // ITU-T H.266 (V4) Table 62, initType 0 / I-slice.
+                const I_SLICE_INIT: [u8; 12] = [36, 45, 36, 45, 43, 37, 21, 22, 28, 29, 28, 29];
                 I_SLICE_INIT[ctx as usize]
             }
             VvcCabacContext::MultiRefLineIdx(ctx) => {
@@ -1531,8 +1736,9 @@ fn write_vvc_coding_tree_entropy(
     writer: &mut VvcSyntaxWriter,
     geometry: VvcVideoGeometry,
     color: Vvc4x4QuantizedColor,
+    slice_config: VvcSliceSyntaxConfig,
 ) {
-    let bits = vvc_cabac_bits(geometry, color);
+    let bits = vvc_cabac_bits(geometry, color, slice_config);
     writer.write_cabac_bits("cabac_vvc_quantized_residual_bits", &bits);
 }
 
@@ -1578,8 +1784,8 @@ fn vvc_luma_partition_plan(geometry: VvcVideoGeometry) -> Vec<VvcLumaPartitionSt
         coded.width,
         coded.height,
         VvcCodedGeometry {
-            width: VVC_CTU_SIZE / 2,
-            height: VVC_CTU_SIZE / 2,
+            width: VVC_CURRENT_MAX_LUMA_LEAF_SIZE as usize,
+            height: VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT as usize,
         },
     );
     steps
@@ -1625,9 +1831,13 @@ fn append_vvc_luma_partition(
     }
 }
 
-fn vvc_cabac_bits(geometry: VvcVideoGeometry, color: Vvc4x4QuantizedColor) -> Vec<bool> {
+fn vvc_cabac_bits(
+    geometry: VvcVideoGeometry,
+    color: Vvc4x4QuantizedColor,
+    slice_config: VvcSliceSyntaxConfig,
+) -> Vec<bool> {
     if let Some(params) = vvc_ctu_partition_params(geometry, color) {
-        return vvc_ctu_partition_cabac_bits(params);
+        return vvc_ctu_partition_cabac_bits(params, slice_config);
     }
     unimplemented!(
         "VVC coding tree for coded geometry {}x{} must be generated from syntax parameters",
@@ -1686,14 +1896,46 @@ fn vvc_ctu_partition_params(
     })
 }
 
-fn vvc_ctu_partition_cabac_bits(params: VvcCtuPartitionParams) -> Vec<bool> {
+fn vvc_anchor_luma_tu_size_from_partition(geometry: VvcVideoGeometry) -> VvcVideoGeometry {
+    let params = VvcCtuPartitionParams {
+        root_width: VVC_CTU_SIZE,
+        root_height: VVC_CTU_SIZE,
+        visible_width: geometry.coded_width(),
+        visible_height: geometry.coded_height(),
+        chroma_sampling: ChromaSampling::Cs420,
+        chroma_tu_count: 0,
+        luma_dc_abs_level: 0,
+        luma_dc_negative: false,
+        cb_dc_abs_level: 0,
+        cb_dc_negative: false,
+    };
+
+    VvcCtuCabacOp::yuv420_ctu_partition(params)
+        .into_iter()
+        .find_map(|op| match op {
+            VvcCtuCabacOp::LumaLeafWithSplitCtx { node, .. } => Some(VvcVideoGeometry {
+                width: usize::from(node.width),
+                height: usize::from(node.height),
+            }),
+            _ => None,
+        })
+        .unwrap_or(VvcVideoGeometry {
+            width: VVC_CURRENT_MAX_LUMA_LEAF_SIZE as usize,
+            height: VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT as usize,
+        })
+}
+
+fn vvc_ctu_partition_cabac_bits(
+    params: VvcCtuPartitionParams,
+    slice_config: VvcSliceSyntaxConfig,
+) -> Vec<bool> {
     debug_assert!((8..=64).contains(&params.root_width));
     debug_assert!((8..=64).contains(&params.root_height));
     debug_assert!(params.visible_width >= 8 && params.visible_height >= 8);
 
     let mut cabac = VvcCabacEncoder::new();
     cabac.start();
-    encode_ctu_partition_body(&mut cabac, params);
+    encode_ctu_partition_body(&mut cabac, params, slice_config);
     cabac.encode_bin_trm(true);
     cabac.finish()
 }
@@ -1706,14 +1948,17 @@ struct VvcCtuCabacDump {
     bits: Vec<bool>,
 }
 
-fn vvc_ctu_partition_cabac_dump(params: VvcCtuPartitionParams) -> VvcCtuCabacDump {
+fn vvc_ctu_partition_cabac_dump(
+    params: VvcCtuPartitionParams,
+    slice_config: VvcSliceSyntaxConfig,
+) -> VvcCtuCabacDump {
     debug_assert!((8..=64).contains(&params.root_width));
     debug_assert!((8..=64).contains(&params.root_height));
     debug_assert!(params.visible_width >= 8 && params.visible_height >= 8);
 
     let mut cabac = VvcCabacEncoder::new();
     cabac.start();
-    encode_ctu_partition_body(&mut cabac, params);
+    encode_ctu_partition_body(&mut cabac, params, slice_config);
     cabac.encode_bin_trm(true);
     let semantic_symbols = cabac.semantic_symbols.clone();
     let context_events = cabac.context_events.clone();
@@ -1858,12 +2103,15 @@ fn append_byte_hex(out: &mut String, byte: u8) {
     out.push(HEX[(byte & 0x0f) as usize] as char);
 }
 
-fn encode_ctu_partition_body(cabac: &mut VvcCabacEncoder, params: VvcCtuPartitionParams) {
+fn encode_ctu_partition_body(
+    cabac: &mut VvcCabacEncoder,
+    params: VvcCtuPartitionParams,
+    slice_config: VvcSliceSyntaxConfig,
+) {
     let mut ctu = VvcCtuCabacGenerator::new(
         params.luma_dc_abs_level,
         params.luma_dc_negative,
-        params.cb_dc_abs_level,
-        params.cb_dc_negative,
+        slice_config,
     );
     for op in VvcCtuCabacOp::yuv420_ctu_partition(params) {
         ctu.emit(cabac, op);
@@ -1879,6 +2127,16 @@ enum VvcTreeType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VvcPartSplit {
+    None,
+    Quad,
+    HorizontalBinary,
+    VerticalBinary,
+    HorizontalTernary,
+    VerticalTernary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct VvcCodingTreeNode {
     x: u16,
     y: u16,
@@ -1886,7 +2144,9 @@ struct VvcCodingTreeNode {
     height: u16,
     cqt_depth: u8,
     mtt_depth: u8,
+    implicit_mtt_depth: u8,
     tree_type: VvcTreeType,
+    split_history: [VvcPartSplit; 2],
 }
 
 impl VvcCodingTreeNode {
@@ -1898,8 +2158,19 @@ impl VvcCodingTreeNode {
             height,
             cqt_depth: 0,
             mtt_depth: 0,
+            implicit_mtt_depth: 0,
             tree_type,
+            split_history: [VvcPartSplit::None; 2],
         }
+    }
+
+    fn with_split_at_current_depth(self, split: VvcPartSplit) -> [VvcPartSplit; 2] {
+        let mut split_history = self.split_history;
+        let depth = usize::from(self.cqt_depth + self.mtt_depth);
+        if depth < split_history.len() {
+            split_history[depth] = split;
+        }
+        split_history
     }
 
     fn qt_child(self, child_idx: u8) -> Self {
@@ -1913,7 +2184,9 @@ impl VvcCodingTreeNode {
             height: half_height,
             cqt_depth: self.cqt_depth + 1,
             mtt_depth: 0,
+            implicit_mtt_depth: 0,
             tree_type: self.tree_type,
+            split_history: self.with_split_at_current_depth(VvcPartSplit::Quad),
         }
     }
 
@@ -1932,8 +2205,20 @@ impl VvcCodingTreeNode {
             height,
             cqt_depth: self.cqt_depth,
             mtt_depth: self.mtt_depth + 1,
+            implicit_mtt_depth: self.implicit_mtt_depth,
             tree_type: self.tree_type,
+            split_history: self.with_split_at_current_depth(if vertical {
+                VvcPartSplit::VerticalBinary
+            } else {
+                VvcPartSplit::HorizontalBinary
+            }),
         }
+    }
+
+    fn implicit_mtt_child(self, vertical: bool, child_idx: u8) -> Self {
+        let mut child = self.mtt_child(vertical, child_idx);
+        child.implicit_mtt_depth = self.implicit_mtt_depth + 1;
+        child
     }
 
     #[allow(dead_code)]
@@ -1980,7 +2265,13 @@ impl VvcCodingTreeNode {
             height,
             cqt_depth: self.cqt_depth,
             mtt_depth: self.mtt_depth + 1,
+            implicit_mtt_depth: self.implicit_mtt_depth,
             tree_type: self.tree_type,
+            split_history: self.with_split_at_current_depth(if vertical {
+                VvcPartSplit::VerticalTernary
+            } else {
+                VvcPartSplit::HorizontalTernary
+            }),
         }
     }
 
@@ -1994,151 +2285,422 @@ impl VvcCodingTreeNode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct VvcSplitCtxInput {
-    available_left: bool,
-    available_above: bool,
-    condition_left: bool,
-    condition_above: bool,
-    allow_bt_vertical: bool,
-    allow_bt_horizontal: bool,
-    allow_tt_vertical: bool,
-    allow_tt_horizontal: bool,
-    allow_qt: bool,
+struct VvcCodedNeighbour {
+    width: u16,
+    height: u16,
+    qt_depth: u8,
 }
 
-impl VvcSplitCtxInput {
-    fn qt_split_without_neighbours() -> Self {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VvcSplitAvailability {
+    can_no_split: bool,
+    can_qt: bool,
+    can_bt_horizontal: bool,
+    can_bt_vertical: bool,
+    can_tt_horizontal: bool,
+    can_tt_vertical: bool,
+}
+
+impl VvcSplitAvailability {
+    #[allow(dead_code)]
+    fn qt_only(can_no_split: bool) -> Self {
         Self {
-            available_left: false,
-            available_above: false,
-            condition_left: false,
-            condition_above: false,
-            allow_bt_vertical: false,
-            allow_bt_horizontal: false,
-            allow_tt_vertical: false,
-            allow_tt_horizontal: false,
-            allow_qt: true,
+            can_no_split,
+            can_qt: true,
+            can_bt_horizontal: false,
+            can_bt_vertical: false,
+            can_tt_horizontal: false,
+            can_tt_vertical: false,
         }
     }
 
-    fn full_child_without_smaller_neighbours() -> Self {
+    fn split_alternatives(self) -> u8 {
+        u8::from(self.can_bt_vertical)
+            + u8::from(self.can_bt_horizontal)
+            + u8::from(self.can_tt_vertical)
+            + u8::from(self.can_tt_horizontal)
+            + (2 * u8::from(self.can_qt))
+    }
+
+    fn can_split(self) -> bool {
+        self.can_qt
+            || self.can_bt_horizontal
+            || self.can_bt_vertical
+            || self.can_tt_horizontal
+            || self.can_tt_vertical
+    }
+
+    fn can_btt(self) -> bool {
+        self.can_bt_horizontal
+            || self.can_bt_vertical
+            || self.can_tt_horizontal
+            || self.can_tt_vertical
+    }
+
+    fn horizontal_alternatives(self) -> u8 {
+        u8::from(self.can_bt_horizontal) + u8::from(self.can_tt_horizontal)
+    }
+
+    fn vertical_alternatives(self) -> u8 {
+        u8::from(self.can_bt_vertical) + u8::from(self.can_tt_vertical)
+    }
+
+    fn can_horizontal_split(self) -> bool {
+        self.can_bt_horizontal || self.can_tt_horizontal
+    }
+
+    fn can_vertical_split(self) -> bool {
+        self.can_bt_vertical || self.can_tt_vertical
+    }
+
+    fn with_implicit_split(self, implicit_split: VvcPartSplit) -> Self {
+        if implicit_split == VvcPartSplit::None {
+            return self;
+        }
+
+        // ITU-T H.266 clause 6.4.1 / VTM QTBTPartitioner::canSplit(): when a
+        // block crosses the picture boundary, no-split and ternary splits are
+        // disabled; the implicit split direction is exposed as the only BT
+        // alternative, while QT remains available when the partitioner permits
+        // it or when no implicit BT can be represented.
+        let can_bt_horizontal = implicit_split == VvcPartSplit::HorizontalBinary;
+        let can_bt_vertical = implicit_split == VvcPartSplit::VerticalBinary;
         Self {
-            available_left: false,
-            available_above: false,
-            condition_left: false,
-            condition_above: false,
-            allow_bt_vertical: true,
-            allow_bt_horizontal: true,
-            allow_tt_vertical: true,
-            allow_tt_horizontal: true,
-            allow_qt: true,
+            can_no_split: false,
+            can_qt: self.can_qt
+                || (!can_bt_horizontal && !can_bt_vertical && implicit_split == VvcPartSplit::Quad),
+            can_bt_horizontal,
+            can_bt_vertical,
+            can_tt_horizontal: false,
+            can_tt_vertical: false,
         }
     }
 
-    fn bt_leaf_without_smaller_neighbours() -> Self {
-        Self {
-            available_left: false,
-            available_above: false,
-            condition_left: false,
-            condition_above: false,
-            allow_bt_vertical: true,
-            allow_bt_horizontal: true,
-            allow_tt_vertical: true,
-            allow_tt_horizontal: true,
-            allow_qt: false,
+    fn split_is_legal(self, split: VvcPartSplit) -> bool {
+        match split {
+            VvcPartSplit::None => self.can_no_split,
+            VvcPartSplit::Quad => self.can_qt,
+            VvcPartSplit::HorizontalBinary => self.can_bt_horizontal,
+            VvcPartSplit::VerticalBinary => self.can_bt_vertical,
+            VvcPartSplit::HorizontalTernary => self.can_tt_horizontal,
+            VvcPartSplit::VerticalTernary => self.can_tt_vertical,
         }
-    }
-
-    fn min_qt_leaf_with_deeper_neighbours(left_deeper: bool, above_deeper: bool) -> Self {
-        Self {
-            available_left: left_deeper,
-            available_above: above_deeper,
-            condition_left: left_deeper,
-            condition_above: above_deeper,
-            allow_bt_vertical: false,
-            allow_bt_horizontal: false,
-            allow_tt_vertical: false,
-            allow_tt_horizontal: false,
-            allow_qt: true,
-        }
-    }
-
-    fn full_child_with_deeper_neighbours(left_deeper: bool, above_deeper: bool) -> Self {
-        Self {
-            available_left: left_deeper,
-            available_above: above_deeper,
-            condition_left: left_deeper,
-            condition_above: above_deeper,
-            allow_bt_vertical: true,
-            allow_bt_horizontal: true,
-            allow_tt_vertical: true,
-            allow_tt_horizontal: true,
-            allow_qt: true,
-        }
-    }
-
-    fn split_cu_flag_ctx(self) -> u8 {
-        // VVC 9.3.4.2.2 derives ctxInc for split_cu_flag as:
-        //   condL + condA + ctxSetIdx * 3
-        // with ctxSetIdx =
-        //   (allowBtVer + allowBtHor + allowTtVer + allowTtHor
-        //    + 2 * allowQt - 1) / 2.
-        let split_alternatives = u8::from(self.allow_bt_vertical)
-            + u8::from(self.allow_bt_horizontal)
-            + u8::from(self.allow_tt_vertical)
-            + u8::from(self.allow_tt_horizontal)
-            + (2 * u8::from(self.allow_qt));
-        debug_assert!(split_alternatives > 0);
-        let ctx_set_idx = (split_alternatives - 1) / 2;
-        u8::from(self.condition_left && self.available_left)
-            + u8::from(self.condition_above && self.available_above)
-            + (3 * ctx_set_idx)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
-struct VvcQtSplitCtxInput {
-    available_left: bool,
-    available_above: bool,
-    left_deeper_qt: bool,
-    above_deeper_qt: bool,
-    cqt_depth: u8,
+struct VvcSplitCtxInput {
+    node: VvcCodingTreeNode,
+    left: Option<VvcCodedNeighbour>,
+    above: Option<VvcCodedNeighbour>,
+    availability: VvcSplitAvailability,
 }
 
-#[allow(dead_code)]
-impl VvcQtSplitCtxInput {
-    fn from_node_without_deeper_neighbours(node: VvcCodingTreeNode) -> Self {
-        Self {
-            available_left: false,
-            available_above: false,
-            left_deeper_qt: false,
-            above_deeper_qt: false,
-            cqt_depth: node.cqt_depth,
-        }
-    }
-
-    fn from_node_with_deeper_neighbours(
-        node: VvcCodingTreeNode,
-        left_deeper_qt: bool,
-        above_deeper_qt: bool,
-    ) -> Self {
-        Self {
-            available_left: left_deeper_qt,
-            available_above: above_deeper_qt,
-            left_deeper_qt,
-            above_deeper_qt,
-            cqt_depth: node.cqt_depth,
-        }
+impl VvcSplitCtxInput {
+    fn split_cu_flag_ctx(self) -> u8 {
+        // ITU-T H.266 clause 9.3.4.2.2 / Table 133 derives ctxInc for
+        // split_cu_flag from the actual left/above CU sizes in the current
+        // channel plus the legal split alternatives returned by canSplit().
+        let split_alternatives = self.availability.split_alternatives();
+        debug_assert!(split_alternatives > 0);
+        let ctx_set_idx = (split_alternatives - 1) / 2;
+        let left_smaller = self
+            .left
+            .map(|left| left.height < self.node.height)
+            .unwrap_or(false);
+        let above_smaller = self
+            .above
+            .map(|above| above.width < self.node.width)
+            .unwrap_or(false);
+        u8::from(left_smaller) + u8::from(above_smaller) + (3 * ctx_set_idx)
     }
 
     fn split_qt_flag_ctx(self) -> u8 {
-        // VVC 9.3.4.2.2 derives ctxInc for split_qt_flag as:
-        //   (condL && availableL) + (condA && availableA) + ctxSetIdx * 3
-        // where ctxSetIdx is cqtDepth >= 2.
-        u8::from(self.left_deeper_qt && self.available_left)
-            + u8::from(self.above_deeper_qt && self.available_above)
-            + (3 * u8::from(self.cqt_depth >= 2))
+        // ITU-T H.266 clause 9.3.4.2.2 / Table 133 derives ctxInc for
+        // split_qt_flag from neighbouring CU QT depth and the current QT-depth
+        // context set. Keep neighbour availability as data instead of assuming
+        // top-left-only CTUs.
+        let left_deeper_qt = self
+            .left
+            .map(|left| left.qt_depth > self.node.cqt_depth)
+            .unwrap_or(false);
+        let above_deeper_qt = self
+            .above
+            .map(|above| above.qt_depth > self.node.cqt_depth)
+            .unwrap_or(false);
+        u8::from(left_deeper_qt)
+            + u8::from(above_deeper_qt)
+            + (3 * u8::from(self.node.cqt_depth >= 2))
+    }
+
+    fn mtt_vertical_ctx(self) -> u8 {
+        // ITU-T H.266 clause 9.3.4.2.2 / Table 133 derives ctxInc for
+        // mtt_split_cu_vertical_flag from the horizontal/vertical split
+        // alternatives and, when tied, the relative depth implied by the
+        // actual left/above CU dimensions.
+        let num_hor = self.availability.horizontal_alternatives();
+        let num_ver = self.availability.vertical_alternatives();
+        match num_ver.cmp(&num_hor) {
+            std::cmp::Ordering::Less => 3,
+            std::cmp::Ordering::Greater => 4,
+            std::cmp::Ordering::Equal => {
+                let (Some(left), Some(above)) = (self.left, self.above) else {
+                    return 0;
+                };
+                let dep_above = self.node.width / above.width.max(1);
+                let dep_left = self.node.height / left.height.max(1);
+                match dep_above.cmp(&dep_left) {
+                    std::cmp::Ordering::Less => 1,
+                    std::cmp::Ordering::Greater => 2,
+                    std::cmp::Ordering::Equal => 0,
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VvcSplitSyntaxDecision {
+    split_input: VvcSplitCtxInput,
+    selected_split: VvcPartSplit,
+}
+
+impl VvcSplitSyntaxDecision {
+    fn new(split_input: VvcSplitCtxInput, selected_split: VvcPartSplit) -> Self {
+        debug_assert!(
+            split_input.availability.split_is_legal(selected_split),
+            "illegal selected split {:?} for {:?}",
+            selected_split,
+            split_input
+        );
+        Self {
+            split_input,
+            selected_split,
+        }
+    }
+
+    fn split_flag(self) -> Option<(u8, bool)> {
+        let availability = self.split_input.availability;
+        if availability.can_no_split && availability.can_split() {
+            Some((
+                self.split_input.split_cu_flag_ctx(),
+                self.selected_split != VvcPartSplit::None,
+            ))
+        } else {
+            None
+        }
+    }
+
+    fn split_qt_flag(self) -> Option<(u8, bool)> {
+        let availability = self.split_input.availability;
+        if self.selected_split == VvcPartSplit::None {
+            return None;
+        }
+        if availability.can_qt && availability.can_btt() {
+            Some((
+                self.split_input.split_qt_flag_ctx(),
+                self.selected_split == VvcPartSplit::Quad,
+            ))
+        } else {
+            None
+        }
+    }
+
+    fn mtt_vertical_flag(self) -> Option<(u8, bool)> {
+        let availability = self.split_input.availability;
+        if matches!(self.selected_split, VvcPartSplit::None | VvcPartSplit::Quad) {
+            return None;
+        }
+        let is_vertical = matches!(
+            self.selected_split,
+            VvcPartSplit::VerticalBinary | VvcPartSplit::VerticalTernary
+        );
+        if availability.can_vertical_split() && availability.can_horizontal_split() {
+            Some((self.split_input.mtt_vertical_ctx(), is_vertical))
+        } else {
+            None
+        }
+    }
+
+    fn mtt_binary_flag(self) -> Option<(u8, bool)> {
+        let availability = self.split_input.availability;
+        let is_vertical = match self.selected_split {
+            VvcPartSplit::VerticalBinary | VvcPartSplit::VerticalTernary => true,
+            VvcPartSplit::HorizontalBinary | VvcPartSplit::HorizontalTernary => false,
+            VvcPartSplit::None | VvcPartSplit::Quad => return None,
+        };
+        let can_binary = if is_vertical {
+            availability.can_bt_vertical
+        } else {
+            availability.can_bt_horizontal
+        };
+        let can_ternary = if is_vertical {
+            availability.can_tt_vertical
+        } else {
+            availability.can_tt_horizontal
+        };
+        if can_binary && can_ternary {
+            Some((
+                VvcCtuCabacOp::mtt_binary_ctx(is_vertical, self.split_input.node.mtt_depth),
+                matches!(
+                    self.selected_split,
+                    VvcPartSplit::HorizontalBinary | VvcPartSplit::VerticalBinary
+                ),
+            ))
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VvcCodedCuRegion {
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+    qt_depth: u8,
+}
+
+impl VvcCodedCuRegion {
+    fn from_leaf(node: VvcCodingTreeNode) -> Self {
+        Self {
+            x: node.x,
+            y: node.y,
+            width: node.width,
+            height: node.height,
+            qt_depth: node.cqt_depth,
+        }
+    }
+
+    fn contains(self, x: u16, y: u16) -> bool {
+        x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
+    }
+
+    fn as_neighbour(self) -> VvcCodedNeighbour {
+        VvcCodedNeighbour {
+            width: self.width,
+            height: self.height,
+            qt_depth: self.qt_depth,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+struct VvcCodedCuMap {
+    regions: Vec<VvcCodedCuRegion>,
+}
+
+impl VvcCodedCuMap {
+    fn record_leaf(&mut self, node: VvcCodingTreeNode) {
+        self.regions.push(VvcCodedCuRegion::from_leaf(node));
+    }
+
+    fn left_neighbour(&self, node: VvcCodingTreeNode) -> Option<VvcCodedNeighbour> {
+        node.x
+            .checked_sub(1)
+            .and_then(|x| self.neighbour_at(x, node.y))
+    }
+
+    fn above_neighbour(&self, node: VvcCodingTreeNode) -> Option<VvcCodedNeighbour> {
+        node.y
+            .checked_sub(1)
+            .and_then(|y| self.neighbour_at(node.x, y))
+    }
+
+    fn neighbour_at(&self, x: u16, y: u16) -> Option<VvcCodedNeighbour> {
+        self.regions
+            .iter()
+            .rev()
+            .copied()
+            .find(|region| region.contains(x, y))
+            .map(VvcCodedCuRegion::as_neighbour)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VvcCclmEligibilityInput {
+    is_dual_tree: bool,
+    ctu_size: u16,
+    chroma_sampling: ChromaSampling,
+    node: VvcCodingTreeNode,
+    depth1_split: VvcPartSplit,
+    depth2_split: VvcPartSplit,
+    colocated_luma_depth1_split: VvcPartSplit,
+    colocated_luma_uses_isp: bool,
+}
+
+impl VvcCclmEligibilityInput {
+    fn allowed(self) -> bool {
+        // VTM CodingUnit::checkCCLMAllowed implements the VVC dual-tree CCLM
+        // restrictions. For CTU size 64/128, CCLM is legal only for specific
+        // chroma split paths, then a luma-side guard disallows non-QT 64x64
+        // luma splits and ISP. Keep every input explicit so future multi-CTU
+        // and non-4:2:0 paths can replace these current subset values.
+        if !self.is_dual_tree || self.ctu_size <= 32 {
+            return true;
+        }
+
+        let chroma_path_allowed = match (self.depth1_split, self.depth2_split) {
+            (VvcPartSplit::Quad, _)
+            | (VvcPartSplit::HorizontalBinary, VvcPartSplit::VerticalBinary) => {
+                self.chroma_sampling != ChromaSampling::Cs420
+                    || (self.node.width <= 16 && self.node.height <= 16)
+            }
+            (VvcPartSplit::None, _) => {
+                self.chroma_sampling != ChromaSampling::Cs420
+                    || (self.node.width == 32 && self.node.height == 32)
+            }
+            (VvcPartSplit::HorizontalBinary, VvcPartSplit::None) => {
+                self.chroma_sampling != ChromaSampling::Cs420
+                    || (self.node.width == 32 && self.node.height == 16)
+            }
+            _ => false,
+        };
+
+        chroma_path_allowed
+            && self.colocated_luma_depth1_split == VvcPartSplit::Quad
+            && !self.colocated_luma_uses_isp
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VvcPartitionCtx {
+    visible_width: u16,
+    visible_height: u16,
+}
+
+impl VvcPartitionCtx {
+    fn luma(visible_width: u16, visible_height: u16) -> Self {
+        Self {
+            visible_width,
+            visible_height,
+        }
+    }
+
+    fn split_ctx_input_from_luma_map(
+        self,
+        node: VvcCodingTreeNode,
+        availability: VvcSplitAvailability,
+        coded_map: &VvcCodedCuMap,
+    ) -> VvcSplitCtxInput {
+        // ITU-T H.266 clause 9.3.4.2.2 derives split contexts from the CU
+        // covering the left/above sample positions. Keep this tied to coded
+        // traversal state instead of estimating neighbour dimensions.
+        VvcSplitCtxInput {
+            node,
+            left: if node.x == 0 || node.y >= self.visible_height {
+                None
+            } else {
+                coded_map.left_neighbour(node)
+            },
+            above: if node.y == 0 || node.x >= self.visible_width {
+                None
+            } else {
+                coded_map.above_neighbour(node)
+            },
+            availability,
+        }
     }
 }
 
@@ -2155,32 +2717,22 @@ struct VvcLastSigCoeffPrefixCtxInput {
 enum VvcCtuCabacOp {
     QtSplit {
         node: VvcCodingTreeNode,
-        split_ctx: u8,
-        write_split_flag: bool,
-        write_qt_flag: bool,
-        qt_ctx: u8,
+        split_input: VvcSplitCtxInput,
     },
     BtSplit {
         node: VvcCodingTreeNode,
-        vertical: bool,
-        split_ctx: u8,
-        write_split_flag: bool,
-        write_qt_flag: bool,
-        qt_ctx: u8,
-        write_mtt_vertical_flag: bool,
-        mtt_vertical_ctx: u8,
-        write_binary_flag: bool,
-        mtt_binary_ctx: u8,
-        mtt_binary_value: bool,
+        split_input: VvcSplitCtxInput,
+        split: VvcPartSplit,
     },
     LumaLeafWithSplitCtx {
         node: VvcCodingTreeNode,
-        split_ctx: u8,
+        split_input: VvcSplitCtxInput,
     },
     ChromaTree {
         node: VvcCodingTreeNode,
         visible_width: u16,
         visible_height: u16,
+        chroma_sampling: ChromaSampling,
     },
 }
 
@@ -2191,51 +2743,66 @@ impl VvcCtuCabacOp {
             params.root_height as u16,
             VvcTreeType::DualTreeLuma,
         );
-        let chroma = params.ctu_chroma_root();
+        let visible_chroma_width = params.visible_chroma_width();
+        let visible_chroma_height = params.visible_chroma_height();
+        let luma_ctx =
+            VvcPartitionCtx::luma(params.visible_width as u16, params.visible_height as u16);
         let mut ops = Vec::new();
+        let mut luma_cu_map = VvcCodedCuMap::default();
         Self::append_visible_luma_subtree(
             &mut ops,
             root,
-            params.visible_width as u16,
-            params.visible_height as u16,
+            luma_ctx,
             VVC_CURRENT_MAX_LUMA_LEAF_SIZE,
+            &mut luma_cu_map,
         );
-        ops.push(Self::ChromaTree {
-            node: chroma,
-            visible_width: params.visible_chroma_width(),
-            visible_height: params.visible_chroma_height(),
-        });
+        // VTM TypeDef.h TREE_C: separate chroma tree contains chroma and is
+        // not split. The current dual-tree residual path attaches chroma CUs to
+        // fixed luma regions and derives chroma sample coordinates from the
+        // configured chroma subsampling instead of assuming 4:2:0 geometry.
+        for node in params.current_chroma_tree_nodes() {
+            ops.push(Self::ChromaTree {
+                node,
+                visible_width: visible_chroma_width,
+                visible_height: visible_chroma_height,
+                chroma_sampling: params.chroma_sampling,
+            });
+        }
         ops
     }
 
     fn append_visible_luma_subtree(
         ops: &mut Vec<Self>,
         node: VvcCodingTreeNode,
-        visible_width: u16,
-        visible_height: u16,
+        partition_ctx: VvcPartitionCtx,
         max_leaf_size: u16,
+        coded_map: &mut VvcCodedCuMap,
     ) {
-        if !node.intersects_visible(visible_width, visible_height) {
+        if !node.intersects_visible(partition_ctx.visible_width, partition_ctx.visible_height) {
             return;
         }
-        if node.fits_visible(visible_width, visible_height)
-            && node.width <= max_leaf_size
-            && node.height <= VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT
+        if node.fits_visible(partition_ctx.visible_width, partition_ctx.visible_height)
+            && Self::luma_leaf_allowed(node, max_leaf_size)
         {
             ops.push(Self::LumaLeafWithSplitCtx {
                 node,
-                split_ctx: Self::visible_luma_leaf_split_ctx(node),
+                split_input: partition_ctx.split_ctx_input_from_luma_map(
+                    node,
+                    Self::luma_split_availability(node),
+                    coded_map,
+                ),
             });
+            coded_map.record_leaf(node);
             return;
         }
 
-        if !node.fits_visible(visible_width, visible_height) {
+        if !node.fits_visible(partition_ctx.visible_width, partition_ctx.visible_height) {
             Self::append_implicit_boundary_luma_children(
                 ops,
                 node,
-                visible_width,
-                visible_height,
+                partition_ctx,
                 max_leaf_size,
+                coded_map,
             );
             return;
         }
@@ -2245,73 +2812,68 @@ impl VvcCtuCabacOp {
             Self::append_visible_luma_mtt_subtree(
                 ops,
                 node,
-                visible_width,
-                visible_height,
+                partition_ctx,
                 max_leaf_size,
+                coded_map,
             );
             return;
         }
-        let left_deeper = false;
-        let above_deeper = false;
-        let split_ctx = if node.cqt_depth == 0 && node.mtt_depth == 0 {
-            VvcSplitCtxInput::qt_split_without_neighbours().split_cu_flag_ctx()
-        } else {
-            VvcSplitCtxInput::full_child_with_deeper_neighbours(left_deeper, above_deeper)
-                .split_cu_flag_ctx()
-        };
-        ops.push(Self::QtSplit {
+        let split_input = partition_ctx.split_ctx_input_from_luma_map(
             node,
-            split_ctx,
-            write_split_flag: true,
-            write_qt_flag: !(node.cqt_depth == 0 && node.mtt_depth == 0),
-            qt_ctx: VvcQtSplitCtxInput::from_node_with_deeper_neighbours(
-                node,
-                left_deeper,
-                above_deeper,
-            )
-            .split_qt_flag_ctx(),
-        });
+            Self::luma_split_availability(node),
+            coded_map,
+        );
+        ops.push(Self::QtSplit { node, split_input });
         for child_idx in 0..4 {
             Self::append_visible_luma_subtree(
                 ops,
                 node.qt_child(child_idx),
-                visible_width,
-                visible_height,
+                partition_ctx,
                 max_leaf_size,
+                coded_map,
             );
         }
+    }
+
+    fn luma_leaf_allowed(node: VvcCodingTreeNode, max_leaf_size: u16) -> bool {
+        (node.width <= max_leaf_size && node.height <= VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT)
+            || (node.mtt_depth > 0
+                && ((node.width <= VVC_CURRENT_MAX_LUMA_BOUNDARY_BT_SIZE
+                    && node.height <= VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT)
+                    || (node.height <= VVC_CURRENT_MAX_LUMA_BOUNDARY_BT_SIZE
+                        && node.width <= max_leaf_size)))
     }
 
     fn append_visible_luma_mtt_subtree(
         ops: &mut Vec<Self>,
         node: VvcCodingTreeNode,
-        visible_width: u16,
-        visible_height: u16,
+        partition_ctx: VvcPartitionCtx,
         max_leaf_size: u16,
+        coded_map: &mut VvcCodedCuMap,
     ) {
         let vertical = node.width > max_leaf_size
             && (node.height <= max_leaf_size || node.width >= node.height);
+        let split_input = partition_ctx.split_ctx_input_from_luma_map(
+            node,
+            Self::luma_split_availability(node),
+            coded_map,
+        );
         ops.push(Self::BtSplit {
             node,
-            vertical,
-            split_ctx: VvcSplitCtxInput::bt_leaf_without_smaller_neighbours().split_cu_flag_ctx(),
-            write_split_flag: true,
-            write_qt_flag: Self::qt_flag_can_be_signaled(node),
-            qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node)
-                .split_qt_flag_ctx(),
-            write_mtt_vertical_flag: true,
-            mtt_vertical_ctx: 0,
-            write_binary_flag: false,
-            mtt_binary_ctx: if vertical { 3 } else { 1 },
-            mtt_binary_value: true,
+            split_input,
+            split: if vertical {
+                VvcPartSplit::VerticalBinary
+            } else {
+                VvcPartSplit::HorizontalBinary
+            },
         });
         for child_idx in 0..2 {
             Self::append_visible_luma_subtree(
                 ops,
                 node.mtt_child(vertical, child_idx),
-                visible_width,
-                visible_height,
+                partition_ctx,
                 max_leaf_size,
+                coded_map,
             );
         }
     }
@@ -2319,97 +2881,118 @@ impl VvcCtuCabacOp {
     fn append_implicit_boundary_luma_children(
         ops: &mut Vec<Self>,
         node: VvcCodingTreeNode,
-        visible_width: u16,
-        visible_height: u16,
+        partition_ctx: VvcPartitionCtx,
         max_leaf_size: u16,
+        coded_map: &mut VvcCodedCuMap,
     ) {
-        let bottom_left_in_pic =
-            node.x < visible_width && node.y + node.height - 1 < visible_height;
-        let top_right_in_pic = node.x + node.width - 1 < visible_width && node.y < visible_height;
-        let implicit_bt_allowed =
-            node.width <= max_leaf_size && node.height <= VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT;
+        let bottom_left_in_pic = node.x < partition_ctx.visible_width
+            && node.y + node.height - 1 < partition_ctx.visible_height;
+        let top_right_in_pic = node.x + node.width - 1 < partition_ctx.visible_width
+            && node.y < partition_ctx.visible_height;
+        let implicit_bt_allowed = node.width <= VVC_CURRENT_MAX_LUMA_BOUNDARY_BT_SIZE
+            && node.height <= VVC_CURRENT_MAX_LUMA_BOUNDARY_BT_SIZE;
         if (!bottom_left_in_pic && !top_right_in_pic) || !implicit_bt_allowed {
             for child_idx in 0..4 {
                 Self::append_visible_luma_subtree(
                     ops,
                     node.qt_child(child_idx),
-                    visible_width,
-                    visible_height,
+                    partition_ctx,
                     max_leaf_size,
+                    coded_map,
                 );
             }
         } else if !bottom_left_in_pic {
+            let split = VvcPartSplit::HorizontalBinary;
+            let split_input = partition_ctx.split_ctx_input_from_luma_map(
+                node,
+                Self::luma_split_availability(node).with_implicit_split(split),
+                coded_map,
+            );
             ops.push(Self::BtSplit {
                 node,
-                vertical: false,
-                split_ctx: VvcSplitCtxInput::bt_leaf_without_smaller_neighbours()
-                    .split_cu_flag_ctx(),
-                write_split_flag: false,
-                write_qt_flag: Self::qt_flag_can_be_signaled(node),
-                qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node)
-                    .split_qt_flag_ctx(),
-                write_mtt_vertical_flag: false,
-                mtt_vertical_ctx: 3,
-                write_binary_flag: false,
-                mtt_binary_ctx: 1,
-                mtt_binary_value: true,
+                split_input,
+                split,
             });
             for child_idx in 0..2 {
                 Self::append_visible_luma_subtree(
                     ops,
-                    node.mtt_child(false, child_idx),
-                    visible_width,
-                    visible_height,
+                    node.implicit_mtt_child(false, child_idx),
+                    partition_ctx,
                     max_leaf_size,
+                    coded_map,
                 );
             }
         } else if !top_right_in_pic {
+            let split = VvcPartSplit::VerticalBinary;
+            let split_input = partition_ctx.split_ctx_input_from_luma_map(
+                node,
+                Self::luma_split_availability(node).with_implicit_split(split),
+                coded_map,
+            );
             ops.push(Self::BtSplit {
                 node,
-                vertical: true,
-                split_ctx: VvcSplitCtxInput::bt_leaf_without_smaller_neighbours()
-                    .split_cu_flag_ctx(),
-                write_split_flag: false,
-                write_qt_flag: Self::qt_flag_can_be_signaled(node),
-                qt_ctx: VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node)
-                    .split_qt_flag_ctx(),
-                write_mtt_vertical_flag: false,
-                mtt_vertical_ctx: 3,
-                write_binary_flag: false,
-                mtt_binary_ctx: 3,
-                mtt_binary_value: true,
+                split_input,
+                split,
             });
             for child_idx in 0..2 {
                 Self::append_visible_luma_subtree(
                     ops,
-                    node.mtt_child(true, child_idx),
-                    visible_width,
-                    visible_height,
+                    node.implicit_mtt_child(true, child_idx),
+                    partition_ctx,
                     max_leaf_size,
+                    coded_map,
                 );
             }
         }
     }
 
-    fn qt_flag_can_be_signaled(node: VvcCodingTreeNode) -> bool {
-        let min_qt_size = match node.tree_type {
-            VvcTreeType::SingleTree | VvcTreeType::DualTreeLuma => VVC_CURRENT_MIN_LUMA_QT_SIZE,
-            VvcTreeType::DualTreeChroma => VVC_CURRENT_MIN_CHROMA_420_QT_SIZE,
-        };
-        node.mtt_depth == 0 && node.width > min_qt_size && node.height > min_qt_size
+    fn luma_split_availability(node: VvcCodingTreeNode) -> VvcSplitAvailability {
+        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
+        // Approximation of VTM QTBTPartitioner::canSplit for the current
+        // all-intra luma constraints. All dimensions are luma samples here.
+        let allow_qt = node.mtt_depth == 0
+            && node.width > VVC_CURRENT_MIN_LUMA_QT_SIZE
+            && node.height > VVC_CURRENT_MIN_LUMA_QT_SIZE;
+        let too_small_for_btt =
+            node.width <= VVC_MIN_CODING_BLOCK_SIZE && node.height <= VVC_MIN_CODING_BLOCK_SIZE;
+        let too_large_for_btt = (node.width > VVC_CURRENT_MAX_LUMA_BOUNDARY_BT_SIZE
+            || node.height > VVC_CURRENT_MAX_LUMA_BOUNDARY_BT_SIZE)
+            && (node.width > VVC_CURRENT_MAX_LUMA_BOUNDARY_BT_SIZE
+                || node.height > VVC_CURRENT_MAX_LUMA_BOUNDARY_BT_SIZE);
+        let max_btt_depth = 3 + node.implicit_mtt_depth;
+        let can_btt = node.mtt_depth < max_btt_depth && !too_small_for_btt && !too_large_for_btt;
+        let exceeds_bt_size = node.width > VVC_CURRENT_MAX_LUMA_BOUNDARY_BT_SIZE
+            || node.height > VVC_CURRENT_MAX_LUMA_BOUNDARY_BT_SIZE;
+        VvcSplitAvailability {
+            can_no_split: true,
+            can_qt: allow_qt,
+            can_bt_horizontal: can_btt
+                && !exceeds_bt_size
+                && node.height > VVC_MIN_CODING_BLOCK_SIZE
+                && !(node.width > VVC_MAX_TB_SIZEY && node.height <= VVC_MAX_TB_SIZEY),
+            can_bt_vertical: can_btt
+                && !exceeds_bt_size
+                && node.width > VVC_MIN_CODING_BLOCK_SIZE
+                && !(node.width <= VVC_MAX_TB_SIZEY && node.height > VVC_MAX_TB_SIZEY),
+            can_tt_horizontal: can_btt
+                && node.height > 2 * VVC_MIN_CODING_BLOCK_SIZE
+                && node.height <= VVC_CURRENT_MAX_LUMA_BOUNDARY_BT_SIZE
+                && node.width <= VVC_CURRENT_MAX_LUMA_BOUNDARY_BT_SIZE
+                && node.width <= VVC_MAX_TB_SIZEY
+                && node.height <= VVC_MAX_TB_SIZEY,
+            can_tt_vertical: can_btt
+                && node.width > 2 * VVC_MIN_CODING_BLOCK_SIZE
+                && node.width <= VVC_CURRENT_MAX_LUMA_BOUNDARY_BT_SIZE
+                && node.height <= VVC_CURRENT_MAX_LUMA_BOUNDARY_BT_SIZE
+                && node.width <= VVC_MAX_TB_SIZEY
+                && node.height <= VVC_MAX_TB_SIZEY,
+        }
     }
 
-    fn visible_luma_leaf_split_ctx(node: VvcCodingTreeNode) -> u8 {
-        if node.mtt_depth == 0 && node.cqt_depth >= 3 {
-            let left_deeper = !node.x.is_multiple_of(16);
-            let above_deeper = !node.y.is_multiple_of(16);
-            VvcSplitCtxInput::min_qt_leaf_with_deeper_neighbours(left_deeper, above_deeper)
-                .split_cu_flag_ctx()
-        } else if node.mtt_depth == 0 {
-            VvcSplitCtxInput::full_child_without_smaller_neighbours().split_cu_flag_ctx()
-        } else {
-            VvcSplitCtxInput::bt_leaf_without_smaller_neighbours().split_cu_flag_ctx()
-        }
+    fn mtt_binary_ctx(vertical: bool, mtt_depth: u8) -> u8 {
+        // ITU-T H.266 (V4) clause 9.3.4.2.1, Table 132:
+        // ctxInc = (2 * mtt_split_cu_vertical_flag) + (mttDepth <= 1 ? 1 : 0).
+        (2 * u8::from(vertical)) + u8::from(mtt_depth <= 1)
     }
 }
 
@@ -2418,23 +3001,20 @@ struct VvcCtuCabacGenerator {
     contexts: VvcCabacContexts,
     luma_dc_abs_level: u8,
     luma_dc_negative: bool,
-    cb_dc_abs_level: u8,
-    cb_dc_negative: bool,
+    slice_config: VvcSliceSyntaxConfig,
 }
 
 impl VvcCtuCabacGenerator {
     fn new(
         luma_dc_abs_level: u8,
         luma_dc_negative: bool,
-        cb_dc_abs_level: u8,
-        cb_dc_negative: bool,
+        slice_config: VvcSliceSyntaxConfig,
     ) -> Self {
         Self {
             contexts: VvcCabacContexts::new(),
             luma_dc_abs_level,
             luma_dc_negative,
-            cb_dc_abs_level,
-            cb_dc_negative,
+            slice_config,
         }
     }
 
@@ -2443,23 +3023,16 @@ impl VvcCtuCabacGenerator {
             eprintln!("FF_CABAC_OP {op:?}");
         }
         match op {
-            VvcCtuCabacOp::QtSplit {
+            VvcCtuCabacOp::QtSplit { node, split_input } => {
+                self.emit_luma_split_cu_mode(cabac, node, split_input, VvcPartSplit::Quad)
+            }
+            VvcCtuCabacOp::BtSplit {
                 node,
-                split_ctx,
-                write_split_flag,
-                write_qt_flag,
-                qt_ctx,
-            } => self.emit_qt_split(
-                cabac,
-                node,
-                split_ctx,
-                write_split_flag,
-                write_qt_flag,
-                qt_ctx,
-            ),
-            op @ VvcCtuCabacOp::BtSplit { .. } => self.emit_bt_split(cabac, op),
-            VvcCtuCabacOp::LumaLeafWithSplitCtx { node, split_ctx } => {
-                self.emit_luma_leaf_split_with_ctx(cabac, node, split_ctx);
+                split_input,
+                split,
+            } => self.emit_luma_split_cu_mode(cabac, node, split_input, split),
+            VvcCtuCabacOp::LumaLeafWithSplitCtx { node, split_input } => {
+                self.emit_luma_split_cu_mode(cabac, node, split_input, VvcPartSplit::None);
                 self.emit_luma_multi_ref_line(cabac, node);
                 self.emit_luma_intra_prediction_mode(cabac, node);
                 self.emit_luma_residual(cabac, node);
@@ -2468,92 +3041,42 @@ impl VvcCtuCabacGenerator {
                 node,
                 visible_width,
                 visible_height,
-            } => self.emit_chroma_tree(cabac, node, visible_width, visible_height),
+                chroma_sampling,
+            } => self.emit_chroma_tree(cabac, node, visible_width, visible_height, chroma_sampling),
         }
     }
 
-    fn emit_bt_split(&mut self, cabac: &mut VvcCabacEncoder, op: VvcCtuCabacOp) {
-        let VvcCtuCabacOp::BtSplit {
-            node,
-            vertical,
-            split_ctx,
-            write_split_flag,
-            write_qt_flag,
-            qt_ctx,
-            write_mtt_vertical_flag,
-            mtt_vertical_ctx,
-            write_binary_flag,
-            mtt_binary_ctx,
-            mtt_binary_value,
-        } = op
-        else {
-            unreachable!("emit_bt_split expects a binary split operation");
-        };
-        debug_assert!(node.cqt_depth >= 1 || node.mtt_depth > 0 || (node.x == 0 && node.y == 0));
-        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
-        if write_split_flag {
-            self.contexts
-                .encode(cabac, VvcCabacContext::SplitFlag(split_ctx), true);
-        }
-        if write_qt_flag {
-            self.contexts
-                .encode(cabac, VvcCabacContext::SplitQtFlag(qt_ctx), false);
-        }
-        if write_mtt_vertical_flag {
-            self.contexts.encode(
-                cabac,
-                VvcCabacContext::MttSplitCuVerticalFlag(mtt_vertical_ctx),
-                vertical,
-            );
-        }
-        if write_binary_flag {
-            self.contexts.encode(
-                cabac,
-                VvcCabacContext::MttSplitCuBinaryFlag(mtt_binary_ctx),
-                mtt_binary_value,
-            );
-        }
-    }
-
-    fn emit_qt_split(
+    fn emit_luma_split_cu_mode(
         &mut self,
         cabac: &mut VvcCabacEncoder,
         node: VvcCodingTreeNode,
-        split_ctx: u8,
-        write_split_flag: bool,
-        write_qt_flag: bool,
-        qt_ctx: u8,
+        split_input: VvcSplitCtxInput,
+        selected_split: VvcPartSplit,
     ) {
-        debug_assert!(node.cqt_depth <= 3);
-        debug_assert_eq!(node.mtt_depth, 0);
+        debug_assert_eq!(node, split_input.node);
         debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
-        // VVC 7.3.11.4 coding_tree emits split_cu_flag for QT-split luma
-        // nodes. Some root-only geometries infer split_qt_flag, while boundary
-        // constrained rectangular CTU views write it explicitly.
-        if write_split_flag {
+        // ITU-T H.266 clause 7.3.11.4 split_cu_mode() syntax order:
+        // split_cu_flag, optional split_qt_flag, optional MTT direction, then
+        // optional binary-vs-ternary flag. The helper derives bin presence from
+        // canSplit() outputs before VTM comparison so context and syntax drift
+        // remain visible in this model.
+        let decision = VvcSplitSyntaxDecision::new(split_input, selected_split);
+        if let Some((ctx, value)) = decision.split_flag() {
             self.contexts
-                .encode(cabac, VvcCabacContext::SplitFlag(split_ctx), true);
+                .encode(cabac, VvcCabacContext::SplitFlag(ctx), value);
         }
-        if write_qt_flag {
+        if let Some((ctx, value)) = decision.split_qt_flag() {
             self.contexts
-                .encode(cabac, VvcCabacContext::SplitQtFlag(qt_ctx), true);
+                .encode(cabac, VvcCabacContext::SplitQtFlag(ctx), value);
         }
-    }
-
-    fn emit_luma_leaf_split_with_ctx(
-        &mut self,
-        cabac: &mut VvcCabacEncoder,
-        node: VvcCodingTreeNode,
-        split_ctx: u8,
-    ) {
-        debug_assert!(node.cqt_depth >= 1 || node.mtt_depth > 0 || (node.x == 0 && node.y == 0));
-        debug_assert!(node.mtt_depth <= 3);
-        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
-        if node.width == 4 && node.height == 4 {
-            return;
+        if let Some((ctx, value)) = decision.mtt_vertical_flag() {
+            self.contexts
+                .encode(cabac, VvcCabacContext::MttSplitCuVerticalFlag(ctx), value);
         }
-        self.contexts
-            .encode(cabac, VvcCabacContext::SplitFlag(split_ctx), false);
+        if let Some((ctx, value)) = decision.mtt_binary_flag() {
+            self.contexts
+                .encode(cabac, VvcCabacContext::MttSplitCuBinaryFlag(ctx), value);
+        }
     }
 
     fn emit_luma_intra_prediction_mode(
@@ -2577,7 +3100,7 @@ impl VvcCtuCabacGenerator {
         // MultiRefLineIdx(0) for intra luma CUs that are not on the first
         // luma line of the CTU. The current encoder always selects the first
         // reference line, so only the first MRL bin is needed.
-        if node.y != 0 {
+        if self.slice_config.tools.mrl_enabled && node.y != 0 {
             self.contexts
                 .encode(cabac, VvcCabacContext::MultiRefLineIdx(0), false);
         }
@@ -2609,10 +3132,8 @@ impl VvcCtuCabacGenerator {
             self.luma_dc_abs_level,
             self.luma_dc_negative,
         );
-        let mut residual = VvcResidualCabacEncoder::new(
-            &mut self.contexts,
-            VvcResidualCabacOptions::current_intra_subset(),
-        );
+        let mut residual =
+            VvcResidualCabacEncoder::new(&mut self.contexts, self.slice_config.residual_options());
         stream.emit(&mut residual, cabac);
     }
 
@@ -2622,157 +3143,29 @@ impl VvcCtuCabacGenerator {
         node: VvcCodingTreeNode,
         visible_width: u16,
         visible_height: u16,
-    ) {
-        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
-        self.emit_chroma_visible_qt_subtree(cabac, node, visible_width, visible_height, 4);
-    }
-
-    fn emit_chroma_visible_qt_subtree(
-        &mut self,
-        cabac: &mut VvcCabacEncoder,
-        node: VvcCodingTreeNode,
-        visible_width: u16,
-        visible_height: u16,
-        min_leaf_size: u16,
+        chroma_sampling: ChromaSampling,
     ) {
         debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
         if !node.intersects_visible(visible_width, visible_height) {
             return;
         }
-        if node.fits_visible(visible_width, visible_height) && Self::chroma_leaf_allowed(node) {
-            self.emit_chroma_transform_only_leaf_with_split_ctx(
-                cabac,
-                node,
-                Self::visible_chroma_leaf_split_ctx(node),
-                0,
-            );
-            return;
-        }
-
-        if !node.fits_visible(visible_width, visible_height) {
-            self.emit_chroma_implicit_boundary_children(
-                cabac,
-                node,
-                visible_width,
-                visible_height,
-                min_leaf_size,
-            );
-            return;
-        }
-
-        self.emit_chroma_visible_qt_split(cabac, node);
-        for child_idx in 0..4 {
-            self.emit_chroma_visible_qt_subtree(
-                cabac,
-                node.qt_child(child_idx),
-                visible_width,
-                visible_height,
-                min_leaf_size,
-            );
-        }
+        self.emit_chroma_transform_only_leaf(cabac, node, chroma_sampling, 0);
     }
 
-    fn emit_chroma_implicit_boundary_children(
+    fn emit_chroma_transform_only_leaf(
         &mut self,
         cabac: &mut VvcCabacEncoder,
         node: VvcCodingTreeNode,
-        visible_width: u16,
-        visible_height: u16,
-        min_leaf_size: u16,
-    ) {
-        let bottom_left_in_pic =
-            node.x < visible_width && node.y + node.height - 1 < visible_height;
-        let top_right_in_pic = node.x + node.width - 1 < visible_width && node.y < visible_height;
-        let implicit_bt_allowed = node.width <= VVC_CURRENT_MAX_CHROMA_420_BOUNDARY_LEAF_SIZE
-            && node.height <= VVC_CURRENT_MAX_CHROMA_420_BOUNDARY_LEAF_SIZE;
-        if (!bottom_left_in_pic && !top_right_in_pic) || !implicit_bt_allowed {
-            for child_idx in 0..4 {
-                self.emit_chroma_visible_qt_subtree(
-                    cabac,
-                    node.qt_child(child_idx),
-                    visible_width,
-                    visible_height,
-                    min_leaf_size,
-                );
-            }
-        } else if !bottom_left_in_pic {
-            self.emit_chroma_boundary_bt_split(cabac, node, false);
-            for child_idx in 0..2 {
-                self.emit_chroma_visible_qt_subtree(
-                    cabac,
-                    node.mtt_child(false, child_idx),
-                    visible_width,
-                    visible_height,
-                    min_leaf_size,
-                );
-            }
-        } else if !top_right_in_pic {
-            self.emit_chroma_boundary_bt_split(cabac, node, true);
-            for child_idx in 0..2 {
-                self.emit_chroma_visible_qt_subtree(
-                    cabac,
-                    node.mtt_child(true, child_idx),
-                    visible_width,
-                    visible_height,
-                    min_leaf_size,
-                );
-            }
-        }
-    }
-
-    fn emit_chroma_visible_qt_split(
-        &mut self,
-        cabac: &mut VvcCabacEncoder,
-        node: VvcCodingTreeNode,
-    ) {
-        let split_ctx = if node.cqt_depth == 0 {
-            VvcSplitCtxInput::bt_leaf_without_smaller_neighbours().split_cu_flag_ctx()
-        } else {
-            VvcSplitCtxInput::full_child_without_smaller_neighbours().split_cu_flag_ctx()
-        };
-        let qt_ctx = if node.cqt_depth >= 2 { 3 } else { 0 };
-        self.contexts
-            .encode(cabac, VvcCabacContext::SplitFlag(split_ctx), true);
-        self.contexts
-            .encode(cabac, VvcCabacContext::SplitQtFlag(qt_ctx), true);
-    }
-
-    fn emit_chroma_boundary_bt_split(
-        &mut self,
-        cabac: &mut VvcCabacEncoder,
-        node: VvcCodingTreeNode,
-        _vertical: bool,
-    ) {
-        if !VvcCtuCabacOp::qt_flag_can_be_signaled(node) {
-            return;
-        }
-        self.contexts.encode(
-            cabac,
-            VvcCabacContext::SplitQtFlag(
-                VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node).split_qt_flag_ctx(),
-            ),
-            false,
-        );
-    }
-
-    fn emit_chroma_cb_residual(&mut self, cabac: &mut VvcCabacEncoder) {
-        cabac.encode_rem_abs_ep(self.cb_dc_abs_level as u32, 0);
-        cabac.encode_bin_ep(self.cb_dc_negative);
-    }
-
-    fn emit_chroma_transform_only_leaf_with_split_ctx(
-        &mut self,
-        cabac: &mut VvcCabacEncoder,
-        node: VvcCodingTreeNode,
-        split_ctx: u8,
+        chroma_sampling: ChromaSampling,
         cbf_cb_ctx: u8,
     ) {
         debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
-        if node.width != 4 || node.height != 4 {
-            self.contexts
-                .encode(cabac, VvcCabacContext::SplitFlag(split_ctx), false);
-        }
-        if Self::chroma_cclm_allowed(node) {
+        // VVC cu_pred_data() calls intra_chroma_pred_modes() for dual-tree
+        // chroma intra CUs. VTM does not print a D_SYNTAX line for these bins,
+        // so keep the syntax presence derived from the reader/writer code, not
+        // from trace-line absence.
+        if self.slice_config.tools.cclm_enabled && Self::chroma_cclm_allowed(node, chroma_sampling)
+        {
             self.contexts
                 .encode(cabac, VvcCabacContext::CclmModeFlag, false);
         }
@@ -2786,74 +3179,20 @@ impl VvcCtuCabacGenerator {
             .encode(cabac, VvcCabacContext::QtCbfCb(cbf_cb_ctx), cbf_cb);
         self.contexts
             .encode(cabac, VvcCabacContext::QtCbfCr(0), false);
-        if cbf_cb {
-            self.emit_chroma_cb_residual(cabac);
+    }
+
+    fn chroma_cclm_allowed(node: VvcCodingTreeNode, chroma_sampling: ChromaSampling) -> bool {
+        VvcCclmEligibilityInput {
+            is_dual_tree: true,
+            ctu_size: VVC_CTU_SIZE as u16,
+            chroma_sampling,
+            node,
+            depth1_split: node.split_history[0],
+            depth2_split: node.split_history[1],
+            colocated_luma_depth1_split: VvcPartSplit::Quad,
+            colocated_luma_uses_isp: false,
         }
-    }
-
-    fn chroma_leaf_allowed(node: VvcCodingTreeNode) -> bool {
-        (node.width <= VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE
-            && node.height <= VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE)
-            || (node.mtt_depth > 0
-                && node.width <= VVC_CURRENT_MAX_CHROMA_420_BOUNDARY_LEAF_SIZE
-                && node.height <= VVC_CURRENT_MAX_CHROMA_420_BOUNDARY_LEAF_SIZE)
-    }
-
-    fn chroma_cclm_allowed(node: VvcCodingTreeNode) -> bool {
-        (node.width <= VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE
-            && node.height <= VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE)
-            || (node.mtt_depth == 1
-                && node.width > VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE
-                && node.height == VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE)
-    }
-
-    fn visible_chroma_leaf_split_ctx(node: VvcCodingTreeNode) -> u8 {
-        if node.mtt_depth > 0
-            && (node.width > VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE
-                || node.height > VVC_CURRENT_MAX_CHROMA_420_LEAF_SIZE)
-        {
-            0
-        } else if node.mtt_depth > 0 && node.height == 4 {
-            Self::chroma_boundary_flat_leaf_split_ctx(node)
-        } else if node.width == 4 || node.height == 4 {
-            0
-        } else if node.mtt_depth > 0 {
-            3
-        } else {
-            VvcSplitCtxInput::full_child_without_smaller_neighbours().split_cu_flag_ctx()
-        }
-    }
-
-    fn chroma_boundary_flat_leaf_split_ctx(node: VvcCodingTreeNode) -> u8 {
-        debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
-        // VTM derives split_cu_flag context from split availability in luma
-        // units even when the current coding tree is chroma. For 4:2:0 flat
-        // boundary leaves, an 8x4 chroma leaf cannot use TT vertical, while a
-        // 16x4 leaf still has BT-H/BT-V/TT-V alternatives and therefore uses
-        // context set 1 (ctxInc 3) when no neighbours are available. Wider
-        // leaves exceed the current chroma BT/TT size and fall back to ctx 0.
-        let luma_width = node.width * 2;
-        let luma_height = node.height * 2;
-        let chroma_area = node.width * node.height;
-        let can_btt =
-            node.mtt_depth < 3 && luma_width <= 32 && luma_height <= 32 && chroma_area > 16;
-        let allow_bt_horizontal = can_btt && luma_height > 4;
-        let allow_bt_vertical = can_btt && luma_width > 4 && node.width != 4;
-        let allow_tt_horizontal = false;
-        let allow_tt_vertical =
-            can_btt && luma_width > 8 && luma_width <= 32 && luma_height <= 32 && node.width != 8;
-        VvcSplitCtxInput {
-            available_left: false,
-            available_above: false,
-            condition_left: false,
-            condition_above: false,
-            allow_bt_vertical,
-            allow_bt_horizontal,
-            allow_tt_vertical,
-            allow_tt_horizontal,
-            allow_qt: false,
-        }
-        .split_cu_flag_ctx()
+        .allowed()
     }
 }
 

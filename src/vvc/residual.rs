@@ -4,12 +4,13 @@ pub(super) mod transform;
 pub(super) use transform::quantize_vvc_4x4_chroma;
 pub(super) use transform::{
     inverse_transform_vvc_4x4_luma_dc, quantize_vvc_4x4_chroma_sample, quantize_vvc_4x4_luma_dc,
-    reconstruct_vvc_4x4_chroma, transform_vvc_4x4_luma, VVC_LUMA_DC_BASE,
+    reconstruct_vvc_4x4_chroma, transform_vvc_tu, VVC_CHROMA_DC_BASE, VVC_LUMA_DC_BASE,
 };
 
 use super::{
-    Vvc4x4SampledColor, Vvc4x4SampledFrame, VvcCabacContext, VvcCabacContexts, VvcCabacEncoder,
-    VvcLastSigCoeffPrefixCtxInput, VvcVideoGeometry,
+    vvc_anchor_luma_tu_size_from_partition, Vvc4x4SampledColor, Vvc4x4SampledFrame,
+    VvcCabacContext, VvcCabacContexts, VvcCabacEncoder, VvcLastSigCoeffPrefixCtxInput,
+    VvcVideoGeometry,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +27,32 @@ pub struct Vvc4x4QuantizedColor {
     pub(super) luma_tu_count: usize,
     pub(super) cb_rem: u8,
     pub(super) cr_rem: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(super) enum VvcTransformComponent {
+    Luma,
+    ChromaCb,
+    ChromaCr,
+}
+
+impl VvcTransformComponent {
+    pub(super) const fn dc_base(self) -> i16 {
+        match self {
+            Self::Luma => VVC_LUMA_DC_BASE,
+            Self::ChromaCb | Self::ChromaCr => VVC_CHROMA_DC_BASE,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct VvcTuTransformBlock {
+    pub(super) component: VvcTransformComponent,
+    pub(super) width: u16,
+    pub(super) height: u16,
+    pub(super) dc_coeff: i16,
+    pub(super) ac_coeffs: Vec<i16>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,96 +87,84 @@ pub fn quantize_vvc_4x4_color(color: Vvc4x4SampledColor) -> Vvc4x4QuantizedColor
 }
 
 pub(super) fn quantize_vvc_4x4_frame(frame: Vvc4x4SampledFrame) -> Vvc4x4QuantizedColor {
-    let quantized_luma_tus = quantize_vvc_4x4_luma_tus(&frame);
-    let quantized_luma = quantized_luma_tus[0];
+    let quantized_luma = quantize_vvc_anchor_luma_tu(&frame);
     let reconstructed_luma = inverse_transform_vvc_4x4_luma_dc(quantized_luma);
-    let second_luma = quantized_luma_tus.get(1).copied();
     let color = frame.sampled_color();
     let cb_rem = quantize_vvc_4x4_chroma_sample(color.u);
     let cr_rem = quantize_vvc_4x4_chroma_sample(color.v);
     let reconstructed_cb = reconstruct_vvc_4x4_chroma(cb_rem);
     let reconstructed_cr = reconstruct_vvc_4x4_chroma(cr_rem);
-    let mut luma_tu_remainders = [quantized_luma.abs_remainder; MAX_VVC_LUMA_TUS];
-    let mut luma_tu_ac0_tokens = [quantized_luma.ac_tokens[0]; MAX_VVC_LUMA_TUS];
-    for (index, quantized) in quantized_luma_tus.iter().enumerate() {
-        luma_tu_remainders[index] = quantized.abs_remainder;
-        luma_tu_ac0_tokens[index] = quantized.ac_tokens[0];
-    }
+    let luma_tu_remainders = [quantized_luma.abs_remainder; MAX_VVC_LUMA_TUS];
+    let luma_tu_ac0_tokens = [quantized_luma.ac_tokens[0]; MAX_VVC_LUMA_TUS];
     Vvc4x4QuantizedColor {
         y: reconstructed_luma.samples[0],
         u: reconstructed_cb,
         v: reconstructed_cr,
         luma_rem: quantized_luma.abs_remainder,
         luma_ac_tokens: quantized_luma.ac_tokens,
-        second_luma_rem: second_luma
-            .map(|block| block.abs_remainder)
-            .unwrap_or(quantized_luma.abs_remainder),
-        second_luma_ac_tokens: second_luma
-            .map(|block| block.ac_tokens)
-            .unwrap_or(quantized_luma.ac_tokens),
+        second_luma_rem: quantized_luma.abs_remainder,
+        second_luma_ac_tokens: quantized_luma.ac_tokens,
         luma_tu_remainders,
         luma_tu_ac0_tokens,
-        luma_tu_count: quantized_luma_tus.len(),
+        luma_tu_count: 1,
         cb_rem,
         cr_rem,
     }
 }
 
-fn quantize_vvc_4x4_luma_tus(frame: &Vvc4x4SampledFrame) -> Vec<Vvc4x4QuantizedTransformBlock> {
-    luma_tu_origins(frame.geometry)
-        .into_iter()
-        .map(|(x, y)| {
-            let block = residual_luma_block_at(frame, x, y);
-            let transform = transform_vvc_4x4_luma(block);
-            quantize_vvc_4x4_luma_dc(transform)
-        })
-        .collect()
+fn quantize_vvc_anchor_luma_tu(frame: &Vvc4x4SampledFrame) -> Vvc4x4QuantizedTransformBlock {
+    let size = vvc_anchor_luma_tu_size(frame.geometry);
+    quantize_vvc_luma_tu_dc(frame, 0, 0, size.width, size.height)
 }
 
-fn luma_tu_origins(geometry: VvcVideoGeometry) -> Vec<(usize, usize)> {
-    let mut origins = Vec::new();
-    for y in (0..geometry.height).step_by(VVC_RESIDUAL_CB_SIZE) {
-        for x in (0..geometry.width).step_by(VVC_RESIDUAL_CB_SIZE) {
-            origins.push((x, y));
-        }
-    }
-    origins
+pub(super) fn vvc_anchor_luma_tu_size(geometry: VvcVideoGeometry) -> VvcVideoGeometry {
+    // ITU-T H.266 clause 7.3.11.10 defines transform_unit() syntax inside
+    // coding_unit(). The residual anchor must therefore use the first luma
+    // leaf produced by the same coding-tree partition generator that emits
+    // tu_y_coded_flag and residual_coding(), not a fixed 8x8 fixture size.
+    vvc_anchor_luma_tu_size_from_partition(geometry)
 }
 
-#[cfg(test)]
-pub(super) fn first_residual_luma_block(
-    frame: &Vvc4x4SampledFrame,
-) -> [u8; VVC_RESIDUAL_LUMA_SAMPLES] {
-    residual_luma_block_at(frame, 0, 0)
-}
-
-#[cfg(test)]
-pub(super) fn second_residual_luma_block(
-    frame: &Vvc4x4SampledFrame,
-) -> Option<[u8; VVC_RESIDUAL_LUMA_SAMPLES]> {
-    luma_tu_origins(frame.geometry)
-        .get(1)
-        .map(|(x, y)| residual_luma_block_at(frame, *x, *y))
-}
-
-fn residual_luma_block_at(
+fn quantize_vvc_luma_tu_dc(
     frame: &Vvc4x4SampledFrame,
     origin_x: usize,
     origin_y: usize,
-) -> [u8; VVC_RESIDUAL_LUMA_SAMPLES] {
-    let mut block = [0; VVC_RESIDUAL_LUMA_SAMPLES];
-    let cb_width = VVC_RESIDUAL_CB_SIZE.min(frame.geometry.width - origin_x);
-    let cb_height = VVC_RESIDUAL_CB_SIZE.min(frame.geometry.height - origin_y);
-    for y in 0..cb_height {
+    width: usize,
+    height: usize,
+) -> Vvc4x4QuantizedTransformBlock {
+    let samples = residual_luma_tu_at(frame, origin_x, origin_y, width, height);
+    let transform = transform_vvc_tu(
+        VvcTransformComponent::Luma,
+        width as u16,
+        height as u16,
+        &samples,
+    );
+    quantize_vvc_4x4_luma_dc(Vvc4x4TransformBlock {
+        dc_coeff: transform.dc_coeff,
+        ac_coeffs: [0; 15],
+    })
+}
+
+fn residual_luma_tu_at(
+    frame: &Vvc4x4SampledFrame,
+    origin_x: usize,
+    origin_y: usize,
+    width: usize,
+    height: usize,
+) -> Vec<u8> {
+    let mut block = vec![0; width * height];
+    let copy_width = width.min(frame.geometry.width.saturating_sub(origin_x));
+    let copy_height = height.min(frame.geometry.height.saturating_sub(origin_y));
+    for y in 0..copy_height {
         let src = (origin_y + y) * frame.geometry.width + origin_x;
-        let dst = y * VVC_RESIDUAL_CB_SIZE;
-        block[dst..dst + cb_width].copy_from_slice(&frame.luma[src..src + cb_width]);
+        let dst = y * width;
+        block[dst..dst + copy_width].copy_from_slice(&frame.luma[src..src + copy_width]);
     }
     block
 }
 
-pub(super) const VVC_RESIDUAL_CB_SIZE: usize = 4;
-pub(super) const VVC_RESIDUAL_LUMA_SAMPLES: usize = VVC_RESIDUAL_CB_SIZE * VVC_RESIDUAL_CB_SIZE;
+#[allow(dead_code)]
+pub(super) const VVC_CHROMA_TU_SIZE: usize = 4;
 pub(super) const MAX_VVC_LUMA_TUS: usize = 16 * 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,24 +176,6 @@ pub(super) struct VvcResidualCabacOptions {
     pub(super) sign_data_hiding_enabled: bool,
     pub(super) lfnst_enabled: bool,
     pub(super) sbt_enabled: bool,
-}
-
-#[allow(dead_code)]
-impl VvcResidualCabacOptions {
-    pub(super) fn current_intra_subset() -> Self {
-        Self {
-            // Keep disabled syntax paths labelled. The current parameter sets
-            // infer transform_skip_flag=0 and mts_idx=0 in most paths, but the
-            // encoder can switch these on once the surrounding CU syntax is
-            // fully spec-generated.
-            transform_skip_enabled: false,
-            explicit_mts_intra_enabled: false,
-            dependent_quantization_enabled: false,
-            sign_data_hiding_enabled: false,
-            lfnst_enabled: false,
-            sbt_enabled: false,
-        }
-    }
 }
 
 #[allow(dead_code)]
@@ -834,15 +831,17 @@ impl VvcResidualPass1State {
 
 #[allow(dead_code)]
 impl VvcResidualCabacSymbolStream {
-    pub(super) fn from_quantized_luma_4x4_dc(block: Vvc4x4QuantizedTransformBlock) -> Self {
-        Self::luma_4x4_dc_only(
+    pub(super) fn from_quantized_luma_dc(
+        log2_tb_width: u8,
+        log2_tb_height: u8,
+        block: Vvc4x4QuantizedTransformBlock,
+    ) -> Self {
+        Self::luma_dc_only(
+            log2_tb_width,
+            log2_tb_height,
             block.abs_remainder,
             block.reconstructed_dc_coeff < 0 && block.abs_remainder != 0,
         )
-    }
-
-    pub(super) fn luma_4x4_dc_only(abs_level: u8, negative: bool) -> Self {
-        Self::luma_dc_only(2, 2, abs_level, negative)
     }
 
     pub(super) fn luma_dc_only(
