@@ -91,23 +91,23 @@ module ff_vvc_residual_dc_symbolizer (
   always_comb begin
     case (index_q)
       4'd0: symbol_next = {
-        SYMBOL_BIN_CTX, 19'd0, last_sig_x_ctx, 8'd0, 1'b0
+        SYMBOL_BIN_CTX, 18'd0, 1'b0, last_sig_x_ctx, 8'd0, 1'b0
       };
       4'd1: symbol_next = {
-        SYMBOL_BIN_CTX, 19'd0, last_sig_y_ctx, 8'd0, last_index == 4'd1
+        SYMBOL_BIN_CTX, 18'd0, 1'b0, last_sig_y_ctx, 8'd0, last_index == 4'd1
       };
       4'd2: symbol_next = {
-        SYMBOL_BIN_CTX, 19'd0, CTX_ABS_LEVEL_GTX_0, 7'd0, abs_level > 5'd1, 1'b0
+        SYMBOL_BIN_CTX, 18'd0, 1'b0, CTX_ABS_LEVEL_GTX_0, 7'd0, abs_level > 5'd1, 1'b0
       };
       4'd3: begin
         if (last_index == 4'd3) begin
           symbol_next = {SYMBOL_BIN_EP, 31'd0, negative, 1'b1};
         end else begin
-          symbol_next = {SYMBOL_BIN_CTX, 19'd0, CTX_PAR_LEVEL_0, 7'd0, abs_level[0], 1'b0};
+          symbol_next = {SYMBOL_BIN_CTX, 18'd0, 1'b0, CTX_PAR_LEVEL_0, 7'd0, abs_level[0], 1'b0};
         end
       end
       4'd4: symbol_next = {
-        SYMBOL_BIN_CTX, 19'd0, CTX_ABS_LEVEL_GTX_32, 7'd0, abs_level > 5'd3, last_index == 4'd4
+        SYMBOL_BIN_CTX, 18'd0, 1'b0, CTX_ABS_LEVEL_GTX_32, 7'd0, abs_level > 5'd3, last_index == 4'd4
       };
       4'd5: begin
         if (last_index == 4'd5) begin

@@ -6,6 +6,8 @@ module ff_vvc_annexb_slice_stream (
   input  logic       clear,
   input  logic       start,
   input  logic [4:0] nal_unit_type,
+  input  logic       sh_dep_quant_used_flag,
+  input  logic       sh_sign_data_hiding_used_flag,
 
   output logic       s_axis_ready,
   input  logic       s_axis_valid,
@@ -29,8 +31,8 @@ module ff_vvc_annexb_slice_stream (
   localparam logic [2:0] ST_PREFIX_DRAIN = 3'd6;
   localparam logic [2:0] ST_PAYLOAD_RBSP = 3'd7;
   localparam logic [4:0] NAL_UNIT_TYPE_CRA = 5'd9;
-  localparam logic [3:0] SLICE_PREFIX_FIELD_COUNT_IDR = 4'd13;
-  localparam logic [3:0] SLICE_PREFIX_FIELD_COUNT_CRA = 4'd14;
+  localparam logic [3:0] SLICE_PREFIX_FIELD_COUNT_IDR = 4'd14;
+  localparam logic [3:0] SLICE_PREFIX_FIELD_COUNT_CRA = 4'd15;
 
   logic [2:0] state_q;
   logic [2:0] byte_index_q;
@@ -85,9 +87,10 @@ module ff_vvc_annexb_slice_stream (
       4'd8:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // ph_joint_cbcr_sign_flag
       4'd9:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // sh_no_output_of_prior_pics_flag
       4'd10: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // sh_qp_delta se(0)
-      4'd11: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // sh_dep_quant_used_flag
-      4'd12: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // cabac_alignment_one_bit
-      4'd13: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // CRA alignment bit matching current SW subset
+      4'd11: begin prefix_syntax_value = {31'd0, sh_dep_quant_used_flag}; prefix_syntax_bits = sh_dep_quant_used_flag ? 6'd1 : 6'd0; end // sh_dep_quant_used_flag
+      4'd12: begin prefix_syntax_value = {31'd0, sh_sign_data_hiding_used_flag}; prefix_syntax_bits = (sh_sign_data_hiding_used_flag && !sh_dep_quant_used_flag) ? 6'd1 : 6'd0; end // sh_sign_data_hiding_used_flag
+      4'd13: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // cabac_alignment_one_bit
+      4'd14: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // CRA alignment bit matching current SW subset
       default: begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd0; end
     endcase
   end
@@ -241,8 +244,12 @@ module ff_vvc_annexb_slice_stream (
               m_axis_data <= ep_m_data;
               m_axis_last <= 1'b0;
             end
-            if (prefix_fields_done && prefix_writer_idle) begin
-              state_q <= ST_PREFIX_FLUSH;
+            if (prefix_fields_done) begin
+              if (prefix_writer_idle) begin
+                state_q <= ST_PREFIX_FLUSH;
+              end
+            end else if (prefix_syntax_bits == 6'd0) begin
+              prefix_field_index_q <= prefix_field_index_q + 4'd1;
             end else if (prefix_bit_valid && prefix_bit_ready) begin
               prefix_field_index_q <= prefix_field_index_q + 4'd1;
             end

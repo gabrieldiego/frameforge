@@ -192,3 +192,21 @@ async def cabac_pipeline_matches_multiple_rust_encoder_vectors(dut):
             expected_last_bits,
         )
         await Timer(1, unit="ps")
+
+
+@cocotb.test()
+async def cabac_pipeline_restarts_without_reset_against_rust_vector(dut):
+    symbols, expected_bytes, expected_last_bits = load_rust_cabac_vector(width=16, height=16)
+
+    await reset_dut(dut)
+    await start_pipeline(dut)
+    first = await drive_symbols_and_collect(dut, symbols, max_cycles=4096)
+    assert first == expected_bytes, (first.hex(), expected_bytes.hex())
+    assert int(dut.stream_last_byte_bits.value) == expected_last_bits
+
+    await Timer(1, unit="ps")
+    await RisingEdge(dut.clk)
+    await start_pipeline(dut)
+    second = await drive_symbols_and_collect(dut, symbols, max_cycles=4096)
+    assert second == expected_bytes, (second.hex(), expected_bytes.hex())
+    assert int(dut.stream_last_byte_bits.value) == expected_last_bits

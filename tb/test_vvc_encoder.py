@@ -121,7 +121,10 @@ def rtl_input_samples(data):
 
 
 def packed_rtl_luma_value(data):
-    return packed_luma_value(first_residual_luma_block(data))
+    # luma_samples_q is the current 8x8 hardware capture register. The
+    # standards-facing reconstruction model below may use a larger generated
+    # transform_unit() leaf for thin pictures.
+    return packed_luma_value(residual_luma_block(data, 0, 0))
 
 
 def packed_second_rtl_luma_value(data):
@@ -137,22 +140,22 @@ def packed_luma_value(samples):
 
 
 def first_residual_luma_block(data):
-    return residual_luma_block(data, 0, 0)
-
-
-def second_residual_luma_block(data):
-    if rtl_visible_width() >= 8:
-        return residual_luma_block(data, 4, 0)
-    if rtl_visible_height() >= 8:
-        return residual_luma_block(data, 0, 4)
-    return [0] * 16
+    width, height = current_anchor_luma_tu_size(rtl_visible_width(), rtl_visible_height())
+    return residual_luma_block_sized(data, 0, 0, width, height)
 
 
 def residual_luma_block(data, origin_x, origin_y):
+    return residual_luma_block_sized(
+        data, origin_x, origin_y, VVC_LUMA_TU_SIZE, VVC_LUMA_TU_SIZE
+    )
+
+
+def residual_luma_block_sized(data, origin_x, origin_y, width, height):
     block = []
-    for y in range(4):
+    for y in range(min(height, rtl_visible_height() - origin_y)):
         start = (origin_y + y) * rtl_visible_width() + origin_x
-        block.extend(data[start : start + 4])
+        block.extend(data[start : start + min(width, rtl_visible_width() - origin_x)])
+    block.extend([0] * ((width * height) - len(block)))
     return block
 
 
@@ -166,7 +169,7 @@ def quantized_luma(sample):
 
 def forward_luma_dc(samples):
     samples = [sample_to_8bit(sample) for sample in samples]
-    return ((sum(samples) + 8) >> 4) - 114
+    return ((sum(samples) + (len(samples) // 2)) // len(samples)) - 114
 
 
 def quant_ac_token(sample, dc_sample):
@@ -178,8 +181,8 @@ def quant_ac_token(sample, dc_sample):
 
 
 def quant_ac_tokens(samples):
-    dc_sample = (sum(sample_to_8bit(sample) for sample in samples) + 8) >> 4
-    return bytes(quant_ac_token(sample, dc_sample) for sample in samples[1:16])
+    del samples
+    return bytes([0x40] * ((VVC_LUMA_TU_SIZE * VVC_LUMA_TU_SIZE) - 1))
 
 
 def quantized_luma_dc(dc_coeff):
@@ -199,19 +202,94 @@ def quantized_luma_remainder(sample):
 
 
 VVC_CURRENT_CTU_SIZE = 64
-VVC_CURRENT_MIN_LUMA_LEAF_SIZE = 16
-VVC_CURRENT_MAX_LUMA_LEAF_SIZE = 32
+VVC_LUMA_TU_SIZE = 8
+VVC_LUMA_BOUNDARY_BT_SIZE = VVC_LUMA_TU_SIZE * 4
+VVC_CODED_DIMENSION_GRANULARITY = 8
 
 
-def current_anchor_luma_tb_log2(width, height):
-    return (
-        5 if width >= VVC_CURRENT_MAX_LUMA_LEAF_SIZE else (4 if width >= VVC_CURRENT_MIN_LUMA_LEAF_SIZE else 3),
-        5 if height >= VVC_CURRENT_MAX_LUMA_LEAF_SIZE else (4 if height >= VVC_CURRENT_MIN_LUMA_LEAF_SIZE else 3),
+def current_anchor_luma_tu_size(width, height):
+    coded_width = coded_dimension(width)
+    coded_height = coded_dimension(height)
+    return first_luma_leaf_size(
+        0, 0, VVC_CURRENT_CTU_SIZE, VVC_CURRENT_CTU_SIZE, 0, coded_width, coded_height
     )
 
 
-def vvc_luma_reconstruction_from_sample(sample):
-    rem = quantized_luma_remainder(sample_to_8bit(sample))
+def first_luma_leaf_size(x, y, width, height, mtt_depth, visible_width, visible_height):
+    if not (x < visible_width and y < visible_height):
+        raise ValueError("anchor luma TU search reached a non-visible node")
+
+    right = x + width - 1
+    bottom = y + height - 1
+    fits = right < visible_width and bottom < visible_height
+    if fits and luma_leaf_allowed(width, height, mtt_depth):
+        return (width, height)
+
+    # ITU-T H.266 clause 7.3.11.10 places transform_unit() below the selected
+    # coding_unit() leaf. The RTL reconstruction dump must therefore mirror the
+    # same generated leaf extent used by the CABAC symbolizer.
+    if not fits:
+        bottom_left_in_pic = x < visible_width and bottom < visible_height
+        top_right_in_pic = right < visible_width and y < visible_height
+        implicit_bt_allowed = (
+            width <= VVC_LUMA_BOUNDARY_BT_SIZE
+            and height <= VVC_LUMA_BOUNDARY_BT_SIZE
+        )
+        if (not bottom_left_in_pic and not top_right_in_pic) or not implicit_bt_allowed:
+            return first_luma_leaf_size(
+                x, y, width // 2, height // 2, 0, visible_width, visible_height
+            )
+        if not bottom_left_in_pic:
+            return first_luma_leaf_size(
+                x, y, width, height // 2, mtt_depth + 1, visible_width, visible_height
+            )
+        return first_luma_leaf_size(
+            x, y, width // 2, height, mtt_depth + 1, visible_width, visible_height
+        )
+
+    if mtt_depth > 0:
+        vertical = width > VVC_LUMA_TU_SIZE and (
+            height <= VVC_LUMA_TU_SIZE or width >= height
+        )
+        if vertical:
+            return first_luma_leaf_size(
+                x, y, width // 2, height, mtt_depth + 1, visible_width, visible_height
+            )
+        return first_luma_leaf_size(
+            x, y, width, height // 2, mtt_depth + 1, visible_width, visible_height
+        )
+
+    return first_luma_leaf_size(
+        x, y, width // 2, height // 2, 0, visible_width, visible_height
+    )
+
+
+def luma_leaf_allowed(width, height, mtt_depth):
+    return (width <= VVC_LUMA_TU_SIZE and height <= VVC_LUMA_TU_SIZE) or (
+        mtt_depth > 0
+        and (
+            (width <= VVC_LUMA_BOUNDARY_BT_SIZE and height <= VVC_LUMA_TU_SIZE)
+            or (height <= VVC_LUMA_BOUNDARY_BT_SIZE and width <= VVC_LUMA_TU_SIZE)
+        )
+    )
+
+
+def coded_dimension(value):
+    return (
+        (value + VVC_CODED_DIMENSION_GRANULARITY - 1)
+        // VVC_CODED_DIMENSION_GRANULARITY
+    ) * VVC_CODED_DIMENSION_GRANULARITY
+
+
+def current_anchor_luma_tb_log2(width, height):
+    tu_width, tu_height = current_anchor_luma_tu_size(width, height)
+    return (tu_width.bit_length() - 1, tu_height.bit_length() - 1)
+
+
+def vvc_luma_reconstruction_from_anchor(data):
+    block = first_residual_luma_block(data)
+    sample = max(0, min(255, forward_luma_dc(block) + 114))
+    rem = quantized_luma_remainder(sample)
     log2_tb_width, log2_tb_height = current_anchor_luma_tb_log2(
         rtl_visible_width(), rtl_visible_height()
     )
@@ -255,20 +333,19 @@ def decoded_reconstruction(frames, data):
     if uses_capacity_tu_grid(data):
         chroma = reconstructed_chroma(sample_to_8bit(data[luma_samples()]), sample_to_8bit(data[v_sample_index()]))
         frame = bytearray([0] * luma_samples())
-        for origin_y in range(0, rtl_visible_height(), 4):
-            for origin_x in range(0, rtl_visible_width(), 4):
+        for origin_y in range(0, rtl_visible_height(), VVC_LUMA_TU_SIZE):
+            for origin_x in range(0, rtl_visible_width(), VVC_LUMA_TU_SIZE):
                 block = residual_luma_block(data, origin_x, origin_y)
                 y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(block)))
-                for y_off in range(min(4, rtl_visible_height() - origin_y)):
+                for y_off in range(min(VVC_LUMA_TU_SIZE, rtl_visible_height() - origin_y)):
                     row = (origin_y + y_off) * rtl_visible_width() + origin_x
-                    frame[row : row + min(4, rtl_visible_width() - origin_x)] = bytes(
-                        [y] * min(4, rtl_visible_width() - origin_x)
-                    )
+                    tile_width = min(VVC_LUMA_TU_SIZE, rtl_visible_width() - origin_x)
+                    frame[row : row + tile_width] = bytes([y] * tile_width)
         frame.extend([chroma] * (luma_samples() // 4))
         frame.extend([chroma] * (luma_samples() // 4))
         return bytes(frame) * frames
 
-    y = vvc_luma_reconstruction_from_sample(data[0] if data else 0)
+    y = vvc_luma_reconstruction_from_anchor(data)
     chroma = 128
     frame = bytes(
         [y] * luma_samples()
@@ -526,6 +603,9 @@ async def vvc_encoder_matches_software_stream(dut):
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(decoded_reconstruction(frames=1, data=one_frame_input))
 
+    if rtl_chroma_format_idc() != 3:
+        assert one_frame == software_stream(frames=1, data=one_frame_input)
+
     # The palette RTL path currently models one CTU/frame at a time. Re-enable
     # this when the palette symbolizer has an explicit per-frame reset/drain
     # handshake instead of draining only on final input EOF.
@@ -542,6 +622,7 @@ async def vvc_encoder_matches_software_stream(dut):
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(decoded_reconstruction(frames=2, data=two_frame_input))
     assert two_frames, "RTL encoder top emitted no bytes for two-frame smoke"
+    assert two_frames == software_stream(frames=2, data=two_frame_input)
 
 
 @cocotb.test()

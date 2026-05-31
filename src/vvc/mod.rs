@@ -567,6 +567,17 @@ pub fn vvc_yuv420_cabac_vector_dump_json(
         )
     })?;
     let dump = vvc_ctu_partition_cabac_dump(params, VvcSliceSyntaxConfig::yuv420_residual());
+    let mapped_context_symbols = dump
+        .semantic_symbols
+        .iter()
+        .filter(|symbol| symbol.kind == 2)
+        .count();
+    if mapped_context_symbols != dump.context_events.len() {
+        return Err(format!(
+            "VVC CABAC vector dump used {} context bins but only {} have RTL context IDs; audit VvcCabacContext::rtl_context_id before using this as an RTL reference",
+            dump.context_events.len(), mapped_context_symbols
+        ));
+    }
     Ok(vvc_cabac_vector_dump_json(
         compat_frame.geometry,
         params,
@@ -1158,6 +1169,8 @@ impl VvcCabacContext {
             VvcCabacContext::SplitFlag(2) => Some(28),
             VvcCabacContext::MttSplitCuVerticalFlag(0) => Some(29),
             VvcCabacContext::MttSplitCuVerticalFlag(4) => Some(30),
+            VvcCabacContext::MttSplitCuVerticalFlag(1) => Some(40),
+            VvcCabacContext::MttSplitCuVerticalFlag(2) => Some(41),
             VvcCabacContext::SplitFlag(4) => Some(33),
             VvcCabacContext::SplitQtFlag(1) => Some(34),
             VvcCabacContext::SplitQtFlag(2) => Some(35),

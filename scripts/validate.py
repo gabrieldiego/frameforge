@@ -359,9 +359,7 @@ def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes
         luma = capacity_tu_grid_reconstruction(frame, info)
         chroma = reconstructed_chroma(frame[luma_len], frame[luma_len + chroma_len])
     else:
-        luma = bytes(
-            [vvc_luma_reconstruction_from_sample(frame[0] if frame else 0, info)] * luma_len
-        )
+        luma = bytes([vvc_luma_reconstruction_from_anchor(frame, info)] * luma_len)
         chroma = 128
     # This is the reconstruction of the emitted VVC bitstream, not the
     # original input. Keep this matched to VTM decode output after quantization.
@@ -370,12 +368,12 @@ def software_internal_reconstruction(input_path: Path, info: InputInfo) -> bytes
 
 def capacity_tu_grid_reconstruction(frame: bytes, info: InputInfo) -> bytes:
     recon = bytearray(info.width * info.height)
-    for origin_y in range(0, info.height, 4):
-        for origin_x in range(0, info.width, 4):
+    for origin_y in range(0, info.height, VVC_LUMA_TU_SIZE):
+        for origin_x in range(0, info.width, VVC_LUMA_TU_SIZE):
             block = residual_luma_block(frame, info, origin_x, origin_y)
             y = inverse_transform_luma_dc(quantized_luma_dc(forward_luma_dc(block)))
-            width = min(4, info.width - origin_x)
-            for y_off in range(min(4, info.height - origin_y)):
+            width = min(VVC_LUMA_TU_SIZE, info.width - origin_x)
+            for y_off in range(min(VVC_LUMA_TU_SIZE, info.height - origin_y)):
                 row = (origin_y + y_off) * info.width + origin_x
                 recon[row : row + width] = bytes([y] * width)
     return bytes(recon)
@@ -485,20 +483,34 @@ def crop_yuv420p8_frame(
 
 
 def first_residual_luma_block(frame: bytes, info: InputInfo) -> bytes:
-    return residual_luma_block(frame, info, 0, 0)
+    width, height = current_anchor_luma_tu_size(info.width, info.height)
+    return residual_luma_block_sized(frame, info, 0, 0, width, height)
 
 
 def residual_luma_block(frame: bytes, info: InputInfo, origin_x: int, origin_y: int) -> bytes:
+    return residual_luma_block_sized(
+        frame, info, origin_x, origin_y, VVC_LUMA_TU_SIZE, VVC_LUMA_TU_SIZE
+    )
+
+
+def residual_luma_block_sized(
+    frame: bytes,
+    info: InputInfo,
+    origin_x: int,
+    origin_y: int,
+    width: int,
+    height: int,
+) -> bytes:
     block = bytearray()
-    for y in range(min(4, info.height - origin_y)):
+    for y in range(min(height, info.height - origin_y)):
         row = (origin_y + y) * info.width + origin_x
-        block.extend(frame[row : row + min(4, info.width - origin_x)])
-    block.extend([0] * (16 - len(block)))
+        block.extend(frame[row : row + min(width, info.width - origin_x)])
+    block.extend([0] * ((width * height) - len(block)))
     return bytes(block)
 
 
 def forward_luma_dc(samples: bytes) -> int:
-    return ((sum(samples) + 8) >> 4) - 114
+    return ((sum(samples) + (len(samples) // 2)) // len(samples)) - 114
 
 
 def quantized_luma_dc(dc_coeff: int) -> int:
@@ -518,18 +530,78 @@ def quantized_luma_remainder(sample: int) -> int:
 
 
 VVC_CURRENT_CTU_SIZE = 64
-VVC_CURRENT_MIN_LUMA_LEAF_SIZE = 16
-VVC_CURRENT_MAX_LUMA_LEAF_SIZE = 32
+VVC_LUMA_TU_SIZE = 8
+VVC_LUMA_BOUNDARY_BT_SIZE = VVC_LUMA_TU_SIZE * 4
 
 
-def current_anchor_luma_tb_log2(width: int, height: int) -> tuple[int, int]:
-    return (
-        5 if width >= VVC_CURRENT_MAX_LUMA_LEAF_SIZE else (4 if width >= VVC_CURRENT_MIN_LUMA_LEAF_SIZE else 3),
-        5 if height >= VVC_CURRENT_MAX_LUMA_LEAF_SIZE else (4 if height >= VVC_CURRENT_MIN_LUMA_LEAF_SIZE else 3),
+def current_anchor_luma_tu_size(width: int, height: int) -> tuple[int, int]:
+    coded_width = coded_dimension(width)
+    coded_height = coded_dimension(height)
+    return first_luma_leaf_size(0, 0, VVC_CURRENT_CTU_SIZE, VVC_CURRENT_CTU_SIZE, 0, coded_width, coded_height)
+
+
+def first_luma_leaf_size(
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    mtt_depth: int,
+    visible_width: int,
+    visible_height: int,
+) -> tuple[int, int]:
+    if not (x < visible_width and y < visible_height):
+        raise ValueError("anchor luma TU search reached a non-visible node")
+
+    right = x + width - 1
+    bottom = y + height - 1
+    fits = right < visible_width and bottom < visible_height
+    if fits and luma_leaf_allowed(width, height, mtt_depth):
+        return (width, height)
+
+    # ITU-T H.266 clause 7.3.11.10 places transform_unit() below the selected
+    # coding_unit() leaf. This mirrors the generated luma partition traversal so
+    # internal reconstruction uses the same TU extent that VTM decodes.
+    if not fits:
+        bottom_left_in_pic = x < visible_width and bottom < visible_height
+        top_right_in_pic = right < visible_width and y < visible_height
+        implicit_bt_allowed = width <= VVC_LUMA_BOUNDARY_BT_SIZE and height <= VVC_LUMA_BOUNDARY_BT_SIZE
+        if (not bottom_left_in_pic and not top_right_in_pic) or not implicit_bt_allowed:
+            return first_luma_leaf_size(x, y, width // 2, height // 2, 0, visible_width, visible_height)
+        if not bottom_left_in_pic:
+            return first_luma_leaf_size(x, y, width, height // 2, mtt_depth + 1, visible_width, visible_height)
+        return first_luma_leaf_size(x, y, width // 2, height, mtt_depth + 1, visible_width, visible_height)
+
+    if mtt_depth > 0:
+        vertical = width > VVC_LUMA_TU_SIZE and (height <= VVC_LUMA_TU_SIZE or width >= height)
+        if vertical:
+            return first_luma_leaf_size(x, y, width // 2, height, mtt_depth + 1, visible_width, visible_height)
+        return first_luma_leaf_size(x, y, width, height // 2, mtt_depth + 1, visible_width, visible_height)
+
+    return first_luma_leaf_size(x, y, width // 2, height // 2, 0, visible_width, visible_height)
+
+
+def luma_leaf_allowed(width: int, height: int, mtt_depth: int) -> bool:
+    return (width <= VVC_LUMA_TU_SIZE and height <= VVC_LUMA_TU_SIZE) or (
+        mtt_depth > 0
+        and (
+            (width <= VVC_LUMA_BOUNDARY_BT_SIZE and height <= VVC_LUMA_TU_SIZE)
+            or (height <= VVC_LUMA_BOUNDARY_BT_SIZE and width <= VVC_LUMA_TU_SIZE)
+        )
     )
 
 
-def vvc_luma_reconstruction_from_sample(sample: int, info: InputInfo) -> int:
+def coded_dimension(value: int) -> int:
+    return ((value + VVC_CODED_DIMENSION_GRANULARITY - 1) // VVC_CODED_DIMENSION_GRANULARITY) * VVC_CODED_DIMENSION_GRANULARITY
+
+
+def current_anchor_luma_tb_log2(width: int, height: int) -> tuple[int, int]:
+    tu_width, tu_height = current_anchor_luma_tu_size(width, height)
+    return (tu_width.bit_length() - 1, tu_height.bit_length() - 1)
+
+
+def vvc_luma_reconstruction_from_anchor(frame: bytes, info: InputInfo) -> int:
+    block = first_residual_luma_block(frame, info)
+    sample = max(0, min(255, forward_luma_dc(block) + 114))
     rem = quantized_luma_remainder(sample)
     # Mirrors the currently emitted VVC residual subset: planar intra prediction
     # around the neutral sample with one negative DC coefficient level.

@@ -13,7 +13,7 @@ module ff_vvc_cabac_stream_writer (
   input  logic [31:0] s_axis_bins_pattern,
   input  logic [5:0]  s_axis_bins_count,
   input  logic        s_axis_ctx_valid,
-  input  logic [4:0]  s_axis_ctx_id,
+  input  logic [5:0]  s_axis_ctx_id,
   input  logic [8:0]  s_axis_lps,
   input  logic        s_axis_mps,
   input  logic        s_axis_last,
@@ -54,7 +54,7 @@ module ff_vvc_cabac_stream_writer (
   logic finish_carry_q;
   logic [5:0] final_bits_q;
 
-  logic [4:0] engine_ctx_bank_id;
+  logic [5:0] engine_ctx_bank_id;
   logic [8:0] context_ctx_lps;
   logic context_ctx_mps;
   logic [8:0] selected_ctx_lps;

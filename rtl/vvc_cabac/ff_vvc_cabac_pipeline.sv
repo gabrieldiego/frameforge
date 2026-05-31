@@ -26,7 +26,7 @@ module ff_vvc_cabac_pipeline (
   logic [31:0] bin_pattern;
   logic [5:0]  bin_count;
   logic        bin_ctx_valid;
-  logic [4:0]  bin_ctx_id;
+  logic [5:0]  bin_ctx_id;
   logic [8:0]  bin_lps;
   logic        bin_mps;
   logic        bin_last;

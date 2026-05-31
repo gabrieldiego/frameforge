@@ -18,7 +18,7 @@ module ff_vvc_cabac_symbol_binarizer (
   output logic [31:0] m_axis_bins_pattern,
   output logic [5:0]  m_axis_bins_count,
   output logic        m_axis_ctx_valid,
-  output logic [4:0]  m_axis_ctx_id,
+  output logic [5:0]  m_axis_ctx_id,
   output logic [8:0]  m_axis_lps,
   output logic        m_axis_mps,
   output logic        m_axis_last
@@ -40,7 +40,7 @@ module ff_vvc_cabac_symbol_binarizer (
   logic [31:0] bins_pattern_q;
   logic [5:0]  bins_count_q;
   logic        ctx_valid_q;
-  logic [4:0]  ctx_id_q;
+  logic [5:0]  ctx_id_q;
   logic [8:0]  lps_q;
   logic        mps_q;
   logic        last_q;
@@ -76,7 +76,7 @@ module ff_vvc_cabac_symbol_binarizer (
       bins_pattern_q <= 32'd0;
       bins_count_q <= 6'd1;
       ctx_valid_q <= 1'b0;
-      ctx_id_q <= 5'd0;
+      ctx_id_q <= 6'd0;
       lps_q <= 9'd4;
       mps_q <= 1'b0;
       last_q <= 1'b0;
@@ -87,7 +87,7 @@ module ff_vvc_cabac_symbol_binarizer (
       bins_pattern_q <= 32'd0;
       bins_count_q <= 6'd1;
       ctx_valid_q <= 1'b0;
-      ctx_id_q <= 5'd0;
+      ctx_id_q <= 6'd0;
       lps_q <= 9'd4;
       mps_q <= 1'b0;
       last_q <= 1'b0;
@@ -98,7 +98,7 @@ module ff_vvc_cabac_symbol_binarizer (
       bins_pattern_q <= (s_axis_kind == SYMBOL_BINS_EP) ? (s_axis_data >> 6) : {31'd0, s_axis_data[0]};
       bins_count_q <= (s_axis_kind == SYMBOL_BINS_EP) ? s_axis_data[5:0] : 6'd1;
       ctx_valid_q <= s_axis_kind == SYMBOL_BIN_CTX;
-      ctx_id_q <= s_axis_data[12:8];
+      ctx_id_q <= s_axis_data[13:8];
       lps_q <= s_axis_data[24:16];
       mps_q <= s_axis_data[25];
       last_q <= s_axis_last;

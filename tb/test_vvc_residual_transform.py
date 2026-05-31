@@ -102,12 +102,12 @@ async def residual_stream_emits_quantized_packets(dut):
     await reset(dut)
     assert int(dut.cu_active.value) == 1
 
-    for index in range(16):
+    for index in range(64):
         while int(dut.s_axis_ready.value) != 1:
             await RisingEdge(dut.clk)
         dut.s_axis_valid.value = 1
         dut.s_axis_sample.value = 64
-        dut.s_axis_last.value = index == 15
+        dut.s_axis_last.value = index == 63
         await RisingEdge(dut.clk)
     dut.s_axis_valid.value = 0
     dut.s_axis_last.value = 0

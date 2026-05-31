@@ -2,7 +2,7 @@
 
 module ff_vvc_residual_transform #(
   parameter int SAMPLE_BITS = 8,
-  parameter int LUMA_CB_SIZE = 4,
+  parameter int LUMA_TU_SIZE = 8,
   parameter int CU_ACTIVE_COUNT = 64
 ) (
   input  logic clk,
@@ -21,12 +21,14 @@ module ff_vvc_residual_transform #(
   output logic [7:0] m_axis_kind,
   output logic [31:0] m_axis_data,
   output logic m_axis_last,
-  input  logic [(SAMPLE_BITS * LUMA_CB_SIZE * LUMA_CB_SIZE) - 1:0] luma_samples,
-  output logic [4:0]   quant_luma_rem,
-  output logic [119:0] quant_luma_ac_tokens,
-  output logic [7:0]   recon_luma_sample
+  input  logic [(SAMPLE_BITS * LUMA_TU_SIZE * LUMA_TU_SIZE) - 1:0] luma_samples,
+  output logic [4:0] quant_luma_rem,
+  output logic [(8 * ((LUMA_TU_SIZE * LUMA_TU_SIZE) - 1)) - 1:0] quant_luma_ac_tokens,
+  output logic [7:0] recon_luma_sample
 );
-  localparam int LUMA_SAMPLE_COUNT = LUMA_CB_SIZE * LUMA_CB_SIZE;
+  localparam int LUMA_SAMPLE_COUNT = LUMA_TU_SIZE * LUMA_TU_SIZE;
+  localparam int SAMPLE_COUNT_BITS = $clog2(LUMA_SAMPLE_COUNT + 1);
+  localparam int SUM_BITS = SAMPLE_BITS + $clog2(LUMA_SAMPLE_COUNT + 1) + 1;
   localparam logic [7:0] SYMBOL_BIN_EP  = 8'd0;
   localparam logic [7:0] SYMBOL_BIN_CTX = 8'd2;
   localparam logic [7:0] SYMBOL_BINS_EP = 8'd4;
@@ -36,27 +38,24 @@ module ff_vvc_residual_transform #(
   localparam logic [4:0] CTX_PAR_LEVEL_0 = 5'd11;
   localparam logic [4:0] CTX_ABS_LEVEL_GTX_32 = 5'd12;
 
-  logic signed [9:0] dc_coeff;
-  logic signed [9:0] quantized_dc_coeff;
+  logic [7:0] direct_sample [0:LUMA_SAMPLE_COUNT - 1];
+  logic [7:0] stream_sample [0:LUMA_SAMPLE_COUNT - 1];
+  logic [SUM_BITS - 1:0] direct_sum;
+  logic [SUM_BITS - 1:0] stream_sum;
+  logic [SUM_BITS - 1:0] direct_dc_numerator;
+  logic [SUM_BITS - 1:0] stream_dc_numerator;
   logic [7:0] dc_sample;
   logic [7:0] stream_dc_sample;
+  logic signed [9:0] stream_recon_dc_coeff;
   logic [(SAMPLE_BITS * LUMA_SAMPLE_COUNT) - 1:0] stream_samples_q;
-  logic [4:0] stream_sample_count_q;
+  logic [SAMPLE_COUNT_BITS - 1:0] stream_sample_count_q;
   logic stream_result_valid_q;
   logic [3:0] stream_packet_index_q;
   logic [4:0] stream_quant_luma_rem;
-  logic [119:0] stream_quant_luma_ac_tokens;
-  logic [7:0] stream_recon_luma_sample;
-  logic [7:0] direct_sample [0:15];
-  logic [7:0] stream_sample [0:15];
-  logic [12:0] direct_sum;
-  logic [12:0] stream_sum;
   logic [12:0] direct_scaled_distance;
   logic [12:0] stream_scaled_distance;
-  logic [119:0] direct_quant_luma_ac_tokens;
   logic [7:0] direct_recon_from_rem;
   logic [7:0] stream_recon_from_rem;
-  logic signed [9:0] stream_recon_dc_coeff;
   logic stream_negative;
   logic [4:0] stream_abs_remainder_value;
   logic [4:0] stream_abs_remainder_code_value;
@@ -68,72 +67,39 @@ module ff_vvc_residual_transform #(
   logic [3:0] stream_last_packet_index;
   logic [40:0] residual_packet_next;
   integer sample_i;
-  logic signed [9:0] ac_coeff;
-  logic [8:0] ac_abs_coeff;
-  logic [4:0] ac_magnitude;
-  logic ac_negative;
 
   always_comb begin
-    direct_sum = 13'd0;
-    stream_sum = 13'd0;
-    direct_quant_luma_ac_tokens = 120'd0;
-    stream_quant_luma_ac_tokens = 120'd0;
-    for (sample_i = 0; sample_i < 16; sample_i = sample_i + 1) begin
+    direct_sum = '0;
+    stream_sum = '0;
+    quant_luma_ac_tokens = '0;
+    for (sample_i = 0; sample_i < LUMA_SAMPLE_COUNT; sample_i = sample_i + 1) begin
       if (SAMPLE_BITS <= 8) begin
-        direct_sample[sample_i] =
-          luma_samples[((15 - sample_i) * SAMPLE_BITS) +: SAMPLE_BITS];
-        stream_sample[sample_i] =
-          stream_samples_q[((15 - sample_i) * SAMPLE_BITS) +: SAMPLE_BITS];
+        direct_sample[sample_i] = luma_samples[((LUMA_SAMPLE_COUNT - 1 - sample_i) * SAMPLE_BITS) +: SAMPLE_BITS];
+        stream_sample[sample_i] = stream_samples_q[((LUMA_SAMPLE_COUNT - 1 - sample_i) * SAMPLE_BITS) +: SAMPLE_BITS];
       end else begin
-        direct_sample[sample_i] =
-          luma_samples[((15 - sample_i) * SAMPLE_BITS) +: SAMPLE_BITS] >> (SAMPLE_BITS - 8);
-        stream_sample[sample_i] =
-          stream_samples_q[((15 - sample_i) * SAMPLE_BITS) +: SAMPLE_BITS] >> (SAMPLE_BITS - 8);
+        direct_sample[sample_i] = luma_samples[((LUMA_SAMPLE_COUNT - 1 - sample_i) * SAMPLE_BITS) +: SAMPLE_BITS] >> (SAMPLE_BITS - 8);
+        stream_sample[sample_i] = stream_samples_q[((LUMA_SAMPLE_COUNT - 1 - sample_i) * SAMPLE_BITS) +: SAMPLE_BITS] >> (SAMPLE_BITS - 8);
       end
-      direct_sum = direct_sum + {5'd0, direct_sample[sample_i]};
-      stream_sum = stream_sum + {5'd0, stream_sample[sample_i]};
+      direct_sum = direct_sum + direct_sample[sample_i];
+      stream_sum = stream_sum + stream_sample[sample_i];
     end
 
-    for (sample_i = 1; sample_i < 16; sample_i = sample_i + 1) begin
-      ac_coeff = $signed({2'b00, direct_sample[sample_i]}) - $signed({2'b00, dc_sample});
-      ac_negative = ac_coeff < 0;
-      ac_abs_coeff = ac_negative ? -ac_coeff : ac_coeff;
-      ac_magnitude = (ac_abs_coeff + 9'd8) >> 4;
-      if (ac_magnitude > 5'd8) begin
-        ac_magnitude = 5'd8;
-      end
-      if (ac_magnitude == 5'd0) begin
-        ac_negative = 1'b0;
-      end
-      direct_quant_luma_ac_tokens =
-        (direct_quant_luma_ac_tokens << 8) | (8'h40 | {2'b00, ac_negative, ac_magnitude});
-
-      ac_coeff = $signed({2'b00, stream_sample[sample_i]}) - $signed({2'b00, stream_dc_sample});
-      ac_negative = ac_coeff < 0;
-      ac_abs_coeff = ac_negative ? -ac_coeff : ac_coeff;
-      ac_magnitude = (ac_abs_coeff + 9'd8) >> 4;
-      if (ac_magnitude > 5'd8) begin
-        ac_magnitude = 5'd8;
-      end
-      if (ac_magnitude == 5'd0) begin
-        ac_negative = 1'b0;
-      end
-      stream_quant_luma_ac_tokens =
-        (stream_quant_luma_ac_tokens << 8) | (8'h40 | {2'b00, ac_negative, ac_magnitude});
+    for (sample_i = 0; sample_i < LUMA_SAMPLE_COUNT - 1; sample_i = sample_i + 1) begin
+      quant_luma_ac_tokens = (quant_luma_ac_tokens << 8) | 8'h40;
     end
   end
 
-  assign dc_sample = (direct_sum + 13'd8) >> 4;
-  assign stream_dc_sample = (stream_sum + 13'd8) >> 4;
-  assign dc_coeff = $signed({ 2'b00, dc_sample }) - 10'sd114;
+  assign direct_dc_numerator = direct_sum + (LUMA_SAMPLE_COUNT / 2);
+  assign stream_dc_numerator = stream_sum + (LUMA_SAMPLE_COUNT / 2);
+  assign dc_sample = direct_dc_numerator / LUMA_SAMPLE_COUNT;
+  assign stream_dc_sample = stream_dc_numerator / LUMA_SAMPLE_COUNT;
   assign direct_scaled_distance = (((13'd114 - {5'd0, dc_sample}) * 13'd16) + 13'd57) / 13'd114;
   assign quant_luma_rem =
     (dc_sample >= 8'd114) ? 5'd0 :
     ((direct_scaled_distance > 13'd16) ? 5'd16 : direct_scaled_distance[4:0]);
-  assign quant_luma_ac_tokens = direct_quant_luma_ac_tokens;
   assign direct_recon_from_rem = (((9'd16 - quant_luma_rem) * 9'd114) + 9'd8) >> 4;
-  assign quantized_dc_coeff = $signed({2'b00, direct_recon_from_rem}) - 10'sd114;
   assign recon_luma_sample = direct_recon_from_rem;
+
   assign s_axis_ready = enable && (!stream_result_valid_q || (m_axis_valid && m_axis_ready && m_axis_last));
   assign stream_scaled_distance =
     (((13'd114 - {5'd0, stream_dc_sample}) * 13'd16) + 13'd57) / 13'd114;
@@ -141,7 +107,6 @@ module ff_vvc_residual_transform #(
     (stream_dc_sample >= 8'd114) ? 5'd0 :
     ((stream_scaled_distance > 13'd16) ? 5'd16 : stream_scaled_distance[4:0]);
   assign stream_recon_from_rem = (((9'd16 - stream_quant_luma_rem) * 9'd114) + 9'd8) >> 4;
-  assign stream_recon_luma_sample = stream_recon_from_rem;
   assign stream_recon_dc_coeff = $signed({2'b00, stream_recon_from_rem}) - 10'sd114;
   assign stream_negative = (stream_quant_luma_rem != 5'd0) && (stream_recon_dc_coeff < 10'sd0);
   assign stream_abs_remainder_value =
@@ -173,25 +138,25 @@ module ff_vvc_residual_transform #(
   always_comb begin
     case (stream_packet_index_q)
       4'd0: residual_packet_next = {
-        SYMBOL_BIN_CTX, 19'd0, CTX_LAST_SIG_COEFF_X_PREFIX_3, 8'd0, 1'b0
+        SYMBOL_BIN_CTX, 18'd0, 1'b0, CTX_LAST_SIG_COEFF_X_PREFIX_3, 8'd0, 1'b0
       };
       4'd1: residual_packet_next = {
-        SYMBOL_BIN_CTX, 19'd0, CTX_LAST_SIG_COEFF_Y_PREFIX_3, 8'd0, stream_last_packet_index == 4'd1
+        SYMBOL_BIN_CTX, 18'd0, 1'b0, CTX_LAST_SIG_COEFF_Y_PREFIX_3, 8'd0, stream_last_packet_index == 4'd1
       };
       4'd2: residual_packet_next = {
-        SYMBOL_BIN_CTX, 19'd0, CTX_ABS_LEVEL_GTX_0, 7'd0, stream_quant_luma_rem > 5'd1, 1'b0
+        SYMBOL_BIN_CTX, 18'd0, 1'b0, CTX_ABS_LEVEL_GTX_0, 7'd0, stream_quant_luma_rem > 5'd1, 1'b0
       };
       4'd3: begin
         if (stream_last_packet_index == 4'd3) begin
           residual_packet_next = {SYMBOL_BIN_EP, 31'd0, stream_negative, 1'b1};
         end else begin
           residual_packet_next = {
-            SYMBOL_BIN_CTX, 19'd0, CTX_PAR_LEVEL_0, 7'd0, stream_quant_luma_rem[0], 1'b0
+            SYMBOL_BIN_CTX, 18'd0, 1'b0, CTX_PAR_LEVEL_0, 7'd0, stream_quant_luma_rem[0], 1'b0
           };
         end
       end
       4'd4: residual_packet_next = {
-        SYMBOL_BIN_CTX, 19'd0, CTX_ABS_LEVEL_GTX_32, 7'd0, stream_quant_luma_rem > 5'd3,
+        SYMBOL_BIN_CTX, 18'd0, 1'b0, CTX_ABS_LEVEL_GTX_32, 7'd0, stream_quant_luma_rem > 5'd3,
         stream_last_packet_index == 4'd4
       };
       4'd5: begin
@@ -219,7 +184,7 @@ module ff_vvc_residual_transform #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       stream_samples_q <= '0;
-      stream_sample_count_q <= 5'd0;
+      stream_sample_count_q <= '0;
       stream_result_valid_q <= 1'b0;
       stream_packet_index_q <= 4'd0;
       m_axis_valid <= 1'b0;
@@ -228,7 +193,7 @@ module ff_vvc_residual_transform #(
       m_axis_last <= 1'b0;
     end else if (clear || !enable) begin
       stream_samples_q <= '0;
-      stream_sample_count_q <= 5'd0;
+      stream_sample_count_q <= '0;
       stream_result_valid_q <= 1'b0;
       stream_packet_index_q <= 4'd0;
       m_axis_valid <= 1'b0;
@@ -242,9 +207,9 @@ module ff_vvc_residual_transform #(
         if (s_axis_last || stream_sample_count_q == LUMA_SAMPLE_COUNT - 1) begin
           stream_result_valid_q <= 1'b1;
           stream_packet_index_q <= 4'd0;
-          stream_sample_count_q <= 5'd0;
+          stream_sample_count_q <= '0;
         end else begin
-          stream_sample_count_q <= stream_sample_count_q + 5'd1;
+          stream_sample_count_q <= stream_sample_count_q + 1'b1;
         end
       end
 
@@ -254,6 +219,7 @@ module ff_vvc_residual_transform #(
         if (stream_packet_index_q == stream_last_packet_index) begin
           stream_result_valid_q <= 1'b0;
           stream_packet_index_q <= 4'd0;
+          stream_samples_q <= '0;
         end else begin
           stream_packet_index_q <= stream_packet_index_q + 4'd1;
         end

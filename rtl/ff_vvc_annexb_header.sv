@@ -7,6 +7,13 @@ module ff_vvc_annexb_header (
   input  logic        start,
   input  logic [15:0] visible_width,
   input  logic [15:0] visible_height,
+  input  logic        sps_transform_skip_enabled_flag,
+  input  logic        sps_mts_enabled_flag,
+  input  logic        sps_lfnst_enabled_flag,
+  input  logic        sps_mrl_enabled_flag,
+  input  logic        sps_cclm_enabled_flag,
+  input  logic        sps_dep_quant_enabled_flag,
+  input  logic        sps_sign_data_hiding_enabled_flag,
   input  logic        m_axis_ready,
   output logic        m_axis_valid,
   output logic [7:0]  m_axis_data,
@@ -177,8 +184,8 @@ module ff_vvc_annexb_header (
         7'd12: begin syntax_value = 32'd0; syntax_bits = 6'd5; end // gci_alignment_zero_bit[0..4]
         7'd13: begin syntax_value = 32'd0; syntax_bits = 6'd8; end // ptl_num_sub_profiles
         7'd14: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_gdr_enabled_flag
-        7'd15: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // sps_ref_pic_resampling_enabled_flag
-        7'd16: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_res_change_in_clvs_allowed_flag
+        7'd15: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_ref_pic_resampling_enabled_flag
+        7'd16: begin syntax_value = 32'd0; syntax_bits = 6'd0; end // sps_res_change_in_clvs_allowed_flag gated off
         7'd17: begin syntax_value = ue_width_value; syntax_bits = ue_width_bits; end
         7'd18: begin syntax_value = ue_height_value; syntax_bits = ue_height_bits; end
         7'd19: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // sps_conformance_window_flag
@@ -189,7 +196,7 @@ module ff_vvc_annexb_header (
         7'd24: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_subpic_info_present_flag
         7'd25: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // sps_bitdepth_minus8 ue(0)
         7'd26: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_entropy_coding_sync_enabled_flag
-        7'd27: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // sps_entry_point_offsets_present_flag
+        7'd27: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_entry_point_offsets_present_flag
         7'd28: begin syntax_value = 32'd4; syntax_bits = 6'd4; end // sps_log2_max_pic_order_cnt_lsb_minus4
         7'd29: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_poc_msb_cycle_flag
         7'd30: begin syntax_value = 32'd0; syntax_bits = 6'd2; end // sps_num_extra_ph_bytes
@@ -210,9 +217,9 @@ module ff_vvc_annexb_header (
         7'd48: begin syntax_value = 32'd4; syntax_bits = 6'd5; end // inter ue(3)
         7'd49: begin syntax_value = 32'd4; syntax_bits = 6'd5; end // inter ue(3)
         7'd50: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // sps_max_luma_transform_size_64_flag
-        7'd51: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // transform skip
-        7'd52: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // mts
-        7'd53: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // lfnst
+        7'd51: begin syntax_value = {31'd0, sps_transform_skip_enabled_flag}; syntax_bits = 6'd1; end // sps_transform_skip_enabled_flag
+        7'd52: begin syntax_value = {31'd0, sps_mts_enabled_flag}; syntax_bits = 6'd1; end // sps_mts_enabled_flag
+        7'd53: begin syntax_value = {31'd0, sps_lfnst_enabled_flag}; syntax_bits = 6'd1; end // sps_lfnst_enabled_flag
         7'd54: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // joint cbcr
         7'd55: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // same qp table
         7'd56: begin syntax_value = 32'd19; syntax_bits = 6'd9; end // se(-9)
@@ -228,32 +235,33 @@ module ff_vvc_annexb_header (
         7'd72: begin syntax_value = 32'd2; syntax_bits = 6'd3; end // sps_num_ref_pic_lists[0] ue(1)
         7'd73: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // num_ref_entries ue(0)
         7'd74: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // ref wraparound
-        7'd75: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // temporal mvp
-        7'd76: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // sbtmvp
-        7'd77: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // amvr
+        7'd75: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_temporal_mvp_enabled_flag
+        7'd76: begin syntax_value = 32'd0; syntax_bits = 6'd0; end // sps_sbtmvp_enabled_flag gated off
+        7'd77: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_amvr_enabled_flag
         7'd78: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // bdof
         7'd79: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // smvd
         7'd80: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // dmvr
-        7'd81: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // mmvd
-        7'd82: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // mmvd fullpel
+        7'd81: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_mmvd_enabled_flag
+        7'd82: begin syntax_value = 32'd0; syntax_bits = 6'd0; end // sps_mmvd_fullpel_only_flag gated off
         7'd83: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // six_minus_max_num_merge_cand ue(0)
-        7'd84: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // sbt
-        7'd85: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // affine
-        7'd86: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // five_minus_max_num_subblock_merge_cand ue(0)
-        7'd87: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // affine type
-        7'd88, 7'd89, 7'd90, 7'd91, 7'd92: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
+        7'd84: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_sbt_enabled_flag
+        7'd85: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_affine_enabled_flag
+        7'd86: begin syntax_value = 32'd0; syntax_bits = 6'd0; end // sps_five_minus_max_num_subblock_merge_cand gated off
+        7'd87: begin syntax_value = 32'd0; syntax_bits = 6'd0; end // sps_affine_type_flag gated off
+        7'd88, 7'd89: begin syntax_value = 32'd0; syntax_bits = 6'd0; end // gated affine subfields
+        7'd90, 7'd91, 7'd92: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // bcw, ciip, gpm
         7'd93: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // log2_parallel_merge_level_minus2 ue(0)
         7'd94: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // isp
-        7'd95: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // mrl
+        7'd95: begin syntax_value = {31'd0, sps_mrl_enabled_flag}; syntax_bits = 6'd1; end // sps_mrl_enabled_flag
         7'd96: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // mip
-        7'd97: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // cclm
+        7'd97: begin syntax_value = {31'd0, sps_cclm_enabled_flag}; syntax_bits = 6'd1; end // sps_cclm_enabled_flag
         7'd98: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // chroma horizontal collocated
         7'd99: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // chroma vertical collocated
         7'd100: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // palette enabled
         7'd101: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // ibc
         7'd102: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // ladf
         7'd103: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // scaling list
-        7'd104: begin syntax_value = 32'b1000000; syntax_bits = 6'd7; end // dep_quant through extension flags
+        7'd104: begin syntax_value = {25'd0, sps_dep_quant_enabled_flag, sps_sign_data_hiding_enabled_flag, 5'b00000}; syntax_bits = 6'd7; end // dep/sign through extension flags
         default: begin syntax_value = 32'd0; syntax_bits = 6'd0; end
       endcase
     end else begin
@@ -263,7 +271,7 @@ module ff_vvc_annexb_header (
         7'd2: begin syntax_value = 32'd0; syntax_bits = 6'd1; end  // pps_mixed_nalu_types_in_pic_flag
         7'd3: begin syntax_value = ue_width_value; syntax_bits = ue_width_bits; end
         7'd4: begin syntax_value = ue_height_value; syntax_bits = ue_height_bits; end
-        7'd5: begin syntax_value = 32'b000101; syntax_bits = 6'd6; end // conformance through cabac_init
+        7'd5: begin syntax_value = 32'b000100; syntax_bits = 6'd6; end // conformance through pps_cabac_init_present_flag
         7'd6: begin syntax_value = 32'd4; syntax_bits = 6'd5; end // num_ref_idx_default_active_minus1[0] ue(3)
         7'd7: begin syntax_value = 32'd4; syntax_bits = 6'd5; end // num_ref_idx_default_active_minus1[1] ue(3)
         7'd8: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // pps_rpl1_idx_present_flag
@@ -387,6 +395,8 @@ module ff_vvc_annexb_header (
         ST_FIELDS: begin
           if (syntax_fields_done) begin
             state_q <= ST_TRAILING_STOP;
+          end else if (syntax_bits == 6'd0) begin
+            field_index_q <= field_index_q + 7'd1;
           end else if (bit_writer_valid && bit_writer_ready) begin
             field_index_q <= field_index_q + 7'd1;
           end

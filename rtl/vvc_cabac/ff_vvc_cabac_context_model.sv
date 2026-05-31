@@ -1,21 +1,21 @@
 `timescale 1ns/1ps
 
 module ff_vvc_cabac_context_model #(
-  parameter int VVC_CTX_COUNT = 30,
+  parameter int VVC_CTX_COUNT = 42,
   parameter int VVC_CTX_QP = 32
 ) (
   input  logic        clk,
   input  logic        rst_n,
   input  logic        reset_contexts,
 
-  input  logic [4:0]  query_ctx_id,
+  input  logic [5:0]  query_ctx_id,
   input  logic [15:0] query_range,
-  output logic [4:0]  query_bank_id,
+  output logic [5:0]  query_bank_id,
   output logic [8:0]  query_lps,
   output logic        query_mps,
 
   input  logic        update_valid,
-  input  logic [4:0]  update_ctx_id,
+  input  logic [5:0]  update_ctx_id,
   input  logic        update_bin
 );
   localparam int VVC_PROB_MODEL_BITS = 40;
@@ -52,9 +52,36 @@ module ff_vvc_cabac_context_model #(
   localparam int VVC_CTX_SPLIT_FLAG_1             = 27;
   localparam int VVC_CTX_SPLIT_FLAG_2             = 28;
   localparam int VVC_CTX_MTT_SPLIT_CU_VERTICAL_0  = 29;
-  localparam logic [4:0] VVC_CTX_COUNT_LIMIT = VVC_CTX_COUNT;
+  localparam int VVC_CTX_MTT_SPLIT_CU_VERTICAL_4  = 30;
+  localparam int VVC_CTX_MTT_SPLIT_CU_BINARY_0    = 31;
+  localparam int VVC_CTX_MTT_SPLIT_CU_BINARY_2    = 32;
+  localparam int VVC_CTX_SPLIT_FLAG_4             = 33;
+  localparam int VVC_CTX_SPLIT_QT_FLAG_1          = 34;
+  localparam int VVC_CTX_SPLIT_QT_FLAG_2          = 35;
+  localparam int VVC_CTX_SPLIT_QT_FLAG_4          = 36;
+  localparam int VVC_CTX_SPLIT_QT_FLAG_5          = 37;
+  localparam int VVC_CTX_SPLIT_FLAG_5             = 38;
+  localparam int VVC_CTX_SPLIT_FLAG_8             = 39;
+  localparam int VVC_CTX_MTT_SPLIT_CU_VERTICAL_1  = 40;
+  localparam int VVC_CTX_MTT_SPLIT_CU_VERTICAL_2  = 41;
+  localparam logic [5:0] VVC_CTX_COUNT_LIMIT = VVC_CTX_COUNT;
 
+  // ITU-T H.266 (V4) Table 62, initType 0 / I-slice gives
+  // mtt_split_cu_binary_flag ctxIdx 0..3 initValue = 36,45,36,45
+  // and shiftIdx = 12,13,12,13.
   localparam logic [(VVC_CTX_COUNT * 8) - 1:0] INIT_VALUE_LUT = {
+    8'd29, // 41: MttSplitCuVerticalFlag(2)
+    8'd42, // 40: MttSplitCuVerticalFlag(1)
+    8'd31, // 39: SplitFlag(8)
+    8'd38, // 38: SplitFlag(5)
+    8'd37, // 37: SplitQtFlag(5)
+    8'd19, // 36: SplitQtFlag(4)
+    8'd15, // 35: SplitQtFlag(2)
+    8'd6,  // 34: SplitQtFlag(1)
+    8'd29, // 33: SplitFlag(4)
+    8'd36, // 32: MttSplitCuBinaryFlag(2)
+    8'd36, // 31: MttSplitCuBinaryFlag(0)
+    8'd44, // 30: MttSplitCuVerticalFlag(4)
     8'd43, // 29: MttSplitCuVerticalFlag(0)
     8'd38, // 28: SplitFlag(2)
     8'd28, // 27: SplitFlag(1)
@@ -87,6 +114,18 @@ module ff_vvc_cabac_context_model #(
     8'd19  //  0: SplitFlag(0)
   };
   localparam logic [(VVC_CTX_COUNT * 4) - 1:0] LOG2_WINDOW_LUT = {
+    4'd9,  // 41: MttSplitCuVerticalFlag(2)
+    4'd8,  // 40: MttSplitCuVerticalFlag(1)
+    4'd9,  // 39: SplitFlag(8)
+    4'd12, // 38: SplitFlag(5)
+    4'd8,  // 37: SplitQtFlag(5)
+    4'd12, // 36: SplitQtFlag(4)
+    4'd8,  // 35: SplitQtFlag(2)
+    4'd8,  // 34: SplitQtFlag(1)
+    4'd13, // 33: SplitFlag(4)
+    4'd12, // 32: MttSplitCuBinaryFlag(2)
+    4'd12, // 31: MttSplitCuBinaryFlag(0)
+    4'd5,  // 30: MttSplitCuVerticalFlag(4)
     4'd9,  // 29: MttSplitCuVerticalFlag(0)
     4'd8,  // 28: SplitFlag(2)
     4'd13, // 27: SplitFlag(1)
@@ -123,9 +162,9 @@ module ff_vvc_cabac_context_model #(
 
   vvc_prob_model_t ctx_model_q [0:VVC_CTX_COUNT - 1];
   vvc_prob_model_t ctx_init_model [0:VVC_CTX_COUNT - 1];
-  logic [4:0] update_bank_id;
-  logic [4:0] query_bank_id_next;
-  logic [4:0] update_bank_id_next;
+  logic [5:0] update_bank_id;
+  logic [5:0] query_bank_id_next;
+  logic [5:0] update_bank_id_next;
   logic [16:0] query_state_sum;
   logic [7:0] query_state;
   logic [15:0] query_q;
@@ -149,12 +188,12 @@ module ff_vvc_cabac_context_model #(
   always_comb begin
     query_bank_id_next = query_ctx_id;
     if (query_ctx_id >= VVC_CTX_COUNT_LIMIT) begin
-      query_bank_id_next = VVC_CTX_SPLIT_FLAG_0[4:0];
+      query_bank_id_next = VVC_CTX_SPLIT_FLAG_0[5:0];
     end
 
     update_bank_id_next = update_ctx_id;
     if (update_ctx_id >= VVC_CTX_COUNT_LIMIT) begin
-      update_bank_id_next = VVC_CTX_SPLIT_FLAG_0[4:0];
+      update_bank_id_next = VVC_CTX_SPLIT_FLAG_0[5:0];
     end
   end
 
