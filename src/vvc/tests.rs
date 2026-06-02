@@ -127,6 +127,21 @@ fn assert_vvc_annex_b_has_min_picture_nals(bytes: &[u8], frames: usize) -> Vec<V
     infos
 }
 
+fn count_vvc_picture_nals(infos: &[VvcNalInfo]) -> usize {
+    infos
+        .iter()
+        .filter(|info| {
+            matches!(
+                info.nal_unit_type,
+                value if value == VvcNalUnitType::IdrNLp as u8
+                    || value == VvcNalUnitType::IdrWRadl as u8
+                    || value == VvcNalUnitType::Cra as u8
+                    || value == VvcNalUnitType::Trail as u8
+            )
+        })
+        .count()
+}
+
 fn vvc_quantized_color(y: u8, luma_rem: u8) -> VvcQuantizedColor {
     VvcQuantizedColor {
         y,
@@ -295,6 +310,28 @@ fn vvc_parameter_sets_are_generated_from_named_syntax() {
     assert_vvc_parameter_sets_signal_geometry(geometry);
     assert_vvc_flag(&pps, "pps_no_pic_partition_flag", true);
     assert_vvc_flag(&pps, "pps_cabac_init_present_flag", false);
+}
+
+#[test]
+fn vvc_multi_ctu_pps_signals_picture_header_placement_flags() {
+    let single_ctu = vvc_pps_rbsp(VvcVideoGeometry {
+        width: 64,
+        height: 64,
+    });
+    assert_vvc_field_absent(&single_ctu, "pps_rpl_info_in_ph_flag");
+    assert_vvc_field_absent(&single_ctu, "pps_sao_info_in_ph_flag");
+    assert_vvc_field_absent(&single_ctu, "pps_alf_info_in_ph_flag");
+    assert_vvc_field_absent(&single_ctu, "pps_qp_delta_info_in_ph_flag");
+
+    let multi_ctu = vvc_pps_rbsp(VvcVideoGeometry {
+        width: 128,
+        height: 64,
+    });
+    assert_vvc_flag(&multi_ctu, "pps_no_pic_partition_flag", false);
+    assert_vvc_flag(&multi_ctu, "pps_rpl_info_in_ph_flag", false);
+    assert_vvc_flag(&multi_ctu, "pps_sao_info_in_ph_flag", false);
+    assert_vvc_flag(&multi_ctu, "pps_alf_info_in_ph_flag", false);
+    assert_vvc_flag(&multi_ctu, "pps_qp_delta_info_in_ph_flag", false);
 }
 
 #[test]
@@ -1515,6 +1552,124 @@ fn vvc_yuv444_palette_path_encodes_each_frame_independently() {
 }
 
 #[test]
+fn vvc_input_path_emits_one_slice_per_ctu_for_larger_yuv420_picture() {
+    let geometry = VvcVideoGeometry {
+        width: 160,
+        height: 120,
+    };
+    let input = solid_yuv420p8_geometry(geometry.width, geometry.height, 0, 0, 0, 1);
+
+    let artifacts = vvc_yuv_encode_artifacts_from_input_with_limits(
+        &input,
+        VvcEncodeParams { frames: 1 },
+        geometry,
+        VvcVideoLimits {
+            max_width: 1024,
+            max_height: 512,
+        },
+        PixelFormat::Yuv420p8,
+    )
+    .unwrap();
+
+    let infos = assert_vvc_annex_b_has_min_picture_nals(&artifacts.bitstream, 1);
+    assert_eq!(infos[2].nal_unit_type, VvcNalUnitType::PictureHeader as u8);
+    assert_eq!(
+        count_vvc_picture_nals(&infos),
+        vvc_picture_ctu_count(geometry)
+    );
+    assert_eq!(
+        artifacts.reconstruction.len(),
+        Picture::expected_len(geometry.width, geometry.height, PixelFormat::Yuv420p8)
+    );
+}
+
+#[test]
+fn vvc_input_path_emits_one_slice_per_ctu_for_larger_yuv444_palette_picture() {
+    let geometry = VvcVideoGeometry {
+        width: 128,
+        height: 72,
+    };
+    let input = solid_yuv444p8_geometry(geometry.width, geometry.height, 20, 40, 60, 1);
+
+    let artifacts = vvc_yuv_encode_artifacts_from_input_with_limits(
+        &input,
+        VvcEncodeParams { frames: 1 },
+        geometry,
+        VvcVideoLimits {
+            max_width: 1024,
+            max_height: 512,
+        },
+        PixelFormat::Yuv444p8,
+    )
+    .unwrap();
+
+    let infos = assert_vvc_annex_b_has_min_picture_nals(&artifacts.bitstream, 1);
+    assert_eq!(infos[2].nal_unit_type, VvcNalUnitType::PictureHeader as u8);
+    assert_eq!(
+        count_vvc_picture_nals(&infos),
+        vvc_picture_ctu_count(geometry)
+    );
+    assert_eq!(artifacts.reconstruction, input);
+}
+
+#[test]
+fn vvc_input_max_capacity_does_not_affect_encoded_stream() {
+    let cases = [
+        (
+            VvcVideoGeometry {
+                width: 160,
+                height: 120,
+            },
+            PixelFormat::Yuv420p8,
+            solid_yuv420p8_geometry(160, 120, 24, 128, 192, 1),
+        ),
+        (
+            VvcVideoGeometry {
+                width: 128,
+                height: 72,
+            },
+            PixelFormat::Yuv444p8,
+            solid_yuv444p8_geometry(128, 72, 24, 128, 192, 1),
+        ),
+    ];
+
+    for (geometry, format, input) in cases {
+        let exact_capacity = vvc_yuv_encode_artifacts_from_input_with_limits(
+            &input,
+            VvcEncodeParams { frames: 1 },
+            geometry,
+            VvcVideoLimits {
+                max_width: geometry.width,
+                max_height: geometry.height,
+            },
+            format,
+        )
+        .unwrap();
+
+        let oversized_capacity = vvc_yuv_encode_artifacts_from_input_with_limits(
+            &input,
+            VvcEncodeParams { frames: 1 },
+            geometry,
+            VvcVideoLimits {
+                max_width: 16_384,
+                max_height: 8_192,
+            },
+            format,
+        )
+        .unwrap();
+
+        assert_eq!(
+            exact_capacity.bitstream, oversized_capacity.bitstream,
+            "max capacity should not change the emitted stream for {geometry:?} {format:?}"
+        );
+        assert_eq!(
+            exact_capacity.reconstruction, oversized_capacity.reconstruction,
+            "max capacity should not change reconstruction for {geometry:?} {format:?}"
+        );
+    }
+}
+
+#[test]
 fn vvc_palette_444_contexts_are_spec_audited() {
     let rows = vvc_palette_444_context_audit_rows();
     assert!(rows.contains(&("pred_mode_plt_flag[0]", 25, 1)));
@@ -1655,11 +1810,44 @@ fn rejects_zero_vvc_frame_count() {
 }
 
 fn solid_yuv420p8(y: u8, u: u8, v: u8, frames: usize) -> Vec<u8> {
-    let mut out = Vec::with_capacity(Picture::expected_len(8, 8, PixelFormat::Yuv420p8) * frames);
+    solid_yuv420p8_geometry(8, 8, y, u, v, frames)
+}
+
+fn solid_yuv420p8_geometry(
+    width: usize,
+    height: usize,
+    y: u8,
+    u: u8,
+    v: u8,
+    frames: usize,
+) -> Vec<u8> {
+    let luma = width * height;
+    let chroma = luma / 4;
+    let mut out =
+        Vec::with_capacity(Picture::expected_len(width, height, PixelFormat::Yuv420p8) * frames);
     for _ in 0..frames {
-        out.extend(std::iter::repeat_n(y, 64));
-        out.extend(std::iter::repeat_n(u, 16));
-        out.extend(std::iter::repeat_n(v, 16));
+        out.extend(std::iter::repeat_n(y, luma));
+        out.extend(std::iter::repeat_n(u, chroma));
+        out.extend(std::iter::repeat_n(v, chroma));
+    }
+    out
+}
+
+fn solid_yuv444p8_geometry(
+    width: usize,
+    height: usize,
+    y: u8,
+    u: u8,
+    v: u8,
+    frames: usize,
+) -> Vec<u8> {
+    let samples = width * height;
+    let mut out =
+        Vec::with_capacity(Picture::expected_len(width, height, PixelFormat::Yuv444p8) * frames);
+    for _ in 0..frames {
+        out.extend(std::iter::repeat_n(y, samples));
+        out.extend(std::iter::repeat_n(u, samples));
+        out.extend(std::iter::repeat_n(v, samples));
     }
     out
 }

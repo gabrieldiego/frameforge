@@ -4,7 +4,7 @@ FrameForge is an open-source lab for video compression, bitstream generation, RT
 
 FrameForge is starting with a minimal VVC/H.266 encoder foundation, but the project is not limited to VVC, H.266, screen-content coding, FPGA work, or encoding only. The long-term goal is a practical research workspace for codec block experiments, software golden models, bitstream generation, RTL acceleration, FPGA-oriented blocks, encoder and decoder research, and hardware/software co-verification.
 
-Current status: experimental, not production-ready, and not conforming. The current VVC path generates small Annex-B VVC streams for software/RTL validation from planar YUV 4:2:0, 4:2:2, or 4:4:4 input at 8, 10, 12, or 16 bits. The validation target is a single CTU with visible geometries up to 64x64. Non-4:4:4 inputs currently use a 4:2:0 residual path with internally generated CTU/CU syntax and a DC-only transform path. 4:4:4 inputs currently select an experimental palette path with 8x8 palette CUs and no escape coding; it is lossless only when each 8x8 CU uses at most 31 unique YCbCr colors. Software, RTL, and VTM-backed validation are wired for the current subset, and unsupported syntax must remain explicit instead of being hidden in sideband payloads.
+Current status: experimental, not production-ready, and not conforming. The current VVC path generates small Annex-B VVC streams for software/RTL validation from planar YUV 4:2:0, 4:2:2, or 4:4:4 input at 8, 10, 12, or 16 bits. The software path can emit larger pictures as a stream of 64x64 CTU-local slices, with one slice per CTU and caller-provided validation limits rather than a compiled geometry ceiling. RTL validation remains bounded by the instantiated maximum geometry parameters. Non-4:4:4 inputs currently use a 4:2:0 residual path with internally generated CTU/CU syntax and a DC-only transform path. 4:4:4 inputs currently select an experimental palette path with 8x8 palette CUs and no escape coding; it is lossless only when each 8x8 CU uses at most 31 unique YCbCr colors. Software, RTL, and VTM-backed validation are wired for the current subset, and unsupported syntax must remain explicit instead of being hidden in sideband payloads.
 
 ## Near-Term Direction
 
@@ -118,7 +118,7 @@ cargo run -- vvc-encode --input /tmp/frameforge-vvc-16x16-2f.yuv --frames 2 --ou
 make validate-decode BITSTREAM=/tmp/frameforge-vvc-16x16-2f.vvc DECODED=/tmp/frameforge-vvc-16x16-2f-dec.yuv
 ```
 
-This stream emits one SPS/PPS sequence header followed by two picture slices. The same command can be run with `--width` and `--height` for other supported validation geometries, which is useful for proving that the software and RTL output paths remain aligned across the current single-CTU subset.
+This stream emits one SPS/PPS sequence header followed by two picture slices. The same command can be run with `--width` and `--height` for other supported validation geometries, which is useful for proving that the software and RTL output paths remain aligned across the current subset.
 
 Validate the software stream, RTL stream, and VTM reconstructions with SHA-256 checksums:
 
@@ -133,7 +133,7 @@ make validate INPUT=/tmp/frameforge/black_16x16_2f_yuv420p8.yuv
 
 The validation command infers resolution, frame count, and format from names such as `black_16x16_2f_yuv420p8.yuv`, `color_16x8_1f_yuv422p10le.yuv`, or `palette_tiles_64x64_1f_yuv444p8.yuv`. You can override them with `WIDTH=64 HEIGHT=64 FRAMES=1 FORMAT=yuv444p8`. Supported VVC input formats are planar `yuv420p`, `yuv422p`, and `yuv444p` at 8, 10, 12, or 16 bits, with common `i420`, `i422`, `i444`, `i010`, `i210`, and `i410` style aliases. Inputs are reduced to the current 8-bit coding subsets before bitstream generation. Non-4:4:4 inputs use the current 4:2:0 residual syntax path; 4:4:4 inputs use the current palette syntax path. Validation feeds the input YUV into both the software VVC encoder and the RTL testbench, checks that their bitstreams match, taps the software and RTL internal reconstructions, decodes the RTL bitstream with VTM when supported, and checks that all decoder-visible reconstructions match.
 
-Internal reconstruction is always the reconstruction represented by the emitted VVC picture syntax. For geometries currently accepted by VTM, it must match the external decoder output. Unsupported features must not be represented as hidden sideband reconstruction.
+Internal reconstruction is always the reconstruction represented by the emitted VVC picture syntax. For geometries currently accepted by VTM, it must match the external decoder output. If VTM terminates with a process crash such as `SIGSEGV`, validation skips only the external decoder comparison for that run; the same vector can still be used for software/RTL bitstream and reconstruction comparison. Unsupported features must not be represented as hidden sideband reconstruction.
 
 Inspect NAL headers in any Annex-B VVC stream:
 
@@ -193,7 +193,7 @@ make rtl-test SIM=icarus TOPLEVEL_LANG=verilog
 
 ## External Decoder Validation
 
-External decoder validation is wired for the current small VVC subset. The `vvc-eos` command emits only a VVC EOS NAL unit. The `vvc-encode` command assembles VTM-decodable streams for visible geometries up to the current 64x64 single-CTU limit, using internally generated sequence and picture NALs plus CABAC-coded slice entropy. Non-4:4:4 inputs use the current 4:2:0 residual path; 4:4:4 inputs use the current palette path. This is still not a conformance claim: the syntax subset is narrow, AC transform coding is not active yet, palette escape coding is missing, and broader profile/tool combinations are intentionally unsupported.
+External decoder validation is wired for the current small VVC subset. The `vvc-eos` command emits only a VVC EOS NAL unit. The `vvc-encode` command assembles VTM-decodable streams for the current subset, using internally generated sequence and picture NALs plus CABAC-coded slice entropy. Larger software pictures are emitted as one CTU-local slice per 64x64 CTU. Non-4:4:4 inputs use the current 4:2:0 residual path; 4:4:4 inputs use the current palette path. This is still not a conformance claim: the syntax subset is narrow, AC transform coding is not active yet, palette escape coding is missing, and broader profile/tool combinations are intentionally unsupported.
 
 FrameForge looks for decoder resources in this order:
 

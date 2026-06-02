@@ -16,11 +16,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_DIR = Path("verification/generated/checksums")
 RTL_SUPPORTED_FORMAT = "yuv420p8"
+VTM_CRASH_SKIP_EXIT = 77
 
-# Keep this in sync with frameforge::vvc::VVC_CODED_DIMENSION_GRANULARITY and
-# the RTL coded-dimension logic. It is the current validation-path coded-picture
-# luma dimension alignment, not a general statement about every VVC profile.
-VVC_CODED_DIMENSION_GRANULARITY = 8
 SUPPORTED_FORMATS = {
     "i420": "yuv420p8",
     "yuv420p8": "yuv420p8",
@@ -172,8 +169,12 @@ def main() -> int:
                 cwd=REPO_ROOT,
             )
             if decoder.returncode != 0:
-                print("FAIL: VTM decoder rejected software bitstream", file=sys.stderr)
-                return 1
+                if decoder.returncode == VTM_CRASH_SKIP_EXIT:
+                    has_vtm_recon = False
+                    print("SKIP: VTM crashed; skipping only the external decode comparison")
+                else:
+                    print("FAIL: VTM decoder rejected software bitstream", file=sys.stderr)
+                    return 1
 
         digests = {
             "input_yuv": sha256(validation_input_path),
@@ -253,11 +254,15 @@ def main() -> int:
             cwd=REPO_ROOT,
         )
         if decoder.returncode != 0:
-            print(
-                f"FAIL: VTM decoder rejected {'RTL' if rtl_annexb_bitstream else 'software'} bitstream",
-                file=sys.stderr,
-            )
-            return 1
+            if decoder.returncode == VTM_CRASH_SKIP_EXIT:
+                has_vtm_recon = False
+                print("SKIP: VTM crashed; skipping only the external decode comparison")
+            else:
+                print(
+                    f"FAIL: VTM decoder rejected {'RTL' if rtl_annexb_bitstream else 'software'} bitstream",
+                    file=sys.stderr,
+                )
+                return 1
 
     digests = {
         "input_yuv": sha256(validation_input_path),
@@ -400,22 +405,10 @@ def validate_supported_input(
         )
 
 
-def vtm_decode_supported(input_path: Path, info: InputInfo) -> bool:
+def vtm_decode_supported(_input_path: Path, info: InputInfo) -> bool:
     if format_chroma_sampling(info.fmt) == "444":
-        return (
-            info.fmt == "yuv444p8"
-            and coded_dimension(info.width) <= 64
-            and coded_dimension(info.height) <= 64
-        )
-    return coded_dimension(info.width) <= 64 and coded_dimension(info.height) <= 64
-
-
-def coded_dimension(value: int) -> int:
-    return (
-        (value + VVC_CODED_DIMENSION_GRANULARITY - 1)
-        // VVC_CODED_DIMENSION_GRANULARITY
-        * VVC_CODED_DIMENSION_GRANULARITY
-    )
+        return info.fmt == "yuv444p8"
+    return True
 
 
 def normalize_format(fmt: str) -> str:

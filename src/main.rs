@@ -236,8 +236,8 @@ fn parse_vvc_encode_cli(args: Vec<String>) -> Result<Command, String> {
     let mut frames = 2;
     let mut width = 4;
     let mut height = 4;
-    let mut max_width = 64;
-    let mut max_height = 64;
+    let mut max_width = usize::MAX;
+    let mut max_height = usize::MAX;
     let mut format = PixelFormat::Yuv420p8;
 
     let mut iter = args.into_iter();
@@ -377,7 +377,7 @@ fn parse_usize(value: String, flag: &str) -> Result<usize, String> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-encode --input <yuv> --output <vvc> [--recon <yuv>] [--frames <n>] [--width <w> --height <h>] [--max-width 64 --max-height 64] [--format yuv420p8|yuv422p8|yuv444p8|i420|i422|i444|i010|i210|i410|...]\n  frameforge vvc-cabac-vector-dump --input <yuv420> --output <json> [--frames 1 --width <w> --height <h> --format yuv420p8]\n  frameforge vvc-palette-cabac-dump --input <yuv444> --output <json> [--width <w> --height <h> --format yuv444p8]\n  frameforge vvc-list --input <vvc>"
+    "usage:\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-encode --input <yuv> --output <vvc> [--recon <yuv>] [--frames <n>] [--width <w> --height <h>] [--max-width <w> --max-height <h>] [--format yuv420p8|yuv422p8|yuv444p8|i420|i422|i444|i010|i210|i410|...]\n  frameforge vvc-cabac-vector-dump --input <yuv420> --output <json> [--frames 1 --width <w> --height <h> --format yuv420p8]\n  frameforge vvc-palette-cabac-dump --input <yuv444> --output <json> [--width <w> --height <h> --format yuv444p8]\n  frameforge vvc-list --input <vvc>"
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - Rust crate and CLI foundation.
 - VVC Annex-B writer capable of emitting an EOS-only stream for NAL header and bytestream testing.
 - VVC Annex-B NAL header listing for comparing FrameForge output against VTM output.
-- Generated 1- or 2-frame VVC streams assembled from internally generated SPS/PPS headers and picture slice NAL units. The current input path accepts planar YUV 4:2:0, 4:2:2, and 4:4:4 at 8, 10, 12, or 16 bits up to a single 64x64 CTU. Samples are reduced to the current 8-bit coding subsets before bitstream generation.
+- Generated VVC frame sequences assembled from internally generated SPS/PPS headers, picture headers, and picture slice NAL units. The current software input path accepts planar YUV 4:2:0, 4:2:2, and 4:4:4 at 8, 10, 12, or 16 bits and can emit larger pictures as a stream of 64x64 CTU-local slices. Samples are reduced to the current 8-bit coding subsets before bitstream generation.
 - VTM-backed decode validation for the current subset. Software and RTL bitstreams must match. Software internal reconstruction, RTL internal reconstruction, and VTM reconstruction must match whenever external decode is wired for the selected path.
 - Current non-4:4:4 path: internally generated 4:2:0 CTU/CU syntax, CABAC-coded slice entropy, and a DC-only residual transform path. AC coefficient plumbing exists, but the forward transform currently emits zero AC coefficients.
 - Current 4:4:4 path: experimental palette coding with 8x8 palette CUs. This path is lossless only when each 8x8 CU has at most 31 unique YCbCr colors. Palette escape coding is not implemented.
@@ -21,9 +21,9 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - Named VVC syntax writer for `flag`, `u(n)`, `ue(v)`, `se(v)`, CABAC packets, RBSP trailing bits, and field-offset tracing.
 - Internally generated VVC NAL unit headers with named `forbidden_zero_bit`, `nuh_reserved_zero_bit`, `nuh_layer_id`, `nal_unit_type`, and `nuh_temporal_id_plus1` fields.
 - Internally generated SPS, PPS, picture header, slice header, and typed coding-tree events packetized into the entropy-coded body. The generated VVC stream no longer carries private `FFAC` or `FFPL` reserved-NAL payloads.
-- Rust VVC encoder input handling for planar YUV frame sequences up to 64x64 with 4:2:0, 4:2:2, or 4:4:4 chroma at 8, 10, 12, or 16 bits per sample.
+- Rust VVC encoder input handling for planar YUV frame sequences with 4:2:0, 4:2:2, or 4:4:4 chroma at 8, 10, 12, or 16 bits per sample. Software validation may choose practical size limits, but those limits are caller-supplied checks rather than a compiled encoder geometry ceiling.
 - RTL VVC encoder input handling is parameterized with `visible_width`, `visible_height`, `SAMPLE_BITS`, and `chroma_format_idc` for wider input frames, input buses, and chroma planes while emitting the same stream as software for the current subset.
-- Software and RTL internal reconstructions must match the reconstruction represented by the emitted VVC bitstream. For geometries currently accepted by VTM, they must also match external decoder output; unsupported features must not be represented as hidden sideband reconstruction.
+- Software and RTL internal reconstructions must match the reconstruction represented by the emitted VVC bitstream. For geometries currently accepted by VTM, they must also match external decoder output. If VTM terminates with a process crash, only that external decoder comparison is skipped; the same vector remains useful for software/RTL comparison. Unsupported features must not be represented as hidden sideband reconstruction.
 - Basic NAL/Annex-B-style structures with TODOs for missing exact VVC syntax.
 - `EncoderParams`, `Picture`, reconstruction buffers, and CTU/CU traversal for the current subset.
 - JSONL trace events.

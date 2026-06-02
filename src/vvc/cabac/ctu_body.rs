@@ -531,7 +531,7 @@ impl VvcCtuCabacGenerator {
             return false;
         }
         // H.266 8.4.4 derives CclmEnabled from the dual-tree chroma partition
-        // state for 64x64 CTUs. In the current single-CTU all-intra subset,
+        // state for 64x64 CTUs. In the current CTU-local all-intra subset,
         // CtbLog2SizeY is 6 and sps_qtbtt_dual_tree_intra_flag is enabled, so
         // the relevant enabled cases are:
         // - an unsplit 64x64 chroma CTU,

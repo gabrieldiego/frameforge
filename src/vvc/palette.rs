@@ -1,10 +1,10 @@
 use crate::picture::{ChromaSampling, PixelFormat};
 
 use super::{
-    sample_vvc_yuv_frame, vvc_poc_lsb_for_frame_idx, VvcCabacContext, VvcCabacContexts,
-    VvcCabacEncoder, VvcCtuCabacOp, VvcCtuPartitionShape, VvcEncodeParams, VvcNalUnit,
-    VvcPictureKind, VvcSampledColor, VvcSampledFrame, VvcSliceSyntaxConfig, VvcSyntaxWriter,
-    VvcVideoGeometry, VVC_CTU_SIZE,
+    sample_vvc_yuv_frame, vvc_picture_ctu_count, vvc_poc_lsb_for_frame_idx, vvc_slice_address_bits,
+    VvcCabacContext, VvcCabacContexts, VvcCabacEncoder, VvcCtuCabacOp, VvcCtuPartitionShape,
+    VvcEncodeParams, VvcNalUnit, VvcPictureKind, VvcSampledColor, VvcSampledFrame,
+    VvcSliceSyntaxConfig, VvcSyntaxWriter, VvcVideoGeometry, VVC_CTU_SIZE,
 };
 
 const VVC_PALETTE_CU_SIZE: u16 = 8;
@@ -146,43 +146,63 @@ pub(super) fn vvc_palette_444_reconstruction_yuv(frame: &VvcSampledFrame) -> Vec
     [luma, cb, cr].concat()
 }
 
-pub(super) fn vvc_palette_444_slice_unit(
+pub(super) fn vvc_palette_444_ctu_slice_unit(
     frame_idx: usize,
+    picture_geometry: VvcVideoGeometry,
+    slice_address: usize,
     frame: &VvcSampledFrame,
     slice_config: VvcSliceSyntaxConfig,
 ) -> Result<VvcNalUnit, String> {
     let picture_kind = VvcPictureKind::for_frame_idx(frame_idx);
     let poc_lsb = vvc_poc_lsb_for_frame_idx(frame_idx);
+    let slice_count = vvc_picture_ctu_count(picture_geometry);
+    if slice_address >= slice_count {
+        return Err(format!(
+            "VVC palette slice address {slice_address} is outside the picture CTU/slice count {slice_count}"
+        ));
+    }
 
     Ok(VvcNalUnit {
         nal_unit_type: picture_kind.nal_unit_type(),
         layer_id: 0,
         temporal_id: 0,
-        rbsp_payload: vvc_palette_444_slice_payload(picture_kind, poc_lsb, frame, slice_config),
+        rbsp_payload: vvc_palette_444_slice_payload(
+            picture_kind,
+            poc_lsb,
+            picture_geometry,
+            slice_address,
+            frame,
+            slice_config,
+        ),
     })
 }
 
 fn vvc_palette_444_slice_payload(
     picture_kind: VvcPictureKind,
     poc_lsb: u32,
+    picture_geometry: VvcVideoGeometry,
+    slice_address: usize,
     frame: &VvcSampledFrame,
     slice_config: VvcSliceSyntaxConfig,
 ) -> Vec<u8> {
     let mut writer = VvcSyntaxWriter::new();
     let tool_flags = slice_config.tools;
-    writer.write_flag("sh_picture_header_in_slice_header_flag", true);
-    writer.write_flag("ph_gdr_or_irap_pic_flag", true);
-    writer.write_flag("ph_non_ref_pic_flag", false);
-    writer.write_flag("ph_gdr_pic_flag", false);
-    writer.write_flag("ph_inter_slice_allowed_flag", false);
-    writer.write_ue("ph_pic_parameter_set_id", 0);
-    writer.write_u(
-        "ph_pic_order_cnt_lsb",
-        u64::from(poc_lsb),
-        super::header::VVC_POC_LSB_BITS,
+    let slice_count = vvc_picture_ctu_count(picture_geometry);
+    let include_picture_header = slice_count == 1;
+    writer.write_flag(
+        "sh_picture_header_in_slice_header_flag",
+        include_picture_header,
     );
-    writer.write_flag("ph_partition_constraints_override_flag", false);
-    writer.write_flag("ph_joint_cbcr_sign_flag", false);
+    if include_picture_header {
+        super::header::write_vvc_picture_header(&mut writer, picture_kind, poc_lsb);
+    }
+    if slice_count > 1 {
+        writer.write_u(
+            "sh_slice_address",
+            slice_address as u64,
+            vvc_slice_address_bits(picture_geometry),
+        );
+    }
     writer.write_flag("sh_no_output_of_prior_pics_flag", false);
     writer.write_se("sh_qp_delta", 0);
     if tool_flags.dependent_quantization_enabled {

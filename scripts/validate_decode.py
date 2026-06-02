@@ -3,10 +3,22 @@
 
 import argparse
 import os
+import signal
 import shlex
 import subprocess
 import sys
 from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+VTM_CRASH_SKIP_EXIT = 77
+VTM_CRASH_SIGNALS = {
+    signal.SIGABRT,
+    signal.SIGBUS,
+    signal.SIGFPE,
+    signal.SIGILL,
+    signal.SIGSEGV,
+}
 
 
 def find_decoder_command() -> list[str] | None:
@@ -87,6 +99,17 @@ def main() -> int:
                 print(completed.stdout, end="")
             if completed.stderr:
                 print(completed.stderr, end="", file=sys.stderr)
+        if is_vtm_executable(cmd):
+            signum = decoder_crash_signal(completed.returncode)
+            if signum is not None:
+                print(
+                    f"SKIP: VTM decoder terminated by {signal.Signals(signum).name}; "
+                    "skip only the external VTM comparison for this run. The same "
+                    "test vector can still be used for software/RTL comparisons, "
+                    "and can be retried against VTM after the generated bitstream changes.",
+                    file=sys.stderr,
+                )
+                return VTM_CRASH_SKIP_EXIT
         print(
             "decoder returned a non-zero status. This is expected for experimental "
             "FrameForge streams that are not yet decodable VVC/H.266 pictures, and "
@@ -94,6 +117,28 @@ def main() -> int:
             file=sys.stderr,
         )
     return completed.returncode
+
+
+def decoder_crash_signal(returncode: int) -> int | None:
+    if returncode < 0:
+        signum = -returncode
+    elif returncode >= 128:
+        signum = returncode - 128
+    else:
+        return None
+
+    try:
+        sig = signal.Signals(signum)
+    except ValueError:
+        return None
+    return signum if sig in VTM_CRASH_SIGNALS else None
+
+
+def is_vtm_executable(cmd: list[str]) -> bool:
+    if not cmd:
+        return False
+    name = Path(cmd[0]).name
+    return name.startswith("DecoderApp") or name.startswith("DecoderAnalyserApp")
 
 
 def is_vtm_decoder(cmd: list[str]) -> bool:

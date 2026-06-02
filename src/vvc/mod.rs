@@ -24,7 +24,9 @@ use cabac::{
 #[cfg(test)]
 use cabac::{VvcCtuCabacGenerator, VvcQtSplitCtxInput, VvcSplitCtxInput, VvcTreeType};
 use header::{
-    vvc_poc_lsb_for_frame_idx, vvc_pps_unit, vvc_slice_unit, vvc_sps_unit, VvcPictureKind,
+    vvc_ctu_slice_unit, vvc_picture_ctu_cols, vvc_picture_ctu_count, vvc_picture_ctu_rows,
+    vvc_picture_header_unit, vvc_poc_lsb_for_frame_idx, vvc_pps_unit, vvc_slice_address_bits,
+    vvc_slice_unit, vvc_sps_unit, VvcPictureKind,
 };
 #[cfg(test)]
 use header::{
@@ -36,7 +38,6 @@ pub use nal::{
     VvcNalHeader, VvcNalInfo, VvcNalUnit, VvcNalUnitType,
 };
 pub use palette::vvc_palette_444_cabac_dump_json;
-use palette::vvc_palette_444_slice_unit;
 #[cfg(test)]
 use palette::{
     vvc_palette_444_binarized_syntax_bits, vvc_palette_444_context_audit_rows,
@@ -136,6 +137,13 @@ impl VvcVideoLimits {
             max_height: 64,
         }
     }
+
+    pub const fn unbounded() -> Self {
+        Self {
+            max_width: usize::MAX,
+            max_height: usize::MAX,
+        }
+    }
 }
 
 impl VvcVideoGeometry {
@@ -233,6 +241,23 @@ struct VvcSampledFrame {
     cb: Vec<u8>,
     cr: Vec<u8>,
     chroma_len: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VvcCtuRegion {
+    slice_address: usize,
+    origin_x: usize,
+    origin_y: usize,
+    geometry: VvcVideoGeometry,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VvcReconstructionFrame {
+    geometry: VvcVideoGeometry,
+    format: VvcPictureFormat,
+    luma: Vec<u8>,
+    cb: Vec<u8>,
+    cr: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -501,7 +526,7 @@ pub fn vvc_yuv_annex_b_from_input(
         input,
         params,
         geometry,
-        VvcVideoLimits::max_64x64(),
+        VvcVideoLimits::unbounded(),
         format,
     )
 }
@@ -587,55 +612,72 @@ pub fn vvc_yuv_encode_stream_with_limits<R: Read, W: Write>(
         })?;
         let source_frame =
             sample_vvc_yuv_frame(&frame_buf, VvcEncodeParams { frames: 1 }, geometry, format)?;
+        if vvc_picture_ctu_count(geometry) > 1 {
+            write_annex_b_to(bitstream, &[vvc_picture_header_unit(frame_idx)])?;
+        }
         if stream_format.chroma_sampling == ChromaSampling::Cs444 {
-            if let Some(writer) = reconstruction.as_deref_mut() {
-                writer
-                    .write_all(&palette::vvc_palette_444_reconstruction_yuv(&source_frame))
-                    .map_err(|err| {
-                        format!("failed to write VVC reconstruction frame {frame_idx}: {err}")
-                    })?;
+            let mut frame_recon = VvcReconstructionFrame::new_neutral(geometry, stream_format);
+            for region in vvc_ctu_regions(geometry) {
+                let ctu_frame = extract_vvc_ctu_frame(&source_frame, region);
+                let ctu_recon = palette::vvc_palette_444_reconstruction_yuv(&ctu_frame);
+                frame_recon.copy_ctu_yuv(region, &ctu_frame, &ctu_recon)?;
+                write_annex_b_to(
+                    bitstream,
+                    &[palette::vvc_palette_444_ctu_slice_unit(
+                        frame_idx,
+                        geometry,
+                        region.slice_address,
+                        &ctu_frame,
+                        slice_config,
+                    )?],
+                )?;
             }
-            write_annex_b_to(
-                bitstream,
-                &[vvc_palette_444_slice_unit(
-                    frame_idx,
-                    &source_frame,
-                    slice_config,
-                )?],
-            )?;
+            if let Some(writer) = reconstruction.as_deref_mut() {
+                writer.write_all(&frame_recon.into_yuv()).map_err(|err| {
+                    format!("failed to write VVC reconstruction frame {frame_idx}: {err}")
+                })?;
+            }
             continue;
         }
 
         let compat_frame = source_frame.decoder_compat_frame();
-        let quantized = quantize_vvc_frame(compat_frame.clone());
-        let partition_params = vvc_ctu_partition_params(compat_frame.geometry, quantized)
-            .ok_or_else(|| {
-                format!(
-                    "VVC reconstruction has no generated CTU path for coded geometry {}x{}",
-                    compat_frame.geometry.coded_width(),
-                    compat_frame.geometry.coded_height()
-                )
-            })?;
-        if let Some(writer) = reconstruction.as_deref_mut() {
-            writer
-                .write_all(&reconstruct_vvc_residual_frame(
-                    &compat_frame,
-                    quantized,
-                    partition_params,
-                ))
-                .map_err(|err| {
-                    format!("failed to write VVC reconstruction frame {frame_idx}: {err}")
+        let mut frame_recon = VvcReconstructionFrame::new_neutral(
+            geometry,
+            VvcPictureFormat {
+                chroma_sampling: ChromaSampling::Cs420,
+                bit_depth: SampleBitDepth::Eight,
+            },
+        );
+        for region in vvc_ctu_regions(geometry) {
+            let ctu_frame = extract_vvc_ctu_frame(&compat_frame, region);
+            let quantized = quantize_vvc_frame(ctu_frame.clone());
+            let partition_params = vvc_ctu_partition_params(ctu_frame.geometry, quantized)
+                .ok_or_else(|| {
+                    format!(
+                        "VVC reconstruction has no generated CTU path for coded CTU geometry {}x{}",
+                        ctu_frame.geometry.coded_width(),
+                        ctu_frame.geometry.coded_height()
+                    )
                 })?;
+            let ctu_recon = reconstruct_vvc_residual_frame(&ctu_frame, quantized, partition_params);
+            frame_recon.copy_ctu_yuv(region, &ctu_frame, &ctu_recon)?;
+            write_annex_b_to(
+                bitstream,
+                &[vvc_ctu_slice_unit(
+                    frame_idx,
+                    geometry,
+                    region.slice_address,
+                    ctu_frame.geometry,
+                    quantized,
+                    slice_config,
+                )?],
+            )?;
         }
-        write_annex_b_to(
-            bitstream,
-            &[vvc_slice_unit(
-                frame_idx,
-                compat_frame.geometry,
-                quantized,
-                slice_config,
-            )?],
-        )?;
+        if let Some(writer) = reconstruction.as_deref_mut() {
+            writer.write_all(&frame_recon.into_yuv()).map_err(|err| {
+                format!("failed to write VVC reconstruction frame {frame_idx}: {err}")
+            })?;
+        }
     }
 
     let mut extra = [0; 1];
@@ -654,6 +696,129 @@ fn write_annex_b_to<W: Write>(output: &mut W, units: &[VvcNalUnit]) -> Result<()
     output
         .write_all(&bytes)
         .map_err(|err| format!("failed to write VVC Annex-B stream: {err}"))
+}
+
+fn vvc_ctu_regions(geometry: VvcVideoGeometry) -> impl Iterator<Item = VvcCtuRegion> {
+    let cols = vvc_picture_ctu_cols(geometry);
+    let rows = vvc_picture_ctu_rows(geometry);
+    (0..rows).flat_map(move |ctu_y| {
+        (0..cols).map(move |ctu_x| {
+            let origin_x = ctu_x * VVC_CTU_SIZE;
+            let origin_y = ctu_y * VVC_CTU_SIZE;
+            let width = VVC_CTU_SIZE.min(geometry.width.saturating_sub(origin_x).max(1));
+            let height = VVC_CTU_SIZE.min(geometry.height.saturating_sub(origin_y).max(1));
+            VvcCtuRegion {
+                slice_address: ctu_y * cols + ctu_x,
+                origin_x,
+                origin_y,
+                geometry: VvcVideoGeometry { width, height },
+            }
+        })
+    })
+}
+
+fn extract_vvc_ctu_frame(frame: &VvcSampledFrame, region: VvcCtuRegion) -> VvcSampledFrame {
+    let mut luma = vec![0; region.geometry.luma_samples()];
+    for y in 0..region.geometry.height {
+        let src = (region.origin_y + y) * frame.geometry.width + region.origin_x;
+        let dst = y * region.geometry.width;
+        luma[dst..dst + region.geometry.width]
+            .copy_from_slice(&frame.luma[src..src + region.geometry.width]);
+    }
+
+    let subsample_x = chroma_subsample_x(frame.format.chroma_sampling);
+    let subsample_y = chroma_subsample_y(frame.format.chroma_sampling);
+    let chroma_width = region.geometry.width / subsample_x;
+    let chroma_height = region.geometry.height / subsample_y;
+    let chroma_len = chroma_width * chroma_height;
+    let source_chroma_width = frame.geometry.width / subsample_x;
+    let source_origin_x = region.origin_x / subsample_x;
+    let source_origin_y = region.origin_y / subsample_y;
+    let mut cb = vec![128; chroma_len];
+    let mut cr = vec![128; chroma_len];
+    for y in 0..chroma_height {
+        let src = (source_origin_y + y) * source_chroma_width + source_origin_x;
+        let dst = y * chroma_width;
+        cb[dst..dst + chroma_width].copy_from_slice(&frame.cb[src..src + chroma_width]);
+        cr[dst..dst + chroma_width].copy_from_slice(&frame.cr[src..src + chroma_width]);
+    }
+
+    VvcSampledFrame {
+        geometry: region.geometry,
+        format: frame.format,
+        luma,
+        cb,
+        cr,
+        chroma_len,
+    }
+}
+
+impl VvcReconstructionFrame {
+    fn new_neutral(geometry: VvcVideoGeometry, format: VvcPictureFormat) -> Self {
+        let chroma_len = (geometry.width / chroma_subsample_x(format.chroma_sampling))
+            * (geometry.height / chroma_subsample_y(format.chroma_sampling));
+        Self {
+            geometry,
+            format,
+            luma: vec![128; geometry.luma_samples()],
+            cb: vec![128; chroma_len],
+            cr: vec![128; chroma_len],
+        }
+    }
+
+    fn copy_ctu_yuv(
+        &mut self,
+        region: VvcCtuRegion,
+        ctu_frame: &VvcSampledFrame,
+        ctu_yuv: &[u8],
+    ) -> Result<(), String> {
+        if ctu_frame.format.chroma_sampling != self.format.chroma_sampling {
+            return Err(format!(
+                "VVC reconstruction CTU format mismatch: frame {:?}, CTU {:?}",
+                self.format.chroma_sampling, ctu_frame.format.chroma_sampling
+            ));
+        }
+
+        let luma_len = ctu_frame.geometry.luma_samples();
+        if ctu_yuv.len() != luma_len + ctu_frame.chroma_len * 2 {
+            return Err(format!(
+                "VVC CTU reconstruction size mismatch: got {} bytes, expected {}",
+                ctu_yuv.len(),
+                luma_len + ctu_frame.chroma_len * 2
+            ));
+        }
+
+        for y in 0..ctu_frame.geometry.height {
+            let src = y * ctu_frame.geometry.width;
+            let dst = (region.origin_y + y) * self.geometry.width + region.origin_x;
+            self.luma[dst..dst + ctu_frame.geometry.width]
+                .copy_from_slice(&ctu_yuv[src..src + ctu_frame.geometry.width]);
+        }
+
+        let subsample_x = chroma_subsample_x(self.format.chroma_sampling);
+        let subsample_y = chroma_subsample_y(self.format.chroma_sampling);
+        let frame_chroma_width = self.geometry.width / subsample_x;
+        let ctu_chroma_width = ctu_frame.geometry.width / subsample_x;
+        let ctu_chroma_height = ctu_frame.geometry.height / subsample_y;
+        let dst_origin_x = region.origin_x / subsample_x;
+        let dst_origin_y = region.origin_y / subsample_y;
+        let cb_offset = luma_len;
+        let cr_offset = cb_offset + ctu_frame.chroma_len;
+        for y in 0..ctu_chroma_height {
+            let src = y * ctu_chroma_width;
+            let dst = (dst_origin_y + y) * frame_chroma_width + dst_origin_x;
+            self.cb[dst..dst + ctu_chroma_width]
+                .copy_from_slice(&ctu_yuv[cb_offset + src..cb_offset + src + ctu_chroma_width]);
+            self.cr[dst..dst + ctu_chroma_width]
+                .copy_from_slice(&ctu_yuv[cr_offset + src..cr_offset + src + ctu_chroma_width]);
+        }
+
+        Ok(())
+    }
+
+    fn into_yuv(self) -> Vec<u8> {
+        [self.luma, self.cb, self.cr].concat()
+    }
 }
 
 pub fn vvc_yuv420_cabac_vector_dump_json(
