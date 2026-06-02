@@ -10,6 +10,12 @@
 /synth/out/
 /.tools/
 /.Xil/
+
+# Local generated media artifacts should live under verification/generated/.
+/*.yuv
+/*.vvc
+/*.mp4
+
 *.vcd
 *.fst
 *.ffbs

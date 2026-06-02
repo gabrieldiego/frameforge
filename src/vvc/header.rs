@@ -11,6 +11,39 @@ pub(in crate::vvc) enum VvcPictureKind {
     Cra,
 }
 
+const VVC_SPS_LOG2_MAX_POC_LSB_MINUS4: u8 = 12;
+pub(in crate::vvc) const VVC_POC_LSB_BITS: u8 = VVC_SPS_LOG2_MAX_POC_LSB_MINUS4 + 4;
+
+impl VvcPictureKind {
+    pub(in crate::vvc) fn for_frame_idx(frame_idx: usize) -> Self {
+        if frame_idx == 0 {
+            Self::Idr
+        } else {
+            Self::Cra
+        }
+    }
+
+    pub(in crate::vvc) fn nal_unit_type(self) -> VvcNalUnitType {
+        match self {
+            Self::Idr => VvcNalUnitType::IdrNLp,
+            Self::Cra => VvcNalUnitType::Cra,
+        }
+    }
+
+    pub(in crate::vvc) const fn is_cra(self) -> bool {
+        matches!(self, Self::Cra)
+    }
+}
+
+pub(in crate::vvc) fn vvc_poc_lsb_for_frame_idx(frame_idx: usize) -> u32 {
+    // H.266/VTM constrain sps_log2_max_pic_order_cnt_lsb_minus4 to 0..=12;
+    // value 12 is the largest allowed value and gives a 16-bit POC LSB. Longer
+    // sequences wrap the LSB; future reference-list work must add the matching
+    // POC MSB/reference logic.
+    let modulus = 1usize << VVC_POC_LSB_BITS;
+    (frame_idx % modulus) as u32
+}
+
 pub(in crate::vvc) fn vvc_sps_unit(
     geometry: VvcVideoGeometry,
     slice_config: VvcSliceSyntaxConfig,
@@ -38,20 +71,20 @@ pub(in crate::vvc) fn vvc_slice_unit(
     color: VvcQuantizedColor,
     slice_config: VvcSliceSyntaxConfig,
 ) -> Result<VvcNalUnit, String> {
-    let picture_kind = match frame_idx {
-        0 => VvcPictureKind::Idr,
-        1 => VvcPictureKind::Cra,
-        _ => return Err(format!("unsupported VVC frame index {frame_idx}")),
-    };
+    let picture_kind = VvcPictureKind::for_frame_idx(frame_idx);
+    let poc_lsb = vvc_poc_lsb_for_frame_idx(frame_idx);
 
     Ok(VvcNalUnit {
-        nal_unit_type: match picture_kind {
-            VvcPictureKind::Idr => VvcNalUnitType::IdrNLp,
-            VvcPictureKind::Cra => VvcNalUnitType::Cra,
-        },
+        nal_unit_type: picture_kind.nal_unit_type(),
         layer_id: 0,
         temporal_id: 0,
-        rbsp_payload: vvc_slice_payload(picture_kind, geometry, color, slice_config),
+        rbsp_payload: vvc_slice_payload_with_poc(
+            picture_kind,
+            poc_lsb,
+            geometry,
+            color,
+            slice_config,
+        ),
     })
 }
 
@@ -139,7 +172,11 @@ pub(in crate::vvc) fn vvc_sps_rbsp(
         "sps_entry_point_offsets_present_flag",
         slice_config.entry_point_offsets_present,
     );
-    writer.write_u("sps_log2_max_pic_order_cnt_lsb_minus4", 4, 4);
+    writer.write_u(
+        "sps_log2_max_pic_order_cnt_lsb_minus4",
+        u64::from(VVC_SPS_LOG2_MAX_POC_LSB_MINUS4),
+        4,
+    );
     writer.write_flag("sps_poc_msb_cycle_flag", false);
     writer.write_u("sps_num_extra_ph_bytes", 0, 2);
     writer.write_u("sps_num_extra_sh_bytes", 0, 2);
@@ -357,17 +394,59 @@ pub(in crate::vvc) fn vvc_pps_rbsp(geometry: VvcVideoGeometry) -> VvcSyntaxRbsp 
     writer.finish()
 }
 
+#[cfg(test)]
 pub(in crate::vvc) fn vvc_slice_payload(
     picture_kind: VvcPictureKind,
     geometry: VvcVideoGeometry,
     color: VvcQuantizedColor,
     slice_config: VvcSliceSyntaxConfig,
 ) -> Vec<u8> {
-    vvc_slice_rbsp(picture_kind, geometry, color, slice_config).bytes
+    vvc_slice_payload_with_poc(
+        picture_kind,
+        vvc_test_poc_lsb(picture_kind),
+        geometry,
+        color,
+        slice_config,
+    )
 }
 
+pub(in crate::vvc) fn vvc_slice_payload_with_poc(
+    picture_kind: VvcPictureKind,
+    poc_lsb: u32,
+    geometry: VvcVideoGeometry,
+    color: VvcQuantizedColor,
+    slice_config: VvcSliceSyntaxConfig,
+) -> Vec<u8> {
+    vvc_slice_rbsp_with_poc(picture_kind, poc_lsb, geometry, color, slice_config).bytes
+}
+
+#[cfg(test)]
 pub(in crate::vvc) fn vvc_slice_rbsp(
     picture_kind: VvcPictureKind,
+    geometry: VvcVideoGeometry,
+    color: VvcQuantizedColor,
+    slice_config: VvcSliceSyntaxConfig,
+) -> VvcSyntaxRbsp {
+    vvc_slice_rbsp_with_poc(
+        picture_kind,
+        vvc_test_poc_lsb(picture_kind),
+        geometry,
+        color,
+        slice_config,
+    )
+}
+
+#[cfg(test)]
+fn vvc_test_poc_lsb(picture_kind: VvcPictureKind) -> u32 {
+    match picture_kind {
+        VvcPictureKind::Idr => 0,
+        VvcPictureKind::Cra => 1,
+    }
+}
+
+pub(in crate::vvc) fn vvc_slice_rbsp_with_poc(
+    picture_kind: VvcPictureKind,
+    poc_lsb: u32,
     geometry: VvcVideoGeometry,
     color: VvcQuantizedColor,
     slice_config: VvcSliceSyntaxConfig,
@@ -380,14 +459,7 @@ pub(in crate::vvc) fn vvc_slice_rbsp(
     writer.write_flag("ph_gdr_pic_flag", false);
     writer.write_flag("ph_inter_slice_allowed_flag", false);
     writer.write_ue("ph_pic_parameter_set_id", 0);
-    match picture_kind {
-        VvcPictureKind::Idr => {
-            writer.write_u("ph_pic_order_cnt_lsb", 0, 8);
-        }
-        VvcPictureKind::Cra => {
-            writer.write_u("ph_pic_order_cnt_lsb", 1, 8);
-        }
-    }
+    writer.write_u("ph_pic_order_cnt_lsb", u64::from(poc_lsb), VVC_POC_LSB_BITS);
     writer.write_flag("ph_partition_constraints_override_flag", false);
     writer.write_flag("ph_joint_cbcr_sign_flag", false);
     writer.write_flag("sh_no_output_of_prior_pics_flag", false);
@@ -399,7 +471,7 @@ pub(in crate::vvc) fn vvc_slice_rbsp(
         writer.write_flag("sh_sign_data_hiding_used_flag", true);
     }
     writer.write_flag("cabac_alignment_one_bit", true);
-    if picture_kind == VvcPictureKind::Cra {
+    if picture_kind.is_cra() {
         writer.write_flag("cabac_alignment_one_bit", true);
     }
     writer.byte_align_zero("cabac_alignment_zero_bit");

@@ -179,7 +179,7 @@ module ff_vvc_annexb_header (
   assign m_axis_data = direct_valid ? direct_data : rbsp_data;
   assign m_axis_last = rbsp_output_active && rbsp_valid && rbsp_last && nal_is_pps_q;
 
-  always_comb begin
+  always @* begin
     syntax_value = 32'd0;
     syntax_bits = 6'd0;
 
@@ -213,7 +213,7 @@ module ff_vvc_annexb_header (
         7'd25: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // sps_bitdepth_minus8 ue(0)
         7'd26: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_entropy_coding_sync_enabled_flag
         7'd27: begin syntax_value = {31'd0, sps_entry_point_offsets_present_flag}; syntax_bits = 6'd1; end // sps_entry_point_offsets_present_flag
-        7'd28: begin syntax_value = 32'd4; syntax_bits = 6'd4; end // sps_log2_max_pic_order_cnt_lsb_minus4
+        7'd28: begin syntax_value = 32'd12; syntax_bits = 6'd4; end // sps_log2_max_pic_order_cnt_lsb_minus4
         7'd29: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_poc_msb_cycle_flag
         7'd30: begin syntax_value = 32'd0; syntax_bits = 6'd2; end // sps_num_extra_ph_bytes
         7'd31: begin syntax_value = 32'd0; syntax_bits = 6'd2; end // sps_num_extra_sh_bytes
@@ -321,7 +321,7 @@ module ff_vvc_annexb_header (
     end
   end
 
-  always_comb begin
+  always @* begin
     bit_writer_valid = 1'b0;
     bit_writer_value = syntax_value;
     bit_writer_bits = syntax_bits;

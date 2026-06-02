@@ -11,7 +11,7 @@ module ff_vvc_cu_activity_mask #(
   input  logic [15:0] visible_height,
   output logic [CU_COUNT - 1:0] cu_active_mask
 );
-  always_comb begin
+  always @* begin
     logic [15:0] origin_x;
     logic [15:0] origin_y;
     logic [7:0] index_in_32;

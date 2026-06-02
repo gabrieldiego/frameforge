@@ -104,7 +104,7 @@ module ff_vvc_cabac_syntax_frontend #(
   assign ctu_ready = 1'b0;
   assign palette_raw_cu_last = raw_symbol_data[27];
 
-  always_comb begin
+  always @* begin
     eg0_pattern = 32'd0;
     eg0_bit_count = 6'd0;
     eg0_symbol_work =
@@ -132,7 +132,7 @@ module ff_vvc_cabac_syntax_frontend #(
   assign index_scan_y = index_cur_pos_q[5:3];
   assign index_copy_above_present = (index_cur_pos_q != 8'd0) && (index_scan_y != 3'd0);
 
-  always_comb begin
+  always @* begin
     if (index_previous_run_type_copy_above_q) begin
       if (index_dist == 8'd0) begin
         index_run_copy_ctx_inc = 3'd5;
@@ -156,7 +156,7 @@ module ff_vvc_cabac_syntax_frontend #(
     end
   end
 
-  always_comb begin
+  always @* begin
     trunc_level = palette_indices_q[index_level_pos_q[5:0]];
     trunc_num_symbols = palette_entry_count_q - {7'd0, (index_level_pos_q > 8'd0)};
     if (index_level_pos_q > 8'd0) begin
@@ -437,8 +437,8 @@ module ff_vvc_cabac_syntax_frontend #(
     end
   end
 
-  logic unused_inputs;
-  assign unused_inputs = clk || rst_n || clear || ctu_valid || (|ctu_x) || (|ctu_y) ||
+  (* keep = "true" *) logic unused_future_ctu_inputs;
+  assign unused_future_ctu_inputs = ctu_valid || (|ctu_x) || (|ctu_y) ||
     (|ctu_visible_width) || (|ctu_visible_height) || (|ctu_luma_dc_abs_level) ||
     ctu_luma_dc_negative || ctu_luma_only || ctu_last;
 endmodule

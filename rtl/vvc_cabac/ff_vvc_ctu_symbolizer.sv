@@ -400,7 +400,7 @@ module ff_vvc_ctu_symbolizer #(
     ((cur_luma_split_alternatives >= 4'd5) ? 4'd6 :
     ((cur_luma_split_alternatives >= 4'd3) ? 4'd3 : 4'd0)) +
     {2'd0, cur_luma_split_neighbour_ctx};
-  always_comb begin
+  always @* begin
     case (cur_luma_split_ctx_inc)
       4'd0: cur_luma_split_ctx = CTX_SPLIT_FLAG_0;
       4'd1: cur_luma_split_ctx = CTX_SPLIT_FLAG_1;
@@ -473,7 +473,7 @@ module ff_vvc_ctu_symbolizer #(
     ((cur_chroma_split_alternatives >= 4'd5) ? 4'd6 :
     ((cur_chroma_split_alternatives >= 4'd3) ? 4'd3 : 4'd0)) +
     {2'd0, cur_chroma_split_neighbour_ctx};
-  always_comb begin
+  always @* begin
     case (cur_chroma_split_ctx_inc)
       4'd0: cur_chroma_split_ctx = CTX_SPLIT_FLAG_0;
       4'd1: cur_chroma_split_ctx = CTX_SPLIT_FLAG_1;
@@ -490,7 +490,7 @@ module ff_vvc_ctu_symbolizer #(
   assign unused_luma_log2 = luma_log2_tb_width ^ luma_log2_tb_height;
 
 
-  always_comb begin
+  always @* begin
     case (cur_qt_ctx_inc)
       3'd0: cur_split_qt_ctx = CTX_SPLIT_QT_FLAG_0;
       3'd1: cur_split_qt_ctx = CTX_SPLIT_QT_FLAG_1;
@@ -501,7 +501,7 @@ module ff_vvc_ctu_symbolizer #(
     endcase
   end
 
-  always_comb begin
+  always @* begin
     if (cur_w_q >= 16'd64) begin
       cur_last_sig_x_ctx = CTX_LAST_SIG_X_PREFIX_15;
     end else if (cur_w_q >= 16'd32) begin
@@ -523,7 +523,7 @@ module ff_vvc_ctu_symbolizer #(
     end
   end
 
-  always_comb begin
+  always @* begin
     cur_leaf_writes_split = 1'b1;
     cur_leaf_split_ctx = CTX_SPLIT_FLAG_3;
     if (cur_chroma_q) begin

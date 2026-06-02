@@ -60,7 +60,7 @@ module ff_vvc_palette_cu_symbolizer #(
                   (8'd7 - {5'd0, drain_sample_q[2:0]});
   assign scan_index = (scan_y * 8'd8) + scan_x;
 
-  always_comb begin
+  always @* begin
     found = 1'b0;
     found_index = 8'd0;
     for (int entry = 0; entry < MAX_PALETTE_ENTRIES; entry = entry + 1) begin

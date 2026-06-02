@@ -71,8 +71,18 @@ def main() -> int:
     parser.add_argument("input", help="input YUV file")
     parser.add_argument("--width", type=int)
     parser.add_argument("--height", type=int)
-    parser.add_argument("--max-width", type=int, default=64)
-    parser.add_argument("--max-height", type=int, default=64)
+    parser.add_argument(
+        "--max-width",
+        type=int,
+        default=64,
+        help="maximum visible width supported by the RTL instance under validation",
+    )
+    parser.add_argument(
+        "--max-height",
+        type=int,
+        default=64,
+        help="maximum visible height supported by the RTL instance under validation",
+    )
     parser.add_argument("--frames", type=int)
     parser.add_argument("--format", default=None)
     parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
@@ -100,7 +110,14 @@ def main() -> int:
 
     try:
         info = resolve_input_info(input_path, args)
-        validate_supported_input(input_path, info, args.max_width, args.max_height)
+        validate_supported_input(
+            input_path,
+            info,
+            args.max_width,
+            args.max_height,
+            args.sw_only,
+            allow_trailing=args.frames is not None,
+        )
     except ValueError as err:
         print(f"FAIL: {err}", file=sys.stderr)
         return 2
@@ -114,7 +131,8 @@ def main() -> int:
     sw_internal_recon = out_dir / f"{stem}_software_internal_rec.yuv"
     rtl_internal_recon = out_dir / f"{stem}_rtl_internal_rec.yuv"
     vtm_recon = out_dir / f"{stem}_vtm_from_decodable_bitstream.yuv"
-    rtl_input_path = normalized_rtl_input(input_path, info, out_dir, stem)
+    validation_input_path = materialized_validation_input(input_path, info, out_dir, stem)
+    rtl_input_path = normalized_rtl_input(validation_input_path, info, out_dir, stem)
 
     run(
         [
@@ -124,7 +142,7 @@ def main() -> int:
             "--",
             "vvc-encode",
             "--input",
-            str(input_path),
+            str(validation_input_path),
             "--frames",
             str(info.frames),
             "--width",
@@ -158,7 +176,7 @@ def main() -> int:
                 return 1
 
         digests = {
-            "input_yuv": sha256(input_path),
+            "input_yuv": sha256(validation_input_path),
             "software_bitstream": sha256(sw_bitstream),
             "software_internal_recon": sha256(sw_internal_recon),
             "vtm_recon_from_software_bitstream": sha256(vtm_recon) if has_vtm_recon else None,
@@ -166,7 +184,7 @@ def main() -> int:
 
         print("FrameForge software validation checksums")
         print(
-            f"input={input_path} width={info.width} height={info.height} "
+            f"input={validation_input_path} width={info.width} height={info.height} "
             f"frames={info.frames} format={info.fmt}"
         )
         for name, digest in digests.items():
@@ -185,7 +203,7 @@ def main() -> int:
             print("OK: software internal reconstruction matches VTM reconstruction")
         else:
             print("SKIP: VTM decode is not wired for this VVC path yet")
-        if has_vtm_recon and input_has_nonzero_chroma(input_path, info):
+        if has_vtm_recon and input_has_nonzero_chroma(validation_input_path, info):
             validate_decoded_non_monochrome(vtm_recon, info)
             print("OK: VTM reconstruction contains decoder-visible chroma")
         return 0
@@ -198,6 +216,7 @@ def main() -> int:
     env["RTL_SAMPLE_BITS"] = str(rtl_sample_bits)
     env["RTL_SOURCE_SAMPLE_BITS"] = str(format_bit_depth(info.fmt))
     env["RTL_CHROMA_FORMAT_IDC"] = str(rtl_chroma_format_idc(info))
+    env["FRAMEFORGE_RTL_VVC_ENCODER_FRAMES"] = str(info.frames)
     if info.frames == 1:
         env["FRAMEFORGE_RTL_VVC_ENCODER_INPUT_1F"] = str(rtl_input_path)
         env["FRAMEFORGE_RTL_VVC_ENCODER_OUT_1F"] = str(rtl_bitstream)
@@ -214,6 +233,8 @@ def main() -> int:
             "DUT=vvc-encoder",
             f"RTL_VISIBLE_WIDTH={info.width}",
             f"RTL_VISIBLE_HEIGHT={info.height}",
+            f"RTL_MAX_VISIBLE_WIDTH={args.max_width}",
+            f"RTL_MAX_VISIBLE_HEIGHT={args.max_height}",
         ],
         env=env,
     )
@@ -239,7 +260,7 @@ def main() -> int:
             return 1
 
     digests = {
-        "input_yuv": sha256(input_path),
+        "input_yuv": sha256(validation_input_path),
         "software_bitstream": sha256(sw_bitstream),
         "rtl_bitstream": sha256(rtl_bitstream),
         "software_internal_recon": sha256(sw_internal_recon),
@@ -249,7 +270,7 @@ def main() -> int:
 
     print("FrameForge validation checksums")
     print(
-        f"input={input_path} width={info.width} height={info.height} "
+        f"input={validation_input_path} width={info.width} height={info.height} "
         f"frames={info.frames} format={info.fmt}"
     )
     for name, digest in digests.items():
@@ -288,7 +309,7 @@ def main() -> int:
         print("OK: software, RTL, and VTM reconstructions match using RTL VVC bitstream")
     else:
         print("SKIP: VTM decode is not wired for this VVC path yet")
-    if has_vtm_recon and input_has_nonzero_chroma(input_path, info):
+    if has_vtm_recon and input_has_nonzero_chroma(validation_input_path, info):
         validate_decoded_non_monochrome(vtm_recon, info)
         print("OK: VTM reconstruction contains decoder-visible chroma")
     return 0
@@ -324,6 +345,7 @@ def infer_from_filename(name: str) -> InputInfo:
     pattern = re.compile(
         r"(?P<width>\d+)x(?P<height>\d+)"
         r"(?:[_-](?P<frames>\d+)f)?"
+        r"(?:[_-]\d+fps)?"
         r"(?:[_-](?P<fmt>yuv(?:420|422|444)p(?:8|10le?|12le?|16le?)|i(?:420|422|444|010|012|016|210|212|216|410|412|416)))?",
         re.IGNORECASE,
     )
@@ -339,7 +361,14 @@ def infer_from_filename(name: str) -> InputInfo:
     )
 
 
-def validate_supported_input(input_path: Path, info: InputInfo, max_width: int, max_height: int) -> None:
+def validate_supported_input(
+    input_path: Path,
+    info: InputInfo,
+    max_width: int,
+    max_height: int,
+    sw_only: bool = False,
+    allow_trailing: bool = False,
+) -> None:
     if normalize_format(info.fmt) not in SUPPORTED_FORMATS.values():
         raise ValueError(
             f"unsupported format {info.fmt}; supported VVC formats are "
@@ -356,14 +385,18 @@ def validate_supported_input(input_path: Path, info: InputInfo, max_width: int, 
         raise ValueError("yuv420p formats require even width and height")
     if sampling == "422" and info.width % 2:
         raise ValueError("yuv422p formats require even width")
-    if info.frames not in (1, 2):
-        raise ValueError("VVC validation currently supports only 1 or 2 frames")
+    if info.frames < 1:
+        raise ValueError("VVC validation expects at least one frame")
 
     expected_len = frame_len(info) * info.frames
-    data = input_path.read_bytes()
-    if len(data) != expected_len:
+    actual_len = input_path.stat().st_size
+    if actual_len < expected_len:
         raise ValueError(
-            f"input size mismatch: got {len(data)} bytes, expected {expected_len}"
+            f"input size mismatch: got {actual_len} bytes, expected at least {expected_len}"
+        )
+    if actual_len != expected_len and not allow_trailing:
+        raise ValueError(
+            f"input size mismatch: got {actual_len} bytes, expected {expected_len}"
         )
 
 
@@ -433,6 +466,25 @@ def normalized_rtl_input(input_path: Path, info: InputInfo, out_dir: Path, stem:
 
     out = out_dir / f"{stem}_rtl_input_yuv{format_chroma_sampling(info.fmt)}p8.yuv"
     out.write_bytes(normalized_input_to_yuv8(input_path, info))
+    return out
+
+
+def materialized_validation_input(input_path: Path, info: InputInfo, out_dir: Path, stem: str) -> Path:
+    expected_len = frame_len(info) * info.frames
+    if input_path.stat().st_size == expected_len:
+        return input_path
+
+    out = out_dir / f"{stem}_input_prefix.yuv"
+    remaining = expected_len
+    with input_path.open("rb") as src, out.open("wb") as dst:
+        while remaining:
+            chunk = src.read(min(remaining, 1024 * 1024))
+            if not chunk:
+                raise ValueError(
+                    f"input size mismatch: got fewer bytes than the first {info.frames} frame(s)"
+                )
+            dst.write(chunk)
+            remaining -= len(chunk)
     return out
 
 

@@ -6,6 +6,8 @@
 //! reconstruction semantics need to keep converging toward real implementations
 //! before FrameForge can encode arbitrary input pictures.
 
+use std::io::{Cursor, ErrorKind, Read, Write};
+
 use crate::picture::{ChromaSampling, Picture, PixelFormat, SampleBitDepth};
 
 mod cabac;
@@ -21,18 +23,20 @@ use cabac::{
 };
 #[cfg(test)]
 use cabac::{VvcCtuCabacGenerator, VvcQtSplitCtxInput, VvcSplitCtxInput, VvcTreeType};
+use header::{
+    vvc_poc_lsb_for_frame_idx, vvc_pps_unit, vvc_slice_unit, vvc_sps_unit, VvcPictureKind,
+};
 #[cfg(test)]
 use header::{
     vvc_pps_rbsp, vvc_slice_payload, vvc_slice_rbsp, vvc_sps_payload, vvc_sps_rbsp,
     write_vvc_coding_tree_entropy,
 };
-use header::{vvc_pps_unit, vvc_slice_unit, vvc_sps_unit, VvcPictureKind};
 pub use nal::{
     nal_unit_header_bytes, parse_annex_b_nal_units, write_annex_b, write_nal_unit_header,
     VvcNalHeader, VvcNalInfo, VvcNalUnit, VvcNalUnitType,
 };
-use palette::vvc_palette_444_annex_b;
 pub use palette::vvc_palette_444_cabac_dump_json;
+use palette::vvc_palette_444_slice_unit;
 #[cfg(test)]
 use palette::{
     vvc_palette_444_binarized_syntax_bits, vvc_palette_444_context_audit_rows,
@@ -522,43 +526,134 @@ pub fn vvc_yuv_encode_artifacts_from_input_with_limits(
     limits: VvcVideoLimits,
     format: PixelFormat,
 ) -> Result<VvcEncodeArtifacts, String> {
-    geometry.validate_against(limits)?;
-    let source_frame = sample_vvc_yuv_frame(input, params, geometry, format)?;
-    if source_frame.format.chroma_sampling == ChromaSampling::Cs444 {
-        let reconstruction = repeat_reconstructed_frame(
-            &palette::vvc_palette_444_reconstruction_yuv(&source_frame),
-            params.frames,
-        );
-        let bitstream = vvc_palette_444_annex_b(params, source_frame)?;
-        return Ok(VvcEncodeArtifacts {
-            bitstream,
-            reconstruction,
-        });
-    }
-    let compat_frame = source_frame.decoder_compat_frame();
-    let quantized = quantize_vvc_frame(compat_frame.clone());
-    let partition_params =
-        vvc_ctu_partition_params(compat_frame.geometry, quantized).ok_or_else(|| {
-            format!(
-                "VVC reconstruction has no generated CTU path for coded geometry {}x{}",
-                compat_frame.geometry.coded_width(),
-                compat_frame.geometry.coded_height()
-            )
-        })?;
-    let reconstruction = repeat_reconstructed_frame(
-        &reconstruct_vvc_residual_frame(&compat_frame, quantized, partition_params),
-        params.frames,
-    );
-    let bitstream = vvc_annex_b_from_quantized(
+    let mut reader = Cursor::new(input);
+    let mut bitstream = Vec::new();
+    let mut reconstruction = Vec::new();
+    vvc_yuv_encode_stream_with_limits(
+        &mut reader,
+        &mut bitstream,
+        Some(&mut reconstruction),
         params,
-        compat_frame.geometry,
-        quantized,
-        compat_frame.format,
+        geometry,
+        limits,
+        format,
     )?;
     Ok(VvcEncodeArtifacts {
         bitstream,
         reconstruction,
     })
+}
+
+pub fn vvc_yuv_encode_stream_with_limits<R: Read, W: Write>(
+    input: &mut R,
+    bitstream: &mut W,
+    mut reconstruction: Option<&mut dyn Write>,
+    params: VvcEncodeParams,
+    geometry: VvcVideoGeometry,
+    limits: VvcVideoLimits,
+    format: PixelFormat,
+) -> Result<(), String> {
+    geometry.validate_against(limits)?;
+    validate_vvc_frame_count(params)?;
+    geometry.validate_shape()?;
+    if !format.is_yuv() {
+        return Err(format!("VVC input expects planar YUV format; got {format}"));
+    }
+    Picture::validate_shape(geometry.width, geometry.height, format)?;
+    let frame_len = Picture::expected_len(geometry.width, geometry.height, format);
+    let stream_format = VvcPictureFormat {
+        chroma_sampling: format
+            .chroma_sampling()
+            .expect("YUV input has chroma sampling"),
+        bit_depth: format.bit_depth(),
+    };
+    let slice_config = VvcSliceSyntaxConfig::for_picture_format(stream_format);
+    write_annex_b_to(
+        bitstream,
+        &[vvc_sps_unit(geometry, slice_config), vvc_pps_unit(geometry)],
+    )?;
+
+    let mut frame_buf = vec![0; frame_len];
+    for frame_idx in 0..params.frames {
+        input.read_exact(&mut frame_buf).map_err(|err| {
+            if err.kind() == ErrorKind::UnexpectedEof {
+                format!(
+                    "VVC input ended before frame {frame_idx}; expected {} frame(s) of {} bytes",
+                    params.frames, frame_len
+                )
+            } else {
+                format!("failed to read VVC input frame {frame_idx}: {err}")
+            }
+        })?;
+        let source_frame =
+            sample_vvc_yuv_frame(&frame_buf, VvcEncodeParams { frames: 1 }, geometry, format)?;
+        if stream_format.chroma_sampling == ChromaSampling::Cs444 {
+            if let Some(writer) = reconstruction.as_deref_mut() {
+                writer
+                    .write_all(&palette::vvc_palette_444_reconstruction_yuv(&source_frame))
+                    .map_err(|err| {
+                        format!("failed to write VVC reconstruction frame {frame_idx}: {err}")
+                    })?;
+            }
+            write_annex_b_to(
+                bitstream,
+                &[vvc_palette_444_slice_unit(
+                    frame_idx,
+                    &source_frame,
+                    slice_config,
+                )?],
+            )?;
+            continue;
+        }
+
+        let compat_frame = source_frame.decoder_compat_frame();
+        let quantized = quantize_vvc_frame(compat_frame.clone());
+        let partition_params = vvc_ctu_partition_params(compat_frame.geometry, quantized)
+            .ok_or_else(|| {
+                format!(
+                    "VVC reconstruction has no generated CTU path for coded geometry {}x{}",
+                    compat_frame.geometry.coded_width(),
+                    compat_frame.geometry.coded_height()
+                )
+            })?;
+        if let Some(writer) = reconstruction.as_deref_mut() {
+            writer
+                .write_all(&reconstruct_vvc_residual_frame(
+                    &compat_frame,
+                    quantized,
+                    partition_params,
+                ))
+                .map_err(|err| {
+                    format!("failed to write VVC reconstruction frame {frame_idx}: {err}")
+                })?;
+        }
+        write_annex_b_to(
+            bitstream,
+            &[vvc_slice_unit(
+                frame_idx,
+                compat_frame.geometry,
+                quantized,
+                slice_config,
+            )?],
+        )?;
+    }
+
+    let mut extra = [0; 1];
+    match input.read(&mut extra) {
+        Ok(0) => Ok(()),
+        Ok(_) => Err(format!(
+            "VVC input contains trailing bytes after {} frame(s)",
+            params.frames
+        )),
+        Err(err) => Err(format!("failed to check VVC input length: {err}")),
+    }
+}
+
+fn write_annex_b_to<W: Write>(output: &mut W, units: &[VvcNalUnit]) -> Result<(), String> {
+    let bytes = write_annex_b(units)?;
+    output
+        .write_all(&bytes)
+        .map_err(|err| format!("failed to write VVC Annex-B stream: {err}"))
 }
 
 pub fn vvc_yuv420_cabac_vector_dump_json(
@@ -627,7 +722,23 @@ fn sample_vvc_yuv_frame(
     geometry: VvcVideoGeometry,
     format: PixelFormat,
 ) -> Result<VvcSampledFrame, String> {
+    sample_vvc_yuv_frame_at(input, params, geometry, format, 0)
+}
+
+fn sample_vvc_yuv_frame_at(
+    input: &[u8],
+    params: VvcEncodeParams,
+    geometry: VvcVideoGeometry,
+    format: PixelFormat,
+    frame_idx: usize,
+) -> Result<VvcSampledFrame, String> {
     validate_vvc_frame_count(params)?;
+    if frame_idx >= params.frames {
+        return Err(format!(
+            "VVC input requested frame {frame_idx}, but stream has {} frame(s)",
+            params.frames
+        ));
+    }
     geometry.validate_shape()?;
     if !format.is_yuv() {
         return Err(format!("VVC input expects planar YUV format; got {format}"));
@@ -645,12 +756,13 @@ fn sample_vvc_yuv_frame(
             params.frames
         ));
     }
+    let frame_base = frame_len * frame_idx;
 
     let luma_samples = geometry.luma_samples();
     let mut luma = vec![0; luma_samples];
     let bytes_per_sample = format.bytes_per_sample();
     for (idx, sample) in luma.iter_mut().take(luma_samples).enumerate() {
-        let raw = read_vvc_sample_raw(input, idx * bytes_per_sample, format);
+        let raw = read_vvc_sample_raw(input, frame_base + idx * bytes_per_sample, format);
         *sample = vvc_sample_to_8bit(raw, format.bit_depth());
     }
 
@@ -662,8 +774,16 @@ fn sample_vvc_yuv_frame(
     let mut cb = vec![0; chroma_plane_samples];
     let mut cr = vec![0; chroma_plane_samples];
     for idx in 0..chroma_plane_samples {
-        let raw_cb = read_vvc_sample_raw(input, u_offset + idx * bytes_per_sample, format);
-        let raw_cr = read_vvc_sample_raw(input, v_offset + idx * bytes_per_sample, format);
+        let raw_cb = read_vvc_sample_raw(
+            input,
+            frame_base + u_offset + idx * bytes_per_sample,
+            format,
+        );
+        let raw_cr = read_vvc_sample_raw(
+            input,
+            frame_base + v_offset + idx * bytes_per_sample,
+            format,
+        );
         cb[idx] = vvc_sample_to_8bit(raw_cb, format.bit_depth());
         cr[idx] = vvc_sample_to_8bit(raw_cr, format.bit_depth());
     }
@@ -704,9 +824,6 @@ fn validate_vvc_frame_count(params: VvcEncodeParams) -> Result<(), String> {
     if params.frames == 0 {
         return Err("VVC encode expects at least one frame".to_string());
     }
-    if params.frames > 2 {
-        return Err("VVC encode currently supports at most two frames".to_string());
-    }
     Ok(())
 }
 
@@ -737,11 +854,28 @@ fn vvc_annex_b_from_quantized(
     quantized: VvcQuantizedColor,
     format: VvcPictureFormat,
 ) -> Result<Vec<u8>, String> {
+    let quantized_frames = vec![quantized; params.frames];
+    vvc_annex_b_from_quantized_frames(params, geometry, &quantized_frames, format)
+}
+
+fn vvc_annex_b_from_quantized_frames(
+    params: VvcEncodeParams,
+    geometry: VvcVideoGeometry,
+    quantized_frames: &[VvcQuantizedColor],
+    format: VvcPictureFormat,
+) -> Result<Vec<u8>, String> {
+    if quantized_frames.len() != params.frames {
+        return Err(format!(
+            "VVC residual encoder got {} frame(s), expected {}",
+            quantized_frames.len(),
+            params.frames
+        ));
+    }
     let mut units = Vec::with_capacity(params.frames + 3);
     let slice_config = VvcSliceSyntaxConfig::for_picture_format(format);
     units.push(vvc_sps_unit(geometry, slice_config));
     units.push(vvc_pps_unit(geometry));
-    for frame_idx in 0..params.frames {
+    for (frame_idx, quantized) in quantized_frames.iter().copied().enumerate() {
         units.push(vvc_slice_unit(
             frame_idx,
             geometry,
@@ -750,14 +884,6 @@ fn vvc_annex_b_from_quantized(
         )?);
     }
     write_annex_b(&units)
-}
-
-fn repeat_reconstructed_frame(frame: &[u8], frames: usize) -> Vec<u8> {
-    let mut out = Vec::with_capacity(frame.len() * frames);
-    for _ in 0..frames {
-        out.extend_from_slice(frame);
-    }
-    out
 }
 
 fn vvc_coding_tree_plan(geometry: VvcVideoGeometry) -> Vec<VvcCodingTreeStep> {

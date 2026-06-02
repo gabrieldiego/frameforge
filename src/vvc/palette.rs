@@ -1,10 +1,10 @@
 use crate::picture::{ChromaSampling, PixelFormat};
 
 use super::{
-    sample_vvc_yuv_frame, vvc_pps_unit, vvc_sps_unit, write_annex_b, VvcCabacContext,
-    VvcCabacContexts, VvcCabacEncoder, VvcCtuCabacOp, VvcCtuPartitionShape, VvcEncodeParams,
-    VvcNalUnit, VvcNalUnitType, VvcPictureKind, VvcSampledColor, VvcSampledFrame,
-    VvcSliceSyntaxConfig, VvcSyntaxWriter, VvcVideoGeometry, VVC_CTU_SIZE,
+    sample_vvc_yuv_frame, vvc_poc_lsb_for_frame_idx, VvcCabacContext, VvcCabacContexts,
+    VvcCabacEncoder, VvcCtuCabacOp, VvcCtuPartitionShape, VvcEncodeParams, VvcNalUnit,
+    VvcPictureKind, VvcSampledColor, VvcSampledFrame, VvcSliceSyntaxConfig, VvcSyntaxWriter,
+    VvcVideoGeometry, VVC_CTU_SIZE,
 };
 
 const VVC_PALETTE_CU_SIZE: u16 = 8;
@@ -113,22 +113,6 @@ pub fn vvc_palette_444_cabac_dump_json(
     Ok(json)
 }
 
-pub(super) fn vvc_palette_444_annex_b(
-    params: VvcEncodeParams,
-    frame: VvcSampledFrame,
-) -> Result<Vec<u8>, String> {
-    debug_assert_eq!(frame.format.chroma_sampling, ChromaSampling::Cs444);
-    let mut units = Vec::with_capacity(params.frames + 3);
-    let geometry = frame.geometry;
-    let slice_config = VvcSliceSyntaxConfig::for_picture_format(frame.format);
-    units.push(vvc_sps_unit(geometry, slice_config));
-    units.push(vvc_pps_unit(geometry));
-    for frame_idx in 0..params.frames {
-        units.push(vvc_palette_444_slice_unit(frame_idx, &frame, slice_config)?);
-    }
-    write_annex_b(&units)
-}
-
 pub(super) fn vvc_palette_444_reconstruction_yuv(frame: &VvcSampledFrame) -> Vec<u8> {
     debug_assert_eq!(frame.format.chroma_sampling, ChromaSampling::Cs444);
     let samples = frame.geometry.luma_samples();
@@ -162,30 +146,25 @@ pub(super) fn vvc_palette_444_reconstruction_yuv(frame: &VvcSampledFrame) -> Vec
     [luma, cb, cr].concat()
 }
 
-fn vvc_palette_444_slice_unit(
+pub(super) fn vvc_palette_444_slice_unit(
     frame_idx: usize,
     frame: &VvcSampledFrame,
     slice_config: VvcSliceSyntaxConfig,
 ) -> Result<VvcNalUnit, String> {
-    let picture_kind = match frame_idx {
-        0 => VvcPictureKind::Idr,
-        1 => VvcPictureKind::Cra,
-        _ => return Err(format!("unsupported VVC frame index {frame_idx}")),
-    };
+    let picture_kind = VvcPictureKind::for_frame_idx(frame_idx);
+    let poc_lsb = vvc_poc_lsb_for_frame_idx(frame_idx);
 
     Ok(VvcNalUnit {
-        nal_unit_type: match picture_kind {
-            VvcPictureKind::Idr => VvcNalUnitType::IdrNLp,
-            VvcPictureKind::Cra => VvcNalUnitType::Cra,
-        },
+        nal_unit_type: picture_kind.nal_unit_type(),
         layer_id: 0,
         temporal_id: 0,
-        rbsp_payload: vvc_palette_444_slice_payload(picture_kind, frame, slice_config),
+        rbsp_payload: vvc_palette_444_slice_payload(picture_kind, poc_lsb, frame, slice_config),
     })
 }
 
 fn vvc_palette_444_slice_payload(
     picture_kind: VvcPictureKind,
+    poc_lsb: u32,
     frame: &VvcSampledFrame,
     slice_config: VvcSliceSyntaxConfig,
 ) -> Vec<u8> {
@@ -197,10 +176,11 @@ fn vvc_palette_444_slice_payload(
     writer.write_flag("ph_gdr_pic_flag", false);
     writer.write_flag("ph_inter_slice_allowed_flag", false);
     writer.write_ue("ph_pic_parameter_set_id", 0);
-    match picture_kind {
-        VvcPictureKind::Idr => writer.write_u("ph_pic_order_cnt_lsb", 0, 8),
-        VvcPictureKind::Cra => writer.write_u("ph_pic_order_cnt_lsb", 1, 8),
-    }
+    writer.write_u(
+        "ph_pic_order_cnt_lsb",
+        u64::from(poc_lsb),
+        super::header::VVC_POC_LSB_BITS,
+    );
     writer.write_flag("ph_partition_constraints_override_flag", false);
     writer.write_flag("ph_joint_cbcr_sign_flag", false);
     writer.write_flag("sh_no_output_of_prior_pics_flag", false);
@@ -212,7 +192,7 @@ fn vvc_palette_444_slice_payload(
         writer.write_flag("sh_sign_data_hiding_used_flag", true);
     }
     writer.write_flag("cabac_alignment_one_bit", true);
-    if picture_kind == VvcPictureKind::Cra {
+    if picture_kind.is_cra() {
         writer.write_flag("cabac_alignment_one_bit", true);
     }
     writer.byte_align_zero("cabac_alignment_zero_bit");

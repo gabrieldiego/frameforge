@@ -208,18 +208,35 @@ module ff_vvc_cabac_context_model #(
   logic [7:0] update_rate;
   logic [3:0] update_rate0;
   logic [3:0] update_rate1;
+  (* keep = "true" *) logic unused_query_range_bits;
   integer ctx_i;
-  integer model_i;
-  integer slope_i;
-  integer offset_i;
-  integer inistate_i;
-  integer rate0_i;
-  integer rate1_i;
+
+  genvar init_i;
+  generate
+    for (init_i = 0; init_i < VVC_CTX_COUNT; init_i = init_i + 1) begin : gen_ctx_init
+      localparam int INIT_VALUE = INIT_VALUE_LUT[init_i * 8 +: 8];
+      localparam int LOG2_WINDOW = LOG2_WINDOW_LUT[init_i * 4 +: 4];
+      localparam int INIT_SLOPE = (INIT_VALUE >> 3) - 4;
+      localparam int INIT_OFFSET = ((INIT_VALUE & 8'd7) * 18) + 1;
+      localparam int INIT_STATE_RAW = ((INIT_SLOPE * (VVC_CTX_QP - 16)) >>> 1) + INIT_OFFSET;
+      localparam int INIT_STATE =
+        (INIT_STATE_RAW < 1) ? 1 :
+        ((INIT_STATE_RAW > 127) ? 127 : INIT_STATE_RAW);
+      localparam int INIT_RATE0 = 2 + ((LOG2_WINDOW >> 2) & 3);
+      localparam int INIT_RATE1 = 3 + INIT_RATE0 + (LOG2_WINDOW & 3);
+      localparam logic [7:0] INIT_RATE_BYTE =
+        (((INIT_RATE0 & 8'h0f) << 4) | (INIT_RATE1 & 8'h0f));
+      localparam logic [15:0] INIT_STATE0 = (INIT_STATE << 8) & 16'h7fe0;
+      localparam logic [15:0] INIT_STATE1 = (INIT_STATE << 8) & 16'h7ffe;
+      assign ctx_init_model[init_i] = {INIT_RATE_BYTE, INIT_STATE1, INIT_STATE0};
+    end
+  endgenerate
 
   assign query_bank_id = query_bank_id_next;
   assign update_bank_id = update_bank_id_next;
+  assign unused_query_range_bits = query_range[15] || (|query_range[4:0]);
 
-  always_comb begin
+  always @* begin
     query_bank_id_next = query_ctx_id;
     if (query_ctx_id >= VVC_CTX_COUNT_LIMIT) begin
       query_bank_id_next = '0;
@@ -228,24 +245,6 @@ module ff_vvc_cabac_context_model #(
     update_bank_id_next = update_ctx_id;
     if (update_ctx_id >= VVC_CTX_COUNT_LIMIT) begin
       update_bank_id_next = '0;
-    end
-  end
-
-  always_comb begin
-    for (model_i = 0; model_i < VVC_CTX_COUNT; model_i = model_i + 1) begin
-      slope_i = (INIT_VALUE_LUT[model_i * 8 +: 8] >> 3) - 4;
-      offset_i = ((INIT_VALUE_LUT[model_i * 8 +: 8] & 8'd7) * 18) + 1;
-      inistate_i = ((slope_i * (VVC_CTX_QP - 16)) >>> 1) + offset_i;
-      if (inistate_i < 1) begin
-        inistate_i = 1;
-      end else if (inistate_i > 127) begin
-        inistate_i = 127;
-      end
-      rate0_i = 2 + ((LOG2_WINDOW_LUT[model_i * 4 +: 4] >> 2) & 3);
-      rate1_i = 3 + rate0_i + (LOG2_WINDOW_LUT[model_i * 4 +: 4] & 3);
-      ctx_init_model[model_i][0 +: 16] = (inistate_i[15:0] << 8) & 16'h7fe0;
-      ctx_init_model[model_i][16 +: 16] = (inistate_i[15:0] << 8) & 16'h7ffe;
-      ctx_init_model[model_i][32 +: 8] = ((rate0_i & 8'h0f) << 4) | (rate1_i & 8'h0f);
     end
   end
 

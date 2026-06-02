@@ -6,6 +6,7 @@ module ff_vvc_annexb_slice_stream (
   input  logic       clear,
   input  logic       start,
   input  logic [4:0] nal_unit_type,
+  input  logic [15:0] poc_lsb,
   input  logic       sh_dep_quant_used_flag,
   input  logic       sh_sign_data_hiding_used_flag,
 
@@ -72,7 +73,7 @@ module ff_vvc_annexb_slice_stream (
                       (!m_axis_valid || m_axis_ready);
   assign s_axis_ready = (state_q == ST_PAYLOAD_RBSP) && ep_s_ready;
 
-  always_comb begin
+  always @* begin
     prefix_syntax_value = 32'd0;
     prefix_syntax_bits = 6'd0;
     case (prefix_field_index_q)
@@ -82,7 +83,7 @@ module ff_vvc_annexb_slice_stream (
       4'd3:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // ph_gdr_pic_flag
       4'd4:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // ph_inter_slice_allowed_flag
       4'd5:  begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // ph_pic_parameter_set_id ue(0)
-      4'd6:  begin prefix_syntax_value = is_cra_nal ? 32'd1 : 32'd0; prefix_syntax_bits = 6'd8; end // ph_pic_order_cnt_lsb
+      4'd6:  begin prefix_syntax_value = {16'd0, poc_lsb}; prefix_syntax_bits = 6'd16; end // ph_pic_order_cnt_lsb
       4'd7:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // ph_partition_constraints_override_flag
       4'd8:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // ph_joint_cbcr_sign_flag
       4'd9:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // sh_no_output_of_prior_pics_flag
@@ -95,7 +96,7 @@ module ff_vvc_annexb_slice_stream (
     endcase
   end
 
-  always_comb begin
+  always @* begin
     prefix_bit_valid = 1'b0;
     prefix_bit_value = prefix_syntax_value;
     prefix_bit_count = prefix_syntax_bits;
@@ -110,7 +111,7 @@ module ff_vvc_annexb_slice_stream (
     end
   end
 
-  always_comb begin
+  always @* begin
     ep_s_valid = 1'b0;
     ep_s_data = 8'h00;
     ep_s_last = 1'b0;

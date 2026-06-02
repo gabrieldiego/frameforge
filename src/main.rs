@@ -1,5 +1,6 @@
 use std::env;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufReader, BufWriter, Write};
 use std::path::PathBuf;
 
 use frameforge::PixelFormat;
@@ -106,18 +107,44 @@ fn run_vvc_encode(cli: VvcEncodeCli) -> Result<(), String> {
         max_height: cli.max_height,
     };
     geometry.validate_against(limits)?;
-    let data = fs::read(&cli.input)
-        .map_err(|err| format!("failed to read input '{}': {err}", cli.input.display()))?;
-    let artifacts = frameforge::vvc::vvc_yuv_encode_artifacts_from_input_with_limits(
-        &data, params, geometry, limits, cli.format,
-    )?;
-    fs::write(&cli.output, artifacts.bitstream)
-        .map_err(|err| format!("failed to write output '{}': {err}", cli.output.display()))?;
-    if let Some(recon) = cli.recon {
-        fs::write(&recon, artifacts.reconstruction).map_err(|err| {
+    let input_file = File::open(&cli.input)
+        .map_err(|err| format!("failed to open input '{}': {err}", cli.input.display()))?;
+    let output_file = File::create(&cli.output)
+        .map_err(|err| format!("failed to create output '{}': {err}", cli.output.display()))?;
+    let mut input = BufReader::new(input_file);
+    let mut output = BufWriter::new(output_file);
+    let mut recon_output = if let Some(recon) = cli.recon.as_ref() {
+        let file = File::create(recon).map_err(|err| {
             format!(
-                "failed to write reconstruction '{}': {err}",
+                "failed to create reconstruction '{}': {err}",
                 recon.display()
+            )
+        })?;
+        Some(BufWriter::new(file))
+    } else {
+        None
+    };
+    let recon_sink = recon_output.as_mut().map(|writer| writer as &mut dyn Write);
+    frameforge::vvc::vvc_yuv_encode_stream_with_limits(
+        &mut input,
+        &mut output,
+        recon_sink,
+        params,
+        geometry,
+        limits,
+        cli.format,
+    )?;
+    output
+        .flush()
+        .map_err(|err| format!("failed to flush output '{}': {err}", cli.output.display()))?;
+    if let Some(writer) = recon_output.as_mut() {
+        writer.flush().map_err(|err| {
+            format!(
+                "failed to flush reconstruction '{}': {err}",
+                cli.recon
+                    .as_ref()
+                    .expect("reconstruction path exists")
+                    .display()
             )
         })?;
     }
@@ -350,7 +377,7 @@ fn parse_usize(value: String, flag: &str) -> Result<usize, String> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-encode --input <yuv> --output <vvc> [--recon <yuv>] [--frames 1|2] [--width <w> --height <h>] [--max-width 64 --max-height 64] [--format yuv420p8|yuv422p8|yuv444p8|i420|i422|i444|i010|i210|i410|...]\n  frameforge vvc-cabac-vector-dump --input <yuv420> --output <json> [--frames 1 --width <w> --height <h> --format yuv420p8]\n  frameforge vvc-palette-cabac-dump --input <yuv444> --output <json> [--width <w> --height <h> --format yuv444p8]\n  frameforge vvc-list --input <vvc>"
+    "usage:\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-encode --input <yuv> --output <vvc> [--recon <yuv>] [--frames <n>] [--width <w> --height <h>] [--max-width 64 --max-height 64] [--format yuv420p8|yuv422p8|yuv444p8|i420|i422|i444|i010|i210|i410|...]\n  frameforge vvc-cabac-vector-dump --input <yuv420> --output <json> [--frames 1 --width <w> --height <h> --format yuv420p8]\n  frameforge vvc-palette-cabac-dump --input <yuv444> --output <json> [--width <w> --height <h> --format yuv444p8]\n  frameforge vvc-list --input <vvc>"
 }
 
 #[cfg(test)]

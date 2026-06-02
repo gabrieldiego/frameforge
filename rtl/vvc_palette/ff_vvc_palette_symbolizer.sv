@@ -110,7 +110,7 @@ module ff_vvc_palette_symbolizer #(
   assign drain_cu_selected = 1'b1;
   assign drain_cu_is_last_selected = drain_cu_is_last_selected_q;
 
-  always_comb begin
+  always @* begin
     selected_after_current = 1'b0;
     for (int i = 0; i < MAX_PALETTE_SYMBOLS; i = i + 1) begin
       if ((i > drain_cu_index_q) && cu_select_mask[MAX_PALETTE_SYMBOLS - 1 - i]) begin
@@ -119,7 +119,7 @@ module ff_vvc_palette_symbolizer #(
     end
   end
 
-  always_comb begin
+  always @* begin
     drain_origin_x = drain_origin_x_q;
     drain_origin_y = drain_origin_y_q;
     drain_index_in_32 = drain_cu_index_q;

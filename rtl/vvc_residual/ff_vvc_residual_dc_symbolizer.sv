@@ -50,7 +50,7 @@ module ff_vvc_residual_dc_symbolizer (
     (abs_level == 5'd0) ? 4'd1 :
     ((abs_level <= 5'd1) ? 4'd3 :
     ((abs_level <= 5'd3) ? 4'd5 : 4'd7));
-  always_comb begin
+  always @* begin
     if (log2_tb_width >= 3'd6) begin
       last_sig_x_ctx = CTX_LAST_SIG_COEFF_X_PREFIX_15;
     end else if (log2_tb_width >= 3'd5) begin
@@ -88,7 +88,7 @@ module ff_vvc_residual_dc_symbolizer (
     (rem_abs_value < 5'd5) ? 32'd0 :
     (rem_code_value - ((32'd1 << rem_prefix_extra_len) - 32'd1));
 
-  always_comb begin
+  always @* begin
     case (index_q)
       4'd0: symbol_next = {
         SYMBOL_BIN_CTX, 18'd0, 1'b0, last_sig_x_ctx, 8'd0, 1'b0

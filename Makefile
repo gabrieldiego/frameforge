@@ -1,4 +1,4 @@
-.PHONY: help check-tools build test fmt lint decoder-setup validate validate-vtm-synth validate-decode rtl-test synth-env synth-check synth synth-postsim synth-vivado synth-vivado-remote yosys vivado vivado-prepare vivado-config vivado-auth vivado-install vivado-host-deps clean
+.PHONY: help check-tools build test fmt lint decoder-setup test-vectors validate-set validate-smoke validate-random-short validate-sweep-420 validate-sweep-444 validate-motion-short validate-all-short validate-all-sweeps validate validate-vtm-synth validate-decode rtl-test synth-env synth-check synth synth-postsim synth-vivado synth-vivado-remote yosys vivado vivado-prepare vivado-config vivado-auth vivado-install vivado-host-deps clean
 
 SIM ?= icarus
 TOPLEVEL_LANG ?= verilog
@@ -11,8 +11,6 @@ RTL_VISIBLE_HEIGHT ?= 8
 RTL_MAX_VISIBLE_WIDTH ?= 64
 RTL_MAX_VISIBLE_HEIGHT ?= 64
 RTL_CTU_SIZE ?= 64
-MAX_WIDTH ?= 64
-MAX_HEIGHT ?= 64
 SYNTH_BOARD ?= synth/boards/arty-z7-10.env
 SYNTH_DUT ?= vvc-cabac-stream-writer
 SYNTH_FILELIST ?=
@@ -26,6 +24,14 @@ VALIDATE_SYNTH ?= 1
 VALIDATE_SW_ONLY ?= 0
 VALIDATE_SYNTH_DUT ?= vvc-cabac-pipeline
 VALIDATE_SYNTH_BACKEND ?= yosys
+TEST_VECTOR_SET ?= smoke
+TEST_VECTOR_DIR ?= verification/generated/test_vectors
+VALIDATION_SET ?= smoke
+VALIDATION_LOG_DIR ?= verification/generated/validation_logs
+VALIDATION_LIMIT ?=
+VALIDATION_STOP_ON_FAIL ?= 0
+VALIDATION_WITH_SYNTH ?= 0
+VALIDATION_SW_ONLY ?= $(VALIDATE_SW_ONLY)
 VIVADO_INSTALLER ?=
 VIVADO_LICENSE ?=
 VIVADO_INSTALL_LOG ?= .tools/vivado-install-run.log
@@ -38,8 +44,11 @@ help:
 	@printf '%s\n' '  make fmt       - format Rust code'
 	@printf '%s\n' '  make lint      - run Rust Clippy lints'
 	@printf '%s\n' '  make decoder-setup - find or build external VTM decoder'
-	@printf '%s\n' '  make validate INPUT=in.yuv [WIDTH=<w> HEIGHT=<h> MAX_WIDTH=64 MAX_HEIGHT=64 FRAMES=1 FORMAT=yuv420p8|yuv422p8|yuv444p8|i420|i422|i444|i010|i210|i410|... VALIDATE_SW_ONLY=1 VALIDATE_SYNTH=1|0]'
-	@printf '%s\n' '  make validate-vtm-synth INPUT=in.yuv [WIDTH=<w> HEIGHT=<h> FRAMES=1 FORMAT=yuv420p8 VALIDATE_SYNTH_DUT=vvc-cabac-pipeline VALIDATE_SYNTH_BACKEND=yosys|vivado-remote|none] - compare software stream with VTM, then run synthesis'
+	@printf '%s\n' '  make test-vectors [TEST_VECTOR_SET=smoke|sweep-420|sweep-444|random-short|motion-short|motion-long|all-short|all-sweeps TEST_VECTOR_DIR=verification/generated/test_vectors] - generate deterministic YUV test streams'
+	@printf '%s\n' '  make validate-set [VALIDATION_SET=smoke VALIDATION_LIMIT=<n> VALIDATION_WITH_SYNTH=0|1 VALIDATION_STOP_ON_FAIL=0|1] - generate and run a named validation set'
+	@printf '%s\n' '  make validate-smoke | validate-random-short | validate-sweep-420 | validate-sweep-444 | validate-motion-short | validate-all-short | validate-all-sweeps - direct validation set entry points'
+	@printf '%s\n' '  make validate INPUT=input_64x64_300f_30fps_yuv420p8.yuv [WIDTH=<w> HEIGHT=<h> FRAMES=<n> FORMAT=<fmt> RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 VALIDATE_SW_ONLY=1 VALIDATE_SYNTH=1|0] - infer metadata from filename unless overridden'
+	@printf '%s\n' '  make validate-vtm-synth INPUT=input_64x64_1f_yuv420p8.yuv [WIDTH=<w> HEIGHT=<h> FRAMES=<n> FORMAT=<fmt> RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 VALIDATE_SYNTH_DUT=vvc-cabac-pipeline VALIDATE_SYNTH_BACKEND=yosys|vivado-remote|none] - compare software stream with VTM, then run synthesis'
 	@printf '%s\n' '  make validate-decode BITSTREAM=out.vvc [DECODED=out.yuv]'
 	@printf '%s\n' '  make rtl-test  - run cocotb RTL tests'
 	@printf '%s\n' '  make rtl-test DUT=vvc-coding-tree-scheduler - run local coding-tree geometry/path selection test'
@@ -77,13 +86,40 @@ lint:
 decoder-setup:
 	python3 scripts/ensure_reference_decoder.py
 
+test-vectors:
+	python3 scripts/generate_test_vectors.py --set "$(TEST_VECTOR_SET)" --out-dir "$(TEST_VECTOR_DIR)"
+
+validate-set:
+	python3 scripts/run_validation_set.py "$(VALIDATION_SET)" --out-dir "$(TEST_VECTOR_DIR)" --log-dir "$(VALIDATION_LOG_DIR)" --max-width "$(RTL_MAX_VISIBLE_WIDTH)" --max-height "$(RTL_MAX_VISIBLE_HEIGHT)" $(if $(VALIDATION_LIMIT),--limit "$(VALIDATION_LIMIT)") $(if $(filter 1,$(VALIDATION_WITH_SYNTH)),--with-synth) $(if $(filter 1,$(VALIDATION_SW_ONLY)),--sw-only) $(if $(filter 1,$(VALIDATION_STOP_ON_FAIL)),--stop-on-fail)
+
+validate-smoke:
+	$(MAKE) validate-set VALIDATION_SET=smoke
+
+validate-random-short:
+	$(MAKE) validate-set VALIDATION_SET=random-short
+
+validate-sweep-420:
+	$(MAKE) validate-set VALIDATION_SET=sweep-420
+
+validate-sweep-444:
+	$(MAKE) validate-set VALIDATION_SET=sweep-444
+
+validate-motion-short:
+	$(MAKE) validate-set VALIDATION_SET=motion-short
+
+validate-all-short:
+	$(MAKE) validate-set VALIDATION_SET=all-short
+
+validate-all-sweeps:
+	$(MAKE) validate-set VALIDATION_SET=all-sweeps
+
 validate:
-	@test -n "$(INPUT)" || { echo 'usage: make validate INPUT=path/to/input_64x64_1f_yuv420p8.yuv [WIDTH=<w> HEIGHT=<h> MAX_WIDTH=64 MAX_HEIGHT=64 FRAMES=1 FORMAT=yuv420p8|yuv422p8|yuv444p8|i420|i422|i444|i010|i210|i410|...]'; exit 2; }
-	python3 scripts/validate.py "$(INPUT)" $(if $(WIDTH),--width "$(WIDTH)") $(if $(HEIGHT),--height "$(HEIGHT)") --max-width "$(MAX_WIDTH)" --max-height "$(MAX_HEIGHT)" $(if $(FRAMES),--frames "$(FRAMES)") $(if $(FORMAT),--format "$(FORMAT)") --synth-dut "$(VALIDATE_SYNTH_DUT)" $(if $(filter 0,$(VALIDATE_SYNTH)),--skip-synth) $(if $(filter 1,$(VALIDATE_SW_ONLY)),--sw-only)
+	@test -n "$(INPUT)" || { echo 'usage: make validate INPUT=path/to/input_64x64_1f_yuv420p8.yuv [WIDTH=<w> HEIGHT=<h> FRAMES=<n> FORMAT=<fmt> RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64]'; exit 2; }
+	python3 scripts/validate.py "$(INPUT)" $(if $(WIDTH),--width "$(WIDTH)") $(if $(HEIGHT),--height "$(HEIGHT)") --max-width "$(RTL_MAX_VISIBLE_WIDTH)" --max-height "$(RTL_MAX_VISIBLE_HEIGHT)" $(if $(FRAMES),--frames "$(FRAMES)") $(if $(FORMAT),--format "$(FORMAT)") --synth-dut "$(VALIDATE_SYNTH_DUT)" $(if $(filter 0,$(VALIDATE_SYNTH)),--skip-synth) $(if $(filter 1,$(VALIDATE_SW_ONLY)),--sw-only)
 
 validate-vtm-synth:
-	@test -n "$(INPUT)" || { echo 'usage: make validate-vtm-synth INPUT=path/to/input_16x16_1f_yuv420p8.yuv [WIDTH=<w> HEIGHT=<h> FRAMES=1 FORMAT=yuv420p8 VALIDATE_SYNTH_DUT=vvc-cabac-pipeline VALIDATE_SYNTH_BACKEND=yosys|vivado-remote|none]'; exit 2; }
-	python3 scripts/validate_vtm_synth.py "$(INPUT)" $(if $(WIDTH),--width "$(WIDTH)") $(if $(HEIGHT),--height "$(HEIGHT)") --max-width "$(MAX_WIDTH)" --max-height "$(MAX_HEIGHT)" $(if $(FRAMES),--frames "$(FRAMES)") $(if $(FORMAT),--format "$(FORMAT)") --synth-dut "$(VALIDATE_SYNTH_DUT)" --synth-backend "$(VALIDATE_SYNTH_BACKEND)" --clock-mhz "$(SYNTH_CLOCK_MHZ)"
+	@test -n "$(INPUT)" || { echo 'usage: make validate-vtm-synth INPUT=path/to/input_16x16_1f_yuv420p8.yuv [WIDTH=<w> HEIGHT=<h> FRAMES=<n> FORMAT=<fmt> RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 VALIDATE_SYNTH_DUT=vvc-cabac-pipeline VALIDATE_SYNTH_BACKEND=yosys|vivado-remote|none]'; exit 2; }
+	python3 scripts/validate_vtm_synth.py "$(INPUT)" $(if $(WIDTH),--width "$(WIDTH)") $(if $(HEIGHT),--height "$(HEIGHT)") --max-width "$(RTL_MAX_VISIBLE_WIDTH)" --max-height "$(RTL_MAX_VISIBLE_HEIGHT)" $(if $(FRAMES),--frames "$(FRAMES)") $(if $(FORMAT),--format "$(FORMAT)") --synth-dut "$(VALIDATE_SYNTH_DUT)" --synth-backend "$(VALIDATE_SYNTH_BACKEND)" --clock-mhz "$(SYNTH_CLOCK_MHZ)"
 
 validate-decode:
 	@test -n "$(BITSTREAM)" || { echo 'usage: make validate-decode BITSTREAM=path/to/stream.vvc [DECODED=decoded.yuv]'; exit 2; }

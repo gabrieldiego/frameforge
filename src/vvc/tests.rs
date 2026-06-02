@@ -93,6 +93,40 @@ fn assert_vvc_parameter_sets_signal_geometry(geometry: VvcVideoGeometry) {
     );
 }
 
+fn assert_vvc_annex_b_has_min_picture_nals(bytes: &[u8], frames: usize) -> Vec<VvcNalInfo> {
+    let infos = parse_annex_b_nal_units(bytes).unwrap();
+    assert!(infos.len() >= 2 + frames);
+    assert_eq!(infos[0].nal_unit_type, VvcNalUnitType::Sps as u8);
+    assert_eq!(infos[1].nal_unit_type, VvcNalUnitType::Pps as u8);
+    assert!(infos[0].payload_len > 0);
+    assert!(infos[1].payload_len > 0);
+
+    let picture_count = infos
+        .iter()
+        .filter(|info| {
+            matches!(
+                info.nal_unit_type,
+                value if value == VvcNalUnitType::IdrNLp as u8
+                    || value == VvcNalUnitType::IdrWRadl as u8
+                    || value == VvcNalUnitType::Cra as u8
+                    || value == VvcNalUnitType::Trail as u8
+            )
+        })
+        .count();
+    assert!(
+        picture_count >= frames,
+        "stream should contain at least one picture NAL per frame; got {picture_count} for {frames} frame(s)"
+    );
+    assert!(infos[2..].iter().all(|info| info.payload_len > 0));
+    let last = infos.last().expect("stream has at least SPS/PPS");
+    assert_eq!(
+        last.offset + 2 + last.payload_len,
+        bytes.len(),
+        "stream should end at the last NAL payload boundary"
+    );
+    infos
+}
+
 fn vvc_quantized_color(y: u8, luma_rem: u8) -> VvcQuantizedColor {
     VvcQuantizedColor {
         y,
@@ -245,17 +279,7 @@ fn syntax_writer_encodes_signed_exp_golomb() {
 #[test]
 fn parses_vvc_black_one_frame_headers() {
     let bytes = vvc_black_yuv420p8_annex_b(VvcEncodeParams { frames: 1 }).unwrap();
-    let infos = parse_annex_b_nal_units(&bytes).unwrap();
-    let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
-    assert_eq!(types, vec![15, 16, 8]);
-    assert!(infos[0].payload_len > 0);
-    assert!(infos[1].payload_len > 0);
-    assert!(infos[2].payload_len > 0);
-    assert_eq!(
-        infos[2].offset + 2 + infos[2].payload_len,
-        bytes.len(),
-        "single-frame stream should end at the IDR NAL payload boundary"
-    );
+    assert_vvc_annex_b_has_min_picture_nals(&bytes, 1);
 }
 
 #[test]
@@ -1291,16 +1315,7 @@ fn vvc_coding_tree_plan_carries_chroma_sampling_parameter() {
 #[test]
 fn parses_vvc_black_two_frame_headers() {
     let bytes = vvc_black_yuv420p8_annex_b(VvcEncodeParams { frames: 2 }).unwrap();
-    let infos = parse_annex_b_nal_units(&bytes).unwrap();
-    let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
-    assert_eq!(types, vec![15, 16, 8, 9]);
-    assert!(infos[2].payload_len > 0);
-    assert!(infos[3].payload_len > 0);
-    assert_eq!(
-        infos[3].offset + 2 + infos[3].payload_len,
-        bytes.len(),
-        "two-frame stream should end at the second picture NAL payload boundary"
-    );
+    assert_vvc_annex_b_has_min_picture_nals(&bytes, 2);
 }
 
 #[test]
@@ -1325,9 +1340,7 @@ fn vvc_input_path_accepts_4x8_yuv420p8_frames() {
         PixelFormat::Yuv420p8,
     )
     .unwrap();
-    let infos = parse_annex_b_nal_units(&bytes).unwrap();
-    let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
-    assert_eq!(types, vec![15, 16, 8]);
+    assert_vvc_annex_b_has_min_picture_nals(&bytes, 1);
 }
 
 #[test]
@@ -1343,11 +1356,7 @@ fn vvc_input_path_accepts_16x16_yuv444p8_frames() {
         PixelFormat::Yuv444p8,
     )
     .unwrap();
-    let infos = parse_annex_b_nal_units(&bytes).unwrap();
-    let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
-    assert_eq!(types, vec![15, 16, 8]);
-    assert!(infos[0].payload_len > 0);
-    assert!(infos[1].payload_len > 0);
+    assert_vvc_annex_b_has_min_picture_nals(&bytes, 1);
 }
 
 #[test]
@@ -1386,12 +1395,37 @@ fn vvc_input_path_samples_only_first_frame() {
 }
 
 #[test]
+fn vvc_input_path_encodes_each_yuv420_frame_independently() {
+    let frame_len = Picture::expected_len(8, 8, PixelFormat::Yuv420p8);
+    let mut input = solid_yuv420p8(0, 128, 128, 1);
+    input.extend_from_slice(&solid_yuv420p8(40, 128, 128, 1));
+    input.extend_from_slice(&solid_yuv420p8(80, 128, 128, 1));
+
+    let artifacts = vvc_yuv_encode_artifacts_from_input_with_limits(
+        &input,
+        VvcEncodeParams { frames: 3 },
+        VvcVideoGeometry {
+            width: 8,
+            height: 8,
+        },
+        VvcVideoLimits::max_64x64(),
+        PixelFormat::Yuv420p8,
+    )
+    .unwrap();
+    assert_vvc_annex_b_has_min_picture_nals(&artifacts.bitstream, 3);
+    assert_eq!(artifacts.reconstruction.len(), frame_len * 3);
+    let reconstructed_luma: Vec<u8> = (0..3)
+        .map(|frame_idx| artifacts.reconstruction[frame_idx * frame_len])
+        .collect();
+    assert_eq!(reconstructed_luma.len(), 3);
+    assert!(reconstructed_luma.windows(2).all(|pair| pair[0] != pair[1]));
+}
+
+#[test]
 fn vvc_bitstream_path_accepts_sampled_non_black_input() {
     let input = solid_yuv420p8(65, 128, 192, 1);
     let bytes = vvc_yuv420p8_annex_b_from_input(&input, VvcEncodeParams { frames: 1 }).unwrap();
-    let infos = parse_annex_b_nal_units(&bytes).unwrap();
-    let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
-    assert_eq!(types, vec![15, 16, 8]);
+    assert_vvc_annex_b_has_min_picture_nals(&bytes, 1);
 }
 
 #[test]
@@ -1446,12 +1480,38 @@ fn vvc_yuv444_input_routes_to_palette_path() {
         VvcEncodeParams { frames: 1 },
     )
     .unwrap();
-    let infos = parse_annex_b_nal_units(&bytes).unwrap();
-    let types: Vec<u8> = infos.iter().map(|info| info.nal_unit_type).collect();
-    assert_eq!(types, vec![15, 16, 8]);
+    assert_vvc_annex_b_has_min_picture_nals(&bytes, 1);
     assert_ne!(bytes, transform_bytes);
     assert!(!bytes.windows(4).any(|window| window == b"FFPL"));
     assert!(!bytes.windows(4).any(|window| window == b"FFAC"));
+}
+
+#[test]
+fn vvc_yuv444_palette_path_encodes_each_frame_independently() {
+    let frame_len = Picture::expected_len(8, 8, PixelFormat::Yuv444p8);
+    let mut input = solid_yuv_planar_high(10, 20, 30, 8, 64, 1);
+    input.extend_from_slice(&solid_yuv_planar_high(40, 50, 60, 8, 64, 1));
+    input.extend_from_slice(&solid_yuv_planar_high(70, 80, 90, 8, 64, 1));
+
+    let artifacts = vvc_yuv_encode_artifacts_from_input_with_limits(
+        &input,
+        VvcEncodeParams { frames: 3 },
+        VvcVideoGeometry {
+            width: 8,
+            height: 8,
+        },
+        VvcVideoLimits::max_64x64(),
+        PixelFormat::Yuv444p8,
+    )
+    .unwrap();
+    assert_vvc_annex_b_has_min_picture_nals(&artifacts.bitstream, 3);
+    assert_eq!(artifacts.reconstruction.len(), input.len());
+    assert_eq!(artifacts.reconstruction, input);
+    assert_eq!(&artifacts.reconstruction[..frame_len], &input[..frame_len]);
+    assert_eq!(
+        &artifacts.reconstruction[frame_len..frame_len * 2],
+        &input[frame_len..frame_len * 2]
+    );
 }
 
 #[test]
@@ -1588,9 +1648,10 @@ fn vvc_input_path_changes_bitstream_from_sampled_color() {
 }
 
 #[test]
-fn rejects_unsupported_vvc_frame_count() {
+fn rejects_zero_vvc_frame_count() {
     assert!(vvc_black_yuv420p8_annex_b(VvcEncodeParams { frames: 0 }).is_err());
-    assert!(vvc_black_yuv420p8_annex_b(VvcEncodeParams { frames: 3 }).is_err());
+    let bytes = vvc_black_yuv420p8_annex_b(VvcEncodeParams { frames: 9 }).unwrap();
+    assert_vvc_annex_b_has_min_picture_nals(&bytes, 9);
 }
 
 fn solid_yuv420p8(y: u8, u: u8, v: u8, frames: usize) -> Vec<u8> {

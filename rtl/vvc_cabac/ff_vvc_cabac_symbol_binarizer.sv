@@ -60,7 +60,7 @@ module ff_vvc_cabac_symbol_binarizer #(
   assign m_axis_mps = mps_q;
   assign m_axis_last = last_q;
 
-  always_comb begin
+  always @* begin
     case (s_axis_kind)
       SYMBOL_BIN_TRM: symbol_kind_mapped = CABAC_BIN_TRM;
       SYMBOL_BIN_CTX,

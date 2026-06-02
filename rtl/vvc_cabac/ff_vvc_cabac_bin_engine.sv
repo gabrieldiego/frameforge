@@ -25,7 +25,7 @@ module ff_vvc_cabac_bin_engine (
 
   assign ctx_lps_ext = {7'd0, ctx_lps};
 
-  always_comb begin
+  always @* begin
     low_next = low_in;
     range_next = range_in;
     bits_left_next = bits_left_in;

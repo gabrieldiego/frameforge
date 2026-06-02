@@ -11,7 +11,7 @@ module ff_vvc_coding_tree_scheduler #(
 );
   localparam int CODED_DIMENSION_GRANULARITY = 8;
 
-  always_comb begin
+  always @* begin
     if (visible_width <= CODED_DIMENSION_GRANULARITY[15:0]) begin
       coded_width = CODED_DIMENSION_GRANULARITY[15:0];
     end else begin

@@ -9,7 +9,7 @@ module ff_vvc_ue_code (
   logic [5:0] code_num_bits;
   integer bit_index;
 
-  always_comb begin
+  always @* begin
     code_num = {1'b0, value} + 17'd1;
     code_num_bits = 6'd1;
     for (bit_index = 0; bit_index < 17; bit_index = bit_index + 1) begin

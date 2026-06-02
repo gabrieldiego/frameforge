@@ -31,7 +31,7 @@ module ff_vvc_rbsp_payload_stream (
 
   logic [7:0] rbsp_tail_byte;
 
-  always_comb begin
+  always @* begin
     case (s_axis_last_byte_bits)
       3'd1: rbsp_tail_byte = (s_axis_data & 8'b1000_0000) | 8'h40;
       3'd2: rbsp_tail_byte = (s_axis_data & 8'b1100_0000) | 8'h20;

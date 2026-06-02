@@ -10,7 +10,6 @@ module ff_vvc_encoder #(
   input  logic       clk,
   input  logic       rst_n,
   input  logic       start,
-  input  logic [1:0] frame_count,
   input  logic [15:0] visible_width,
   input  logic [15:0] visible_height,
   // VVC chroma_format_idc values: 1=4:2:0, 2=4:2:2, 3=4:4:4.
@@ -37,7 +36,7 @@ module ff_vvc_encoder #(
   localparam int MAX_LUMA_SAMPLES = MAX_VISIBLE_WIDTH * MAX_VISIBLE_HEIGHT;
   localparam int MAX_CHROMA_PLANE_SAMPLES = MAX_LUMA_SAMPLES;
   localparam int MAX_FRAME_SAMPLES = MAX_LUMA_SAMPLES + (MAX_CHROMA_PLANE_SAMPLES * 2);
-  localparam int INPUT_COUNT_BITS = $clog2((MAX_FRAME_SAMPLES * 2) + 1);
+  localparam int INPUT_COUNT_BITS = $clog2(MAX_FRAME_SAMPLES + 1);
   localparam int VVC_LUMA_TU_SIZE = 8;
   localparam int VVC_CHROMA_TU_SIZE = 4;
   localparam int VVC_RESIDUAL_LUMA_SAMPLES = VVC_LUMA_TU_SIZE * VVC_LUMA_TU_SIZE;
@@ -130,6 +129,9 @@ module ff_vvc_encoder #(
   logic        slice_stream_last;
   logic        cabac_start_q;
   logic        pending_output_q;
+  logic        resume_input_q;
+  logic        frame_clear_q;
+  logic [63:0] frame_index_q;
   logic [2:0]  generated_out_state_q;
   logic        generated_slice_cra_q;
   logic        generated_header_start_q;
@@ -146,6 +148,7 @@ module ff_vvc_encoder #(
   logic [INPUT_COUNT_BITS - 1:0] frame_samples_w;
   logic [INPUT_COUNT_BITS - 1:0] input_len_w;
   logic [INPUT_COUNT_BITS - 1:0] v_sample_index_w;
+  logic        input_frame_last_w;
   logic [1:0]  palette_sample_plane_w;
   logic [15:0] input_luma_x_w;
   logic [15:0] input_luma_y_w;
@@ -157,8 +160,12 @@ module ff_vvc_encoder #(
   logic [8:0]  sampled_v_clamped_w;
   logic [8:0]  quant_cb_level_w;
   logic [8:0]  quant_cr_level_w;
+  logic [7:0]  input_sample_8bit_w;
+  logic [8:0]  input_sample_clamped_w;
+  logic [8:0]  input_quant_level_w;
   logic [2:0]  luma_log2_tb_width_w;
   logic [2:0]  luma_log2_tb_height_w;
+  logic        frame_pipeline_clear_w;
 
   logic        vvc_tool_transform_skip_enabled;
   logic        vvc_tool_mts_enabled;
@@ -202,8 +209,9 @@ module ff_vvc_encoder #(
   assign chroma_plane_samples_w =
     (visible_width / chroma_subsample_x_w) * (visible_height / chroma_subsample_y_w);
   assign frame_samples_w = luma_samples_w + (chroma_plane_samples_w << 1);
-  assign input_len_w = (frame_count == 2'd2) ? (frame_samples_w << 1) : frame_samples_w;
+  assign input_len_w = frame_samples_w;
   assign v_sample_index_w = luma_samples_w + chroma_plane_samples_w;
+  assign input_frame_last_w = input_active_q && (input_count_q == input_len_q - 1'b1);
   assign palette_sample_plane_w =
     (input_count_q < luma_samples_w) ? 2'd0 :
     ((input_count_q < v_sample_index_w) ? 2'd1 : 2'd2);
@@ -221,14 +229,19 @@ module ff_vvc_encoder #(
   assign sampled_v_clamped_w = (sampled_v_8bit_w > 8'd128) ? 9'd128 : {1'b0, sampled_v_8bit_w};
   assign quant_cb_level_w = (sampled_u_clamped_w + 9'd4) >> 3;
   assign quant_cr_level_w = (sampled_v_clamped_w + 9'd4) >> 3;
+  assign input_sample_8bit_w =
+    (SAMPLE_BITS <= 8) ? s_axis_data[7:0] : (s_axis_data >> (SAMPLE_BITS - 8));
+  assign input_sample_clamped_w = (input_sample_8bit_w > 8'd128) ? 9'd128 : {1'b0, input_sample_8bit_w};
+  assign input_quant_level_w = (input_sample_clamped_w + 9'd4) >> 3;
 
   // Current residual subset emits one DC coefficient for an 8x8 luma TU.
   // AC coefficients are present in the transform data model but zero-coded for now.
   assign luma_log2_tb_width_w = 3'd3;
   assign luma_log2_tb_height_w = 3'd3;
 
-  assign busy = input_active_q || pending_output_q || m_axis_valid ||
+  assign busy = input_active_q || pending_output_q || resume_input_q || frame_clear_q || m_axis_valid ||
                 (generated_out_state_q != GENERATED_OUT_IDLE);
+  assign frame_pipeline_clear_w = (start && !busy) || frame_clear_q;
   assign cabac_enable = 1'b1;
   assign cabac_stream_ready = rbsp_payload_ready;
   assign rbsp_output_ready =
@@ -339,7 +352,7 @@ module ff_vvc_encoder #(
   ) palette_symbolizer (
     .clk(clk),
     .rst_n(rst_n),
-    .clear(start && !busy),
+    .clear(frame_pipeline_clear_w),
     .enable(ctu_has_palette_cu),
     .ctu_coded_width(coding_tree_coded_width),
     .ctu_coded_height(coding_tree_coded_height),
@@ -427,6 +440,7 @@ module ff_vvc_encoder #(
     .clear(start && !busy),
     .start(cabac_start_q),
     .nal_unit_type(generated_slice_cra_q ? VVC_NAL_UNIT_TYPE_CRA : VVC_NAL_UNIT_TYPE_IDR_W_RADL),
+    .poc_lsb(frame_index_q[15:0]),
     .sh_dep_quant_used_flag(vvc_tool_dep_quant_enabled),
     .sh_sign_data_hiding_used_flag(vvc_tool_sign_data_hiding_enabled),
     .s_axis_ready(slice_stream_ready),
@@ -447,7 +461,7 @@ module ff_vvc_encoder #(
   ) residual_block (
     .clk(clk),
     .rst_n(rst_n),
-    .clear(start && !busy),
+    .clear(frame_pipeline_clear_w),
     .enable(1'b1),
     .cu_active_mask(ctu_cu_residual_mask),
     .cu_index(8'd0),
@@ -470,7 +484,7 @@ module ff_vvc_encoder #(
   ff_vvc_residual_dc_symbolizer residual_dc_symbols (
     .clk(clk),
     .rst_n(rst_n),
-    .clear(start && !busy),
+    .clear(frame_pipeline_clear_w),
     .start(cabac_start_q && !ctu_has_palette_cu),
     .abs_level(quant_luma_rem_q),
     .negative(quant_luma_rem_q != 5'd0),
@@ -489,7 +503,7 @@ module ff_vvc_encoder #(
   ) ctu_symbols (
     .clk(clk),
     .rst_n(rst_n),
-    .clear(start && !busy),
+    .clear(frame_pipeline_clear_w),
     .start(cabac_start_q),
     .visible_width(visible_width),
     .visible_height(visible_height),
@@ -538,6 +552,9 @@ module ff_vvc_encoder #(
       m_axis_last  <= 1'b0;
       cabac_start_q <= 1'b0;
       pending_output_q <= 1'b0;
+      resume_input_q <= 1'b0;
+      frame_clear_q <= 1'b0;
+      frame_index_q <= 64'd0;
       generated_out_state_q <= GENERATED_OUT_IDLE;
       generated_slice_cra_q <= 1'b0;
       generated_header_start_q <= 1'b0;
@@ -549,12 +566,17 @@ module ff_vvc_encoder #(
     end else begin
       cabac_start_q <= 1'b0;
       generated_header_start_q <= 1'b0;
+      frame_clear_q <= 1'b0;
+      if (m_axis_valid && m_axis_ready) begin
+        m_axis_valid <= 1'b0;
+        m_axis_last <= 1'b0;
+      end
       if (start && !busy) begin
         input_active_q <= 1'b1;
         s_axis_ready   <= 1'b1;
         input_count_q  <= '0;
         input_len_q    <= input_len_w;
-        input_error    <= 1'b0;
+        input_error    <= visible_width == 16'd0 || visible_height == 16'd0;
         sampled_color_valid <= 1'b0;
         luma_samples_q <= '0;
         quant_luma_rem_q <= 5'd16;
@@ -564,6 +586,9 @@ module ff_vvc_encoder #(
         m_axis_valid   <= 1'b0;
         m_axis_last    <= 1'b0;
         pending_output_q <= 1'b0;
+        resume_input_q <= 1'b0;
+        frame_clear_q <= 1'b0;
+        frame_index_q <= 64'd0;
         generated_out_state_q <= GENERATED_OUT_IDLE;
         generated_slice_cra_q <= 1'b0;
         generated_header_start_q <= 1'b0;
@@ -572,11 +597,28 @@ module ff_vvc_encoder #(
         cabac_input_data_q <= 32'd0;
         cabac_input_last_q <= 1'b0;
         palette_mux_state_q <= PALETTE_MUX_PARTITION;
+      end else if (resume_input_q) begin
+        resume_input_q <= 1'b0;
+        input_active_q <= 1'b1;
+        s_axis_ready <= 1'b1;
+        input_count_q <= '0;
+        input_len_q <= input_len_w;
+        sampled_color_valid <= 1'b0;
+        luma_samples_q <= '0;
+        quant_luma_rem_q <= 5'd16;
+        quant_cb_rem_q <= 5'd16;
+        quant_cr_rem_q <= 5'd16;
+        quant_cb_negative_q <= 1'b1;
+        cabac_input_valid_q <= 1'b0;
+        cabac_input_kind_q <= 8'd0;
+        cabac_input_data_q <= 32'd0;
+        cabac_input_last_q <= 1'b0;
+        palette_mux_state_q <= PALETTE_MUX_PARTITION;
       end else if (input_active_q && s_axis_valid && s_axis_ready) begin
-        if (s_axis_last != (input_count_q == input_len_q - 1'b1)) begin
+        if (s_axis_last != input_frame_last_w) begin
           input_error <= 1'b1;
         end
-        if (input_count_q == 8'd0) begin
+        if (input_count_q == '0) begin
           sampled_y <= s_axis_data;
         end
         if (residual_luma_sample_w) begin
@@ -587,20 +629,20 @@ module ff_vvc_encoder #(
         end
         if (input_count_q == luma_samples_w) begin
           sampled_u <= s_axis_data;
+          quant_cb_rem_q <= 5'd16 - input_quant_level_w[4:0];
           quant_cb_negative_q <=
             ((SAMPLE_BITS <= 8) ? s_axis_data[7:0] :
              (s_axis_data >> (SAMPLE_BITS - 8))) < 8'd128;
         end
         if (input_count_q == v_sample_index_w) begin
           sampled_v <= s_axis_data;
-          quant_cb_rem_q <= 5'd16 - quant_cb_level_w[4:0];
-          quant_cr_rem_q <= 5'd16 - quant_cr_level_w[4:0];
+          quant_cr_rem_q <= 5'd16 - input_quant_level_w[4:0];
         end
 
-        if (input_count_q == input_len_q - 1'b1) begin
+        if (input_frame_last_w) begin
           input_active_q <= 1'b0;
           s_axis_ready   <= 1'b0;
-          sampled_color_valid <= !input_error && s_axis_last;
+          sampled_color_valid <= !input_error && (s_axis_last == input_frame_last_w);
           pending_output_q <= 1'b1;
         end else begin
           input_count_q <= input_count_q + 1'b1;
@@ -608,9 +650,13 @@ module ff_vvc_encoder #(
       end else if (pending_output_q &&
                    (generated_out_state_q == GENERATED_OUT_IDLE)) begin
         pending_output_q <= 1'b0;
-        generated_out_state_q <= GENERATED_OUT_PREAMBLE;
-        generated_slice_cra_q <= 1'b0;
-        generated_header_start_q <= 1'b1;
+        generated_slice_cra_q <= frame_index_q != 64'd0;
+        if (frame_index_q == 64'd0) begin
+          generated_out_state_q <= GENERATED_OUT_PREAMBLE;
+          generated_header_start_q <= 1'b1;
+        end else begin
+          generated_out_state_q <= GENERATED_OUT_SLICE_START;
+        end
         m_axis_valid <= 1'b0;
         m_axis_data <= 8'd0;
         m_axis_last <= 1'b0;
@@ -674,17 +720,16 @@ module ff_vvc_encoder #(
             if (slice_stream_valid) begin
               m_axis_valid <= 1'b1;
               m_axis_data <= slice_stream_data;
-              m_axis_last <= slice_stream_last && ((frame_count != 2'd2) || generated_slice_cra_q);
+              m_axis_last <= slice_stream_last;
               if (slice_stream_last) begin
-                if ((frame_count != 2'd2) || generated_slice_cra_q) begin
-                  generated_out_state_q <= GENERATED_OUT_IDLE;
-                end else begin
-                  // VPS/SPS/PPS are emitted once for the access unit sequence.
-                  // The second supported frame starts a fresh CRA slice stream
-                  // directly, matching the Rust Annex-B writer.
-                  generated_out_state_q <= GENERATED_OUT_SLICE_START;
-                  generated_slice_cra_q <= 1'b1;
-                end
+                // VPS/SPS/PPS are emitted once. Each subsequent frame is read
+                // from the input stream and emitted as a fresh CRA slice. The
+                // POC LSB naturally wraps through frame_index_q[15:0], matching
+                // the 16-bit POC LSB width advertised in SPS.
+                generated_out_state_q <= GENERATED_OUT_IDLE;
+                frame_index_q <= frame_index_q + 64'd1;
+                frame_clear_q <= 1'b1;
+                resume_input_q <= 1'b1;
               end
             end else begin
               m_axis_valid <= 1'b0;

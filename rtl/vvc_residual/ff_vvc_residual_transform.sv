@@ -68,7 +68,7 @@ module ff_vvc_residual_transform #(
   logic [40:0] residual_packet_next;
   integer sample_i;
 
-  always_comb begin
+  always @* begin
     direct_sum = '0;
     stream_sum = '0;
     quant_luma_ac_tokens = '0;
@@ -135,7 +135,7 @@ module ff_vvc_residual_transform #(
     ((stream_quant_luma_rem <= 5'd3) ? 4'd5 : 4'd7));
   assign cu_active = cu_active_mask[CU_ACTIVE_COUNT - 1 - cu_index];
 
-  always_comb begin
+  always @* begin
     case (stream_packet_index_q)
       4'd0: residual_packet_next = {
         SYMBOL_BIN_CTX, 18'd0, 1'b0, CTX_LAST_SIG_COEFF_X_PREFIX_3, 8'd0, 1'b0
