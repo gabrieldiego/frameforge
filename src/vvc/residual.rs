@@ -1,5 +1,5 @@
-mod quant;
 mod prediction;
+mod quant;
 mod recon;
 mod syntax;
 pub(super) mod transform;
@@ -10,13 +10,17 @@ mod tests;
 #[cfg(test)]
 pub(super) use transform::quantize_vvc_chroma;
 pub(super) use transform::{
-    inverse_transform_vvc_luma_residual_levels, quantize_vvc_chroma_sample,
+    inverse_transform_vvc_chroma_residual_levels, inverse_transform_vvc_luma_residual_levels,
+    quantize_vvc_chroma_residual_greedy, quantize_vvc_chroma_sample,
     quantize_vvc_luma_residual_greedy, reconstruct_vvc_chroma, transform_vvc_tu,
     VVC_CHROMA_DC_BASE, VVC_LUMA_DC_BASE,
 };
 
+pub(super) use prediction::{
+    fill_visible_chroma_node, fill_visible_luma_node, predict_vvc_chroma_dc_block,
+    predict_vvc_luma_dc_block,
+};
 pub use quant::quantize_vvc_color;
-pub(super) use prediction::{fill_visible_luma_node, predict_vvc_luma_dc_block};
 pub(super) use quant::quantize_vvc_frame;
 pub(super) use recon::reconstruct_vvc_residual_frame;
 pub(super) use syntax::{
@@ -36,6 +40,11 @@ pub struct VvcQuantizedColor {
     pub(super) luma_tu_negative: [bool; MAX_VVC_LUMA_TUS],
     pub(super) luma_tu_ac_levels: [[i16; VVC_LUMA_AC_COEFFS_PER_TU]; MAX_VVC_LUMA_TUS],
     pub(super) luma_tu_count: usize,
+    pub(super) chroma_tu_count: usize,
+    pub(super) cb_tu_dc_levels: [i16; MAX_VVC_CHROMA_TUS],
+    pub(super) cr_tu_dc_levels: [i16; MAX_VVC_CHROMA_TUS],
+    pub(super) cb_tu_ac_levels: [[i16; VVC_CHROMA_AC_COEFFS_PER_TU]; MAX_VVC_CHROMA_TUS],
+    pub(super) cr_tu_ac_levels: [[i16; VVC_CHROMA_AC_COEFFS_PER_TU]; MAX_VVC_CHROMA_TUS],
     pub(super) cb_rem: u8,
     pub(super) cr_rem: u8,
 }
@@ -90,4 +99,6 @@ impl VvcResidualComponent {
 
 pub(super) const VVC_CHROMA_TU_SIZE: usize = 4;
 pub(super) const VVC_LUMA_AC_COEFFS_PER_TU: usize = 15;
+pub(super) const VVC_CHROMA_AC_COEFFS_PER_TU: usize = 15;
 pub(super) const MAX_VVC_LUMA_TUS: usize = 16 * 16;
+pub(super) const MAX_VVC_CHROMA_TUS: usize = MAX_VVC_LUMA_TUS;

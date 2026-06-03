@@ -18,7 +18,10 @@ impl VvcLastSigCoeffPrefixCtxInput {
             let shift = (self.log2_tb_size + 1) >> 2;
             (self.bin_idx >> shift) + offset
         } else {
-            let shift = ((2 * self.log2_tb_size) >> 3).min(2);
+            // H.266 9.3.4.2.4 derives the chroma ctxShift from the transform
+            // block size, i.e. Clip3(0, 2, (1 << log2TbSize) >> 3). VTM
+            // CoeffCodingContext mirrors this as Clip3(0, 2, width >> 3).
+            let shift = ((1u16 << self.log2_tb_size) >> 3).min(2) as u8;
             (self.bin_idx >> shift) + 20
         }
     }

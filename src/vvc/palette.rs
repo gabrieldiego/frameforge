@@ -194,7 +194,7 @@ fn vvc_palette_444_slice_payload(
         include_picture_header,
     );
     if include_picture_header {
-        super::header::write_vvc_picture_header(&mut writer, picture_kind, poc_lsb);
+        super::header::write_vvc_picture_header(&mut writer, picture_kind, poc_lsb, slice_config);
     }
     if slice_count > 1 {
         writer.write_u(

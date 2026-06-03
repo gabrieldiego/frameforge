@@ -17,9 +17,9 @@ mod palette;
 mod residual;
 mod syntax;
 use cabac::{
-    encode_ctu_partition_body, VvcCabacContext, VvcCabacContexts, VvcCabacDumpContextEvent,
-    VvcCabacDumpSymbol, VvcCabacEncoder, VvcCodingTreeNode, VvcCtuCabacOp, VvcCtuPartitionParams,
-    VvcCtuPartitionShape, VvcLastSigCoeffPrefixCtxInput,
+    encode_ctu_partition_body, vvc_chroma_420_transform_nodes, VvcCabacContext, VvcCabacContexts,
+    VvcCabacDumpContextEvent, VvcCabacDumpSymbol, VvcCabacEncoder, VvcCodingTreeNode,
+    VvcCtuCabacOp, VvcCtuPartitionParams, VvcCtuPartitionShape, VvcLastSigCoeffPrefixCtxInput,
 };
 #[cfg(test)]
 use cabac::{VvcCtuCabacGenerator, VvcQtSplitCtxInput, VvcSplitCtxInput, VvcTreeType};
@@ -50,12 +50,11 @@ pub use residual::quantize_vvc_color;
 use residual::VVC_LUMA_DC_BASE;
 use residual::{
     quantize_vvc_frame, reconstruct_vvc_residual_frame, VvcQuantizedColor, VvcResidualCabacOptions,
-    MAX_VVC_LUMA_TUS, VVC_LUMA_AC_COEFFS_PER_TU,
+    VvcResidualComponent, MAX_VVC_CHROMA_TUS, MAX_VVC_LUMA_TUS, VVC_CHROMA_AC_COEFFS_PER_TU,
+    VVC_LUMA_AC_COEFFS_PER_TU,
 };
 #[cfg(test)]
-use residual::{
-    VvcResidualCabacEncoder, VvcResidualComponent, VvcResidualCtxConfig, VvcResidualPass1State,
-};
+use residual::{VvcResidualCabacEncoder, VvcResidualCtxConfig, VvcResidualPass1State};
 pub use syntax::{VvcSyntaxCode, VvcSyntaxField, VvcSyntaxRbsp, VvcSyntaxWriter};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,6 +292,7 @@ pub(super) struct VvcSyntaxToolFlags {
     mts_enabled: bool,
     explicit_mts_intra_enabled: bool,
     lfnst_enabled: bool,
+    joint_cbcr_enabled: bool,
     mrl_enabled: bool,
     cclm_enabled: bool,
     dependent_quantization_enabled: bool,
@@ -315,6 +315,7 @@ impl VvcSyntaxToolFlags {
             mts_enabled: false,
             explicit_mts_intra_enabled: false,
             lfnst_enabled: false,
+            joint_cbcr_enabled: false,
             mrl_enabled: true,
             cclm_enabled: true,
             dependent_quantization_enabled: false,
@@ -329,6 +330,7 @@ impl VvcSyntaxToolFlags {
             mts_enabled: false,
             explicit_mts_intra_enabled: false,
             lfnst_enabled: false,
+            joint_cbcr_enabled: false,
             mrl_enabled: false,
             cclm_enabled: false,
             dependent_quantization_enabled: false,
@@ -417,14 +419,26 @@ impl VvcSampledFrame {
     }
 
     fn decoder_compat_frame(self) -> Self {
-        let color = self.sampled_color();
         let chroma_len = self.geometry.luma_samples() / 4;
+        let format = VvcPictureFormat {
+            chroma_sampling: ChromaSampling::Cs420,
+            bit_depth: SampleBitDepth::Eight,
+        };
+        if self.format.chroma_sampling == ChromaSampling::Cs420 {
+            return Self {
+                geometry: self.geometry,
+                format,
+                luma: self.luma,
+                cb: self.cb,
+                cr: self.cr,
+                chroma_len,
+            };
+        }
+
+        let color = self.sampled_color();
         Self {
             geometry: self.geometry,
-            format: VvcPictureFormat {
-                chroma_sampling: ChromaSampling::Cs420,
-                bit_depth: SampleBitDepth::Eight,
-            },
+            format,
             luma: self.luma,
             cb: vec![color.u; chroma_len],
             cr: vec![color.v; chroma_len],
@@ -433,6 +447,7 @@ impl VvcSampledFrame {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VvcCodingTreeStep {
     LumaTransformUnit {
@@ -648,7 +663,10 @@ pub fn vvc_yuv_encode_stream_with_limits_and_progress<R: Read, W: Write>(
         let source_frame =
             sample_vvc_yuv_frame(&frame_buf, VvcEncodeParams { frames: 1 }, geometry, format)?;
         if vvc_picture_ctu_count(geometry) > 1 {
-            write_annex_b_to(bitstream, &[vvc_picture_header_unit(frame_idx)])?;
+            write_annex_b_to(
+                bitstream,
+                &[vvc_picture_header_unit(frame_idx, slice_config)],
+            )?;
         }
         if stream_format.chroma_sampling == ChromaSampling::Cs444 {
             let mut frame_recon = VvcReconstructionFrame::new_neutral(geometry, stream_format);
@@ -1086,10 +1104,12 @@ fn vvc_annex_b_from_quantized_frames(
     write_annex_b(&units)
 }
 
+#[cfg(test)]
 fn vvc_coding_tree_plan(geometry: VvcVideoGeometry) -> Vec<VvcCodingTreeStep> {
     vvc_coding_tree_plan_with_config(geometry, VvcCodingTreeConfig::yuv420())
 }
 
+#[cfg(test)]
 fn vvc_coding_tree_plan_with_config(
     geometry: VvcVideoGeometry,
     config: VvcCodingTreeConfig,
@@ -1203,10 +1223,14 @@ fn vvc_ctu_partition_params(
         return None;
     }
     let chroma_sampling = ChromaSampling::Cs420;
-    let chroma_tu_count = vvc_coding_tree_plan(geometry)
-        .iter()
-        .filter(|step| matches!(step, VvcCodingTreeStep::ChromaTransformUnit { .. }))
-        .count();
+    let shape = VvcCtuPartitionShape {
+        root_width: VVC_CTU_SIZE as u16,
+        root_height: VVC_CTU_SIZE as u16,
+        visible_width: coded.width as u16,
+        visible_height: coded.height as u16,
+        chroma_sampling,
+    };
+    let chroma_tu_count = vvc_chroma_420_transform_nodes(shape).len();
     let (luma_tu_count, luma_tu_abs_levels, luma_tu_negative, luma_tu_ac_levels) =
         vvc_luma_residual_arrays_for_geometry(coded, chroma_sampling, color);
     Some(VvcCtuPartitionParams {
@@ -1222,6 +1246,10 @@ fn vvc_ctu_partition_params(
         luma_tu_ac_levels,
         cb_dc_abs_level: color.cb_rem,
         cb_dc_negative: color.u < 128 && color.cb_rem != 0,
+        cb_tu_dc_levels: color.cb_tu_dc_levels,
+        cr_tu_dc_levels: color.cr_tu_dc_levels,
+        cb_tu_ac_levels: color.cb_tu_ac_levels,
+        cr_tu_ac_levels: color.cr_tu_ac_levels,
     })
 }
 
@@ -1277,6 +1305,10 @@ fn vvc_luma_leaf_count(coded: VvcCodedGeometry, chroma_sampling: ChromaSampling)
         luma_tu_ac_levels: [[0; VVC_LUMA_AC_COEFFS_PER_TU]; MAX_VVC_LUMA_TUS],
         cb_dc_abs_level: 0,
         cb_dc_negative: false,
+        cb_tu_dc_levels: [0; MAX_VVC_CHROMA_TUS],
+        cr_tu_dc_levels: [0; MAX_VVC_CHROMA_TUS],
+        cb_tu_ac_levels: [[0; VVC_CHROMA_AC_COEFFS_PER_TU]; MAX_VVC_CHROMA_TUS],
+        cr_tu_ac_levels: [[0; VVC_CHROMA_AC_COEFFS_PER_TU]; MAX_VVC_CHROMA_TUS],
     };
     VvcCtuCabacOp::yuv420_ctu_partition(params)
         .into_iter()

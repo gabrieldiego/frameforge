@@ -8,7 +8,8 @@ pub(super) use ctu_body::encode_ctu_partition_body;
 #[cfg(test)]
 pub(super) use ctu_body::VvcCtuCabacGenerator;
 pub(super) use ctu_split::{
-    VvcCodingTreeNode, VvcCtuCabacOp, VvcCtuPartitionParams, VvcCtuPartitionShape,
+    vvc_chroma_420_transform_nodes, VvcCodingTreeNode, VvcCtuCabacOp, VvcCtuPartitionParams,
+    VvcCtuPartitionShape,
 };
 #[cfg(test)]
 pub(super) use ctu_split::{VvcQtSplitCtxInput, VvcSplitCtxInput, VvcTreeType};

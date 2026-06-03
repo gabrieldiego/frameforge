@@ -141,6 +141,123 @@ fn vvc_frame_quantization_builds_per_leaf_luma_tu_metadata() {
 }
 
 #[test]
+fn vvc_420_chroma_dc_residual_preserves_decoder_visible_color() {
+    let frame = VvcSampledFrame {
+        geometry: VvcVideoGeometry {
+            width: 16,
+            height: 16,
+        },
+        format: VvcPictureFormat {
+            chroma_sampling: ChromaSampling::Cs420,
+            bit_depth: SampleBitDepth::Eight,
+        },
+        luma: vec![128; 16 * 16],
+        cb: vec![64; 8 * 8],
+        cr: vec![192; 8 * 8],
+        chroma_len: 8 * 8,
+    };
+    let quantized = quantize_vvc_frame(frame.clone());
+    assert_eq!(quantized.chroma_tu_count, 1);
+    assert!(quantized.cb_tu_dc_levels[0] < 0);
+    assert!(quantized.cr_tu_dc_levels[0] > 0);
+
+    let params = vvc_ctu_partition_params(frame.geometry, quantized).expect("16x16 params");
+    let recon = reconstruct_vvc_residual_frame(&frame, quantized, params);
+    let chroma = &recon[16 * 16..];
+    assert!(chroma.iter().any(|sample| *sample != 128));
+    assert!(chroma[..8 * 8]
+        .iter()
+        .all(|sample| sample.abs_diff(64) <= 3));
+    assert!(chroma[8 * 8..]
+        .iter()
+        .all(|sample| sample.abs_diff(192) <= 3));
+}
+
+#[test]
+fn vvc_420_chroma_dc_residual_predicts_from_prior_chroma_leaves() {
+    let frame = VvcSampledFrame {
+        geometry: VvcVideoGeometry {
+            width: 64,
+            height: 48,
+        },
+        format: VvcPictureFormat {
+            chroma_sampling: ChromaSampling::Cs420,
+            bit_depth: SampleBitDepth::Eight,
+        },
+        luma: vec![128; 64 * 48],
+        cb: vec![64; 32 * 24],
+        cr: vec![192; 32 * 24],
+        chroma_len: 32 * 24,
+    };
+    let quantized = quantize_vvc_frame(frame.clone());
+    assert_eq!(quantized.chroma_tu_count, 2);
+    assert!(quantized.cb_tu_dc_levels[0] < 0);
+    assert!(quantized.cr_tu_dc_levels[0] > 0);
+    assert_eq!(quantized.cb_tu_dc_levels[1], 0);
+    assert_eq!(quantized.cr_tu_dc_levels[1], 0);
+
+    let params = vvc_ctu_partition_params(frame.geometry, quantized).expect("64x48 params");
+    let recon = reconstruct_vvc_residual_frame(&frame, quantized, params);
+    let chroma = &recon[64 * 48..];
+    assert!(chroma[..32 * 24]
+        .iter()
+        .all(|sample| sample.abs_diff(64) <= 3));
+    assert!(chroma[32 * 24..]
+        .iter()
+        .all(|sample| sample.abs_diff(192) <= 3));
+}
+
+#[test]
+fn vvc_420_chroma_ac_residual_preserves_visible_chroma_variation() {
+    let mut cb = vec![0; 8 * 8];
+    let mut cr = vec![0; 8 * 8];
+    for y in 0..8 {
+        for x in 0..8 {
+            cb[y * 8 + x] = if x < 4 { 64 } else { 192 };
+            cr[y * 8 + x] = if y < 4 { 192 } else { 64 };
+        }
+    }
+    let frame = VvcSampledFrame {
+        geometry: VvcVideoGeometry {
+            width: 16,
+            height: 16,
+        },
+        format: VvcPictureFormat {
+            chroma_sampling: ChromaSampling::Cs420,
+            bit_depth: SampleBitDepth::Eight,
+        },
+        luma: vec![128; 16 * 16],
+        cb,
+        cr,
+        chroma_len: 8 * 8,
+    };
+    let quantized = quantize_vvc_frame(frame.clone());
+    assert_eq!(quantized.chroma_tu_count, 1);
+    assert!(quantized.cb_tu_ac_levels[0].iter().any(|level| *level != 0));
+    assert!(quantized.cr_tu_ac_levels[0].iter().any(|level| *level != 0));
+
+    let params = vvc_ctu_partition_params(frame.geometry, quantized).expect("16x16 params");
+    let recon = reconstruct_vvc_residual_frame(&frame, quantized, params);
+    let chroma = &recon[16 * 16..];
+    let cb_recon = &chroma[..8 * 8];
+    let cr_recon = &chroma[8 * 8..];
+    let cb_left: u32 = (0..8)
+        .flat_map(|y| (0..4).map(move |x| u32::from(cb_recon[y * 8 + x])))
+        .sum();
+    let cb_right: u32 = (0..8)
+        .flat_map(|y| (4..8).map(move |x| u32::from(cb_recon[y * 8 + x])))
+        .sum();
+    let cr_top: u32 = (0..4)
+        .flat_map(|y| (0..8).map(move |x| u32::from(cr_recon[y * 8 + x])))
+        .sum();
+    let cr_bottom: u32 = (4..8)
+        .flat_map(|y| (0..8).map(move |x| u32::from(cr_recon[y * 8 + x])))
+        .sum();
+    assert!(cb_right > cb_left);
+    assert!(cr_top > cr_bottom);
+}
+
+#[test]
 fn vvc_chroma_quantization_keeps_black_neutral_and_nonzero_colored() {
     assert_eq!(quantize_vvc_chroma(0, 0), 16);
     assert_eq!(reconstruct_vvc_chroma(16), 0);

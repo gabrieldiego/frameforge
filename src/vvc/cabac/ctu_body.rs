@@ -5,7 +5,8 @@ use super::ctu_split::{
 use super::{VvcCabacContext, VvcCabacContexts, VvcCabacEncoder};
 use crate::vvc::residual::{VvcResidualCabacEncoder, VvcResidualCabacSymbolStream};
 use crate::vvc::{
-    VvcSliceSyntaxConfig, MAX_VVC_LUMA_TUS, VVC_CURRENT_MAX_CHROMA_420_BT_SIZE,
+    VvcResidualComponent, VvcSliceSyntaxConfig, MAX_VVC_CHROMA_TUS, MAX_VVC_LUMA_TUS,
+    VVC_CHROMA_AC_COEFFS_PER_TU, VVC_CURRENT_MAX_CHROMA_420_BT_SIZE,
     VVC_CURRENT_MAX_CHROMA_420_MTT_DEPTH_WITH_BOUNDARY, VVC_CURRENT_MAX_CHROMA_420_TB_SIZE,
     VVC_CURRENT_MAX_CHROMA_420_TT_SIZE, VVC_CURRENT_MAX_LUMA_MTT_DEPTH,
     VVC_CURRENT_MIN_CHROMA_420_QT_SIZE, VVC_LUMA_AC_COEFFS_PER_TU,
@@ -21,8 +22,11 @@ pub(in crate::vvc) fn encode_ctu_partition_body(
         params.luma_tu_abs_levels,
         params.luma_tu_negative,
         params.luma_tu_ac_levels,
-        params.cb_dc_abs_level,
-        params.cb_dc_negative,
+        params.chroma_tu_count,
+        params.cb_tu_dc_levels,
+        params.cr_tu_dc_levels,
+        params.cb_tu_ac_levels,
+        params.cr_tu_ac_levels,
         slice_config,
     );
     for op in VvcCtuCabacOp::yuv420_ctu_partition(params) {
@@ -38,8 +42,12 @@ pub(in crate::vvc) struct VvcCtuCabacGenerator {
     luma_tu_negative: [bool; MAX_VVC_LUMA_TUS],
     luma_tu_ac_levels: [[i16; VVC_LUMA_AC_COEFFS_PER_TU]; MAX_VVC_LUMA_TUS],
     luma_tu_index: usize,
-    cb_dc_abs_level: u8,
-    cb_dc_negative: bool,
+    chroma_tu_count: usize,
+    cb_tu_dc_levels: [i16; MAX_VVC_CHROMA_TUS],
+    cr_tu_dc_levels: [i16; MAX_VVC_CHROMA_TUS],
+    cb_tu_ac_levels: [[i16; VVC_CHROMA_AC_COEFFS_PER_TU]; MAX_VVC_CHROMA_TUS],
+    cr_tu_ac_levels: [[i16; VVC_CHROMA_AC_COEFFS_PER_TU]; MAX_VVC_CHROMA_TUS],
+    chroma_tu_index: usize,
     slice_config: VvcSliceSyntaxConfig,
 }
 
@@ -49,8 +57,11 @@ impl VvcCtuCabacGenerator {
         luma_tu_abs_levels: [u8; MAX_VVC_LUMA_TUS],
         luma_tu_negative: [bool; MAX_VVC_LUMA_TUS],
         luma_tu_ac_levels: [[i16; VVC_LUMA_AC_COEFFS_PER_TU]; MAX_VVC_LUMA_TUS],
-        cb_dc_abs_level: u8,
-        cb_dc_negative: bool,
+        chroma_tu_count: usize,
+        cb_tu_dc_levels: [i16; MAX_VVC_CHROMA_TUS],
+        cr_tu_dc_levels: [i16; MAX_VVC_CHROMA_TUS],
+        cb_tu_ac_levels: [[i16; VVC_CHROMA_AC_COEFFS_PER_TU]; MAX_VVC_CHROMA_TUS],
+        cr_tu_ac_levels: [[i16; VVC_CHROMA_AC_COEFFS_PER_TU]; MAX_VVC_CHROMA_TUS],
         slice_config: VvcSliceSyntaxConfig,
     ) -> Self {
         Self {
@@ -60,8 +71,12 @@ impl VvcCtuCabacGenerator {
             luma_tu_negative,
             luma_tu_ac_levels,
             luma_tu_index: 0,
-            cb_dc_abs_level,
-            cb_dc_negative,
+            chroma_tu_count,
+            cb_tu_dc_levels,
+            cr_tu_dc_levels,
+            cb_tu_ac_levels,
+            cr_tu_ac_levels,
+            chroma_tu_index: 0,
             slice_config,
         }
     }
@@ -492,9 +507,35 @@ impl VvcCtuCabacGenerator {
         );
     }
 
-    fn emit_chroma_cb_residual(&mut self, cabac: &mut VvcCabacEncoder) {
-        cabac.encode_rem_abs_ep(self.cb_dc_abs_level as u32, 0);
-        cabac.encode_bin_ep(self.cb_dc_negative);
+    fn emit_chroma_residual(
+        &mut self,
+        cabac: &mut VvcCabacEncoder,
+        component: VvcResidualComponent,
+        node: VvcCodingTreeNode,
+        dc_level: i16,
+        ac_levels: [i16; VVC_CHROMA_AC_COEFFS_PER_TU],
+    ) {
+        let width = usize::from(Self::chroma_420_width(node));
+        let height = usize::from(Self::chroma_420_height(node));
+        let mut coeff_levels = vec![0; width * height];
+        coeff_levels[0] = dc_level;
+        for (ac_idx, level) in ac_levels.iter().enumerate() {
+            let local = ac_idx + 1;
+            let x = local % 4;
+            let y = local / 4;
+            if x < width && y < height {
+                coeff_levels[y * width + x] = *level;
+            }
+        }
+        let stream = VvcResidualCabacSymbolStream::chroma_coefficients(
+            component,
+            (width as u16).ilog2() as u8,
+            (height as u16).ilog2() as u8,
+            &coeff_levels,
+        );
+        let mut residual =
+            VvcResidualCabacEncoder::new(&mut self.contexts, self.slice_config.residual_options());
+        stream.emit(&mut residual, cabac);
     }
 
     fn emit_chroma_transform_only_leaf(
@@ -515,16 +556,39 @@ impl VvcCtuCabacGenerator {
         }
         self.contexts
             .encode(cabac, VvcCabacContext::IntraChromaPredMode(0), false);
-        // Chroma coefficient coding is not wired through the spec-shaped
-        // residual encoder yet. Keep chroma residual disabled instead of
-        // emitting a shortcut rem_abs payload that desynchronizes VTM.
-        let cbf_cb = false;
+        let tu_idx = self.chroma_tu_index;
+        self.chroma_tu_index += 1;
+        assert!(
+            tu_idx < self.chroma_tu_count,
+            "missing chroma TU coefficient data for coding-tree leaf {tu_idx}"
+        );
+        let cb_dc_level = self.cb_tu_dc_levels[tu_idx];
+        let cr_dc_level = self.cr_tu_dc_levels[tu_idx];
+        let cb_ac_levels = self.cb_tu_ac_levels[tu_idx];
+        let cr_ac_levels = self.cr_tu_ac_levels[tu_idx];
+        let cbf_cb = cb_dc_level != 0 || cb_ac_levels.iter().any(|level| *level != 0);
+        let cbf_cr = cr_dc_level != 0 || cr_ac_levels.iter().any(|level| *level != 0);
         self.contexts
             .encode(cabac, VvcCabacContext::QtCbfCb(cbf_cb_ctx), cbf_cb);
         self.contexts
-            .encode(cabac, VvcCabacContext::QtCbfCr(0), false);
+            .encode(cabac, VvcCabacContext::QtCbfCr(u8::from(cbf_cb)), cbf_cr);
         if cbf_cb {
-            self.emit_chroma_cb_residual(cabac);
+            self.emit_chroma_residual(
+                cabac,
+                VvcResidualComponent::ChromaCb,
+                node,
+                cb_dc_level,
+                cb_ac_levels,
+            );
+        }
+        if cbf_cr {
+            self.emit_chroma_residual(
+                cabac,
+                VvcResidualComponent::ChromaCr,
+                node,
+                cr_dc_level,
+                cr_ac_levels,
+            );
         }
     }
 

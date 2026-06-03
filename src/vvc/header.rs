@@ -65,14 +65,17 @@ pub(in crate::vvc) fn vvc_pps_unit(geometry: VvcVideoGeometry) -> VvcNalUnit {
     }
 }
 
-pub(in crate::vvc) fn vvc_picture_header_unit(frame_idx: usize) -> VvcNalUnit {
+pub(in crate::vvc) fn vvc_picture_header_unit(
+    frame_idx: usize,
+    slice_config: VvcSliceSyntaxConfig,
+) -> VvcNalUnit {
     let picture_kind = VvcPictureKind::for_frame_idx(frame_idx);
     let poc_lsb = vvc_poc_lsb_for_frame_idx(frame_idx);
     VvcNalUnit {
         nal_unit_type: VvcNalUnitType::PictureHeader,
         layer_id: 0,
         temporal_id: 0,
-        rbsp_payload: vvc_picture_header_payload(picture_kind, poc_lsb),
+        rbsp_payload: vvc_picture_header_payload(picture_kind, poc_lsb, slice_config),
     }
 }
 
@@ -294,7 +297,7 @@ pub(in crate::vvc) fn vvc_sps_rbsp(
         writer.write_flag("sps_explicit_mts_inter_enabled_flag", false);
     }
     writer.write_flag("sps_lfnst_enabled_flag", tool_flags.lfnst_enabled);
-    writer.write_flag("sps_joint_cbcr_enabled_flag", true);
+    writer.write_flag("sps_joint_cbcr_enabled_flag", tool_flags.joint_cbcr_enabled);
     writer.write_flag("sps_same_qp_table_for_chroma_flag", true);
     writer.write_se("sps_qp_table_starts_minus26", -9);
     writer.write_ue("sps_num_points_in_qp_table_minus1", 2);
@@ -381,9 +384,13 @@ pub(in crate::vvc) fn vvc_sps_rbsp(
     writer.finish()
 }
 
-fn vvc_picture_header_payload(picture_kind: VvcPictureKind, poc_lsb: u32) -> Vec<u8> {
+fn vvc_picture_header_payload(
+    picture_kind: VvcPictureKind,
+    poc_lsb: u32,
+    slice_config: VvcSliceSyntaxConfig,
+) -> Vec<u8> {
     let mut writer = VvcSyntaxWriter::new();
-    write_vvc_picture_header(&mut writer, picture_kind, poc_lsb);
+    write_vvc_picture_header(&mut writer, picture_kind, poc_lsb, slice_config);
     writer.rbsp_trailing_bits();
     debug_assert!(writer.is_byte_aligned());
     writer.finish().bytes
@@ -393,6 +400,7 @@ pub(in crate::vvc) fn write_vvc_picture_header(
     writer: &mut VvcSyntaxWriter,
     _picture_kind: VvcPictureKind,
     poc_lsb: u32,
+    slice_config: VvcSliceSyntaxConfig,
 ) {
     writer.write_flag("ph_gdr_or_irap_pic_flag", true);
     writer.write_flag("ph_non_ref_pic_flag", false);
@@ -401,7 +409,9 @@ pub(in crate::vvc) fn write_vvc_picture_header(
     writer.write_ue("ph_pic_parameter_set_id", 0);
     writer.write_u("ph_pic_order_cnt_lsb", u64::from(poc_lsb), VVC_POC_LSB_BITS);
     writer.write_flag("ph_partition_constraints_override_flag", false);
-    writer.write_flag("ph_joint_cbcr_sign_flag", false);
+    if slice_config.tools.joint_cbcr_enabled {
+        writer.write_flag("ph_joint_cbcr_sign_flag", false);
+    }
 }
 
 fn chroma_format_idc(chroma_sampling: ChromaSampling) -> u32 {
@@ -602,7 +612,7 @@ pub(in crate::vvc) fn vvc_slice_rbsp_with_poc(
         include_picture_header,
     );
     if include_picture_header {
-        write_vvc_picture_header(&mut writer, picture_kind, poc_lsb);
+        write_vvc_picture_header(&mut writer, picture_kind, poc_lsb, slice_config);
     }
     if slice_count > 1 {
         writer.write_u(

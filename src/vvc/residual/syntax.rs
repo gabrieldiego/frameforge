@@ -281,7 +281,24 @@ impl VvcResidualCtxConfig {
         Self::luma_subset(2, 2, last_significant_x, last_significant_y)
     }
 
+    #[cfg(test)]
     pub(in crate::vvc) fn luma_subset(
+        log2_zo_tb_width: u8,
+        log2_zo_tb_height: u8,
+        last_significant_x: u8,
+        last_significant_y: u8,
+    ) -> Self {
+        Self::subset(
+            VvcResidualComponent::Luma,
+            log2_zo_tb_width,
+            log2_zo_tb_height,
+            last_significant_x,
+            last_significant_y,
+        )
+    }
+
+    pub(in crate::vvc) fn subset(
+        component: VvcResidualComponent,
         log2_zo_tb_width: u8,
         log2_zo_tb_height: u8,
         last_significant_x: u8,
@@ -290,7 +307,7 @@ impl VvcResidualCtxConfig {
         debug_assert!((2..=6).contains(&log2_zo_tb_width));
         debug_assert!((2..=6).contains(&log2_zo_tb_height));
         Self {
-            component: VvcResidualComponent::Luma,
+            component,
             log2_zo_tb_width,
             log2_zo_tb_height,
             q_state: 0,
@@ -653,6 +670,33 @@ impl VvcResidualCabacSymbolStream {
         log2_tb_height: u8,
         coeff_levels: &[i16],
     ) -> Self {
+        Self::coefficients(
+            VvcResidualComponent::Luma,
+            log2_tb_width,
+            log2_tb_height,
+            coeff_levels,
+        )
+    }
+
+    pub(in crate::vvc) fn chroma_coefficients(
+        component: VvcResidualComponent,
+        log2_tb_width: u8,
+        log2_tb_height: u8,
+        coeff_levels: &[i16],
+    ) -> Self {
+        debug_assert!(matches!(
+            component,
+            VvcResidualComponent::ChromaCb | VvcResidualComponent::ChromaCr
+        ));
+        Self::coefficients(component, log2_tb_width, log2_tb_height, coeff_levels)
+    }
+
+    fn coefficients(
+        component: VvcResidualComponent,
+        log2_tb_width: u8,
+        log2_tb_height: u8,
+        coeff_levels: &[i16],
+    ) -> Self {
         // H.266 7.3.11.11 residual_coding() first codes the last significant
         // coefficient position and then walks earlier scan positions with
         // sig_coeff_flag and level/sign syntax. VTM's CoeffCodingContext uses
@@ -677,7 +721,7 @@ impl VvcResidualCabacSymbolStream {
         );
 
         let config =
-            VvcResidualCtxConfig::luma_subset(log2_tb_width, log2_tb_height, last_x, last_y);
+            VvcResidualCtxConfig::subset(component, log2_tb_width, log2_tb_height, last_x, last_y);
         let mut pass1_state = VvcResidualPass1State::new(config);
         for pos in scan.iter().take(last_scan_pos + 1) {
             let level = coeff_levels[pos.raster_index];
@@ -720,9 +764,8 @@ impl VvcResidualCabacSymbolStream {
                 Self::append_regular_level_symbols(&mut symbols, x, y, abs_level);
                 rem_reg_bins -= regular_level_bin_count(abs_level);
                 if abs_level > 3 {
-                    first_pos_2nd_pass = Some(first_pos_2nd_pass.map_or(scan_pos, |first| {
-                        first.max(scan_pos)
-                    }));
+                    first_pos_2nd_pass =
+                        Some(first_pos_2nd_pass.map_or(scan_pos, |first| first.max(scan_pos)));
                 }
                 append_sign_bit(&mut sign_bits, &mut sign_count, level < 0);
             }
@@ -932,15 +975,19 @@ fn template_abs_sum_level(abs_level: u8) -> u8 {
 }
 
 fn regular_bin_limit(width: usize, height: usize) -> i32 {
-    // H.266 residual_coding(): cctx.regBinLimit is derived from
-    // MAX_TU_LEVEL_CTX_CODED_BIN_CONSTRAINT_LUMA (28) as
-    // (TbAreaAfterCoefZeroOut * 28) >> 4. The current residual path uses luma
-    // coefficients only and does not zero-out additional scan positions.
+    // H.266 7.3.11.11 residual_coding() initializes remBinsPass1 as
+    // ((1 << (Log2ZoTbWidth + Log2ZoTbHeight)) * 7) >> 2. VTM expresses the
+    // same value as (TbAreaAfterCoefZeroOut * MAX_TU_LEVEL_CTX_CODED_BIN_*) >>
+    // 4; VTM 24.0 sets both luma and chroma constraints to 28.
     ((width * height * 28) >> 4) as i32
 }
 
 fn regular_level_bin_count(abs_level: u8) -> i32 {
-    if abs_level > 1 { 3 } else { 1 }
+    if abs_level > 1 {
+        3
+    } else {
+        1
+    }
 }
 
 fn append_sign_bit(sign_bits: &mut u32, sign_count: &mut u8, negative: bool) {
@@ -965,8 +1012,8 @@ fn derive_rice_param(
     base_level: i16,
 ) -> u8 {
     const GO_RICE_PARS_COEFF: [u8; 32] = [
-        0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3,
-        3, 3, 3,
+        0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3,
+        3, 3,
     ];
     let sum_abs = rice_template_abs_sum(scan_pos, coeff_levels, width, scan);
     let clipped = (sum_abs - 5 * base_level).clamp(0, 31) as usize;

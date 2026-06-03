@@ -151,6 +151,11 @@ fn vvc_quantized_color(y: u8, luma_rem: u8) -> VvcQuantizedColor {
         luma_tu_negative: [y < VVC_LUMA_DC_BASE as u8 && luma_rem != 0; MAX_VVC_LUMA_TUS],
         luma_tu_ac_levels: [[0; VVC_LUMA_AC_COEFFS_PER_TU]; MAX_VVC_LUMA_TUS],
         luma_tu_count: 1,
+        chroma_tu_count: 0,
+        cb_tu_dc_levels: [0; MAX_VVC_CHROMA_TUS],
+        cr_tu_dc_levels: [0; MAX_VVC_CHROMA_TUS],
+        cb_tu_ac_levels: [[0; VVC_CHROMA_AC_COEFFS_PER_TU]; MAX_VVC_CHROMA_TUS],
+        cr_tu_ac_levels: [[0; VVC_CHROMA_AC_COEFFS_PER_TU]; MAX_VVC_CHROMA_TUS],
         cb_rem: 16,
         cr_rem: 16,
     }
@@ -687,12 +692,12 @@ fn vvc_coded_geometry_does_not_square_promote_even_visible_shapes_at_or_under_32
 #[test]
 fn vvc_ctu_partition_params_are_geometry_derived() {
     let black = quantize_vvc_color(VvcSampledColor { y: 0, u: 0, v: 0 });
-    for (width, height, chroma_tu_count, luma_tu_count) in [
-        (64, 64, 64, 64),
-        (64, 32, 32, 32),
-        (32, 64, 32, 32),
-        (32, 32, 16, 16),
-        (16, 16, 4, 4),
+    for (width, height, luma_tu_count) in [
+        (64, 64, 64),
+        (64, 32, 32),
+        (32, 64, 32),
+        (32, 32, 16),
+        (16, 16, 4),
     ] {
         let params = vvc_ctu_partition_params(VvcVideoGeometry { width, height }, black)
             .expect("partition parameters");
@@ -701,7 +706,10 @@ fn vvc_ctu_partition_params_are_geometry_derived() {
         assert_eq!(params.visible_width, width);
         assert_eq!(params.visible_height, height);
         assert_eq!(params.chroma_sampling, ChromaSampling::Cs420);
-        assert_eq!(params.chroma_tu_count, chroma_tu_count);
+        assert_eq!(
+            params.chroma_tu_count,
+            vvc_chroma_420_transform_nodes(params.shape()).len()
+        );
         assert_eq!(params.luma_tu_count, luma_tu_count);
         assert_eq!(params.luma_tu_abs_levels[0], black.luma_tu_remainders[0]);
         assert_eq!(
@@ -728,7 +736,10 @@ fn vvc_ctu_partition_params_cover_all_8_sample_geometries_up_to_64() {
             assert_eq!(params.root_height, 64);
             assert_eq!(params.visible_width, width);
             assert_eq!(params.visible_height, height);
-            assert_eq!(params.chroma_tu_count, (width * height) / 64);
+            assert_eq!(
+                params.chroma_tu_count,
+                vvc_chroma_420_transform_nodes(params.shape()).len()
+            );
             assert_eq!(
                 vvc_cabac_bits(geometry, black, vvc_test_slice_config()),
                 vvc_ctu_partition_cabac_bits(params, vvc_test_slice_config())
@@ -776,6 +787,41 @@ fn vvc_contexts_include_residual_init_tables() {
     cabac.start();
     ctx.encode(&mut cabac, VvcCabacContext::TransformSkipFlag(0), false);
     assert_ne!(ctx.transform_skip_flag[0].state(), initial_state);
+}
+
+#[test]
+fn vvc_last_sig_chroma_prefix_ctx_uses_block_size_shift() {
+    // H.266 9.3.4.2.4 defines chroma ctxShift as Clip3(0, 2,
+    // (1 << Log2FullTbSize) >> 3). VTM CoeffCodingContext implements the same
+    // rule as Clip3(0, 2, width >> 3), so 8x8 chroma bins 2 and 3 fold into
+    // context 21 instead of walking past the 0..22 context table.
+    assert_eq!(
+        VvcLastSigCoeffPrefixCtxInput {
+            is_luma: false,
+            log2_tb_size: 2,
+            bin_idx: 2,
+        }
+        .ctx_inc(),
+        22
+    );
+    assert_eq!(
+        VvcLastSigCoeffPrefixCtxInput {
+            is_luma: false,
+            log2_tb_size: 3,
+            bin_idx: 3,
+        }
+        .ctx_inc(),
+        21
+    );
+    assert_eq!(
+        VvcLastSigCoeffPrefixCtxInput {
+            is_luma: false,
+            log2_tb_size: 4,
+            bin_idx: 6,
+        }
+        .ctx_inc(),
+        21
+    );
 }
 
 #[test]
@@ -932,7 +978,7 @@ fn vvc_last_sig_prefix_context_uses_spec_geometry_formula() {
             bin_idx: 2,
         }
         .ctx_inc(),
-        22
+        21
     );
 }
 
@@ -952,6 +998,10 @@ fn vvc_ctu_cabac_generator_uses_one_recursive_luma_base() {
             luma_tu_ac_levels: [[0; VVC_LUMA_AC_COEFFS_PER_TU]; MAX_VVC_LUMA_TUS],
             cb_dc_abs_level: 0,
             cb_dc_negative: false,
+            cb_tu_dc_levels: [0; MAX_VVC_CHROMA_TUS],
+            cr_tu_dc_levels: [0; MAX_VVC_CHROMA_TUS],
+            cb_tu_ac_levels: [[0; VVC_CHROMA_AC_COEFFS_PER_TU]; MAX_VVC_CHROMA_TUS],
+            cr_tu_ac_levels: [[0; VVC_CHROMA_AC_COEFFS_PER_TU]; MAX_VVC_CHROMA_TUS],
         };
         let ops = VvcCtuCabacOp::yuv420_ctu_partition(params);
         let chroma_nodes: Vec<_> = ops
@@ -995,8 +1045,11 @@ fn vvc_ctu_cabac_generator_is_embedded_in_ctu_body() {
         params.luma_tu_abs_levels,
         params.luma_tu_negative,
         params.luma_tu_ac_levels,
-        params.cb_dc_abs_level,
-        params.cb_dc_negative,
+        params.chroma_tu_count,
+        params.cb_tu_dc_levels,
+        params.cr_tu_dc_levels,
+        params.cb_tu_ac_levels,
+        params.cr_tu_ac_levels,
         vvc_test_slice_config(),
     );
     manual.start();
@@ -1083,6 +1136,10 @@ fn vvc_ctu_chroma_tree_uses_luma_coordinate_root() {
             luma_tu_ac_levels: [[0; VVC_LUMA_AC_COEFFS_PER_TU]; MAX_VVC_LUMA_TUS],
             cb_dc_abs_level: 0,
             cb_dc_negative: false,
+            cb_tu_dc_levels: [0; MAX_VVC_CHROMA_TUS],
+            cr_tu_dc_levels: [0; MAX_VVC_CHROMA_TUS],
+            cb_tu_ac_levels: [[0; VVC_CHROMA_AC_COEFFS_PER_TU]; MAX_VVC_CHROMA_TUS],
+            cr_tu_ac_levels: [[0; VVC_CHROMA_AC_COEFFS_PER_TU]; MAX_VVC_CHROMA_TUS],
         };
         let root = params.ctu_chroma_root();
         assert_eq!((root.width, root.height), expected_root);

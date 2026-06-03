@@ -1,8 +1,12 @@
 use crate::picture::ChromaSampling;
 
-use super::super::{VvcCtuCabacOp, VvcCtuPartitionParams, VvcSampledFrame};
+use super::super::{
+    vvc_chroma_420_transform_nodes, VvcCodingTreeNode, VvcCtuCabacOp, VvcCtuPartitionParams,
+    VvcSampledFrame,
+};
 use super::{
-    fill_visible_luma_node, inverse_transform_vvc_luma_residual_levels,
+    fill_visible_chroma_node, fill_visible_luma_node, inverse_transform_vvc_chroma_residual_levels,
+    inverse_transform_vvc_luma_residual_levels, predict_vvc_chroma_dc_block,
     predict_vvc_luma_dc_block, VvcQuantizedColor, VVC_LUMA_AC_COEFFS_PER_TU,
 };
 
@@ -43,14 +47,63 @@ fn reconstruct_vvc_residual_frame_420(
         tu_idx += 1;
     }
 
-    // Chroma CBFs are currently emitted as false in the 4:2:0 path, so the
-    // decoder-visible reconstruction is neutral intra prediction.
     let chroma_len = frame.geometry.luma_samples() / 4;
+    let chroma_width = frame.geometry.width / 2;
+    let mut cb = vec![128; chroma_len];
+    let mut cr = vec![128; chroma_len];
+    for (tu_idx, node) in vvc_chroma_420_transform_nodes(partition_params.shape())
+        .into_iter()
+        .enumerate()
+    {
+        let cb_predicted = predict_vvc_chroma_dc_block(&cb, frame.geometry, node);
+        let cb_residuals = inverse_transform_vvc_chroma_residual_levels(
+            node.width / 2,
+            node.height / 2,
+            &quantized_chroma_coeff_levels(
+                node,
+                quantized.cb_tu_dc_levels[tu_idx],
+                quantized.cb_tu_ac_levels[tu_idx],
+            ),
+        );
+        fill_visible_chroma_node(&mut cb, frame.geometry, node, &cb_predicted, &cb_residuals);
+        let cr_predicted = predict_vvc_chroma_dc_block(&cr, frame.geometry, node);
+        let cr_residuals = inverse_transform_vvc_chroma_residual_levels(
+            node.width / 2,
+            node.height / 2,
+            &quantized_chroma_coeff_levels(
+                node,
+                quantized.cr_tu_dc_levels[tu_idx],
+                quantized.cr_tu_ac_levels[tu_idx],
+            ),
+        );
+        fill_visible_chroma_node(&mut cr, frame.geometry, node, &cr_predicted, &cr_residuals);
+    }
+
     let mut out = Vec::with_capacity(frame.geometry.luma_samples() + chroma_len * 2);
     out.extend_from_slice(&luma);
-    out.extend(std::iter::repeat_n(128, chroma_len));
-    out.extend(std::iter::repeat_n(128, chroma_len));
+    out.extend_from_slice(&cb[..chroma_width * (frame.geometry.height / 2)]);
+    out.extend_from_slice(&cr[..chroma_width * (frame.geometry.height / 2)]);
     out
+}
+
+fn quantized_chroma_coeff_levels(
+    node: VvcCodingTreeNode,
+    dc_level: i16,
+    ac_levels: [i16; super::VVC_CHROMA_AC_COEFFS_PER_TU],
+) -> Vec<i16> {
+    let width = usize::from(node.width / 2);
+    let height = usize::from(node.height / 2);
+    let mut levels = vec![0; width * height];
+    levels[0] = dc_level;
+    for (ac_idx, level) in ac_levels.iter().enumerate() {
+        let local = ac_idx + 1;
+        let x = local % 4;
+        let y = local / 4;
+        if x < width && y < height {
+            levels[y * width + x] = *level;
+        }
+    }
+    levels
 }
 
 fn quantized_luma_coeff_levels(
