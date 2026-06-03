@@ -1,6 +1,10 @@
 `timescale 1ns/1ps
 
-module ff_vvc_annexb_header (
+module ff_vvc_annexb_header #(
+  parameter int MAX_VISIBLE_WIDTH = 64,
+  parameter int MAX_VISIBLE_HEIGHT = 64,
+  parameter int CTU_SIZE = 64
+) (
   input  logic        clk,
   input  logic        rst_n,
   input  logic        clear,
@@ -29,6 +33,7 @@ module ff_vvc_annexb_header (
   localparam logic [4:0] NAL_UNIT_TYPE_PPS = 5'd16;
   localparam logic [5:0] NAL_LAYER_ID = 6'd0;
   localparam logic [2:0] NAL_TEMPORAL_ID_PLUS1 = 3'd1;
+  localparam logic [15:0] CTU_SIZE_L = CTU_SIZE;
   localparam logic [6:0] SPS_FIELD_COUNT = 7'd106;
   localparam logic [6:0] PPS_FIELD_COUNT = 7'd33;
   localparam logic [3:0] ST_IDLE = 4'd0;
@@ -44,7 +49,7 @@ module ff_vvc_annexb_header (
   logic [3:0] state_q;
   logic       nal_is_pps_q;
   logic [2:0] byte_index_q;
-  logic [6:0] field_index_q;
+  logic [15:0] field_index_q;
   logic       rbsp_clear_q;
   logic       rbsp_last_seen_q;
 
@@ -52,20 +57,35 @@ module ff_vvc_annexb_header (
   logic [15:0] coded_height;
   logic [15:0] crop_right_offset;
   logic [15:0] crop_bottom_offset;
+  logic [15:0] ctu_cols;
+  logic [15:0] ctu_rows;
+  logic [15:0] slice_count;
+  logic        has_multiple_ctus;
   logic        sps_dual_tree_intra_flag;
   logic [6:0]  general_profile_idc;
   logic [31:0] ue_width_value;
   logic [31:0] ue_height_value;
   logic [31:0] ue_crop_right_value;
   logic [31:0] ue_crop_bottom_value;
+  logic [31:0] ue_ctu_cols_minus1_value;
+  logic [31:0] ue_ctu_rows_minus1_value;
+  logic [31:0] ue_slice_count_minus1_value;
   logic [5:0]  ue_width_bits;
   logic [5:0]  ue_height_bits;
   logic [5:0]  ue_crop_right_bits;
   logic [5:0]  ue_crop_bottom_bits;
+  logic [5:0]  ue_ctu_cols_minus1_bits;
+  logic [5:0]  ue_ctu_rows_minus1_bits;
+  logic [5:0]  ue_slice_count_minus1_bits;
 
   logic [31:0] syntax_value;
   logic [5:0]  syntax_bits;
-  logic [6:0]  syntax_field_count;
+  logic [15:0] syntax_field_count;
+  logic [15:0] pps_multi_field_count;
+  logic [15:0] pps_slice_geometry_field_count;
+  logic [15:0] pps_multi_index;
+  logic [15:0] pps_after_tiles_index;
+  logic [15:0] pps_post_index;
   logic        syntax_fields_done;
   logic        bit_writer_valid;
   logic        bit_writer_ready;
@@ -89,6 +109,10 @@ module ff_vvc_annexb_header (
 
   assign coded_width = (visible_width + CODED_GRANULARITY - 16'd1) & ~(CODED_GRANULARITY - 16'd1);
   assign coded_height = (visible_height + CODED_GRANULARITY - 16'd1) & ~(CODED_GRANULARITY - 16'd1);
+  assign ctu_cols = (coded_width + CTU_SIZE_L - 16'd1) / CTU_SIZE_L;
+  assign ctu_rows = (coded_height + CTU_SIZE_L - 16'd1) / CTU_SIZE_L;
+  assign slice_count = ctu_cols * ctu_rows;
+  assign has_multiple_ctus = slice_count > 16'd1;
   assign crop_right_offset =
     ((chroma_format_idc == 2'd1) || (chroma_format_idc == 2'd2)) ?
     ((coded_width - visible_width) >> 1) : (coded_width - visible_width);
@@ -101,8 +125,28 @@ module ff_vvc_annexb_header (
   assign sps_dual_tree_intra_flag = chroma_format_idc != 2'd3;
   assign general_profile_idc =
     ((chroma_format_idc == 2'd3) || sps_palette_enabled_flag) ? 7'd0 : 7'd1;
-  assign syntax_field_count = nal_is_pps_q ? PPS_FIELD_COUNT : SPS_FIELD_COUNT;
+  assign syntax_field_count = nal_is_pps_q ?
+    (has_multiple_ctus ? pps_multi_field_count : PPS_FIELD_COUNT) :
+    SPS_FIELD_COUNT;
   assign syntax_fields_done = field_index_q >= syntax_field_count;
+  // With one tile per CTU and one rectangular slice per tile, VVC PPS
+  // rectangular-slice geometry emits ue(0) for every non-final tile-column
+  // width in each CTU row and ue(0) for every non-final tile-row height.
+  // This is equivalent to the previous CTU scan, but avoids synthesizing
+  // a modulo/divide search tree over the configured maximum CTU count.
+  assign pps_slice_geometry_field_count =
+    ((ctu_cols == 16'd0) || (ctu_rows == 16'd0)) ? 16'd0 :
+    ((ctu_rows * (ctu_cols - 16'd1)) + (ctu_rows - 16'd1));
+  // Multi-CTU PPS fields:
+  // 13 fields through pps_num_exp_tile_rows_minus1,
+  // one ue(0) per tile column and row,
+  // five fixed partition/slice fields through pps_tile_idx_delta_present_flag
+  // (the tile-delta flag is zero-width when the spec gates it off),
+  // geometry fields for rectangular slices,
+  // one loop-filter-across-slices flag,
+  // then 32 post-partition fields through pps_extension_flag.
+  assign pps_multi_field_count =
+    16'd51 + ctu_cols + ctu_rows + pps_slice_geometry_field_count;
   assign rbsp_output_active =
     (state_q == ST_FIELDS) ||
     (state_q == ST_TRAILING_STOP) ||
@@ -132,6 +176,24 @@ module ff_vvc_annexb_header (
     .value(crop_bottom_offset),
     .code_value(ue_crop_bottom_value),
     .bit_count(ue_crop_bottom_bits)
+  );
+
+  ff_vvc_ue_code ue_ctu_cols_minus1 (
+    .value(ctu_cols - 16'd1),
+    .code_value(ue_ctu_cols_minus1_value),
+    .bit_count(ue_ctu_cols_minus1_bits)
+  );
+
+  ff_vvc_ue_code ue_ctu_rows_minus1 (
+    .value(ctu_rows - 16'd1),
+    .code_value(ue_ctu_rows_minus1_value),
+    .bit_count(ue_ctu_rows_minus1_bits)
+  );
+
+  ff_vvc_ue_code ue_slice_count_minus1 (
+    .value(slice_count - 16'd1),
+    .code_value(ue_slice_count_minus1_value),
+    .bit_count(ue_slice_count_minus1_bits)
   );
 
   ff_vvc_cabac_bit_writer rbsp_bit_writer (
@@ -182,6 +244,9 @@ module ff_vvc_annexb_header (
   always @* begin
     syntax_value = 32'd0;
     syntax_bits = 6'd0;
+    pps_multi_index = 16'd0;
+    pps_after_tiles_index = 16'd0;
+    pps_post_index = 16'd0;
 
     if (!nal_is_pps_q) begin
       case (field_index_q)
@@ -282,42 +347,135 @@ module ff_vvc_annexb_header (
         default: begin syntax_value = 32'd0; syntax_bits = 6'd0; end
       endcase
     end else begin
-      case (field_index_q)
-        7'd0: begin syntax_value = 32'd0; syntax_bits = 6'd6; end  // pps_pic_parameter_set_id
-        7'd1: begin syntax_value = 32'd0; syntax_bits = 6'd4; end  // pps_seq_parameter_set_id
-        7'd2: begin syntax_value = 32'd0; syntax_bits = 6'd1; end  // pps_mixed_nalu_types_in_pic_flag
-        7'd3: begin syntax_value = ue_width_value; syntax_bits = ue_width_bits; end
-        7'd4: begin syntax_value = ue_height_value; syntax_bits = ue_height_bits; end
-        7'd5: begin syntax_value = 32'b000100; syntax_bits = 6'd6; end // conformance through pps_cabac_init_present_flag
-        7'd6: begin syntax_value = 32'd4; syntax_bits = 6'd5; end // num_ref_idx_default_active_minus1[0] ue(3)
-        7'd7: begin syntax_value = 32'd4; syntax_bits = 6'd5; end // num_ref_idx_default_active_minus1[1] ue(3)
-        7'd8: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // pps_rpl1_idx_present_flag
-        7'd9: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // weighted pred
-        7'd10: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // weighted bipred
-        7'd11: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // ref wraparound
-        7'd12: begin syntax_value = 32'd12; syntax_bits = 6'd7; end // pps_init_qp_minus26 se(6)
-        7'd13: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // cu qp delta
-        7'd14: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // chroma tool offsets present
-        7'd15: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // cb qp offset se(0)
-        7'd16: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // cr qp offset se(0)
-        7'd17: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // joint cbcr offset present
-        7'd18: begin syntax_value = 32'd3; syntax_bits = 6'd3; end // joint cbcr qp offset se(-1)
-        7'd19: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // slice chroma offsets
-        7'd20: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // cu chroma qp offset list
-        7'd21: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // deblocking filter control present
-        7'd22: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // deblocking override
-        7'd23: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // deblocking disabled
-        7'd24: begin syntax_value = 32'd5; syntax_bits = 6'd5; end // beta offset se(-2)
-        7'd25: begin syntax_value = 32'd11; syntax_bits = 6'd7; end // tc offset se(-5)
-        7'd26: begin syntax_value = 32'd5; syntax_bits = 6'd5; end // cb beta offset se(-2)
-        7'd27: begin syntax_value = 32'd11; syntax_bits = 6'd7; end // cb tc offset se(-5)
-        7'd28: begin syntax_value = 32'd5; syntax_bits = 6'd5; end // cr beta offset se(-2)
-        7'd29: begin syntax_value = 32'd11; syntax_bits = 6'd7; end // cr tc offset se(-5)
-        7'd30: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // picture header extension
-        7'd31: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // slice header extension
-        7'd32: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // pps_extension_flag
-        default: begin syntax_value = 32'd0; syntax_bits = 6'd0; end
-      endcase
+      if (!has_multiple_ctus) begin
+        case (field_index_q)
+          7'd0: begin syntax_value = 32'd0; syntax_bits = 6'd6; end  // pps_pic_parameter_set_id
+          7'd1: begin syntax_value = 32'd0; syntax_bits = 6'd4; end  // pps_seq_parameter_set_id
+          7'd2: begin syntax_value = 32'd0; syntax_bits = 6'd1; end  // pps_mixed_nalu_types_in_pic_flag
+          7'd3: begin syntax_value = ue_width_value; syntax_bits = ue_width_bits; end
+          7'd4: begin syntax_value = ue_height_value; syntax_bits = ue_height_bits; end
+          7'd5: begin syntax_value = 32'b000100; syntax_bits = 6'd6; end // conformance through pps_cabac_init_present_flag
+          7'd6: begin syntax_value = 32'd4; syntax_bits = 6'd5; end // num_ref_idx_default_active_minus1[0] ue(3)
+          7'd7: begin syntax_value = 32'd4; syntax_bits = 6'd5; end // num_ref_idx_default_active_minus1[1] ue(3)
+          7'd8: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // pps_rpl1_idx_present_flag
+          7'd9: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // weighted pred
+          7'd10: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // weighted bipred
+          7'd11: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // ref wraparound
+          7'd12: begin syntax_value = 32'd12; syntax_bits = 6'd7; end // pps_init_qp_minus26 se(6)
+          7'd13: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // cu qp delta
+          7'd14: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // chroma tool offsets present
+          7'd15: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // cb qp offset se(0)
+          7'd16: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // cr qp offset se(0)
+          7'd17: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // joint cbcr offset present
+          7'd18: begin syntax_value = 32'd3; syntax_bits = 6'd3; end // joint cbcr qp offset se(-1)
+          7'd19: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // slice chroma offsets
+          7'd20: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // cu chroma qp offset list
+          7'd21: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // deblocking filter control present
+          7'd22: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // deblocking override
+          7'd23: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // deblocking disabled
+          7'd24: begin syntax_value = 32'd5; syntax_bits = 6'd5; end // beta offset se(-2)
+          7'd25: begin syntax_value = 32'd11; syntax_bits = 6'd7; end // tc offset se(-5)
+          7'd26: begin syntax_value = 32'd5; syntax_bits = 6'd5; end // cb beta offset se(-2)
+          7'd27: begin syntax_value = 32'd11; syntax_bits = 6'd7; end // cb tc offset se(-5)
+          7'd28: begin syntax_value = 32'd5; syntax_bits = 6'd5; end // cr beta offset se(-2)
+          7'd29: begin syntax_value = 32'd11; syntax_bits = 6'd7; end // cr tc offset se(-5)
+          7'd30: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // picture header extension
+          7'd31: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // slice header extension
+          7'd32: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // pps_extension_flag
+          default: begin syntax_value = 32'd0; syntax_bits = 6'd0; end
+        endcase
+      end else begin
+        pps_multi_index = field_index_q;
+
+        if (pps_multi_index <= 16'd4) begin
+          case (field_index_q)
+            7'd0: begin syntax_value = 32'd0; syntax_bits = 6'd6; end
+            7'd1: begin syntax_value = 32'd0; syntax_bits = 6'd4; end
+            7'd2: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
+            7'd3: begin syntax_value = ue_width_value; syntax_bits = ue_width_bits; end
+            7'd4: begin syntax_value = ue_height_value; syntax_bits = ue_height_bits; end
+            default: begin syntax_value = 32'd0; syntax_bits = 6'd0; end
+          endcase
+        end else if (pps_multi_index <= 16'd9) begin
+          case (pps_multi_index - 16'd5)
+            16'd0: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // pps_conformance_window_flag
+            16'd1: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // pps_scaling_window_explicit_signalling_flag
+            16'd2: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // pps_output_flag_present_flag
+            16'd3: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // pps_no_pic_partition_flag
+            16'd4: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // pps_subpic_id_mapping_present_flag
+            default: begin syntax_value = 32'd0; syntax_bits = 6'd0; end
+          endcase
+        end else if (pps_multi_index == 16'd10) begin
+          syntax_value = 32'd1;
+          syntax_bits = 6'd2; // pps_log2_ctu_size_minus5
+        end else if (pps_multi_index == 16'd11) begin
+          syntax_value = ue_ctu_cols_minus1_value;
+          syntax_bits = ue_ctu_cols_minus1_bits;
+        end else if (pps_multi_index == 16'd12) begin
+          syntax_value = ue_ctu_rows_minus1_value;
+          syntax_bits = ue_ctu_rows_minus1_bits;
+        end else if (pps_multi_index < (16'd13 + ctu_cols)) begin
+          syntax_value = 32'd1;
+          syntax_bits = 6'd1; // pps_tile_column_width_minus1[i] ue(0)
+        end else if (pps_multi_index < (16'd13 + ctu_cols + ctu_rows)) begin
+          syntax_value = 32'd1;
+          syntax_bits = 6'd1; // pps_tile_row_height_minus1[i] ue(0)
+        end else begin
+          pps_after_tiles_index = pps_multi_index - (16'd13 + ctu_cols + ctu_rows);
+          if (pps_after_tiles_index == 16'd0) begin
+            syntax_value = 32'd0; syntax_bits = 6'd1; // pps_loop_filter_across_tiles_enabled_flag
+          end else if (pps_after_tiles_index == 16'd1) begin
+            syntax_value = 32'd1; syntax_bits = 6'd1; // pps_rect_slice_flag
+          end else if (pps_after_tiles_index == 16'd2) begin
+            syntax_value = 32'd0; syntax_bits = 6'd1; // pps_single_slice_per_subpic_flag
+          end else if (pps_after_tiles_index == 16'd3) begin
+            syntax_value = ue_slice_count_minus1_value;
+            syntax_bits = ue_slice_count_minus1_bits;
+          end else if (pps_after_tiles_index == 16'd4) begin
+            syntax_value = 32'd0;
+            syntax_bits = ((slice_count - 16'd1) > 16'd1) ? 6'd1 : 6'd0;
+          end else if (pps_after_tiles_index < (16'd5 + pps_slice_geometry_field_count)) begin
+            syntax_value = 32'd1;
+            syntax_bits = 6'd1; // rectangular-slice geometry ue(0)
+          end else if (pps_after_tiles_index == (16'd5 + pps_slice_geometry_field_count)) begin
+            syntax_value = 32'd0; syntax_bits = 6'd1; // pps_loop_filter_across_slices_enabled_flag
+          end else begin
+            pps_post_index = pps_after_tiles_index - (16'd6 + pps_slice_geometry_field_count);
+            case (pps_post_index)
+              16'd0: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // pps_cabac_init_present_flag
+              16'd1: begin syntax_value = 32'd4; syntax_bits = 6'd5; end
+              16'd2: begin syntax_value = 32'd4; syntax_bits = 6'd5; end
+              16'd3: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
+              16'd4: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
+              16'd5: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
+              16'd6: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
+              16'd7: begin syntax_value = 32'd12; syntax_bits = 6'd7; end
+              16'd8: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
+              16'd9: begin syntax_value = 32'd1; syntax_bits = 6'd1; end
+              16'd10: begin syntax_value = 32'd1; syntax_bits = 6'd1; end
+              16'd11: begin syntax_value = 32'd1; syntax_bits = 6'd1; end
+              16'd12: begin syntax_value = 32'd1; syntax_bits = 6'd1; end
+              16'd13: begin syntax_value = 32'd3; syntax_bits = 6'd3; end
+              16'd14: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
+              16'd15: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
+              16'd16: begin syntax_value = 32'd1; syntax_bits = 6'd1; end
+              16'd17: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
+              16'd18: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
+              16'd19: begin syntax_value = 32'd5; syntax_bits = 6'd5; end
+              16'd20: begin syntax_value = 32'd11; syntax_bits = 6'd7; end
+              16'd21: begin syntax_value = 32'd5; syntax_bits = 6'd5; end
+              16'd22: begin syntax_value = 32'd11; syntax_bits = 6'd7; end
+              16'd23: begin syntax_value = 32'd5; syntax_bits = 6'd5; end
+              16'd24: begin syntax_value = 32'd11; syntax_bits = 6'd7; end
+              16'd25, 16'd26, 16'd27, 16'd28: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
+              16'd29: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
+              16'd30: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
+              16'd31: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
+              default: begin syntax_value = 32'd0; syntax_bits = 6'd0; end
+            endcase
+          end
+        end
+      end
     end
   end
 
@@ -349,7 +507,7 @@ module ff_vvc_annexb_header (
       state_q <= ST_IDLE;
       nal_is_pps_q <= 1'b0;
       byte_index_q <= 3'd0;
-      field_index_q <= 7'd0;
+      field_index_q <= 16'd0;
       rbsp_clear_q <= 1'b0;
       rbsp_last_seen_q <= 1'b0;
       done <= 1'b0;
@@ -357,7 +515,7 @@ module ff_vvc_annexb_header (
       state_q <= ST_IDLE;
       nal_is_pps_q <= 1'b0;
       byte_index_q <= 3'd0;
-      field_index_q <= 7'd0;
+      field_index_q <= 16'd0;
       rbsp_clear_q <= 1'b0;
       rbsp_last_seen_q <= 1'b0;
       done <= 1'b0;
@@ -375,7 +533,7 @@ module ff_vvc_annexb_header (
           if (start) begin
             nal_is_pps_q <= 1'b0;
             byte_index_q <= 3'd0;
-            field_index_q <= 7'd0;
+            field_index_q <= 16'd0;
             state_q <= ST_START_CODE;
           end
         end
@@ -396,7 +554,7 @@ module ff_vvc_annexb_header (
             if (byte_index_q == 3'd1) begin
               byte_index_q <= 3'd0;
               rbsp_clear_q <= 1'b1;
-              field_index_q <= 7'd0;
+              field_index_q <= 16'd0;
               rbsp_last_seen_q <= 1'b0;
               state_q <= ST_CLEAR_RBSP;
             end else begin
@@ -413,9 +571,9 @@ module ff_vvc_annexb_header (
           if (syntax_fields_done) begin
             state_q <= ST_TRAILING_STOP;
           end else if (syntax_bits == 6'd0) begin
-            field_index_q <= field_index_q + 7'd1;
+            field_index_q <= field_index_q + 16'd1;
           end else if (bit_writer_valid && bit_writer_ready) begin
-            field_index_q <= field_index_q + 7'd1;
+            field_index_q <= field_index_q + 16'd1;
           end
         end
 
@@ -449,7 +607,7 @@ module ff_vvc_annexb_header (
             end else begin
               nal_is_pps_q <= 1'b1;
               byte_index_q <= 3'd0;
-              field_index_q <= 7'd0;
+              field_index_q <= 16'd0;
               rbsp_last_seen_q <= 1'b0;
               state_q <= ST_START_CODE;
             end

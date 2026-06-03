@@ -39,6 +39,7 @@ module ff_vvc_encoder #(
   localparam int INPUT_COUNT_BITS = $clog2(MAX_FRAME_SAMPLES + 1);
   localparam int VVC_LUMA_TU_SIZE = 8;
   localparam int VVC_CHROMA_TU_SIZE = 4;
+  localparam logic [15:0] CTU_SIZE_L = CTU_SIZE;
   localparam int VVC_RESIDUAL_LUMA_SAMPLES = VVC_LUMA_TU_SIZE * VVC_LUMA_TU_SIZE;
   localparam int PALETTE_CU_SIZE = 8;
   localparam int MAX_CTU_PALETTE_SYMBOLS =
@@ -48,6 +49,7 @@ module ff_vvc_encoder #(
   localparam logic [2:0] GENERATED_OUT_PREAMBLE = 3'd1;
   localparam logic [2:0] GENERATED_OUT_CABAC    = 3'd2;
   localparam logic [2:0] GENERATED_OUT_SLICE_START = 3'd3;
+  localparam logic [2:0] GENERATED_OUT_PH = 3'd4;
   localparam logic [7:0] SYMBOL_PALETTE_LEAF = 8'hfe;
   localparam logic [1:0] PALETTE_MUX_PARTITION = 2'd0;
   localparam logic [1:0] PALETTE_MUX_CU = 2'd1;
@@ -140,6 +142,25 @@ module ff_vvc_encoder #(
   logic [7:0]  generated_header_byte_w;
   logic        generated_header_last_w;
   logic        generated_header_done_w;
+  logic        generated_ph_start_q;
+  logic        generated_ph_ready_w;
+  logic        generated_ph_valid_w;
+  logic [7:0]  generated_ph_byte_w;
+  logic        generated_ph_last_w;
+  logic        generated_ph_done_w;
+  logic [15:0] current_slice_q;
+  logic [15:0] ctu_cols_w;
+  logic [15:0] ctu_rows_w;
+  logic [15:0] ctu_count_w;
+  logic [15:0] current_ctu_x_w;
+  logic [15:0] current_ctu_y_w;
+  logic [15:0] current_ctu_origin_x_w;
+  logic [15:0] current_ctu_origin_y_w;
+  logic [15:0] ctu_visible_width_w;
+  logic [15:0] ctu_visible_height_w;
+  logic [5:0]  slice_address_bits_w;
+  logic        multi_ctu_picture_w;
+  logic        current_slice_last_w;
   logic        ctu_has_palette_cu;
   logic [1:0]  chroma_subsample_x_w;
   logic [1:0]  chroma_subsample_y_w;
@@ -205,6 +226,30 @@ module ff_vvc_encoder #(
   assign chroma_subsample_x_w = ((chroma_format_idc == 2'd1) || (chroma_format_idc == 2'd2)) ?
                                 2'd2 : 2'd1;
   assign chroma_subsample_y_w = (chroma_format_idc == 2'd1) ? 2'd2 : 2'd1;
+  assign ctu_cols_w = (visible_width + CTU_SIZE_L - 16'd1) / CTU_SIZE_L;
+  assign ctu_rows_w = (visible_height + CTU_SIZE_L - 16'd1) / CTU_SIZE_L;
+  assign ctu_count_w = ctu_cols_w * ctu_rows_w;
+  assign multi_ctu_picture_w = ctu_count_w > 16'd1;
+  assign current_ctu_x_w = (ctu_cols_w == 16'd0) ? 16'd0 : (current_slice_q % ctu_cols_w);
+  assign current_ctu_y_w = (ctu_cols_w == 16'd0) ? 16'd0 : (current_slice_q / ctu_cols_w);
+  assign current_ctu_origin_x_w = current_ctu_x_w * CTU_SIZE_L;
+  assign current_ctu_origin_y_w = current_ctu_y_w * CTU_SIZE_L;
+  assign ctu_visible_width_w =
+    (visible_width <= current_ctu_origin_x_w) ? 16'd1 :
+    (((visible_width - current_ctu_origin_x_w) > CTU_SIZE_L) ?
+      CTU_SIZE_L : (visible_width - current_ctu_origin_x_w));
+  assign ctu_visible_height_w =
+    (visible_height <= current_ctu_origin_y_w) ? 16'd1 :
+    (((visible_height - current_ctu_origin_y_w) > CTU_SIZE_L) ?
+      CTU_SIZE_L : (visible_height - current_ctu_origin_y_w));
+  assign current_slice_last_w = current_slice_q == (ctu_count_w - 16'd1);
+  assign slice_address_bits_w =
+    (ctu_count_w <= 16'd1) ? 6'd0 :
+    (ctu_count_w <= 16'd2) ? 6'd1 :
+    (ctu_count_w <= 16'd4) ? 6'd2 :
+    (ctu_count_w <= 16'd8) ? 6'd3 :
+    (ctu_count_w <= 16'd16) ? 6'd4 :
+    (ctu_count_w <= 16'd32) ? 6'd5 : 6'd6;
   assign luma_samples_w = visible_width * visible_height;
   assign chroma_plane_samples_w =
     (visible_width / chroma_subsample_x_w) * (visible_height / chroma_subsample_y_w);
@@ -284,21 +329,25 @@ module ff_vvc_encoder #(
     .CU_SIZE(PALETTE_CU_SIZE),
     .CU_COUNT(MAX_CTU_PALETTE_SYMBOLS)
   ) ctu_cu_activity_mask (
-    .visible_width(visible_width),
-    .visible_height(visible_height),
+    .visible_width(ctu_visible_width_w),
+    .visible_height(ctu_visible_height_w),
     .cu_active_mask(ctu_cu_active_mask)
   );
 
   ff_vvc_coding_tree_scheduler #(
     .CTU_SIZE(CTU_SIZE)
   ) coding_tree_scheduler (
-    .visible_width(visible_width),
-    .visible_height(visible_height),
+    .visible_width(ctu_visible_width_w),
+    .visible_height(ctu_visible_height_w),
     .coded_width(coding_tree_coded_width),
     .coded_height(coding_tree_coded_height)
   );
 
-  ff_vvc_annexb_header annexb_header (
+  ff_vvc_annexb_header #(
+    .MAX_VISIBLE_WIDTH(MAX_VISIBLE_WIDTH),
+    .MAX_VISIBLE_HEIGHT(MAX_VISIBLE_HEIGHT),
+    .CTU_SIZE(CTU_SIZE)
+  ) annexb_header (
     .clk(clk),
     .rst_n(rst_n),
     .clear(start && !busy),
@@ -325,6 +374,23 @@ module ff_vvc_encoder #(
 
   assign generated_header_ready_w =
     (generated_out_state_q == GENERATED_OUT_PREAMBLE) &&
+    (!m_axis_valid || m_axis_ready);
+
+  ff_vvc_annexb_picture_header_stream picture_header_stream (
+    .clk(clk),
+    .rst_n(rst_n),
+    .clear(start && !busy),
+    .start(generated_ph_start_q),
+    .poc_lsb(frame_index_q[15:0]),
+    .m_axis_ready(generated_ph_ready_w),
+    .m_axis_valid(generated_ph_valid_w),
+    .m_axis_data(generated_ph_byte_w),
+    .m_axis_last(generated_ph_last_w),
+    .done(generated_ph_done_w)
+  );
+
+  assign generated_ph_ready_w =
+    (generated_out_state_q == GENERATED_OUT_PH) &&
     (!m_axis_valid || m_axis_ready);
 
   always @* begin
@@ -384,8 +450,8 @@ module ff_vvc_encoder #(
     .start(cabac_start_q),
     .enable(cabac_enable),
     .mode_palette_444(ctu_has_palette_cu),
-    .visible_width(visible_width),
-    .visible_height(visible_height),
+    .visible_width(ctu_visible_width_w),
+    .visible_height(ctu_visible_height_w),
     .coded_width(coding_tree_coded_width),
     .coded_height(coding_tree_coded_height),
     .luma_rem(quant_luma_rem_q),
@@ -441,6 +507,10 @@ module ff_vvc_encoder #(
     .start(cabac_start_q),
     .nal_unit_type(generated_slice_cra_q ? VVC_NAL_UNIT_TYPE_CRA : VVC_NAL_UNIT_TYPE_IDR_W_RADL),
     .poc_lsb(frame_index_q[15:0]),
+    .include_picture_header(!multi_ctu_picture_w),
+    .multi_slice_picture(multi_ctu_picture_w),
+    .slice_address(current_slice_q),
+    .slice_address_bits(slice_address_bits_w),
     .sh_dep_quant_used_flag(vvc_tool_dep_quant_enabled),
     .sh_sign_data_hiding_used_flag(vvc_tool_sign_data_hiding_enabled),
     .s_axis_ready(slice_stream_ready),
@@ -505,8 +575,8 @@ module ff_vvc_encoder #(
     .rst_n(rst_n),
     .clear(frame_pipeline_clear_w),
     .start(cabac_start_q),
-    .visible_width(visible_width),
-    .visible_height(visible_height),
+    .visible_width(ctu_visible_width_w),
+    .visible_height(ctu_visible_height_w),
     .chroma_format_idc(chroma_format_idc),
     .luma_abs_level(quant_luma_rem_q),
     .luma_negative(quant_luma_rem_q != 5'd0),
@@ -558,6 +628,8 @@ module ff_vvc_encoder #(
       generated_out_state_q <= GENERATED_OUT_IDLE;
       generated_slice_cra_q <= 1'b0;
       generated_header_start_q <= 1'b0;
+      generated_ph_start_q <= 1'b0;
+      current_slice_q <= 16'd0;
       cabac_input_valid_q <= 1'b0;
       cabac_input_kind_q <= 8'd0;
       cabac_input_data_q <= 32'd0;
@@ -566,6 +638,7 @@ module ff_vvc_encoder #(
     end else begin
       cabac_start_q <= 1'b0;
       generated_header_start_q <= 1'b0;
+      generated_ph_start_q <= 1'b0;
       frame_clear_q <= 1'b0;
       if (m_axis_valid && m_axis_ready) begin
         m_axis_valid <= 1'b0;
@@ -592,6 +665,8 @@ module ff_vvc_encoder #(
         generated_out_state_q <= GENERATED_OUT_IDLE;
         generated_slice_cra_q <= 1'b0;
         generated_header_start_q <= 1'b0;
+        generated_ph_start_q <= 1'b0;
+        current_slice_q <= 16'd0;
         cabac_input_valid_q <= 1'b0;
         cabac_input_kind_q <= 8'd0;
         cabac_input_data_q <= 32'd0;
@@ -609,6 +684,7 @@ module ff_vvc_encoder #(
         quant_cb_rem_q <= 5'd16;
         quant_cr_rem_q <= 5'd16;
         quant_cb_negative_q <= 1'b1;
+        current_slice_q <= 16'd0;
         cabac_input_valid_q <= 1'b0;
         cabac_input_kind_q <= 8'd0;
         cabac_input_data_q <= 32'd0;
@@ -651,9 +727,13 @@ module ff_vvc_encoder #(
                    (generated_out_state_q == GENERATED_OUT_IDLE)) begin
         pending_output_q <= 1'b0;
         generated_slice_cra_q <= frame_index_q != 64'd0;
+        current_slice_q <= 16'd0;
         if (frame_index_q == 64'd0) begin
           generated_out_state_q <= GENERATED_OUT_PREAMBLE;
           generated_header_start_q <= 1'b1;
+        end else if (multi_ctu_picture_w) begin
+          generated_out_state_q <= GENERATED_OUT_PH;
+          generated_ph_start_q <= 1'b1;
         end else begin
           generated_out_state_q <= GENERATED_OUT_SLICE_START;
         end
@@ -696,14 +776,41 @@ module ff_vvc_encoder #(
               m_axis_data <= generated_header_byte_w;
               m_axis_last <= 1'b0;
               if (generated_header_last_w && generated_header_ready_w) begin
-                cabac_start_q <= 1'b1;
-                generated_out_state_q <= GENERATED_OUT_CABAC;
+                if (multi_ctu_picture_w) begin
+                  generated_ph_start_q <= 1'b1;
+                  generated_out_state_q <= GENERATED_OUT_PH;
+                end else begin
+                  cabac_start_q <= 1'b1;
+                  generated_out_state_q <= GENERATED_OUT_CABAC;
+                end
               end
             end else if (generated_header_done_w) begin
               m_axis_valid <= 1'b0;
               m_axis_last <= 1'b0;
-              cabac_start_q <= 1'b1;
-              generated_out_state_q <= GENERATED_OUT_CABAC;
+              if (multi_ctu_picture_w) begin
+                generated_ph_start_q <= 1'b1;
+                generated_out_state_q <= GENERATED_OUT_PH;
+              end else begin
+                cabac_start_q <= 1'b1;
+                generated_out_state_q <= GENERATED_OUT_CABAC;
+              end
+            end else begin
+              m_axis_valid <= 1'b0;
+              m_axis_last <= 1'b0;
+            end
+          end
+          GENERATED_OUT_PH: begin
+            if (generated_ph_valid_w) begin
+              m_axis_valid <= 1'b1;
+              m_axis_data <= generated_ph_byte_w;
+              m_axis_last <= 1'b0;
+              if (generated_ph_last_w && generated_ph_ready_w) begin
+                generated_out_state_q <= GENERATED_OUT_SLICE_START;
+              end
+            end else if (generated_ph_done_w) begin
+              m_axis_valid <= 1'b0;
+              m_axis_last <= 1'b0;
+              generated_out_state_q <= GENERATED_OUT_SLICE_START;
             end else begin
               m_axis_valid <= 1'b0;
               m_axis_last <= 1'b0;
@@ -720,16 +827,21 @@ module ff_vvc_encoder #(
             if (slice_stream_valid) begin
               m_axis_valid <= 1'b1;
               m_axis_data <= slice_stream_data;
-              m_axis_last <= slice_stream_last;
+              m_axis_last <= slice_stream_last && current_slice_last_w;
               if (slice_stream_last) begin
-                // VPS/SPS/PPS are emitted once. Each subsequent frame is read
-                // from the input stream and emitted as a fresh CRA slice. The
-                // POC LSB naturally wraps through frame_index_q[15:0], matching
-                // the 16-bit POC LSB width advertised in SPS.
-                generated_out_state_q <= GENERATED_OUT_IDLE;
-                frame_index_q <= frame_index_q + 64'd1;
-                frame_clear_q <= 1'b1;
-                resume_input_q <= 1'b1;
+                if (current_slice_last_w) begin
+                  // VPS/SPS/PPS are emitted once. Each subsequent frame is read
+                  // from the input stream and emitted as fresh CRA CTU slices.
+                  // The POC LSB naturally wraps through frame_index_q[15:0],
+                  // matching the 16-bit POC LSB width advertised in SPS.
+                  generated_out_state_q <= GENERATED_OUT_IDLE;
+                  frame_index_q <= frame_index_q + 64'd1;
+                  frame_clear_q <= 1'b1;
+                  resume_input_q <= 1'b1;
+                end else begin
+                  current_slice_q <= current_slice_q + 16'd1;
+                  generated_out_state_q <= GENERATED_OUT_SLICE_START;
+                end
               end
             end else begin
               m_axis_valid <= 1'b0;

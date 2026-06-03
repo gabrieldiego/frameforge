@@ -7,6 +7,10 @@ module ff_vvc_annexb_slice_stream (
   input  logic       start,
   input  logic [4:0] nal_unit_type,
   input  logic [15:0] poc_lsb,
+  input  logic       include_picture_header,
+  input  logic       multi_slice_picture,
+  input  logic [15:0] slice_address,
+  input  logic [5:0]  slice_address_bits,
   input  logic       sh_dep_quant_used_flag,
   input  logic       sh_sign_data_hiding_used_flag,
 
@@ -32,8 +36,9 @@ module ff_vvc_annexb_slice_stream (
   localparam logic [2:0] ST_PREFIX_DRAIN = 3'd6;
   localparam logic [2:0] ST_PAYLOAD_RBSP = 3'd7;
   localparam logic [4:0] NAL_UNIT_TYPE_CRA = 5'd9;
-  localparam logic [3:0] SLICE_PREFIX_FIELD_COUNT_IDR = 4'd14;
-  localparam logic [3:0] SLICE_PREFIX_FIELD_COUNT_CRA = 4'd15;
+  localparam logic [4:0] SLICE_PREFIX_FIELD_COUNT_IDR = 5'd14;
+  localparam logic [4:0] SLICE_PREFIX_FIELD_COUNT_CRA = 5'd15;
+  localparam logic [4:0] SLICE_PREFIX_FIELD_COUNT_NO_PH = 5'd8;
 
   logic [2:0] state_q;
   logic [2:0] byte_index_q;
@@ -47,8 +52,8 @@ module ff_vvc_annexb_slice_stream (
   logic       ep_m_ready;
   logic [7:0] ep_m_data;
   logic       ep_m_last;
-  logic [3:0] prefix_field_index_q;
-  logic [3:0] prefix_field_count;
+  logic [4:0] prefix_field_index_q;
+  logic [4:0] prefix_field_count;
   logic       prefix_fields_done;
   logic [31:0] prefix_syntax_value;
   logic [5:0]  prefix_syntax_bits;
@@ -64,7 +69,9 @@ module ff_vvc_annexb_slice_stream (
   logic        is_cra_nal;
 
   assign is_cra_nal = nal_unit_type == NAL_UNIT_TYPE_CRA;
-  assign prefix_field_count = is_cra_nal ? SLICE_PREFIX_FIELD_COUNT_CRA : SLICE_PREFIX_FIELD_COUNT_IDR;
+  assign prefix_field_count = include_picture_header ?
+    (is_cra_nal ? SLICE_PREFIX_FIELD_COUNT_CRA : SLICE_PREFIX_FIELD_COUNT_IDR) :
+    SLICE_PREFIX_FIELD_COUNT_NO_PH;
   assign prefix_fields_done = prefix_field_index_q >= prefix_field_count;
   assign ep_m_ready = (state_q == ST_PREFIX_FIELDS ||
                        state_q == ST_PREFIX_FLUSH ||
@@ -76,24 +83,38 @@ module ff_vvc_annexb_slice_stream (
   always @* begin
     prefix_syntax_value = 32'd0;
     prefix_syntax_bits = 6'd0;
-    case (prefix_field_index_q)
-      4'd0:  begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // sh_picture_header_in_slice_header_flag
-      4'd1:  begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // ph_gdr_or_irap_pic_flag
-      4'd2:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // ph_non_ref_pic_flag
-      4'd3:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // ph_gdr_pic_flag
-      4'd4:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // ph_inter_slice_allowed_flag
-      4'd5:  begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // ph_pic_parameter_set_id ue(0)
-      4'd6:  begin prefix_syntax_value = {16'd0, poc_lsb}; prefix_syntax_bits = 6'd16; end // ph_pic_order_cnt_lsb
-      4'd7:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // ph_partition_constraints_override_flag
-      4'd8:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // ph_joint_cbcr_sign_flag
-      4'd9:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // sh_no_output_of_prior_pics_flag
-      4'd10: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // sh_qp_delta se(0)
-      4'd11: begin prefix_syntax_value = {31'd0, sh_dep_quant_used_flag}; prefix_syntax_bits = sh_dep_quant_used_flag ? 6'd1 : 6'd0; end // sh_dep_quant_used_flag
-      4'd12: begin prefix_syntax_value = {31'd0, sh_sign_data_hiding_used_flag}; prefix_syntax_bits = (sh_sign_data_hiding_used_flag && !sh_dep_quant_used_flag) ? 6'd1 : 6'd0; end // sh_sign_data_hiding_used_flag
-      4'd13: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // cabac_alignment_one_bit
-      4'd14: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // CRA alignment bit matching current SW subset
-      default: begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd0; end
-    endcase
+    if (include_picture_header) begin
+      case (prefix_field_index_q)
+        5'd0:  begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // sh_picture_header_in_slice_header_flag
+        5'd1:  begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // ph_gdr_or_irap_pic_flag
+        5'd2:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // ph_non_ref_pic_flag
+        5'd3:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // ph_gdr_pic_flag
+        5'd4:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // ph_inter_slice_allowed_flag
+        5'd5:  begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // ph_pic_parameter_set_id ue(0)
+        5'd6:  begin prefix_syntax_value = {16'd0, poc_lsb}; prefix_syntax_bits = 6'd16; end // ph_pic_order_cnt_lsb
+        5'd7:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // ph_partition_constraints_override_flag
+        5'd8:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // ph_joint_cbcr_sign_flag
+        5'd9:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // sh_no_output_of_prior_pics_flag
+        5'd10: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // sh_qp_delta se(0)
+        5'd11: begin prefix_syntax_value = {31'd0, sh_dep_quant_used_flag}; prefix_syntax_bits = sh_dep_quant_used_flag ? 6'd1 : 6'd0; end // sh_dep_quant_used_flag
+        5'd12: begin prefix_syntax_value = {31'd0, sh_sign_data_hiding_used_flag}; prefix_syntax_bits = (sh_sign_data_hiding_used_flag && !sh_dep_quant_used_flag) ? 6'd1 : 6'd0; end // sh_sign_data_hiding_used_flag
+        5'd13: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // cabac_alignment_one_bit
+        5'd14: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // CRA alignment bit matching current SW subset
+        default: begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd0; end
+      endcase
+    end else begin
+      case (prefix_field_index_q)
+        5'd0: begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // sh_picture_header_in_slice_header_flag
+        5'd1: begin prefix_syntax_value = {16'd0, slice_address}; prefix_syntax_bits = multi_slice_picture ? slice_address_bits : 6'd0; end
+        5'd2: begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // sh_no_output_of_prior_pics_flag
+        5'd3: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // sh_qp_delta se(0)
+        5'd4: begin prefix_syntax_value = {31'd0, sh_dep_quant_used_flag}; prefix_syntax_bits = sh_dep_quant_used_flag ? 6'd1 : 6'd0; end
+        5'd5: begin prefix_syntax_value = {31'd0, sh_sign_data_hiding_used_flag}; prefix_syntax_bits = (sh_sign_data_hiding_used_flag && !sh_dep_quant_used_flag) ? 6'd1 : 6'd0; end
+        5'd6: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // cabac_alignment_one_bit before CABAC payload
+        5'd7: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = is_cra_nal ? 6'd1 : 6'd0; end // extra CRA cabac_alignment_one_bit
+        default: begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd0; end
+      endcase
+    end
   end
 
   always @* begin
@@ -173,7 +194,7 @@ module ff_vvc_annexb_slice_stream (
       byte_index_q <= 3'd0;
       ep_clear_q <= 1'b0;
       prefix_writer_clear_q <= 1'b0;
-      prefix_field_index_q <= 4'd0;
+      prefix_field_index_q <= 5'd0;
       m_axis_valid <= 1'b0;
       m_axis_data <= 8'd0;
       m_axis_last <= 1'b0;
@@ -183,7 +204,7 @@ module ff_vvc_annexb_slice_stream (
       byte_index_q <= 3'd0;
       ep_clear_q <= 1'b0;
       prefix_writer_clear_q <= 1'b0;
-      prefix_field_index_q <= 4'd0;
+      prefix_field_index_q <= 5'd0;
       m_axis_valid <= 1'b0;
       m_axis_data <= 8'd0;
       m_axis_last <= 1'b0;
@@ -204,7 +225,7 @@ module ff_vvc_annexb_slice_stream (
             if (start) begin
               ep_clear_q <= 1'b1;
               prefix_writer_clear_q <= 1'b1;
-              prefix_field_index_q <= 4'd0;
+              prefix_field_index_q <= 5'd0;
               state_q <= ST_START_CODE;
               byte_index_q <= 3'd0;
             end
@@ -230,7 +251,7 @@ module ff_vvc_annexb_slice_stream (
               m_axis_data <= {nal_unit_type, NAL_TEMPORAL_ID_PLUS1};
               byte_index_q <= 3'd0;
               prefix_writer_clear_q <= 1'b1;
-              prefix_field_index_q <= 4'd0;
+              prefix_field_index_q <= 5'd0;
               state_q <= ST_PREFIX_CLEAR;
             end
           end
@@ -250,9 +271,9 @@ module ff_vvc_annexb_slice_stream (
                 state_q <= ST_PREFIX_FLUSH;
               end
             end else if (prefix_syntax_bits == 6'd0) begin
-              prefix_field_index_q <= prefix_field_index_q + 4'd1;
+              prefix_field_index_q <= prefix_field_index_q + 5'd1;
             end else if (prefix_bit_valid && prefix_bit_ready) begin
-              prefix_field_index_q <= prefix_field_index_q + 4'd1;
+              prefix_field_index_q <= prefix_field_index_q + 5'd1;
             end
           end
 
