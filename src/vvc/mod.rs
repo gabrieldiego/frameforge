@@ -46,14 +46,15 @@ use palette::{
     vvc_palette_run_copy_context_id_for_audit, VvcPalettePredictorMode, VvcPaletteTreeType,
 };
 pub use residual::quantize_vvc_color;
+#[cfg(test)]
+use residual::VVC_LUMA_DC_BASE;
 use residual::{
     quantize_vvc_frame, reconstruct_vvc_residual_frame, VvcQuantizedColor, VvcResidualCabacOptions,
-    VVC_LUMA_DC_BASE,
+    MAX_VVC_LUMA_TUS, VVC_LUMA_AC_COEFFS_PER_TU,
 };
 #[cfg(test)]
 use residual::{
     VvcResidualCabacEncoder, VvcResidualComponent, VvcResidualCtxConfig, VvcResidualPass1State,
-    MAX_VVC_LUMA_TUS,
 };
 pub use syntax::{VvcSyntaxCode, VvcSyntaxField, VvcSyntaxRbsp, VvcSyntaxWriter};
 
@@ -90,6 +91,12 @@ pub struct VvcEncodeParams {
 pub struct VvcEncodeArtifacts {
     pub bitstream: Vec<u8>,
     pub reconstruction: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VvcEncodeProgress {
+    pub frame_idx: usize,
+    pub frame_count: usize,
 }
 
 /// Luma coded-picture dimensions are rounded to this granularity before SPS/PPS
@@ -572,11 +579,33 @@ pub fn vvc_yuv_encode_artifacts_from_input_with_limits(
 pub fn vvc_yuv_encode_stream_with_limits<R: Read, W: Write>(
     input: &mut R,
     bitstream: &mut W,
+    reconstruction: Option<&mut dyn Write>,
+    params: VvcEncodeParams,
+    geometry: VvcVideoGeometry,
+    limits: VvcVideoLimits,
+    format: PixelFormat,
+) -> Result<(), String> {
+    vvc_yuv_encode_stream_with_limits_and_progress(
+        input,
+        bitstream,
+        reconstruction,
+        params,
+        geometry,
+        limits,
+        format,
+        None,
+    )
+}
+
+pub fn vvc_yuv_encode_stream_with_limits_and_progress<R: Read, W: Write>(
+    input: &mut R,
+    bitstream: &mut W,
     mut reconstruction: Option<&mut dyn Write>,
     params: VvcEncodeParams,
     geometry: VvcVideoGeometry,
     limits: VvcVideoLimits,
     format: PixelFormat,
+    mut progress: Option<&mut dyn FnMut(VvcEncodeProgress)>,
 ) -> Result<(), String> {
     geometry.validate_against(limits)?;
     validate_vvc_frame_count(params)?;
@@ -600,6 +629,12 @@ pub fn vvc_yuv_encode_stream_with_limits<R: Read, W: Write>(
 
     let mut frame_buf = vec![0; frame_len];
     for frame_idx in 0..params.frames {
+        if let Some(progress) = progress.as_deref_mut() {
+            progress(VvcEncodeProgress {
+                frame_idx,
+                frame_count: params.frames,
+            });
+        }
         input.read_exact(&mut frame_buf).map_err(|err| {
             if err.kind() == ErrorKind::UnexpectedEof {
                 format!(
@@ -1168,30 +1203,12 @@ fn vvc_ctu_partition_params(
         return None;
     }
     let chroma_sampling = ChromaSampling::Cs420;
-    let half_ctu = VVC_CTU_SIZE / 2;
-    if coded.width <= half_ctu && coded.height <= half_ctu {
-        let chroma_tu_count = vvc_coding_tree_plan(geometry)
-            .iter()
-            .filter(|step| matches!(step, VvcCodingTreeStep::ChromaTransformUnit { .. }))
-            .count();
-        return Some(VvcCtuPartitionParams {
-            root_width: VVC_CTU_SIZE,
-            root_height: VVC_CTU_SIZE,
-            visible_width: coded.width,
-            visible_height: coded.height,
-            chroma_sampling,
-            chroma_tu_count,
-            luma_dc_abs_level: color.luma_rem,
-            luma_dc_negative: color.y < VVC_LUMA_DC_BASE as u8 && color.luma_rem != 0,
-            luma_ac_levels: color.luma_ac_levels,
-            cb_dc_abs_level: color.cb_rem,
-            cb_dc_negative: color.u < 128 && color.cb_rem != 0,
-        });
-    }
     let chroma_tu_count = vvc_coding_tree_plan(geometry)
         .iter()
         .filter(|step| matches!(step, VvcCodingTreeStep::ChromaTransformUnit { .. }))
         .count();
+    let (luma_tu_count, luma_tu_abs_levels, luma_tu_negative, luma_tu_ac_levels) =
+        vvc_luma_residual_arrays_for_geometry(coded, chroma_sampling, color);
     Some(VvcCtuPartitionParams {
         root_width: VVC_CTU_SIZE,
         root_height: VVC_CTU_SIZE,
@@ -1199,42 +1216,72 @@ fn vvc_ctu_partition_params(
         visible_height: coded.height,
         chroma_sampling,
         chroma_tu_count,
-        luma_dc_abs_level: color.luma_rem,
-        luma_dc_negative: color.y < VVC_LUMA_DC_BASE as u8 && color.luma_rem != 0,
-        luma_ac_levels: color.luma_ac_levels,
+        luma_tu_count,
+        luma_tu_abs_levels,
+        luma_tu_negative,
+        luma_tu_ac_levels,
         cb_dc_abs_level: color.cb_rem,
         cb_dc_negative: color.u < 128 && color.cb_rem != 0,
     })
 }
 
-fn vvc_anchor_luma_tu_size_from_partition(geometry: VvcVideoGeometry) -> VvcVideoGeometry {
+fn vvc_luma_residual_arrays_for_geometry(
+    coded: VvcCodedGeometry,
+    chroma_sampling: ChromaSampling,
+    color: VvcQuantizedColor,
+) -> (
+    usize,
+    [u8; MAX_VVC_LUMA_TUS],
+    [bool; MAX_VVC_LUMA_TUS],
+    [[i16; VVC_LUMA_AC_COEFFS_PER_TU]; MAX_VVC_LUMA_TUS],
+) {
+    let mut luma_tu_count = color.luma_tu_count;
+    let mut luma_tu_abs_levels = color.luma_tu_remainders;
+    let mut luma_tu_negative = color.luma_tu_negative;
+    let mut luma_tu_ac_levels = color.luma_tu_ac_levels;
+    if color.luma_tu_count > 1 {
+        return (
+            luma_tu_count,
+            luma_tu_abs_levels,
+            luma_tu_negative,
+            luma_tu_ac_levels,
+        );
+    }
+
+    let leaf_count = vvc_luma_leaf_count(coded, chroma_sampling);
+    luma_tu_count = leaf_count;
+    for idx in 0..leaf_count.min(MAX_VVC_LUMA_TUS) {
+        luma_tu_abs_levels[idx] = color.luma_tu_remainders[0];
+        luma_tu_negative[idx] = color.luma_tu_negative[0];
+        luma_tu_ac_levels[idx] = color.luma_tu_ac_levels[0];
+    }
+    (
+        luma_tu_count,
+        luma_tu_abs_levels,
+        luma_tu_negative,
+        luma_tu_ac_levels,
+    )
+}
+
+fn vvc_luma_leaf_count(coded: VvcCodedGeometry, chroma_sampling: ChromaSampling) -> usize {
     let params = VvcCtuPartitionParams {
         root_width: VVC_CTU_SIZE,
         root_height: VVC_CTU_SIZE,
-        visible_width: geometry.coded_width(),
-        visible_height: geometry.coded_height(),
-        chroma_sampling: ChromaSampling::Cs420,
+        visible_width: coded.width,
+        visible_height: coded.height,
+        chroma_sampling,
         chroma_tu_count: 0,
-        luma_dc_abs_level: 0,
-        luma_dc_negative: false,
-        luma_ac_levels: [0; 15],
+        luma_tu_count: 0,
+        luma_tu_abs_levels: [0; MAX_VVC_LUMA_TUS],
+        luma_tu_negative: [false; MAX_VVC_LUMA_TUS],
+        luma_tu_ac_levels: [[0; VVC_LUMA_AC_COEFFS_PER_TU]; MAX_VVC_LUMA_TUS],
         cb_dc_abs_level: 0,
         cb_dc_negative: false,
     };
-
     VvcCtuCabacOp::yuv420_ctu_partition(params)
         .into_iter()
-        .find_map(|op| match op {
-            VvcCtuCabacOp::LumaLeafWithSplitCtx { node, .. } => Some(VvcVideoGeometry {
-                width: usize::from(node.width),
-                height: usize::from(node.height),
-            }),
-            _ => None,
-        })
-        .unwrap_or(VvcVideoGeometry {
-            width: VVC_CURRENT_MAX_LUMA_LEAF_SIZE as usize,
-            height: VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT as usize,
-        })
+        .filter(|op| matches!(op, VvcCtuCabacOp::LumaLeafWithSplitCtx { .. }))
+        .count()
 }
 
 fn vvc_ctu_partition_cabac_bits(
@@ -1305,11 +1352,11 @@ fn vvc_cabac_vector_dump_json(
     json.push_str(",\"format\":\"yuv420p8\"");
     json.push_str(&format!(
         ",\"luma_dc_abs_level\":{}",
-        params.luma_dc_abs_level
+        params.luma_tu_abs_levels[0]
     ));
     json.push_str(&format!(
         ",\"luma_dc_negative\":{}",
-        if params.luma_dc_negative {
+        if params.luma_tu_negative[0] {
             "true"
         } else {
             "false"

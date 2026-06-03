@@ -9,7 +9,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - VVC Annex-B NAL header listing for comparing FrameForge output against VTM output.
 - Generated VVC frame sequences assembled from internally generated SPS/PPS headers, picture headers, and picture slice NAL units. The current software input path accepts planar YUV 4:2:0, 4:2:2, and 4:4:4 at 8, 10, 12, or 16 bits and can emit larger pictures as a stream of 64x64 CTU-local slices. Samples are reduced to the current 8-bit coding subsets before bitstream generation.
 - VTM-backed decode validation for the current subset. Software and RTL bitstreams must match. Software internal reconstruction, RTL internal reconstruction, and VTM reconstruction must match whenever external decode is wired for the selected path.
-- Current non-4:4:4 path: internally generated 4:2:0 CTU/CU syntax, CABAC-coded slice entropy, and a DC-only residual transform path. AC coefficient plumbing exists, but the forward transform currently emits zero AC coefficients.
+- Current non-4:4:4 path: internally generated 4:2:0 CTU/CU syntax, CABAC-coded slice entropy, fixed quantization, local reconstruction, and coefficient-coded luma residuals. AC coding is currently limited to the first 4x4 coefficient group.
 - Current 4:4:4 path: experimental palette coding with 8x8 palette CUs. This path is lossless only when each 8x8 CU has at most 31 unique YCbCr colors. Palette escape coding is not implemented.
 - External VTM reference-encode helper that can generate a real small-geometry YUV VVC stream for validation.
 - Basic encoder trait boundary for adding more codec implementations.
@@ -46,13 +46,13 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - No rate control.
 - No real RDO.
 - Screen-content coding remains narrow: only the current experimental 4:4:4 palette subset is present.
-- Residual path remains DC-only for now.
+- Residual path currently supports coefficient-coded luma residuals with AC limited to the first 4x4 coefficient group.
 - Decoder validation target: generated bitstreams for the current subset should decode with external tools such as VTM.
 
 ## Planned Next
 
 - Continue auditing clean-room VVC parameter set, slice, CTU/CU, residual, and palette syntax against the standard as new syntax elements are enabled.
-- Expand the residual transform path beyond DC-only coding and feed nonzero AC coefficients through the existing CABAC syntax stream.
+- Expand residual coding beyond the first 4x4 coefficient group, including scan-position suffixes and subblock-coded flags for larger transform blocks.
 - Add independent decoded chroma residual support beyond the current limited non-4:4:4 path.
 - Keep software, RTL, and external-decoder reconstructions identical as more color and residual cases are added.
 - Carry profile or operating-point constraints separately from the generic sample bit-depth plumbing once real VVC profile handling is added.
@@ -68,7 +68,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - Full VVC decoder implementation.
 - Imported VTM or VVdeC source code.
 - CABAC completeness beyond syntax elements currently audited and emitted.
-- Full transform/quantization, loop filters, inter prediction, B-frames, rate control, or production RDO.
+- Complete transform/quantization, loop filters, inter prediction, B-frames, rate control, or production RDO.
 - Complete SCC tools such as palette escape coding, intra block copy, BDPCM, and transform skip.
 - FPGA vendor integration or proprietary EDA requirements.
 

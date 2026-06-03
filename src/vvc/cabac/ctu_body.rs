@@ -5,10 +5,10 @@ use super::ctu_split::{
 use super::{VvcCabacContext, VvcCabacContexts, VvcCabacEncoder};
 use crate::vvc::residual::{VvcResidualCabacEncoder, VvcResidualCabacSymbolStream};
 use crate::vvc::{
-    VvcSliceSyntaxConfig, VVC_CURRENT_MAX_CHROMA_420_BT_SIZE,
+    VvcSliceSyntaxConfig, MAX_VVC_LUMA_TUS, VVC_CURRENT_MAX_CHROMA_420_BT_SIZE,
     VVC_CURRENT_MAX_CHROMA_420_MTT_DEPTH_WITH_BOUNDARY, VVC_CURRENT_MAX_CHROMA_420_TB_SIZE,
     VVC_CURRENT_MAX_CHROMA_420_TT_SIZE, VVC_CURRENT_MAX_LUMA_MTT_DEPTH,
-    VVC_CURRENT_MIN_CHROMA_420_QT_SIZE,
+    VVC_CURRENT_MIN_CHROMA_420_QT_SIZE, VVC_LUMA_AC_COEFFS_PER_TU,
 };
 
 pub(in crate::vvc) fn encode_ctu_partition_body(
@@ -17,9 +17,10 @@ pub(in crate::vvc) fn encode_ctu_partition_body(
     slice_config: VvcSliceSyntaxConfig,
 ) {
     let mut ctu = VvcCtuCabacGenerator::new(
-        params.luma_dc_abs_level,
-        params.luma_dc_negative,
-        params.luma_ac_levels,
+        params.luma_tu_count,
+        params.luma_tu_abs_levels,
+        params.luma_tu_negative,
+        params.luma_tu_ac_levels,
         params.cb_dc_abs_level,
         params.cb_dc_negative,
         slice_config,
@@ -32,9 +33,11 @@ pub(in crate::vvc) fn encode_ctu_partition_body(
 #[derive(Debug, Clone)]
 pub(in crate::vvc) struct VvcCtuCabacGenerator {
     contexts: VvcCabacContexts,
-    luma_dc_abs_level: u8,
-    luma_dc_negative: bool,
-    luma_ac_levels: [i16; 15],
+    luma_tu_count: usize,
+    luma_tu_abs_levels: [u8; MAX_VVC_LUMA_TUS],
+    luma_tu_negative: [bool; MAX_VVC_LUMA_TUS],
+    luma_tu_ac_levels: [[i16; VVC_LUMA_AC_COEFFS_PER_TU]; MAX_VVC_LUMA_TUS],
+    luma_tu_index: usize,
     cb_dc_abs_level: u8,
     cb_dc_negative: bool,
     slice_config: VvcSliceSyntaxConfig,
@@ -42,18 +45,21 @@ pub(in crate::vvc) struct VvcCtuCabacGenerator {
 
 impl VvcCtuCabacGenerator {
     pub(in crate::vvc) fn new(
-        luma_dc_abs_level: u8,
-        luma_dc_negative: bool,
-        luma_ac_levels: [i16; 15],
+        luma_tu_count: usize,
+        luma_tu_abs_levels: [u8; MAX_VVC_LUMA_TUS],
+        luma_tu_negative: [bool; MAX_VVC_LUMA_TUS],
+        luma_tu_ac_levels: [[i16; VVC_LUMA_AC_COEFFS_PER_TU]; MAX_VVC_LUMA_TUS],
         cb_dc_abs_level: u8,
         cb_dc_negative: bool,
         slice_config: VvcSliceSyntaxConfig,
     ) -> Self {
         Self {
             contexts: VvcCabacContexts::new(),
-            luma_dc_abs_level,
-            luma_dc_negative,
-            luma_ac_levels,
+            luma_tu_count,
+            luma_tu_abs_levels,
+            luma_tu_negative,
+            luma_tu_ac_levels,
+            luma_tu_index: 0,
             cb_dc_abs_level,
             cb_dc_negative,
             slice_config,
@@ -189,13 +195,16 @@ impl VvcCtuCabacGenerator {
         node: VvcCodingTreeNode,
     ) {
         debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeLuma);
-        // VVC 7.3.11.5 intra_luma_pred_modes. The current generated subset
-        // uses the explicit remaining-mode branch so the following residual
-        // syntax matches the decoder parser for the supported intra picture setup.
-        // Future work should derive the selected mode from prediction costs.
+        // VVC 7.3.11.5 intra_luma_pred_modes. Select MPM index 1, which is
+        // DC_IDX for the current all-intra non-angular neighbourhoods (see
+        // VTM PU::getIntraMPMs). This keeps software reconstruction tied to a
+        // simple, explicit prediction mode instead of an arbitrary remaining
+        // mode.
         self.contexts
-            .encode(cabac, VvcCabacContext::IntraLumaMpmFlag, false);
-        cabac.encode_bins_ep(0b011010, 6);
+            .encode(cabac, VvcCabacContext::IntraLumaMpmFlag, true);
+        self.contexts
+            .encode(cabac, VvcCabacContext::IntraLumaPlanarFlag(1), true);
+        cabac.encode_bin_ep(false);
     }
 
     fn emit_luma_multi_ref_line(&mut self, cabac: &mut VvcCabacEncoder, node: VvcCodingTreeNode) {
@@ -218,12 +227,17 @@ impl VvcCtuCabacGenerator {
     }
 
     fn emit_luma_residual(&mut self, cabac: &mut VvcCabacEncoder, node: VvcCodingTreeNode) {
-        // The current residual subset anchors the input-derived coefficients in
-        // the first luma CU. Later CUs are reconstructed from intra prediction
-        // until the software model grows a full per-CU prediction/residual loop.
-        let anchor_cu = node.x == 0 && node.y == 0;
-        let has_ac = self.luma_ac_levels.iter().any(|level| *level != 0);
-        let cbf = anchor_cu && (self.luma_dc_abs_level != 0 || has_ac);
+        let tu_idx = self.luma_tu_index;
+        self.luma_tu_index += 1;
+        assert!(
+            tu_idx < self.luma_tu_count,
+            "missing luma TU coefficient data for coding-tree leaf {tu_idx}"
+        );
+        let dc_abs_level = self.luma_tu_abs_levels[tu_idx];
+        let dc_negative = self.luma_tu_negative[tu_idx];
+        let ac_levels = self.luma_tu_ac_levels[tu_idx];
+        let has_ac = ac_levels.iter().any(|level| *level != 0);
+        let cbf = dc_abs_level != 0 || has_ac;
         self.emit_luma_cbf(cabac, node, cbf);
         if !cbf {
             return;
@@ -234,18 +248,18 @@ impl VvcCtuCabacGenerator {
         let width = usize::from(node.width);
         let height = usize::from(node.height);
         let mut coeff_levels = vec![0; width * height];
-        coeff_levels[0] = if self.luma_dc_abs_level == 0 {
+        coeff_levels[0] = if dc_abs_level == 0 {
             0
-        } else if self.luma_dc_negative {
-            -(self.luma_dc_abs_level as i16)
+        } else if dc_negative {
+            -(dc_abs_level as i16)
         } else {
-            self.luma_dc_abs_level as i16
+            dc_abs_level as i16
         };
         // The current transform side exposes the first 4x4 AC positions. Keep
         // them wired through the normal residual coefficient path even when
         // they are all zero; future transform work should only change the
         // coefficient values, not reselect a different CABAC writer.
-        for (ac_idx, level) in self.luma_ac_levels.iter().enumerate() {
+        for (ac_idx, level) in ac_levels.iter().enumerate() {
             let local = ac_idx + 1;
             let x = local % 4;
             let y = local / 4;

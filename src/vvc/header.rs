@@ -500,13 +500,7 @@ pub(in crate::vvc) fn vvc_pps_rbsp(geometry: VvcVideoGeometry) -> VvcSyntaxRbsp 
     writer.write_flag("pps_cu_chroma_qp_offset_list_enabled_flag", false);
     writer.write_flag("pps_deblocking_filter_control_present_flag", true);
     writer.write_flag("pps_deblocking_filter_override_enabled_flag", false);
-    writer.write_flag("pps_deblocking_filter_disabled_flag", false);
-    writer.write_se("pps_beta_offset_div2", -2);
-    writer.write_se("pps_tc_offset_div2", -5);
-    writer.write_se("pps_cb_beta_offset_div2", -2);
-    writer.write_se("pps_cb_tc_offset_div2", -5);
-    writer.write_se("pps_cr_beta_offset_div2", -2);
-    writer.write_se("pps_cr_tc_offset_div2", -5);
+    writer.write_flag("pps_deblocking_filter_disabled_flag", true);
     if has_multiple_ctus {
         // H.266 picture_parameter_set_rbsp(): when picture partitioning is
         // present, these flags declare whether later syntax is carried in the

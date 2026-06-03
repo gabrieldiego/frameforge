@@ -6,59 +6,16 @@ fn vvc_test_slice_config() -> VvcSliceSyntaxConfig {
     VvcSliceSyntaxConfig::yuv420_residual()
 }
 
-fn vvc_transform_block(dc_coeff: i16) -> VvcTransformBlock {
-    VvcTransformBlock {
-        dc_coeff,
-        ac_coeffs: [0; 15],
+fn vvc_luma_coefficients(width: usize, height: usize, entries: &[(usize, i16)]) -> Vec<i16> {
+    let mut coeffs = vec![0; width * height];
+    for (index, level) in entries {
+        coeffs[*index] = *level;
     }
-}
-
-fn vvc_luma_8x8_transform_block(samples: [u8; 64]) -> VvcTransformBlock {
-    let transform = transform_vvc_tu(VvcTransformComponent::Luma, 8, 8, &samples);
-    vvc_transform_block(transform.dc_coeff)
-}
-
-fn vvc_solid_luma_8x8_transform_block(sample: u8) -> VvcTransformBlock {
-    vvc_luma_8x8_transform_block([sample; 64])
-}
-
-fn vvc_quantized_block(
-    reconstructed_dc_coeff: i16,
-    abs_remainder: u8,
-) -> VvcQuantizedTransformBlock {
-    VvcQuantizedTransformBlock {
-        reconstructed_dc_coeff,
-        reconstructed_ac_coeffs: [0; 15],
-        abs_remainder,
-        ac_tokens: [0x40; 15],
-    }
-}
-
-fn vvc_quantized_color_with_chroma(
-    y: u8,
-    luma_rem: u8,
-    chroma: u8,
-    chroma_residual: u8,
-) -> VvcQuantizedColor {
-    VvcQuantizedColor {
-        y,
-        u: chroma,
-        v: chroma,
-        luma_rem,
-        luma_ac_levels: [0; 15],
-        luma_ac_tokens: [0x40; 15],
-        second_luma_rem: luma_rem,
-        second_luma_ac_tokens: [0x40; 15],
-        luma_tu_remainders: [luma_rem; MAX_VVC_LUMA_TUS],
-        luma_tu_ac0_tokens: [0x40; MAX_VVC_LUMA_TUS],
-        luma_tu_count: 1,
-        cb_rem: chroma_residual,
-        cr_rem: chroma_residual,
-    }
+    coeffs
 }
 
 #[test]
-fn vvc_solid_luma_8x8_transform_generates_dc_only() {
+fn vvc_solid_luma_8x8_transform_has_zero_ac() {
     for (sample, dc_coeff) in [(0, -114), (64, -50), (114, 0)] {
         assert_eq!(
             transform_vvc_tu(VvcTransformComponent::Luma, 8, 8, &[sample; 64]),
@@ -77,116 +34,92 @@ fn vvc_solid_luma_8x8_transform_generates_dc_only() {
 fn vvc_luma_8x8_transform_dc_uses_all_samples() {
     let mut samples = [64; 64];
     samples[3] = 255;
-    assert_eq!(
-        transform_vvc_tu(VvcTransformComponent::Luma, 8, 8, &samples),
-        VvcTuTransformBlock {
-            component: VvcTransformComponent::Luma,
-            width: 8,
-            height: 8,
-            dc_coeff: -47,
-            ac_coeffs: vec![0; 63],
-        }
-    );
+    let transform = transform_vvc_tu(VvcTransformComponent::Luma, 8, 8, &samples);
+    assert_eq!(transform.dc_coeff, -47);
+    assert_eq!(transform.ac_coeffs[2], 188);
+    assert!(transform
+        .ac_coeffs
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| *idx != 2)
+        .all(|(_, coeff)| *coeff == -3));
 }
 
 #[test]
-fn vvc_dc_transform_accepts_8x8_luma_and_4x4_chroma_tus() {
+fn vvc_transform_accepts_8x8_luma_and_4x4_chroma_tus() {
     let mut luma = vec![32; 8 * 8];
     luma[7] = 255;
-    assert_eq!(
-        transform_vvc_tu(VvcTransformComponent::Luma, 8, 8, &luma),
-        VvcTuTransformBlock {
-            component: VvcTransformComponent::Luma,
-            width: 8,
-            height: 8,
-            dc_coeff: -79,
-            ac_coeffs: vec![0; 63],
-        }
-    );
+    let luma_transform = transform_vvc_tu(VvcTransformComponent::Luma, 8, 8, &luma);
+    assert_eq!(luma_transform.dc_coeff, -79);
+    assert_eq!(luma_transform.ac_coeffs[6], 220);
 
     let mut cb = vec![128; 4 * 4];
     cb[5] = 0;
-    assert_eq!(
-        transform_vvc_tu(VvcTransformComponent::ChromaCb, 4, 4, &cb),
-        VvcTuTransformBlock {
-            component: VvcTransformComponent::ChromaCb,
-            width: 4,
-            height: 4,
-            dc_coeff: -8,
-            ac_coeffs: vec![0; 15],
-        }
-    );
+    let cb_transform = transform_vvc_tu(VvcTransformComponent::ChromaCb, 4, 4, &cb);
+    assert_eq!(cb_transform.dc_coeff, -8);
+    assert_eq!(cb_transform.ac_coeffs[4], -120);
 }
 
 #[test]
-fn vvc_luma_dc_quantization_matches_existing_ladder() {
-    let black = quantize_vvc_luma_dc(vvc_solid_luma_8x8_transform_block(0));
-    assert_eq!(black, vvc_quantized_block(-114, 16));
-
-    let mid = quantize_vvc_luma_dc(vvc_solid_luma_8x8_transform_block(65));
-    assert_eq!(mid, vvc_quantized_block(-50, 7));
-
-    let white = quantize_vvc_luma_dc(vvc_solid_luma_8x8_transform_block(255));
-    assert_eq!(white, vvc_quantized_block(0, 0));
-}
-
-#[test]
-fn vvc_inverse_transform_reconstructs_solid_luma_block() {
-    let quantized = vvc_quantized_block(-50, 7);
-    assert_eq!(
-        inverse_transform_vvc_luma_dc(quantized),
-        VvcReconstructedLumaBlock { samples: [64; 16] }
-    );
+fn vvc_luma_residual_quantization_reconstructs_solid_residual() {
+    let residuals = vec![-64; 8 * 8];
+    let quantized = quantize_vvc_luma_residual_greedy(&residuals, 8, 8);
+    assert!(quantized.reconstructed_dc_coeff < 0);
+    assert!(quantized
+        .reconstructed_ac_coeffs
+        .iter()
+        .all(|level| *level == 0));
+    let mut levels = vec![0; 8 * 8];
+    levels[0] = quantized.reconstructed_dc_coeff;
+    let reconstructed = inverse_transform_vvc_luma_residual_levels(8, 8, &levels);
+    let max_error = reconstructed
+        .iter()
+        .zip(residuals)
+        .map(|(a, b)| (*a - b).abs())
+        .max()
+        .unwrap();
+    assert!(max_error <= 2);
 }
 
 #[test]
 fn vvc_color_quantization_uses_inverse_transform_reconstruction() {
-    assert_eq!(
-        quantize_vvc_color(VvcSampledColor { y: 65, u: 9, v: 7 }),
-        vvc_quantized_color_with_chroma(64, 7, 8, 15)
-    );
+    let color = quantize_vvc_color(VvcSampledColor { y: 65, u: 9, v: 7 });
+    assert_eq!(color.u, 8);
+    assert_eq!(color.v, 8);
+    assert_eq!(color.cb_rem, 15);
+    assert_eq!(color.cr_rem, 15);
+    assert_eq!(color.luma_tu_count, 1);
+    assert!(color.luma_tu_negative[0]);
+    assert!(color.y.abs_diff(65) <= 2);
 }
 
 #[test]
-fn vvc_frame_quantization_uses_anchor_tu_samples_for_dc() {
+fn vvc_frame_quantization_uses_leaf_samples_for_coefficients() {
     let mut luma = [0; 64];
     luma[3] = 255;
-    let ac_tokens = [0x40; 15];
-    assert_eq!(
-        quantize_vvc_frame(VvcSampledFrame {
-            geometry: VvcVideoGeometry {
-                width: 8,
-                height: 8,
-            },
-            format: VvcPictureFormat {
-                chroma_sampling: ChromaSampling::Cs420,
-                bit_depth: SampleBitDepth::Eight,
-            },
-            luma: luma.to_vec(),
-            cb: vec![9; 16],
-            cr: vec![7; 16],
-            chroma_len: 16,
-        }),
-        VvcQuantizedColor {
-            y: 7,
-            u: 8,
-            v: 8,
-            luma_rem: 15,
-            luma_ac_levels: [0; 15],
-            luma_ac_tokens: ac_tokens,
-            second_luma_rem: 15,
-            second_luma_ac_tokens: ac_tokens,
-            luma_tu_remainders: [15; MAX_VVC_LUMA_TUS],
-            luma_tu_ac0_tokens: [0x40; MAX_VVC_LUMA_TUS],
-            luma_tu_count: 1,
-            cb_rem: 15,
-            cr_rem: 15,
-        }
-    );
+    let color = quantize_vvc_frame(VvcSampledFrame {
+        geometry: VvcVideoGeometry {
+            width: 8,
+            height: 8,
+        },
+        format: VvcPictureFormat {
+            chroma_sampling: ChromaSampling::Cs420,
+            bit_depth: SampleBitDepth::Eight,
+        },
+        luma: luma.to_vec(),
+        cb: vec![9; 16],
+        cr: vec![7; 16],
+        chroma_len: 16,
+    });
+    assert_eq!(color.luma_tu_count, 1);
+    assert!(color.luma_tu_remainders[0] > 0);
+    assert!(color.luma_tu_ac_levels[0].iter().any(|level| *level != 0));
+    assert_eq!(color.cb_rem, 15);
+    assert_eq!(color.cr_rem, 15);
 }
 
 #[test]
-fn vvc_frame_quantization_builds_anchor_luma_tu_metadata() {
+fn vvc_frame_quantization_builds_per_leaf_luma_tu_metadata() {
     let frame = VvcSampledFrame {
         geometry: VvcVideoGeometry {
             width: 64,
@@ -202,43 +135,9 @@ fn vvc_frame_quantization_builds_anchor_luma_tu_metadata() {
         chroma_len: 32 * 32,
     };
     let color = quantize_vvc_frame(frame);
-    assert_eq!(color.luma_tu_count, 1);
-    assert_eq!(color.luma_tu_remainders[0], 7);
-    assert_eq!(color.luma_tu_ac0_tokens[0], 0x40);
-}
-
-#[test]
-fn vvc_anchor_luma_tu_size_follows_generated_partition_leaf() {
-    assert_eq!(
-        vvc_anchor_luma_tu_size(VvcVideoGeometry {
-            width: 16,
-            height: 8,
-        }),
-        VvcVideoGeometry {
-            width: 8,
-            height: 8,
-        }
-    );
-    assert_eq!(
-        vvc_anchor_luma_tu_size(VvcVideoGeometry {
-            width: 8,
-            height: 16,
-        }),
-        VvcVideoGeometry {
-            width: 8,
-            height: 8,
-        }
-    );
-    assert_eq!(
-        vvc_anchor_luma_tu_size(VvcVideoGeometry {
-            width: 24,
-            height: 16,
-        }),
-        VvcVideoGeometry {
-            width: 8,
-            height: 8,
-        }
-    );
+    assert_eq!(color.luma_tu_count, 64);
+    assert!(color.luma_tu_remainders[0] > 0);
+    assert_eq!(color.luma_tu_ac_levels[0], [0; VVC_LUMA_AC_COEFFS_PER_TU]);
 }
 
 #[test]
@@ -251,34 +150,9 @@ fn vvc_chroma_quantization_keeps_black_neutral_and_nonzero_colored() {
 }
 
 #[test]
-fn vvc_inverse_transform_reconstructs_quantized_ac_coefficients() {
-    let mut block = vvc_quantized_block(-36, 5);
-    block.reconstructed_ac_coeffs[2] = 128;
-    block.ac_tokens[2] = 0x48;
-    assert_eq!(inverse_transform_vvc_luma_dc(block).samples[3], 206);
-}
-
-#[test]
-fn vvc_residual_cabac_encoder_context_codes_transform_skip_signs() {
-    let mut config = VvcResidualCtxConfig::luma_4x4_subset(3, 3);
-    config.transform_skip = true;
-    config.ts_residual_coding_disabled = false;
-    let state = VvcResidualPass1State::new(config);
-
-    let mut contexts = VvcCabacContexts::new();
-    let initial_sign0 = contexts.coeff_sign_flag[0].state();
-    let mut cabac = VvcCabacEncoder::new();
-    cabac.start();
-    let mut residual =
-        VvcResidualCabacEncoder::new(&mut contexts, vvc_test_slice_config().residual_options());
-    residual.emit_coeff_sign_flag(&mut cabac, &state, 0, 0, true);
-
-    assert_ne!(contexts.coeff_sign_flag[0].state(), initial_sign0);
-}
-
-#[test]
-fn vvc_residual_symbol_stream_names_dc_only_luma_subset() {
-    let stream = VvcResidualCabacSymbolStream::luma_dc_only(3, 3, 3, true);
+fn vvc_residual_symbol_stream_names_single_nonzero_luma_coeff_subset() {
+    let coeffs = vvc_luma_coefficients(8, 8, &[(0, -3)]);
+    let stream = VvcResidualCabacSymbolStream::luma_coefficients(3, 3, &coeffs);
     assert_eq!(stream.config.last_significant_x, 0);
     assert_eq!(stream.config.last_significant_y, 0);
     assert_eq!(
@@ -309,15 +183,12 @@ fn vvc_residual_symbol_stream_names_dc_only_luma_subset() {
                 gtx_idx: 1,
                 greater_than: false
             },
-            VvcResidualCabacSymbol::CoeffSignFlag {
-                x: 0,
-                y: 0,
-                negative: true
-            },
+            VvcResidualCabacSymbol::CoeffSignPattern { bits: 1, count: 1 },
         ]
     );
 
-    let zero = VvcResidualCabacSymbolStream::luma_dc_only(3, 3, 0, false);
+    let zero_coeffs = vvc_luma_coefficients(8, 8, &[]);
+    let zero = VvcResidualCabacSymbolStream::luma_coefficients(3, 3, &zero_coeffs);
     assert_eq!(zero.symbols.len(), 2);
     assert_eq!(
         zero.symbols.last(),
@@ -329,8 +200,9 @@ fn vvc_residual_symbol_stream_names_dc_only_luma_subset() {
 }
 
 #[test]
-fn vvc_residual_symbol_stream_scales_dc_only_luma_tb_size() {
-    let stream = VvcResidualCabacSymbolStream::luma_dc_only(5, 4, 1, false);
+fn vvc_residual_symbol_stream_scales_luma_tb_size() {
+    let coeffs = vvc_luma_coefficients(32, 16, &[(0, 1)]);
+    let stream = VvcResidualCabacSymbolStream::luma_coefficients(5, 4, &coeffs);
     assert_eq!(stream.config.log2_zo_tb_width, 5);
     assert_eq!(stream.config.log2_zo_tb_height, 4);
     assert_eq!(
@@ -350,18 +222,15 @@ fn vvc_residual_symbol_stream_scales_dc_only_luma_tb_size() {
                 gtx_idx: 0,
                 greater_than: false
             },
-            VvcResidualCabacSymbol::CoeffSignFlag {
-                x: 0,
-                y: 0,
-                negative: false
-            }
+            VvcResidualCabacSymbol::CoeffSignPattern { bits: 0, count: 1 }
         ]
     );
 }
 
 #[test]
-fn vvc_residual_symbol_stream_maps_large_dc_abs_remainder_by_spec_order() {
-    let stream = VvcResidualCabacSymbolStream::luma_dc_only(3, 3, 16, true);
+fn vvc_residual_symbol_stream_maps_large_abs_remainder_by_spec_order() {
+    let coeffs = vvc_luma_coefficients(8, 8, &[(0, -16)]);
+    let stream = VvcResidualCabacSymbolStream::luma_coefficients(3, 3, &coeffs);
     assert!(stream
         .symbols
         .contains(&VvcResidualCabacSymbol::AbsLevelGtxFlag {
@@ -380,19 +249,15 @@ fn vvc_residual_symbol_stream_maps_large_dc_abs_remainder_by_spec_order() {
         }));
     assert_eq!(
         stream.symbols.last(),
-        Some(&VvcResidualCabacSymbol::CoeffSignFlag {
-            x: 0,
-            y: 0,
-            negative: true
-        })
+        Some(&VvcResidualCabacSymbol::CoeffSignPattern { bits: 1, count: 1 })
     );
 }
 
 #[test]
-fn vvc_residual_symbol_stream_can_be_derived_from_quantized_luma_block() {
-    let black = quantize_vvc_luma_dc(vvc_solid_luma_8x8_transform_block(0));
-    let stream = VvcResidualCabacSymbolStream::from_quantized_luma_dc(3, 3, black);
-    assert_eq!(stream.pass1_state.abs_level_pass1_at(0, 0), 3);
+fn vvc_residual_symbol_stream_can_be_derived_from_quantized_luma_coefficients() {
+    let coeffs = vvc_luma_coefficients(8, 8, &[(0, -16)]);
+    let stream = VvcResidualCabacSymbolStream::luma_coefficients(3, 3, &coeffs);
+    assert_eq!(stream.pass1_state.abs_level_pass1_at(0, 0), 4);
     assert!(stream
         .symbols
         .contains(&VvcResidualCabacSymbol::AbsRemainder {
@@ -403,15 +268,11 @@ fn vvc_residual_symbol_stream_can_be_derived_from_quantized_luma_block() {
         }));
     assert_eq!(
         stream.symbols.last(),
-        Some(&VvcResidualCabacSymbol::CoeffSignFlag {
-            x: 0,
-            y: 0,
-            negative: true
-        })
+        Some(&VvcResidualCabacSymbol::CoeffSignPattern { bits: 1, count: 1 })
     );
 
-    let white = quantize_vvc_luma_dc(vvc_solid_luma_8x8_transform_block(255));
-    let white_stream = VvcResidualCabacSymbolStream::from_quantized_luma_dc(3, 3, white);
+    let zero_coeffs = vvc_luma_coefficients(8, 8, &[]);
+    let white_stream = VvcResidualCabacSymbolStream::luma_coefficients(3, 3, &zero_coeffs);
     assert_eq!(
         white_stream.symbols.last(),
         Some(&VvcResidualCabacSymbol::LastSigCoeffYPrefix {
@@ -423,7 +284,8 @@ fn vvc_residual_symbol_stream_can_be_derived_from_quantized_luma_block() {
 
 #[test]
 fn vvc_residual_symbol_stream_emits_through_context_models() {
-    let stream = VvcResidualCabacSymbolStream::luma_dc_only(3, 3, 2, true);
+    let coeffs = vvc_luma_coefficients(8, 8, &[(0, -2)]);
+    let stream = VvcResidualCabacSymbolStream::luma_coefficients(3, 3, &coeffs);
     let mut contexts = VvcCabacContexts::new();
     let initial_last_x0 = contexts.last_sig_coeff_x_prefix[3].state();
     let initial_abs0 = contexts.abs_level_gtx_flag[0].state();
@@ -464,11 +326,21 @@ fn vvc_residual_ac_symbol_stream_uses_spec_context_derivations() {
         }));
     assert!(stream
         .symbols
-        .contains(&VvcResidualCabacSymbol::CoeffSignFlag {
-            x: 1,
-            y: 0,
-            negative: true,
+        .contains(&VvcResidualCabacSymbol::CoeffSignPattern {
+            bits: 0b10,
+            count: 2,
         }));
+    let sign_tail = stream.symbols.last();
+    assert_eq!(
+        sign_tail,
+        Some(&VvcResidualCabacSymbol::CoeffSignPattern {
+            bits: 0b10,
+            count: 2,
+        })
+    );
+    assert!(!stream.symbols[..stream.symbols.len() - 1]
+        .iter()
+        .any(|symbol| matches!(symbol, VvcResidualCabacSymbol::CoeffSignPattern { .. })));
 
     // H.266 9.3.4.2.7 through 9.3.4.2.9: for the DC coefficient, the
     // non-zero AC neighbour at (1, 0) contributes to locNumSig and
@@ -479,6 +351,26 @@ fn vvc_residual_ac_symbol_stream_uses_spec_context_derivations() {
     assert_eq!(VvcCabacContext::SigCoeffFlag(9).init_value(), 37);
     assert_eq!(VvcCabacContext::ParLevelFlag(17).init_value(), 42);
     assert_eq!(VvcCabacContext::AbsLevelGtxFlag(49).init_value(), 19);
+
+    let mut coeffs_with_remainder = vec![0; 64];
+    coeffs_with_remainder[0] = 5;
+    coeffs_with_remainder[1] = -2;
+    let remainder_stream =
+        VvcResidualCabacSymbolStream::luma_coefficients(3, 3, &coeffs_with_remainder);
+    let first_remainder = remainder_stream
+        .symbols
+        .iter()
+        .position(|symbol| matches!(symbol, VvcResidualCabacSymbol::AbsRemainder { .. }))
+        .expect("expected a second-pass remainder symbol");
+    let first_sign = remainder_stream
+        .symbols
+        .iter()
+        .position(|symbol| matches!(symbol, VvcResidualCabacSymbol::CoeffSignPattern { .. }))
+        .expect("expected sign symbols");
+    assert!(first_remainder < first_sign);
+    assert!(!remainder_stream.symbols[..first_remainder]
+        .iter()
+        .any(|symbol| matches!(symbol, VvcResidualCabacSymbol::CoeffSignPattern { .. })));
 
     let mut contexts = VvcCabacContexts::new();
     let mut cabac = VvcCabacEncoder::new();
@@ -548,20 +440,4 @@ fn vvc_residual_level_contexts_follow_last_significant_position() {
     let chroma = VvcResidualPass1State::new(chroma_config);
     assert_eq!(chroma.par_level_flag_ctx_inc(1, 1), 21);
     assert_eq!(chroma.par_level_flag_ctx_inc(0, 0), 27);
-}
-
-#[test]
-fn vvc_residual_transform_skip_sign_context_is_separate_from_bypass_signs() {
-    let mut config = VvcResidualCtxConfig::luma_4x4_subset(3, 3);
-    config.transform_skip = true;
-    config.ts_residual_coding_disabled = false;
-    let mut state = VvcResidualPass1State::new(config);
-    assert_eq!(state.coeff_sign_flag_ts_ctx_inc(0, 0), 0);
-
-    state.set_pass1_coeff(0, 0, 1, false);
-    state.set_pass1_coeff(1, 0, 1, false);
-    assert_eq!(state.coeff_sign_flag_ts_ctx_inc(1, 1), 1);
-
-    state.set_pass1_coeff(0, 1, 1, true);
-    assert_eq!(state.coeff_sign_flag_ts_ctx_inc(1, 1), 0);
 }

@@ -1,7 +1,6 @@
 use super::writer::{VvcCabacDumpContextEvent, VvcCabacDumpSymbol, VvcCabacEncoder, VvcCtxEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(in crate::vvc) struct VvcLastSigCoeffPrefixCtxInput {
     pub(in crate::vvc) is_luma: bool,
     pub(in crate::vvc) log2_tb_size: u8,

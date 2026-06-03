@@ -1,10 +1,29 @@
-use super::{
-    VvcQuantizedTransformBlock, VvcReconstructedLumaBlock, VvcTransformBlock,
-    VvcTransformComponent, VvcTuTransformBlock,
-};
+use super::{VvcQuantizedTransformBlock, VvcTransformComponent, VvcTuTransformBlock};
 
 pub(in crate::vvc) const VVC_LUMA_DC_BASE: i16 = 114;
 pub(in crate::vvc) const VVC_CHROMA_DC_BASE: i16 = 128;
+const VVC_LUMA_GREEDY_DC_LEVEL: i16 = 64;
+const VVC_LUMA_GREEDY_AC_LEVEL: i16 = 8;
+const VVC_DCT2_4: [[i32; 4]; 4] = [
+    [64, 64, 64, 64],
+    [83, 36, -36, -83],
+    [64, -64, -64, 64],
+    [36, -83, 83, -36],
+];
+const VVC_DCT2_8: [[i32; 8]; 8] = [
+    [64, 64, 64, 64, 64, 64, 64, 64],
+    // H.266 inverse DCT-II 8-point matrix, matching VTM
+    // g_trCoreDCT2P8[TRANSFORM_INVERSE]. The 89 entries differ from the
+    // older HEVC-style 87 values and are required for bit-exact decoder-side
+    // reconstruction.
+    [89, 75, 50, 18, -18, -50, -75, -89],
+    [83, 36, -36, -83, -83, -36, 36, 83],
+    [75, -18, -89, -50, 50, 89, 18, -75],
+    [64, -64, -64, 64, 64, -64, -64, 64],
+    [50, -89, 18, 75, -75, -18, 89, -50],
+    [36, -83, 83, -36, -36, 83, -83, 36],
+    [18, -50, 75, -89, 89, -75, 50, -18],
+];
 
 pub(in crate::vvc) fn transform_vvc_tu(
     component: VvcTransformComponent,
@@ -22,40 +41,124 @@ pub(in crate::vvc) fn transform_vvc_tu(
     );
     let sum: u32 = samples.iter().map(|sample| u32::from(*sample)).sum();
     let dc_sample = ((sum + (sample_count as u32 / 2)) / sample_count as u32) as u8;
+    let mut ac_coeffs = Vec::with_capacity(sample_count.saturating_sub(1));
+    for sample in samples.iter().skip(1) {
+        ac_coeffs.push(i16::from(*sample) - i16::from(dc_sample));
+    }
     VvcTuTransformBlock {
         component,
         width,
         height,
         dc_coeff: i16::from(dc_sample) - component.dc_base(),
-        ac_coeffs: vec![0; sample_count.saturating_sub(1)],
+        ac_coeffs,
     }
 }
 
-pub(in crate::vvc) fn quantize_vvc_luma_dc(block: VvcTransformBlock) -> VvcQuantizedTransformBlock {
-    let sample = (block.dc_coeff + VVC_LUMA_DC_BASE).clamp(0, u8::MAX as i16) as u8;
-    let (reconstructed_sample, abs_remainder) = nearest_quantized_luma(sample);
-    let reconstructed_ac_coeffs = block.ac_coeffs.map(|coeff| coeff.clamp(-255, 255));
+pub(in crate::vvc) fn quantize_vvc_luma_residual_greedy(
+    residuals: &[i16],
+    width: u16,
+    height: u16,
+) -> VvcQuantizedTransformBlock {
+    let coefficient_count = usize::from(width) * usize::from(height);
+    assert_eq!(residuals.len(), coefficient_count);
+    debug_assert!([4, 8].contains(&width));
+    debug_assert!([4, 8].contains(&height));
+
+    let mut coeff_levels = vec![0; coefficient_count];
+    coeff_levels[0] = best_luma_residual_level(
+        residuals,
+        width,
+        height,
+        &coeff_levels,
+        0,
+        -VVC_LUMA_GREEDY_DC_LEVEL,
+        VVC_LUMA_GREEDY_DC_LEVEL,
+    );
+
+    // The current residual_coding() writer is audited for the first 4x4
+    // subblock. Keep AC search inside that area until scan-position suffixes
+    // and sb_coded_flag generation are expanded for larger coefficient groups.
+    for y in 0..usize::from(height).min(4) {
+        for x in 0..usize::from(width).min(4) {
+            let coeff_index = y * usize::from(width) + x;
+            if coeff_index == 0 {
+                continue;
+            }
+            coeff_levels[coeff_index] = best_luma_residual_level(
+                residuals,
+                width,
+                height,
+                &coeff_levels,
+                coeff_index,
+                -VVC_LUMA_GREEDY_AC_LEVEL,
+                VVC_LUMA_GREEDY_AC_LEVEL,
+            );
+        }
+    }
+
+    let mut ac_coeffs = [0; 15];
+    for y in 0..usize::from(height).min(4) {
+        for x in 0..usize::from(width).min(4) {
+            let coeff_index = y * usize::from(width) + x;
+            if coeff_index == 0 {
+                continue;
+            }
+            let ac_index = y * 4 + x - 1;
+            ac_coeffs[ac_index] = coeff_levels[coeff_index];
+        }
+    }
+    let dc_level = coeff_levels[0];
     VvcQuantizedTransformBlock {
-        reconstructed_dc_coeff: reconstructed_sample as i16 - VVC_LUMA_DC_BASE,
-        reconstructed_ac_coeffs,
-        abs_remainder,
-        ac_tokens: [0x40; 15],
+        reconstructed_dc_coeff: dc_level,
+        reconstructed_ac_coeffs: ac_coeffs,
+        abs_remainder: dc_level.unsigned_abs().min(u8::MAX as u16) as u8,
     }
 }
 
-pub(in crate::vvc) fn inverse_transform_vvc_luma_dc(
-    block: VvcQuantizedTransformBlock,
-) -> VvcReconstructedLumaBlock {
-    let sample = (block.reconstructed_dc_coeff + VVC_LUMA_DC_BASE).clamp(0, u8::MAX as i16) as u8;
-    let mut samples = [sample; 16];
-    for (dst, coeff) in samples
-        .iter_mut()
-        .skip(1)
-        .zip(block.reconstructed_ac_coeffs)
-    {
-        *dst = (sample as i16 + coeff).clamp(0, u8::MAX as i16) as u8;
+pub(in crate::vvc) fn inverse_transform_vvc_luma_residual_levels(
+    width: u16,
+    height: u16,
+    coeff_levels: &[i16],
+) -> Vec<i16> {
+    let width_usize = usize::from(width);
+    let height_usize = usize::from(height);
+    assert_eq!(coeff_levels.len(), width_usize * height_usize);
+    debug_assert!([4, 8].contains(&width));
+    debug_assert!([4, 8].contains(&height));
+
+    let mut dequantized = vec![0; coeff_levels.len()];
+    for (dst, level) in dequantized.iter_mut().zip(coeff_levels.iter().copied()) {
+        *dst = dequantize_vvc_transform_level(level, width, height);
     }
-    VvcReconstructedLumaBlock { samples }
+
+    let mut vertical = vec![0; coeff_levels.len()];
+    for x in 0..width_usize {
+        for y in 0..height_usize {
+            let mut sum = 0;
+            for k in 0..height_usize {
+                sum += dct2_value(height, k, y) * dequantized[k * width_usize + x];
+            }
+            vertical[y * width_usize + x] = if height > 1 { (sum + 64) >> 7 } else { sum };
+        }
+    }
+
+    let residual_bd_shift = if width > 1 && height > 1 {
+        5 + 15 - 8
+    } else {
+        6 + 15 - 8
+    };
+    let residual_offset = 1 << (residual_bd_shift - 1);
+    let mut residuals = vec![0; coeff_levels.len()];
+    for y in 0..height_usize {
+        for x in 0..width_usize {
+            let mut sum = 0;
+            for k in 0..width_usize {
+                sum += dct2_value(width, k, x) * vertical[y * width_usize + k];
+            }
+            residuals[y * width_usize + x] = ((sum + residual_offset) >> residual_bd_shift) as i16;
+        }
+    }
+    residuals
 }
 
 #[cfg(test)]
@@ -81,21 +184,49 @@ pub(in crate::vvc) fn reconstruct_vvc_chroma(chroma_residual: u8) -> u8 {
     (((16 - chroma_residual.min(16)) as u16 * 128 + 8) / 16) as u8
 }
 
-pub(in crate::vvc) fn reconstruct_vvc_luma_dc_residual_sample(
-    abs_level: u8,
-    negative: bool,
-    tb_width: u16,
-    tb_height: u16,
+fn best_luma_residual_level(
+    target: &[i16],
+    width: u16,
+    height: u16,
+    coeff_levels: &[i16],
+    coeff_index: usize,
+    min_level: i16,
+    max_level: i16,
 ) -> i16 {
-    if abs_level == 0 {
+    let current_level = coeff_levels[coeff_index];
+    let mut best_level = current_level;
+    let mut best_error = i64::MAX;
+    let mut candidate = coeff_levels.to_vec();
+    for level in min_level..=max_level {
+        candidate[coeff_index] = level;
+        let reconstructed = inverse_transform_vvc_luma_residual_levels(width, height, &candidate);
+        let error = residual_sse(target, &reconstructed);
+        if error < best_error
+            || (error == best_error && level.unsigned_abs() < best_level.unsigned_abs())
+        {
+            best_level = level;
+            best_error = error;
+        }
+    }
+    best_level
+}
+
+fn residual_sse(target: &[i16], reconstructed: &[i16]) -> i64 {
+    target
+        .iter()
+        .zip(reconstructed)
+        .map(|(a, b)| {
+            let diff = i64::from(*a) - i64::from(*b);
+            diff * diff
+        })
+        .sum()
+}
+
+fn dequantize_vvc_transform_level(level: i16, tb_width: u16, tb_height: u16) -> i32 {
+    if level == 0 {
         return 0;
     }
 
-    debug_assert!(tb_width.is_power_of_two());
-    debug_assert!(tb_height.is_power_of_two());
-
-    // H.266 clauses 8.7.3 and 8.7.4, restricted to the current 8-bit,
-    // scaling-list-disabled, non-transform-skip, DCT-II residual path.
     let log2_width = tb_width.ilog2() as i32;
     let log2_height = tb_height.ilog2() as i32;
     let log2_sum = log2_width + log2_height;
@@ -105,38 +236,13 @@ pub(in crate::vvc) fn reconstruct_vvc_luma_dc_residual_sample(
     let ls = 16 * level_scale[rect_non_ts][(qp_y % 6) as usize] * (1 << (qp_y / 6));
     let bd_shift = 8 + rect_non_ts as i32 + (log2_sum / 2) + 10 - 15;
     let bd_offset = 1 << (bd_shift - 1);
-    let signed_level = if negative {
-        -(abs_level as i32)
-    } else {
-        abs_level as i32
-    };
-    let d = (signed_level * ls + bd_offset) >> bd_shift;
-
-    // For the current DC-only subset, both inverse DCT-II passes use the DC
-    // matrix value 64. This is the same path the decoder applies after
-    // residual_coding() produces TransCoeffLevel[0][0].
-    let e = d * 64;
-    let g = if tb_height > 1 { (e + 64) >> 7 } else { e };
-    let r = g * 64;
-    let residual_bd_shift = if tb_width > 1 && tb_height > 1 {
-        5 + 15 - 8
-    } else {
-        6 + 15 - 8
-    };
-    ((r + (1 << (residual_bd_shift - 1))) >> residual_bd_shift) as i16
+    (i32::from(level) * ls + bd_offset) >> bd_shift
 }
 
-fn nearest_quantized_luma(input: u8) -> (u8, u8) {
-    let mut best_rem = 16;
-    let mut best_error = u16::MAX;
-    for rem in 0..=16 {
-        let value = (((16 - rem) as u16 * 114 + 8) / 16) as u8;
-        let error = input.abs_diff(value) as u16;
-        if error < best_error {
-            best_rem = rem;
-            best_error = error;
-        }
+fn dct2_value(size: u16, k: usize, n: usize) -> i32 {
+    match size {
+        4 => VVC_DCT2_4[k][n],
+        8 => VVC_DCT2_8[k][n],
+        other => unimplemented!("DCT-II matrix size {other} is not wired yet"),
     }
-    let reconstructed_value = (((16 - best_rem) as u16 * 114) / 16) as u8;
-    (reconstructed_value, best_rem)
 }

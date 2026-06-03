@@ -1,9 +1,10 @@
 use crate::picture::ChromaSampling;
 
-use super::super::{
-    VvcCodingTreeNode, VvcCtuCabacOp, VvcCtuPartitionParams, VvcSampledFrame, VvcVideoGeometry,
+use super::super::{VvcCtuCabacOp, VvcCtuPartitionParams, VvcSampledFrame};
+use super::{
+    fill_visible_luma_node, inverse_transform_vvc_luma_residual_levels,
+    predict_vvc_luma_dc_block, VvcQuantizedColor, VVC_LUMA_AC_COEFFS_PER_TU,
 };
-use super::{reconstruct_vvc_luma_dc_residual_sample, VvcQuantizedColor, VVC_LUMA_DC_BASE};
 
 pub(in crate::vvc) fn reconstruct_vvc_residual_frame(
     frame: &VvcSampledFrame,
@@ -29,27 +30,17 @@ fn reconstruct_vvc_residual_frame_420(
     partition_params: VvcCtuPartitionParams,
 ) -> Vec<u8> {
     let mut luma = vec![128; frame.geometry.luma_samples()];
-    let mut anchor_leaf = true;
+    let mut tu_idx = 0;
     for op in VvcCtuCabacOp::yuv420_ctu_partition(partition_params) {
         let VvcCtuCabacOp::LumaLeafWithSplitCtx { node, .. } = op else {
             continue;
         };
-        if anchor_leaf {
-            let predicted = predict_luma_leaf_sample(&luma, frame.geometry, node);
-            let negative = quantized.y < VVC_LUMA_DC_BASE as u8 && quantized.luma_rem != 0;
-            let residual = reconstruct_vvc_luma_dc_residual_sample(
-                quantized.luma_rem,
-                negative,
-                node.width,
-                node.height,
-            );
-            let sample = (i16::from(predicted) + residual).clamp(0, u8::MAX as i16) as u8;
-            fill_visible_luma_node(&mut luma, frame.geometry, node, sample);
-            anchor_leaf = false;
-        } else {
-            let sample = predict_luma_leaf_sample(&luma, frame.geometry, node);
-            fill_visible_luma_node(&mut luma, frame.geometry, node, sample);
-        }
+        let predicted = predict_vvc_luma_dc_block(&luma, frame.geometry, node);
+        let coeff_levels = quantized_luma_coeff_levels(node.width, node.height, quantized, tu_idx);
+        let residuals =
+            inverse_transform_vvc_luma_residual_levels(node.width, node.height, &coeff_levels);
+        fill_visible_luma_node(&mut luma, frame.geometry, node, &predicted, &residuals);
+        tu_idx += 1;
     }
 
     // Chroma CBFs are currently emitted as false in the 4:2:0 path, so the
@@ -62,41 +53,32 @@ fn reconstruct_vvc_residual_frame_420(
     out
 }
 
-fn predict_luma_leaf_sample(
-    luma: &[u8],
-    geometry: VvcVideoGeometry,
-    node: VvcCodingTreeNode,
-) -> u8 {
-    // H.266 8.4.5 intra prediction uses neighbouring reconstructed reference
-    // samples, with unavailable references initialized around the middle of
-    // the sample range. The current encoder always signals the same explicit
-    // luma angular mode, so a single representative neighbour is sufficient
-    // for the solid-DC subset until per-sample intra prediction is implemented.
-    let x = usize::from(node.x).min(geometry.width.saturating_sub(1));
-    let y = usize::from(node.y).min(geometry.height.saturating_sub(1));
-    if y > 0 {
-        return luma[(y - 1) * geometry.width + x];
-    }
-    if x > 0 {
-        return luma[y * geometry.width + x - 1];
-    }
-    128
-}
-
-fn fill_visible_luma_node(
-    luma: &mut [u8],
-    geometry: VvcVideoGeometry,
-    node: VvcCodingTreeNode,
-    sample: u8,
-) {
-    let start_x = usize::from(node.x);
-    let start_y = usize::from(node.y);
-    let end_x = (start_x + usize::from(node.width)).min(geometry.width);
-    let end_y = (start_y + usize::from(node.height)).min(geometry.height);
-    for y in start_y..end_y {
-        let row = y * geometry.width;
-        for x in start_x..end_x {
-            luma[row + x] = sample;
+fn quantized_luma_coeff_levels(
+    width: u16,
+    height: u16,
+    quantized: VvcQuantizedColor,
+    tu_idx: usize,
+) -> Vec<i16> {
+    let mut levels = vec![0; usize::from(width) * usize::from(height)];
+    let abs_level = quantized.luma_tu_remainders[tu_idx];
+    levels[0] = if abs_level == 0 {
+        0
+    } else if quantized.luma_tu_negative[tu_idx] {
+        -(abs_level as i16)
+    } else {
+        abs_level as i16
+    };
+    let ac_levels = quantized.luma_tu_ac_levels[tu_idx];
+    for y in 0..usize::from(height).min(4) {
+        for x in 0..usize::from(width).min(4) {
+            let coeff_index = y * usize::from(width) + x;
+            if coeff_index == 0 {
+                continue;
+            }
+            let ac_index = y * 4 + x - 1;
+            debug_assert!(ac_index < VVC_LUMA_AC_COEFFS_PER_TU);
+            levels[coeff_index] = ac_levels[ac_index];
         }
     }
+    levels
 }

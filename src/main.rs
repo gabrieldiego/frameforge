@@ -125,15 +125,35 @@ fn run_vvc_encode(cli: VvcEncodeCli) -> Result<(), String> {
         None
     };
     let recon_sink = recon_output.as_mut().map(|writer| writer as &mut dyn Write);
-    frameforge::vvc::vvc_yuv_encode_stream_with_limits(
-        &mut input,
-        &mut output,
-        recon_sink,
-        params,
-        geometry,
-        limits,
-        cli.format,
-    )?;
+    if env::var_os("FRAMEFORGE_PROGRESS").is_some() {
+        let mut progress = |progress: frameforge::vvc::VvcEncodeProgress| {
+            eprintln!(
+                "frameforge vvc-encode frame {}/{}",
+                progress.frame_idx + 1,
+                progress.frame_count
+            );
+        };
+        frameforge::vvc::vvc_yuv_encode_stream_with_limits_and_progress(
+            &mut input,
+            &mut output,
+            recon_sink,
+            params,
+            geometry,
+            limits,
+            cli.format,
+            Some(&mut progress),
+        )?;
+    } else {
+        frameforge::vvc::vvc_yuv_encode_stream_with_limits(
+            &mut input,
+            &mut output,
+            recon_sink,
+            params,
+            geometry,
+            limits,
+            cli.format,
+        )?;
+    }
     output
         .flush()
         .map_err(|err| format!("failed to flush output '{}': {err}", cli.output.display()))?;

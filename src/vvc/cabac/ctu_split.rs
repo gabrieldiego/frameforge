@@ -1,8 +1,9 @@
 use crate::picture::ChromaSampling;
 use crate::vvc::{
-    VVC_CURRENT_MAX_LUMA_BT_SIZE, VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT, VVC_CURRENT_MAX_LUMA_LEAF_SIZE,
-    VVC_CURRENT_MAX_LUMA_MTT_DEPTH, VVC_CURRENT_MAX_LUMA_TT_SIZE,
+    MAX_VVC_LUMA_TUS, VVC_CURRENT_MAX_LUMA_BT_SIZE, VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT,
+    VVC_CURRENT_MAX_LUMA_LEAF_SIZE, VVC_CURRENT_MAX_LUMA_MTT_DEPTH, VVC_CURRENT_MAX_LUMA_TT_SIZE,
     VVC_CURRENT_MIN_CHROMA_420_QT_SIZE, VVC_CURRENT_MIN_LUMA_CB_SIZE, VVC_CURRENT_MIN_LUMA_QT_SIZE,
+    VVC_LUMA_AC_COEFFS_PER_TU,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,9 +14,10 @@ pub(in crate::vvc) struct VvcCtuPartitionParams {
     pub(in crate::vvc) visible_height: usize,
     pub(in crate::vvc) chroma_sampling: ChromaSampling,
     pub(in crate::vvc) chroma_tu_count: usize,
-    pub(in crate::vvc) luma_dc_abs_level: u8,
-    pub(in crate::vvc) luma_dc_negative: bool,
-    pub(in crate::vvc) luma_ac_levels: [i16; 15],
+    pub(in crate::vvc) luma_tu_count: usize,
+    pub(in crate::vvc) luma_tu_abs_levels: [u8; MAX_VVC_LUMA_TUS],
+    pub(in crate::vvc) luma_tu_negative: [bool; MAX_VVC_LUMA_TUS],
+    pub(in crate::vvc) luma_tu_ac_levels: [[i16; VVC_LUMA_AC_COEFFS_PER_TU]; MAX_VVC_LUMA_TUS],
     pub(in crate::vvc) cb_dc_abs_level: u8,
     pub(in crate::vvc) cb_dc_negative: bool,
 }
@@ -64,7 +66,6 @@ pub(in crate::vvc) struct VvcCtuPartitionShape {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(in crate::vvc) enum VvcTreeType {
     SingleTree,
     DualTreeLuma,
@@ -77,8 +78,6 @@ pub(in crate::vvc) enum VvcPartSplit {
     Quad,
     HorizontalBinary,
     VerticalBinary,
-    HorizontalTernary,
-    VerticalTernary,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,61 +183,6 @@ impl VvcCodingTreeNode {
         };
         child.depth_offset = self.depth_offset + u8::from(crosses_reduced_boundary);
         child
-    }
-
-    #[allow(dead_code)]
-    fn tt_child(self, vertical: bool, child_idx: u8) -> Self {
-        debug_assert!(child_idx < 3);
-        let quarter_width = self.width / 4;
-        let quarter_height = self.height / 4;
-        let (width, x_offset) = if vertical {
-            let width = if child_idx == 1 {
-                self.width / 2
-            } else {
-                quarter_width
-            };
-            let x_offset = match child_idx {
-                0 => 0,
-                1 => quarter_width,
-                2 => 3 * quarter_width,
-                _ => unreachable!(),
-            };
-            (width, x_offset)
-        } else {
-            (self.width, 0)
-        };
-        let (height, y_offset) = if vertical {
-            (self.height, 0)
-        } else {
-            let height = if child_idx == 1 {
-                self.height / 2
-            } else {
-                quarter_height
-            };
-            let y_offset = match child_idx {
-                0 => 0,
-                1 => quarter_height,
-                2 => 3 * quarter_height,
-                _ => unreachable!(),
-            };
-            (height, y_offset)
-        };
-        Self {
-            x: self.x + x_offset,
-            y: self.y + y_offset,
-            width,
-            height,
-            cqt_depth: self.cqt_depth,
-            mtt_depth: self.mtt_depth + 1,
-            depth_offset: self.depth_offset,
-            part_idx: child_idx,
-            tree_type: self.tree_type,
-            split_history: self.with_split_at_current_depth(if vertical {
-                VvcPartSplit::VerticalTernary
-            } else {
-                VvcPartSplit::HorizontalTernary
-            }),
-        }
     }
 
     pub(in crate::vvc) fn intersects_visible(
@@ -412,7 +356,6 @@ impl VvcSplitCtxInput {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(in crate::vvc) struct VvcQtSplitCtxInput {
     pub(in crate::vvc) available_left: bool,
     pub(in crate::vvc) available_above: bool,
@@ -421,7 +364,6 @@ pub(in crate::vvc) struct VvcQtSplitCtxInput {
     pub(in crate::vvc) cqt_depth: u8,
 }
 
-#[allow(dead_code)]
 impl VvcQtSplitCtxInput {
     pub(in crate::vvc) fn from_node_without_deeper_neighbours(node: VvcCodingTreeNode) -> Self {
         Self {
@@ -433,6 +375,7 @@ impl VvcQtSplitCtxInput {
         }
     }
 
+    #[cfg(test)]
     pub(in crate::vvc) fn from_node_with_deeper_neighbours(
         node: VvcCodingTreeNode,
         left_deeper_qt: bool,
@@ -457,7 +400,6 @@ impl VvcQtSplitCtxInput {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::vvc) enum VvcCtuCabacOp {
     QtSplit {

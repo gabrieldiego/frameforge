@@ -1,12 +1,13 @@
 use super::super::{
-    chroma_subsample_x, chroma_subsample_y, vvc_anchor_luma_tu_size_from_partition,
-    VvcPictureFormat, VvcSampledColor, VvcSampledFrame, VvcVideoGeometry,
+    chroma_subsample_x, chroma_subsample_y, VvcCodingTreeNode, VvcCtuCabacOp,
+    VvcCtuPartitionParams, VvcPictureFormat, VvcSampledColor, VvcSampledFrame, VvcVideoGeometry,
+    VVC_CTU_SIZE,
 };
 use super::{
-    inverse_transform_vvc_luma_dc, quantize_vvc_chroma_sample, quantize_vvc_luma_dc,
-    reconstruct_vvc_chroma, transform_vvc_tu, VvcQuantizedColor, VvcQuantizedTransformBlock,
-    VvcTransformBlock, VvcTransformComponent, VvcTuTransformBlock, MAX_VVC_LUMA_TUS,
-    VVC_CHROMA_TU_SIZE,
+    fill_visible_luma_node, predict_vvc_luma_dc_block, quantize_vvc_chroma_sample,
+    quantize_vvc_luma_residual_greedy, reconstruct_vvc_chroma, transform_vvc_tu,
+    VvcQuantizedColor, VvcQuantizedTransformBlock, VvcTransformComponent, VvcTuTransformBlock,
+    MAX_VVC_LUMA_TUS, VVC_CHROMA_TU_SIZE,
 };
 
 pub fn quantize_vvc_color(color: VvcSampledColor) -> VvcQuantizedColor {
@@ -14,8 +15,56 @@ pub fn quantize_vvc_color(color: VvcSampledColor) -> VvcQuantizedColor {
 }
 
 pub(in crate::vvc) fn quantize_vvc_frame(frame: VvcSampledFrame) -> VvcQuantizedColor {
-    let quantized_luma = quantize_vvc_anchor_luma_tu(&frame);
-    let reconstructed_luma = inverse_transform_vvc_luma_dc(quantized_luma);
+    let mut luma_tu_remainders = [0; MAX_VVC_LUMA_TUS];
+    let mut luma_tu_negative = [false; MAX_VVC_LUMA_TUS];
+    let mut luma_tu_ac_levels = [[0; super::VVC_LUMA_AC_COEFFS_PER_TU]; MAX_VVC_LUMA_TUS];
+    let mut reconstructed_luma = vec![128; frame.geometry.luma_samples()];
+    let mut luma_tu_count = 0;
+
+    for node in vvc_luma_tu_nodes(frame.geometry, frame.format.chroma_sampling) {
+        if luma_tu_count >= MAX_VVC_LUMA_TUS {
+            break;
+        }
+        let predicted = predict_vvc_luma_dc_block(&reconstructed_luma, frame.geometry, node);
+        let samples = residual_luma_tu_at(
+            &frame,
+            usize::from(node.x),
+            usize::from(node.y),
+            usize::from(node.width),
+            usize::from(node.height),
+        );
+        let _observed_luma_transform = transform_vvc_tu(
+            VvcTransformComponent::Luma,
+            node.width,
+            node.height,
+            &samples,
+        );
+        let residuals: Vec<i16> = samples
+            .iter()
+            .zip(predicted.iter())
+            .map(|(sample, predicted)| i16::from(*sample) - i16::from(*predicted))
+            .collect();
+        let quantized = quantize_vvc_luma_residual_greedy(&residuals, node.width, node.height);
+        luma_tu_remainders[luma_tu_count] = quantized.abs_remainder;
+        luma_tu_negative[luma_tu_count] =
+            quantized.reconstructed_dc_coeff < 0 && quantized.abs_remainder != 0;
+        luma_tu_ac_levels[luma_tu_count] = quantized.reconstructed_ac_coeffs;
+        let coeff_levels = quantized_luma_coeff_levels(node.width, node.height, quantized);
+        let reconstructed_residual = super::inverse_transform_vvc_luma_residual_levels(
+            node.width,
+            node.height,
+            &coeff_levels,
+        );
+        fill_visible_luma_node(
+            &mut reconstructed_luma,
+            frame.geometry,
+            node,
+            &predicted,
+            &reconstructed_residual,
+        );
+        luma_tu_count += 1;
+    }
+
     let chroma_transforms = transform_vvc_chroma_default_tus(&frame);
     let _observed_chroma_dc = (chroma_transforms.cb.dc_coeff, chroma_transforms.cr.dc_coeff);
     let color = frame.sampled_color();
@@ -23,20 +72,14 @@ pub(in crate::vvc) fn quantize_vvc_frame(frame: VvcSampledFrame) -> VvcQuantized
     let cr_rem = quantize_vvc_chroma_sample(color.v);
     let reconstructed_cb = reconstruct_vvc_chroma(cb_rem);
     let reconstructed_cr = reconstruct_vvc_chroma(cr_rem);
-    let luma_tu_remainders = [quantized_luma.abs_remainder; MAX_VVC_LUMA_TUS];
-    let luma_tu_ac0_tokens = [quantized_luma.ac_tokens[0]; MAX_VVC_LUMA_TUS];
     VvcQuantizedColor {
-        y: reconstructed_luma.samples[0],
+        y: reconstructed_luma.first().copied().unwrap_or(128),
         u: reconstructed_cb,
         v: reconstructed_cr,
-        luma_rem: quantized_luma.abs_remainder,
-        luma_ac_levels: quantized_luma.reconstructed_ac_coeffs,
-        luma_ac_tokens: quantized_luma.ac_tokens,
-        second_luma_rem: quantized_luma.abs_remainder,
-        second_luma_ac_tokens: quantized_luma.ac_tokens,
         luma_tu_remainders,
-        luma_tu_ac0_tokens,
-        luma_tu_count: 1,
+        luma_tu_negative,
+        luma_tu_ac_levels,
+        luma_tu_count,
         cb_rem,
         cr_rem,
     }
@@ -83,44 +126,51 @@ fn transform_vvc_chroma_default_tus(frame: &VvcSampledFrame) -> VvcChromaTransfo
     }
 }
 
-fn quantize_vvc_anchor_luma_tu(frame: &VvcSampledFrame) -> VvcQuantizedTransformBlock {
-    let size = vvc_anchor_luma_tu_size(frame.geometry);
-    quantize_vvc_luma_tu_dc(frame, 0, 0, size.width, size.height)
+fn vvc_luma_tu_nodes(
+    geometry: VvcVideoGeometry,
+    chroma_sampling: crate::picture::ChromaSampling,
+) -> Vec<VvcCodingTreeNode> {
+    let params = VvcCtuPartitionParams {
+        root_width: VVC_CTU_SIZE,
+        root_height: VVC_CTU_SIZE,
+        visible_width: geometry.coded_width(),
+        visible_height: geometry.coded_height(),
+        chroma_sampling,
+        chroma_tu_count: 0,
+        luma_tu_count: 0,
+        luma_tu_abs_levels: [0; MAX_VVC_LUMA_TUS],
+        luma_tu_negative: [false; MAX_VVC_LUMA_TUS],
+        luma_tu_ac_levels: [[0; super::VVC_LUMA_AC_COEFFS_PER_TU]; MAX_VVC_LUMA_TUS],
+        cb_dc_abs_level: 0,
+        cb_dc_negative: false,
+    };
+    VvcCtuCabacOp::yuv420_ctu_partition(params)
+        .into_iter()
+        .filter_map(|op| match op {
+            VvcCtuCabacOp::LumaLeafWithSplitCtx { node, .. } => Some(node),
+            _ => None,
+        })
+        .collect()
 }
 
-pub(in crate::vvc) fn vvc_anchor_luma_tu_size(geometry: VvcVideoGeometry) -> VvcVideoGeometry {
-    // ITU-T H.266 clause 7.3.11.10 defines transform_unit() syntax inside
-    // coding_unit(). The residual anchor must therefore use the first luma
-    // leaf produced by the same coding-tree partition generator that emits
-    // tu_y_coded_flag and residual_coding(), not a fixed 8x8 fixture size.
-    vvc_anchor_luma_tu_size_from_partition(geometry)
-}
-
-fn quantize_vvc_luma_tu_dc(
-    frame: &VvcSampledFrame,
-    origin_x: usize,
-    origin_y: usize,
-    width: usize,
-    height: usize,
-) -> VvcQuantizedTransformBlock {
-    let samples = residual_luma_tu_at(frame, origin_x, origin_y, width, height);
-    let transform = transform_vvc_tu(
-        VvcTransformComponent::Luma,
-        width as u16,
-        height as u16,
-        &samples,
-    );
-    let mut ac_coeffs = [0; 15];
-    for (dst, src) in ac_coeffs
-        .iter_mut()
-        .zip(transform.ac_coeffs.iter().copied())
-    {
-        *dst = src;
+fn quantized_luma_coeff_levels(
+    width: u16,
+    height: u16,
+    block: VvcQuantizedTransformBlock,
+) -> Vec<i16> {
+    let mut levels = vec![0; usize::from(width) * usize::from(height)];
+    levels[0] = block.reconstructed_dc_coeff;
+    for y in 0..usize::from(height).min(4) {
+        for x in 0..usize::from(width).min(4) {
+            let coeff_index = y * usize::from(width) + x;
+            if coeff_index == 0 {
+                continue;
+            }
+            let ac_index = y * 4 + x - 1;
+            levels[coeff_index] = block.reconstructed_ac_coeffs[ac_index];
+        }
     }
-    quantize_vvc_luma_dc(VvcTransformBlock {
-        dc_coeff: transform.dc_coeff,
-        ac_coeffs,
-    })
+    levels
 }
 
 fn residual_luma_tu_at(

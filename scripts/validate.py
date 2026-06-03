@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import math
 import os
 import re
 import subprocess
@@ -131,6 +132,13 @@ def main() -> int:
     validation_input_path = materialized_validation_input(input_path, info, out_dir, stem)
     rtl_input_path = normalized_rtl_input(validation_input_path, info, out_dir, stem)
 
+    print(
+        f"FrameForge validate: software encode {info.frames} frame(s), "
+        f"{info.width}x{info.height} {info.fmt}",
+        flush=True,
+    )
+    sw_env = os.environ.copy()
+    sw_env["FRAMEFORGE_PROGRESS"] = "1"
     run(
         [
             "cargo",
@@ -152,12 +160,14 @@ def main() -> int:
             str(sw_bitstream),
             "--recon",
             str(sw_internal_recon),
-        ]
+        ],
+        env=sw_env,
     )
 
     if args.sw_only:
         has_vtm_recon = vtm_decode_supported(input_path, info)
         if has_vtm_recon:
+            print("FrameForge validate: VTM decode software bitstream", flush=True)
             decoder = subprocess.run(
                 [
                     sys.executable,
@@ -193,6 +203,9 @@ def main() -> int:
                 print(f"SKIP  {name}")
             else:
                 print(f"{digest}  {name}")
+        print_psnr_report("software_internal_recon", validation_input_path, sw_internal_recon)
+        if has_vtm_recon:
+            print_psnr_report("vtm_recon_from_software_bitstream", validation_input_path, vtm_recon)
 
         if has_vtm_recon and digests["software_internal_recon"] != digests["vtm_recon_from_software_bitstream"]:
             print(
@@ -243,6 +256,7 @@ def main() -> int:
     has_vtm_recon = vtm_decode_supported(input_path, info)
     rtl_annexb_bitstream = is_annexb_bitstream(rtl_bitstream)
     if has_vtm_recon and rtl_annexb_bitstream:
+        print("FrameForge validate: VTM decode RTL bitstream", flush=True)
         decoder = subprocess.run(
             [
                 sys.executable,
@@ -283,6 +297,10 @@ def main() -> int:
             print(f"SKIP  {name}")
         else:
             print(f"{digest}  {name}")
+    print_psnr_report("software_internal_recon", validation_input_path, sw_internal_recon)
+    print_psnr_report("rtl_internal_recon", validation_input_path, rtl_internal_recon)
+    if has_vtm_recon:
+        print_psnr_report("vtm_recon_from_decodable_bitstream", validation_input_path, vtm_recon)
 
     if not rtl_bitstream.read_bytes():
         print("FAIL: RTL encoder produced an empty byte stream", file=sys.stderr)
@@ -426,6 +444,30 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def print_psnr_report(label: str, reference_path: Path, reconstructed_path: Path) -> None:
+    value = psnr_bytes(reference_path, reconstructed_path)
+    if value is None:
+        print(f"SKIP  {label}_psnr_vs_input")
+    elif math.isinf(value):
+        print(f"inf  {label}_psnr_vs_input_db")
+    else:
+        print(f"{value:.2f}  {label}_psnr_vs_input_db")
+
+
+def psnr_bytes(reference_path: Path, reconstructed_path: Path) -> float | None:
+    reference = reference_path.read_bytes()
+    reconstructed = reconstructed_path.read_bytes()
+    if len(reference) != len(reconstructed):
+        return None
+    if not reference:
+        return None
+    sse = sum((a - b) * (a - b) for a, b in zip(reference, reconstructed))
+    if sse == 0:
+        return math.inf
+    mse = sse / len(reference)
+    return 10.0 * math.log10((255.0 * 255.0) / mse)
 
 
 def input_has_nonzero_chroma(input_path: Path, info: InputInfo) -> bool:

@@ -147,13 +147,9 @@ fn vvc_quantized_color(y: u8, luma_rem: u8) -> VvcQuantizedColor {
         y,
         u: 0,
         v: 0,
-        luma_rem,
-        luma_ac_levels: [0; 15],
-        luma_ac_tokens: [0x40; 15],
-        second_luma_rem: luma_rem,
-        second_luma_ac_tokens: [0x40; 15],
         luma_tu_remainders: [luma_rem; MAX_VVC_LUMA_TUS],
-        luma_tu_ac0_tokens: [0x40; MAX_VVC_LUMA_TUS],
+        luma_tu_negative: [y < VVC_LUMA_DC_BASE as u8 && luma_rem != 0; MAX_VVC_LUMA_TUS],
+        luma_tu_ac_levels: [[0; VVC_LUMA_AC_COEFFS_PER_TU]; MAX_VVC_LUMA_TUS],
         luma_tu_count: 1,
         cb_rem: 16,
         cr_rem: 16,
@@ -691,116 +687,33 @@ fn vvc_coded_geometry_does_not_square_promote_even_visible_shapes_at_or_under_32
 #[test]
 fn vvc_ctu_partition_params_are_geometry_derived() {
     let black = quantize_vvc_color(VvcSampledColor { y: 0, u: 0, v: 0 });
-    assert_eq!(
-        vvc_ctu_partition_params(
-            VvcVideoGeometry {
-                width: 64,
-                height: 64
-            },
-            black
-        ),
-        Some(VvcCtuPartitionParams {
-            root_width: 64,
-            root_height: 64,
-            visible_width: 64,
-            visible_height: 64,
-            chroma_sampling: ChromaSampling::Cs420,
-            chroma_tu_count: 64,
-            luma_dc_abs_level: 16,
-            luma_dc_negative: true,
-            luma_ac_levels: [0; 15],
-            cb_dc_abs_level: 16,
-            cb_dc_negative: true,
-        })
-    );
-    assert_eq!(
-        vvc_ctu_partition_params(
-            VvcVideoGeometry {
-                width: 64,
-                height: 32
-            },
-            black
-        ),
-        Some(VvcCtuPartitionParams {
-            root_width: 64,
-            root_height: 64,
-            visible_width: 64,
-            visible_height: 32,
-            chroma_sampling: ChromaSampling::Cs420,
-            chroma_tu_count: 32,
-            luma_dc_abs_level: 16,
-            luma_dc_negative: true,
-            luma_ac_levels: [0; 15],
-            cb_dc_abs_level: 16,
-            cb_dc_negative: true,
-        })
-    );
-    assert_eq!(
-        vvc_ctu_partition_params(
-            VvcVideoGeometry {
-                width: 32,
-                height: 64
-            },
-            black
-        ),
-        Some(VvcCtuPartitionParams {
-            root_width: 64,
-            root_height: 64,
-            visible_width: 32,
-            visible_height: 64,
-            chroma_sampling: ChromaSampling::Cs420,
-            chroma_tu_count: 32,
-            luma_dc_abs_level: 16,
-            luma_dc_negative: true,
-            luma_ac_levels: [0; 15],
-            cb_dc_abs_level: 16,
-            cb_dc_negative: true,
-        })
-    );
-    assert_eq!(
-        vvc_ctu_partition_params(
-            VvcVideoGeometry {
-                width: 32,
-                height: 32
-            },
-            black
-        ),
-        Some(VvcCtuPartitionParams {
-            root_width: 64,
-            root_height: 64,
-            visible_width: 32,
-            visible_height: 32,
-            chroma_sampling: ChromaSampling::Cs420,
-            chroma_tu_count: 16,
-            luma_dc_abs_level: 16,
-            luma_dc_negative: true,
-            luma_ac_levels: [0; 15],
-            cb_dc_abs_level: 16,
-            cb_dc_negative: true,
-        })
-    );
-    assert_eq!(
-        vvc_ctu_partition_params(
-            VvcVideoGeometry {
-                width: 16,
-                height: 16
-            },
-            black
-        ),
-        Some(VvcCtuPartitionParams {
-            root_width: 64,
-            root_height: 64,
-            visible_width: 16,
-            visible_height: 16,
-            chroma_sampling: ChromaSampling::Cs420,
-            chroma_tu_count: 4,
-            luma_dc_abs_level: 16,
-            luma_dc_negative: true,
-            luma_ac_levels: [0; 15],
-            cb_dc_abs_level: 16,
-            cb_dc_negative: true,
-        })
-    );
+    for (width, height, chroma_tu_count, luma_tu_count) in [
+        (64, 64, 64, 64),
+        (64, 32, 32, 32),
+        (32, 64, 32, 32),
+        (32, 32, 16, 16),
+        (16, 16, 4, 4),
+    ] {
+        let params = vvc_ctu_partition_params(VvcVideoGeometry { width, height }, black)
+            .expect("partition parameters");
+        assert_eq!(params.root_width, 64);
+        assert_eq!(params.root_height, 64);
+        assert_eq!(params.visible_width, width);
+        assert_eq!(params.visible_height, height);
+        assert_eq!(params.chroma_sampling, ChromaSampling::Cs420);
+        assert_eq!(params.chroma_tu_count, chroma_tu_count);
+        assert_eq!(params.luma_tu_count, luma_tu_count);
+        assert_eq!(params.luma_tu_abs_levels[0], black.luma_tu_remainders[0]);
+        assert_eq!(
+            params.luma_tu_abs_levels[luma_tu_count - 1],
+            black.luma_tu_remainders[0]
+        );
+        assert_eq!(params.luma_tu_negative[0], black.luma_tu_negative[0]);
+        assert!(params.luma_tu_negative[0]);
+        assert_eq!(params.luma_tu_ac_levels[0], [0; VVC_LUMA_AC_COEFFS_PER_TU]);
+        assert_eq!(params.cb_dc_abs_level, 16);
+        assert!(params.cb_dc_negative);
+    }
 }
 
 #[test]
@@ -903,8 +816,6 @@ fn vvc_residual_cabac_encoder_emits_named_4x4_coefficient_bins() {
     let initial_sig8 = contexts.sig_coeff_flag[8].state();
     let initial_par0 = contexts.par_level_flag[0].state();
     let initial_abs32 = contexts.abs_level_gtx_flag[32].state();
-    let initial_sign0 = contexts.coeff_sign_flag[0].state();
-
     let mut cabac = VvcCabacEncoder::new();
     cabac.start();
     let state = VvcResidualPass1State::new(VvcResidualCtxConfig::luma_4x4_subset(3, 3));
@@ -916,20 +827,19 @@ fn vvc_residual_cabac_encoder_emits_named_4x4_coefficient_bins() {
     residual.emit_sig_coeff_flag(&mut cabac, &state, 0, 0, true);
     residual.emit_par_level_flag(&mut cabac, &state, 3, 3, false);
     residual.emit_abs_level_gtx_flag(&mut cabac, &state, 3, 3, 1, false);
-    residual.emit_coeff_sign_flag(&mut cabac, &state, 3, 3, true);
+    cabac.encode_bin_ep(true);
 
     assert_ne!(contexts.last_sig_coeff_x_prefix[3].state(), initial_last_x0);
     assert_ne!(contexts.last_sig_coeff_y_prefix[0].state(), initial_last_y0);
     assert_ne!(contexts.sig_coeff_flag[8].state(), initial_sig8);
     assert_ne!(contexts.par_level_flag[0].state(), initial_par0);
     assert_ne!(contexts.abs_level_gtx_flag[32].state(), initial_abs32);
-    assert_eq!(contexts.coeff_sign_flag[0].state(), initial_sign0);
 }
 
 #[test]
 fn vvc_ctu_body_routes_ac_coefficients_without_a_feature_gate() {
     let neutral = quantize_vvc_color(VvcSampledColor {
-        y: VVC_LUMA_DC_BASE as u8,
+        y: 128,
         u: 128,
         v: 128,
     });
@@ -941,13 +851,13 @@ fn vvc_ctu_body_routes_ac_coefficients_without_a_feature_gate() {
         neutral,
     )
     .expect("16x16 partition parameters");
-    assert_eq!(params.luma_dc_abs_level, 0);
+    assert_eq!(params.luma_tu_abs_levels[0], 0);
 
-    let dc_only = vvc_ctu_partition_cabac_bits(params, vvc_test_slice_config());
-    params.luma_ac_levels[0] = 1;
+    let without_ac = vvc_ctu_partition_cabac_bits(params, vvc_test_slice_config());
+    params.luma_tu_ac_levels[0][0] = 1;
     let with_ac = vvc_ctu_partition_cabac_bits(params, vvc_test_slice_config());
 
-    assert_ne!(with_ac, dc_only);
+    assert_ne!(with_ac, without_ac);
 }
 
 #[test]
@@ -1036,9 +946,10 @@ fn vvc_ctu_cabac_generator_uses_one_recursive_luma_base() {
             visible_height,
             chroma_sampling: ChromaSampling::Cs420,
             chroma_tu_count: (visible_width * visible_height) / 16,
-            luma_dc_abs_level: 0,
-            luma_dc_negative: false,
-            luma_ac_levels: [0; 15],
+            luma_tu_count: 0,
+            luma_tu_abs_levels: [0; MAX_VVC_LUMA_TUS],
+            luma_tu_negative: [false; MAX_VVC_LUMA_TUS],
+            luma_tu_ac_levels: [[0; VVC_LUMA_AC_COEFFS_PER_TU]; MAX_VVC_LUMA_TUS],
             cb_dc_abs_level: 0,
             cb_dc_negative: false,
         };
@@ -1080,9 +991,10 @@ fn vvc_ctu_cabac_generator_is_embedded_in_ctu_body() {
 
     let mut manual = VvcCabacEncoder::new();
     let mut ctu = VvcCtuCabacGenerator::new(
-        params.luma_dc_abs_level,
-        params.luma_dc_negative,
-        params.luma_ac_levels,
+        params.luma_tu_count,
+        params.luma_tu_abs_levels,
+        params.luma_tu_negative,
+        params.luma_tu_ac_levels,
         params.cb_dc_abs_level,
         params.cb_dc_negative,
         vvc_test_slice_config(),
@@ -1165,9 +1077,10 @@ fn vvc_ctu_chroma_tree_uses_luma_coordinate_root() {
             visible_height: 64,
             chroma_sampling,
             chroma_tu_count: 0,
-            luma_dc_abs_level: 0,
-            luma_dc_negative: false,
-            luma_ac_levels: [0; 15],
+            luma_tu_count: 0,
+            luma_tu_abs_levels: [0; MAX_VVC_LUMA_TUS],
+            luma_tu_negative: [false; MAX_VVC_LUMA_TUS],
+            luma_tu_ac_levels: [[0; VVC_LUMA_AC_COEFFS_PER_TU]; MAX_VVC_LUMA_TUS],
             cb_dc_abs_level: 0,
             cb_dc_negative: false,
         };

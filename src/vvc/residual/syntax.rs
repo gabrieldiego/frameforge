@@ -75,8 +75,13 @@ impl<'a> VvcResidualCabacEncoder<'a> {
             } => {
                 cabac.encode_rem_abs_ep(value, u32::from(rice_param));
             }
-            VvcResidualCabacSymbol::CoeffSignFlag { x, y, negative } => {
-                self.emit_coeff_sign_flag(cabac, state, x, y, negative);
+            VvcResidualCabacSymbol::BypassAbsLevel {
+                value, rice_param, ..
+            } => {
+                cabac.encode_rem_abs_ep(value, u32::from(rice_param));
+            }
+            VvcResidualCabacSymbol::CoeffSignPattern { bits, count } => {
+                cabac.encode_bins_ep(bits, u32::from(count));
             }
         }
     }
@@ -192,23 +197,6 @@ impl<'a> VvcResidualCabacEncoder<'a> {
             VvcCabacContext::AbsLevelGtxFlag(ctx_inc),
             greater_than,
         );
-    }
-
-    pub(in crate::vvc) fn emit_coeff_sign_flag(
-        &mut self,
-        cabac: &mut VvcCabacEncoder,
-        state: &VvcResidualPass1State,
-        x: u8,
-        y: u8,
-        negative: bool,
-    ) {
-        if state.config.transform_skip_residual_enabled() {
-            let ctx_inc = state.coeff_sign_flag_ts_ctx_inc(x, y);
-            self.contexts
-                .encode(cabac, VvcCabacContext::CoeffSignFlag(ctx_inc), negative);
-        } else {
-            cabac.encode_bin_ep(negative);
-        }
     }
 
     pub(in crate::vvc) fn emit_default_tool_control_hooks(
@@ -392,7 +380,6 @@ pub(in crate::vvc) struct VvcResidualPass1State {
     pub(in crate::vvc) config: VvcResidualCtxConfig,
     pub(in crate::vvc) sig_coeff: Vec<bool>,
     pub(in crate::vvc) abs_level_pass1: Vec<u8>,
-    pub(in crate::vvc) coeff_sign_level: Vec<i8>,
     pub(in crate::vvc) sb_coded: Vec<bool>,
 }
 
@@ -439,10 +426,15 @@ pub(in crate::vvc) enum VvcResidualCabacSymbol {
         value: u32,
         rice_param: u8,
     },
-    CoeffSignFlag {
+    BypassAbsLevel {
         x: u8,
         y: u8,
-        negative: bool,
+        value: u32,
+        rice_param: u8,
+    },
+    CoeffSignPattern {
+        bits: u32,
+        count: u8,
     },
 }
 
@@ -459,28 +451,19 @@ impl VvcResidualPass1State {
             config,
             sig_coeff: vec![false; config.coefficient_count()],
             abs_level_pass1: vec![0; config.coefficient_count()],
-            coeff_sign_level: vec![0; config.coefficient_count()],
             sb_coded: vec![false; config.subblock_count()],
         }
     }
 
-    pub(in crate::vvc) fn set_pass1_coeff(
-        &mut self,
-        x: u8,
-        y: u8,
-        abs_level_pass1: u8,
-        negative: bool,
-    ) {
+    pub(in crate::vvc) fn set_pass1_coeff(&mut self, x: u8, y: u8, abs_level: u8, _negative: bool) {
         let index = self.config.coefficient_index(x, y);
-        self.sig_coeff[index] = abs_level_pass1 != 0;
-        self.abs_level_pass1[index] = abs_level_pass1;
-        self.coeff_sign_level[index] = if abs_level_pass1 == 0 {
-            0
-        } else if negative {
-            -1
-        } else {
-            1
-        };
+        self.sig_coeff[index] = abs_level != 0;
+        // VTM CoeffCodingContext::sigCtxIdAbs uses
+        // min(4 + (absLevel & 1), absLevel) for the local template sum and
+        // then reuses sumAbs - numPos for the par/gt context offset.
+        // Keep that exact template magnitude here instead of an artificial
+        // pass-1 clip so AC contexts track H.266 9.3.4.2.8/9.
+        self.abs_level_pass1[index] = template_abs_sum_level(abs_level);
     }
 
     pub(in crate::vvc) fn set_sb_coded(&mut self, x_s: u8, y_s: u8, coded: bool) {
@@ -549,39 +532,6 @@ impl VvcResidualPass1State {
 
     pub(in crate::vvc) fn abs_level_gtx_flag_ctx_inc(&self, x: u8, y: u8, gtx_idx: u8) -> u8 {
         self.par_or_abs_level_ctx_inc(x, y, true, gtx_idx)
-    }
-
-    pub(in crate::vvc) fn coeff_sign_flag_ts_ctx_inc(&self, x: u8, y: u8) -> u8 {
-        // VVC 9.3.4.2.10 is used only for transform-skip sign contexts.
-        // Regular residual sign bins remain bypass-coded in the current path.
-        debug_assert!(self.config.transform_skip_residual_enabled());
-        let left_sign = if x == 0 {
-            0
-        } else {
-            self.coeff_sign_level_at(x - 1, y)
-        };
-        let above_sign = if y == 0 {
-            0
-        } else {
-            self.coeff_sign_level_at(x, y - 1)
-        };
-        if (left_sign == 0 && above_sign == 0) || left_sign == -above_sign {
-            if self.config.bdpcm {
-                3
-            } else {
-                0
-            }
-        } else if left_sign >= 0 && above_sign >= 0 {
-            if self.config.bdpcm {
-                4
-            } else {
-                1
-            }
-        } else if self.config.bdpcm {
-            5
-        } else {
-            2
-        }
     }
 
     pub(in crate::vvc) fn local_stats(&self, x: u8, y: u8) -> VvcResidualLocalStats {
@@ -692,49 +642,12 @@ impl VvcResidualPass1State {
         self.abs_level_pass1[self.config.coefficient_index(x, y)]
     }
 
-    pub(in crate::vvc) fn coeff_sign_level_at(&self, x: u8, y: u8) -> i8 {
-        self.coeff_sign_level[self.config.coefficient_index(x, y)]
-    }
-
     pub(in crate::vvc) fn sb_coded_at(&self, x_s: u8, y_s: u8) -> bool {
         self.sb_coded[self.config.subblock_index(x_s, y_s)]
     }
 }
 
 impl VvcResidualCabacSymbolStream {
-    #[cfg(test)]
-    pub(in crate::vvc) fn from_quantized_luma_dc(
-        log2_tb_width: u8,
-        log2_tb_height: u8,
-        block: super::VvcQuantizedTransformBlock,
-    ) -> Self {
-        Self::luma_dc_only(
-            log2_tb_width,
-            log2_tb_height,
-            block.abs_remainder,
-            block.reconstructed_dc_coeff < 0 && block.abs_remainder != 0,
-        )
-    }
-
-    #[cfg(test)]
-    pub(in crate::vvc) fn luma_dc_only(
-        log2_tb_width: u8,
-        log2_tb_height: u8,
-        abs_level: u8,
-        negative: bool,
-    ) -> Self {
-        let signed_level = if abs_level == 0 {
-            0
-        } else if negative {
-            -(abs_level as i16)
-        } else {
-            abs_level as i16
-        };
-        let mut levels = vec![0; (1usize << log2_tb_width) * (1usize << log2_tb_height)];
-        levels[0] = signed_level;
-        Self::luma_coefficients(log2_tb_width, log2_tb_height, &levels)
-    }
-
     pub(in crate::vvc) fn luma_coefficients(
         log2_tb_width: u8,
         log2_tb_height: u8,
@@ -742,20 +655,22 @@ impl VvcResidualCabacSymbolStream {
     ) -> Self {
         // H.266 7.3.11.11 residual_coding() first codes the last significant
         // coefficient position and then walks earlier scan positions with
-        // sig_coeff_flag and level/sign syntax. This subset is intentionally
-        // limited to coefficients in the first 4x4 subblock while AC plumbing
-        // is being audited; larger scan-position suffix and sb_coded_flag
-        // generation remain labelled future work.
+        // sig_coeff_flag and level/sign syntax. VTM's CoeffCodingContext uses
+        // SCAN_GROUPED_4x4 with diagonal scan (CommonLib/Rom.cpp). This subset
+        // is intentionally limited to coefficients in the first 4x4 subblock
+        // while larger scan-position suffix and sb_coded_flag generation remain
+        // labelled future work.
         let width = 1usize << log2_tb_width;
         let height = 1usize << log2_tb_height;
         assert_eq!(coeff_levels.len(), width * height);
 
-        let last_index = coeff_levels
+        let scan = grouped_4x4_diag_scan(width, height);
+        let last_scan_pos = scan
             .iter()
-            .rposition(|level| *level != 0)
+            .rposition(|pos| coeff_levels[pos.raster_index] != 0)
             .unwrap_or(0);
-        let last_x = (last_index % width) as u8;
-        let last_y = (last_index / width) as u8;
+        let last_x = scan[last_scan_pos].x as u8;
+        let last_y = scan[last_scan_pos].y as u8;
         assert!(
             last_x < 4 && last_y < 4,
             "AC subset currently supports first 4x4 subblock"
@@ -764,15 +679,11 @@ impl VvcResidualCabacSymbolStream {
         let config =
             VvcResidualCtxConfig::luma_subset(log2_tb_width, log2_tb_height, last_x, last_y);
         let mut pass1_state = VvcResidualPass1State::new(config);
-        for (index, level) in coeff_levels
-            .iter()
-            .copied()
-            .enumerate()
-            .take(last_index + 1)
-        {
-            let x = (index % width) as u8;
-            let y = (index / width) as u8;
-            let abs_level = level.unsigned_abs().min(3) as u8;
+        for pos in scan.iter().take(last_scan_pos + 1) {
+            let level = coeff_levels[pos.raster_index];
+            let x = pos.x as u8;
+            let y = pos.y as u8;
+            let abs_level = level.unsigned_abs().min(u8::MAX as u16) as u8;
             pass1_state.set_pass1_coeff(x, y, abs_level, level < 0);
         }
         pass1_state.set_sb_coded(0, 0, coeff_levels.iter().any(|level| *level != 0));
@@ -781,18 +692,102 @@ impl VvcResidualCabacSymbolStream {
         Self::append_last_sig_coeff_prefix(&mut symbols, true, log2_tb_width, last_x);
         Self::append_last_sig_coeff_prefix(&mut symbols, false, log2_tb_height, last_y);
 
-        for index in (0..=last_index).rev() {
-            let x = (index % width) as u8;
-            let y = (index / width) as u8;
-            let level = coeff_levels[index];
+        let mut remainder_symbols = Vec::new();
+        let mut bypass_symbols = Vec::new();
+        let mut sign_bits = 0u32;
+        let mut sign_count = 0u8;
+        let mut residual_state = 0u8;
+        let mut rem_reg_bins = regular_bin_limit(width, height);
+        let mut first_pos_2nd_pass: Option<usize> = None;
+        let mut next_scan_pos = last_scan_pos as isize;
+        let infer_sig_pos = last_scan_pos as isize;
+        let mut num_nonzero = 0usize;
+
+        while next_scan_pos >= 0 && rem_reg_bins >= 4 {
+            let scan_pos = next_scan_pos as usize;
+            let pos = scan[scan_pos];
+            let x = pos.x as u8;
+            let y = pos.y as u8;
+            let level = coeff_levels[pos.raster_index];
             let abs_level = level.unsigned_abs().min(u8::MAX as u16) as u8;
             let significant = abs_level != 0;
-            if index != last_index {
+            if num_nonzero != 0 || next_scan_pos != infer_sig_pos {
                 symbols.push(VvcResidualCabacSymbol::SigCoeffFlag { x, y, significant });
+                rem_reg_bins -= 1;
             }
             if significant {
-                Self::append_regular_level_symbols(&mut symbols, x, y, abs_level, level < 0);
+                num_nonzero += 1;
+                Self::append_regular_level_symbols(&mut symbols, x, y, abs_level);
+                rem_reg_bins -= regular_level_bin_count(abs_level);
+                if abs_level > 3 {
+                    first_pos_2nd_pass = Some(first_pos_2nd_pass.map_or(scan_pos, |first| {
+                        first.max(scan_pos)
+                    }));
+                }
+                append_sign_bit(&mut sign_bits, &mut sign_count, level < 0);
             }
+            residual_state = disabled_dep_quant_state_transition(residual_state, abs_level);
+            next_scan_pos -= 1;
+        }
+
+        let min_pos_2nd_pass = next_scan_pos;
+        if let Some(first_pos_2nd_pass) = first_pos_2nd_pass {
+            for scan_pos in ((min_pos_2nd_pass + 1) as usize..=first_pos_2nd_pass).rev() {
+                let pos = scan[scan_pos];
+                let abs_level = coeff_levels[pos.raster_index]
+                    .unsigned_abs()
+                    .min(u8::MAX as u16) as u8;
+                if abs_level >= 4 {
+                    let x = pos.x as u8;
+                    let y = pos.y as u8;
+                    remainder_symbols.push(VvcResidualCabacSymbol::AbsRemainder {
+                        x,
+                        y,
+                        value: u32::from((abs_level - 4) >> 1),
+                        rice_param: derive_rice_param(scan_pos, coeff_levels, width, &scan, 4),
+                    });
+                }
+            }
+        }
+
+        if min_pos_2nd_pass >= 0 {
+            for scan_pos in (0..=min_pos_2nd_pass as usize).rev() {
+                let pos = scan[scan_pos];
+                let level = coeff_levels[pos.raster_index];
+                let abs_level = level.unsigned_abs().min(u8::MAX as u16) as u8;
+                let rice_param = derive_rice_param(scan_pos, coeff_levels, width, &scan, 0);
+                let zero_pos = go_rice_zero_position(residual_state, rice_param);
+                let rem_value = if abs_level == 0 {
+                    zero_pos
+                } else if u32::from(abs_level) <= zero_pos {
+                    u32::from(abs_level - 1)
+                } else {
+                    u32::from(abs_level)
+                };
+                bypass_symbols.push(VvcResidualCabacSymbol::BypassAbsLevel {
+                    x: pos.x as u8,
+                    y: pos.y as u8,
+                    value: rem_value,
+                    rice_param,
+                });
+                residual_state = disabled_dep_quant_state_transition(residual_state, abs_level);
+                if abs_level != 0 {
+                    append_sign_bit(&mut sign_bits, &mut sign_count, level < 0);
+                }
+            }
+        }
+        // H.266 7.3.11.11 / residual_coding_subblock(): Go-Rice remainders
+        // are emitted in a second pass after all regular significant/gt/par
+        // bins for the subblock. If the regular-bin budget is exhausted, the
+        // remaining dec_abs_level values are bypass-coded before the grouped
+        // coefficient signs. See VTM CABACWriter::residual_coding_subblock().
+        symbols.extend(remainder_symbols);
+        symbols.extend(bypass_symbols);
+        if sign_count > 0 {
+            symbols.push(VvcResidualCabacSymbol::CoeffSignPattern {
+                bits: sign_bits,
+                count: sign_count,
+            });
         }
 
         Self {
@@ -837,11 +832,10 @@ impl VvcResidualCabacSymbolStream {
         x: u8,
         y: u8,
         abs_level: u8,
-        negative: bool,
     ) {
         // H.266 7.3.11.11 residual_coding_subblock regular-pass order: gt1,
-        // parity, gt2, remainder, then sign. Rice adaptation is kept fixed at
-        // zero in this subset until the full state update is added.
+        // parity, gt2. Remainder and sign bypass bins are collected and
+        // emitted after this pass for the whole subblock.
         symbols.push(VvcResidualCabacSymbol::AbsLevelGtxFlag {
             x,
             y,
@@ -860,16 +854,7 @@ impl VvcResidualCabacSymbolStream {
                 gtx_idx: 1,
                 greater_than: abs_level > 3,
             });
-            if abs_level > 3 {
-                symbols.push(VvcResidualCabacSymbol::AbsRemainder {
-                    x,
-                    y,
-                    value: u32::from((abs_level - 4) >> 1),
-                    rice_param: 0,
-                });
-            }
         }
-        symbols.push(VvcResidualCabacSymbol::CoeffSignFlag { x, y, negative });
     }
 
     pub(in crate::vvc) fn emit(
@@ -883,4 +868,144 @@ impl VvcResidualCabacSymbolStream {
             encoder.emit_residual_symbol(cabac, &self.pass1_state, *symbol);
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VvcScanPosition {
+    x: usize,
+    y: usize,
+    raster_index: usize,
+}
+
+fn grouped_4x4_diag_scan(width: usize, height: usize) -> Vec<VvcScanPosition> {
+    debug_assert!(width >= 4);
+    debug_assert!(height >= 4);
+    let group_width = 4;
+    let group_height = 4;
+    let groups_wide = width / group_width;
+    let groups_high = height / group_height;
+    let mut scan = Vec::with_capacity(width * height);
+    for group in diag_scan_positions(groups_wide, groups_high) {
+        let group_x = group.x * group_width;
+        let group_y = group.y * group_height;
+        for local in diag_scan_positions(group_width, group_height) {
+            let x = group_x + local.x;
+            let y = group_y + local.y;
+            scan.push(VvcScanPosition {
+                x,
+                y,
+                raster_index: y * width + x,
+            });
+        }
+    }
+    scan
+}
+
+fn diag_scan_positions(width: usize, height: usize) -> Vec<VvcScanPosition> {
+    let mut line = 0usize;
+    let mut column = 0usize;
+    let mut scan = Vec::with_capacity(width * height);
+    for _ in 0..(width * height) {
+        scan.push(VvcScanPosition {
+            x: column,
+            y: line,
+            raster_index: line * width + column,
+        });
+
+        if column == width - 1 || line == 0 {
+            line += column + 1;
+            column = 0;
+            if line >= height {
+                column += line - (height - 1);
+                line = height - 1;
+            }
+        } else {
+            column += 1;
+            line -= 1;
+        }
+    }
+    scan
+}
+
+fn template_abs_sum_level(abs_level: u8) -> u8 {
+    abs_level.min(4 + (abs_level & 1))
+}
+
+fn regular_bin_limit(width: usize, height: usize) -> i32 {
+    // H.266 residual_coding(): cctx.regBinLimit is derived from
+    // MAX_TU_LEVEL_CTX_CODED_BIN_CONSTRAINT_LUMA (28) as
+    // (TbAreaAfterCoefZeroOut * 28) >> 4. The current residual path uses luma
+    // coefficients only and does not zero-out additional scan positions.
+    ((width * height * 28) >> 4) as i32
+}
+
+fn regular_level_bin_count(abs_level: u8) -> i32 {
+    if abs_level > 1 { 3 } else { 1 }
+}
+
+fn append_sign_bit(sign_bits: &mut u32, sign_count: &mut u8, negative: bool) {
+    if *sign_count != 0 {
+        *sign_bits <<= 1;
+    }
+    *sign_bits |= u32::from(negative);
+    *sign_count += 1;
+}
+
+fn disabled_dep_quant_state_transition(_state: u8, _abs_level: u8) -> u8 {
+    // VTM passes stateTransTable = 0 when dependent quantization is disabled,
+    // so the residual state remains zero for both regular and bypass passes.
+    0
+}
+
+fn derive_rice_param(
+    scan_pos: usize,
+    coeff_levels: &[i16],
+    width: usize,
+    scan: &[VvcScanPosition],
+    base_level: i16,
+) -> u8 {
+    const GO_RICE_PARS_COEFF: [u8; 32] = [
+        0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3,
+        3, 3, 3,
+    ];
+    let sum_abs = rice_template_abs_sum(scan_pos, coeff_levels, width, scan);
+    let clipped = (sum_abs - 5 * base_level).clamp(0, 31) as usize;
+    GO_RICE_PARS_COEFF[clipped]
+}
+
+fn rice_template_abs_sum(
+    scan_pos: usize,
+    coeff_levels: &[i16],
+    width: usize,
+    scan: &[VvcScanPosition],
+) -> i16 {
+    let pos = scan[scan_pos];
+    let height = coeff_levels.len() / width;
+    let x = pos.x;
+    let y = pos.y;
+    let mut sum = 0i16;
+    if x + 1 < width {
+        sum += coeff_abs_at(coeff_levels, width, x + 1, y);
+        if x + 2 < width {
+            sum += coeff_abs_at(coeff_levels, width, x + 2, y);
+        }
+        if y + 1 < height {
+            sum += coeff_abs_at(coeff_levels, width, x + 1, y + 1);
+        }
+    }
+    if y + 1 < height {
+        sum += coeff_abs_at(coeff_levels, width, x, y + 1);
+        if y + 2 < height {
+            sum += coeff_abs_at(coeff_levels, width, x, y + 2);
+        }
+    }
+    sum
+}
+
+fn coeff_abs_at(coeff_levels: &[i16], width: usize, x: usize, y: usize) -> i16 {
+    coeff_levels[y * width + x].abs()
+}
+
+fn go_rice_zero_position(state: u8, rice_param: u8) -> u32 {
+    u32::from(if state < 2 { 1u8 } else { 2u8 }) << rice_param
 }

@@ -219,9 +219,10 @@ ctxInc = (binIdx >> ctxShift) + ctxOffset
 ```
 
 The encoder must pass the actual transform-block size into this derivation.
-The current residual path keeps nonzero coding effectively DC-only, while AC
-plumbing is limited to the first 4x4 coefficient group; future AC work must not
-reuse a fixed 4x4 `log2TbSize` assumption for larger luma TUs.
+The current residual path emits luma coefficient syntax from generated
+coefficient arrays. AC coding is limited to the first 4x4 coefficient group
+until scan-position suffix and `sb_coded_flag` coverage is expanded for larger
+coefficient groups.
 
 ### Tables 122-126: coefficient flags
 
