@@ -35,7 +35,7 @@ module ff_vvc_annexb_header #(
   localparam logic [2:0] NAL_TEMPORAL_ID_PLUS1 = 3'd1;
   localparam logic [15:0] CTU_SIZE_L = CTU_SIZE;
   localparam logic [6:0] SPS_FIELD_COUNT = 7'd106;
-  localparam logic [6:0] PPS_FIELD_COUNT = 7'd33;
+  localparam logic [6:0] PPS_FIELD_COUNT = 7'd27;
   localparam logic [3:0] ST_IDLE = 4'd0;
   localparam logic [3:0] ST_START_CODE = 4'd1;
   localparam logic [3:0] ST_NAL_HEADER = 4'd2;
@@ -144,9 +144,10 @@ module ff_vvc_annexb_header #(
   // (the tile-delta flag is zero-width when the spec gates it off),
   // geometry fields for rectangular slices,
   // one loop-filter-across-slices flag,
-  // then 32 post-partition fields through pps_extension_flag.
+  // then 26 post-partition fields through pps_extension_flag. The deblocking
+  // offset syntax is gated off because pps_deblocking_filter_disabled_flag=1.
   assign pps_multi_field_count =
-    16'd51 + ctu_cols + ctu_rows + pps_slice_geometry_field_count;
+    16'd45 + ctu_cols + ctu_rows + pps_slice_geometry_field_count;
   assign rbsp_output_active =
     (state_q == ST_FIELDS) ||
     (state_q == ST_TRAILING_STOP) ||
@@ -372,16 +373,10 @@ module ff_vvc_annexb_header #(
           7'd20: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // cu chroma qp offset list
           7'd21: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // deblocking filter control present
           7'd22: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // deblocking override
-          7'd23: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // deblocking disabled
-          7'd24: begin syntax_value = 32'd5; syntax_bits = 6'd5; end // beta offset se(-2)
-          7'd25: begin syntax_value = 32'd11; syntax_bits = 6'd7; end // tc offset se(-5)
-          7'd26: begin syntax_value = 32'd5; syntax_bits = 6'd5; end // cb beta offset se(-2)
-          7'd27: begin syntax_value = 32'd11; syntax_bits = 6'd7; end // cb tc offset se(-5)
-          7'd28: begin syntax_value = 32'd5; syntax_bits = 6'd5; end // cr beta offset se(-2)
-          7'd29: begin syntax_value = 32'd11; syntax_bits = 6'd7; end // cr tc offset se(-5)
-          7'd30: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // picture header extension
-          7'd31: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // slice header extension
-          7'd32: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // pps_extension_flag
+          7'd23: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // deblocking disabled
+          7'd24: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // picture header extension
+          7'd25: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // slice header extension
+          7'd26: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // pps_extension_flag
           default: begin syntax_value = 32'd0; syntax_bits = 6'd0; end
         endcase
       end else begin
@@ -460,17 +455,11 @@ module ff_vvc_annexb_header #(
               16'd15: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
               16'd16: begin syntax_value = 32'd1; syntax_bits = 6'd1; end
               16'd17: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
-              16'd18: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
-              16'd19: begin syntax_value = 32'd5; syntax_bits = 6'd5; end
-              16'd20: begin syntax_value = 32'd11; syntax_bits = 6'd7; end
-              16'd21: begin syntax_value = 32'd5; syntax_bits = 6'd5; end
-              16'd22: begin syntax_value = 32'd11; syntax_bits = 6'd7; end
-              16'd23: begin syntax_value = 32'd5; syntax_bits = 6'd5; end
-              16'd24: begin syntax_value = 32'd11; syntax_bits = 6'd7; end
-              16'd25, 16'd26, 16'd27, 16'd28: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
-              16'd29: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
-              16'd30: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
-              16'd31: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
+              16'd18: begin syntax_value = 32'd1; syntax_bits = 6'd1; end
+              16'd19, 16'd20, 16'd21, 16'd22: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
+              16'd23: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
+              16'd24: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
+              16'd25: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
               default: begin syntax_value = 32'd0; syntax_bits = 6'd0; end
             endcase
           end

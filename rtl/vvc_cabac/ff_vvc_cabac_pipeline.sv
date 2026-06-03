@@ -55,7 +55,7 @@ module ff_vvc_cabac_pipeline #(
     .ctu_y(16'd0),
     .ctu_visible_width(16'd0),
     .ctu_visible_height(16'd0),
-    .ctu_luma_dc_abs_level(5'd0),
+    .ctu_luma_dc_abs_level(8'd0),
     .ctu_luma_dc_negative(1'b0),
     .ctu_luma_only(1'b0),
     .ctu_last(1'b0),

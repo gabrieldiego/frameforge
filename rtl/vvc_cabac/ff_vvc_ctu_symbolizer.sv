@@ -10,8 +10,9 @@ module ff_vvc_ctu_symbolizer #(
   input  logic [15:0] visible_width,
   input  logic [15:0] visible_height,
   input  logic [1:0]  chroma_format_idc,
-  input  logic [4:0]  luma_abs_level,
+  input  logic [7:0]  luma_abs_level,
   input  logic        luma_negative,
+  input  logic [(8 * 15) - 1:0] luma_ac_levels,
   input  logic [4:0]  cb_abs_level,
   input  logic        cb_negative,
   input  logic [2:0]  luma_log2_tb_width,
@@ -58,48 +59,67 @@ module ff_vvc_ctu_symbolizer #(
   localparam int LUMA_NEIGHBOUR_GRID = CTU_SIZE / 8;
   localparam int LUMA_NEIGHBOUR_CELLS = LUMA_NEIGHBOUR_GRID * LUMA_NEIGHBOUR_GRID;
 
-  localparam logic [5:0] CTX_SPLIT_FLAG_0 = 6'd0;
-  localparam logic [5:0] CTX_SPLIT_FLAG_6 = 6'd1;
-  localparam logic [5:0] CTX_SPLIT_QT_FLAG_3 = 6'd2;
-  localparam logic [5:0] CTX_SPLIT_FLAG_3 = 6'd3;
-  localparam logic [5:0] CTX_INTRA_LUMA_MPM_FLAG = 6'd4;
-  localparam logic [5:0] CTX_QT_CBF_Y_0 = 6'd5;
-  localparam logic [5:0] CTX_LAST_SIG_X_PREFIX_3 = 6'd6;
-  localparam logic [5:0] CTX_LAST_SIG_Y_PREFIX_3 = 6'd7;
-  localparam logic [5:0] CTX_LAST_SIG_X_PREFIX_6 = 6'd8;
-  localparam logic [5:0] CTX_LAST_SIG_Y_PREFIX_6 = 6'd9;
-  localparam logic [5:0] CTX_ABS_LEVEL_GTX_FLAG_0 = 6'd10;
-  localparam logic [5:0] CTX_PAR_LEVEL_FLAG_0 = 6'd11;
-  localparam logic [5:0] CTX_ABS_LEVEL_GTX_FLAG_32 = 6'd12;
-  localparam logic [5:0] CTX_CCLM_MODE_FLAG = 6'd13;
-  localparam logic [5:0] CTX_INTRA_CHROMA_PRED_MODE_0 = 6'd14;
-  localparam logic [5:0] CTX_QT_CBF_CB_0 = 6'd15;
-  localparam logic [5:0] CTX_QT_CBF_CR_0 = 6'd16;
-  localparam logic [5:0] CTX_LAST_SIG_X_PREFIX_10 = 6'd17;
-  localparam logic [5:0] CTX_LAST_SIG_Y_PREFIX_10 = 6'd18;
-  localparam logic [5:0] CTX_SPLIT_FLAG_7 = 6'd19;
-  localparam logic [5:0] CTX_SPLIT_QT_FLAG_0 = 6'd20;
-  localparam logic [5:0] CTX_MULTI_REF_LINE_IDX_0 = 6'd21;
-  localparam logic [5:0] CTX_LAST_SIG_X_PREFIX_15 = 6'd22;
-  localparam logic [5:0] CTX_LAST_SIG_Y_PREFIX_15 = 6'd23;
-  localparam logic [5:0] CTX_MTT_SPLIT_CU_VERTICAL_3 = 6'd24;
-  localparam logic [5:0] CTX_MTT_SPLIT_CU_BINARY_1 = 6'd25;
-  localparam logic [5:0] CTX_MTT_SPLIT_CU_BINARY_3 = 6'd26;
-  localparam logic [5:0] CTX_SPLIT_FLAG_1 = 6'd27;
-  localparam logic [5:0] CTX_SPLIT_FLAG_2 = 6'd28;
-  localparam logic [5:0] CTX_MTT_SPLIT_CU_VERTICAL_0 = 6'd29;
-  localparam logic [5:0] CTX_MTT_SPLIT_CU_VERTICAL_4 = 6'd30;
-  localparam logic [5:0] CTX_MTT_SPLIT_CU_BINARY_0 = 6'd31;
-  localparam logic [5:0] CTX_MTT_SPLIT_CU_BINARY_2 = 6'd32;
-  localparam logic [5:0] CTX_SPLIT_FLAG_4 = 6'd33;
-  localparam logic [5:0] CTX_SPLIT_QT_FLAG_1 = 6'd34;
-  localparam logic [5:0] CTX_SPLIT_QT_FLAG_2 = 6'd35;
-  localparam logic [5:0] CTX_SPLIT_QT_FLAG_4 = 6'd36;
-  localparam logic [5:0] CTX_SPLIT_QT_FLAG_5 = 6'd37;
-  localparam logic [5:0] CTX_SPLIT_FLAG_5 = 6'd38;
-  localparam logic [5:0] CTX_SPLIT_FLAG_8 = 6'd39;
-  localparam logic [5:0] CTX_MTT_SPLIT_CU_VERTICAL_1 = 6'd40;
-  localparam logic [5:0] CTX_MTT_SPLIT_CU_VERTICAL_2 = 6'd41;
+  localparam logic [9:0] CTX_SPLIT_FLAG_0 = 10'd0;
+  localparam logic [9:0] CTX_SPLIT_FLAG_6 = 10'd1;
+  localparam logic [9:0] CTX_SPLIT_QT_FLAG_3 = 10'd2;
+  localparam logic [9:0] CTX_SPLIT_FLAG_3 = 10'd3;
+  localparam logic [9:0] CTX_INTRA_LUMA_MPM_FLAG = 10'd4;
+  localparam logic [9:0] CTX_QT_CBF_Y_0 = 10'd5;
+  localparam logic [9:0] CTX_LAST_SIG_X_PREFIX_3 = 10'd6;
+  localparam logic [9:0] CTX_LAST_SIG_Y_PREFIX_3 = 10'd7;
+  localparam logic [9:0] CTX_LAST_SIG_X_PREFIX_6 = 10'd8;
+  localparam logic [9:0] CTX_LAST_SIG_Y_PREFIX_6 = 10'd9;
+  localparam logic [9:0] CTX_ABS_LEVEL_GTX_FLAG_0 = 10'd10;
+  localparam logic [9:0] CTX_PAR_LEVEL_FLAG_0 = 10'd11;
+  localparam logic [9:0] CTX_ABS_LEVEL_GTX_FLAG_32 = 10'd12;
+  localparam logic [9:0] CTX_CCLM_MODE_FLAG = 10'd13;
+  localparam logic [9:0] CTX_INTRA_CHROMA_PRED_MODE_0 = 10'd14;
+  localparam logic [9:0] CTX_QT_CBF_CB_0 = 10'd15;
+  localparam logic [9:0] CTX_QT_CBF_CR_0 = 10'd16;
+  localparam logic [9:0] CTX_LAST_SIG_X_PREFIX_10 = 10'd17;
+  localparam logic [9:0] CTX_LAST_SIG_Y_PREFIX_10 = 10'd18;
+  localparam logic [9:0] CTX_SPLIT_FLAG_7 = 10'd19;
+  localparam logic [9:0] CTX_SPLIT_QT_FLAG_0 = 10'd20;
+  localparam logic [9:0] CTX_MULTI_REF_LINE_IDX_0 = 10'd21;
+  localparam logic [9:0] CTX_LAST_SIG_X_PREFIX_15 = 10'd22;
+  localparam logic [9:0] CTX_LAST_SIG_Y_PREFIX_15 = 10'd23;
+  localparam logic [9:0] CTX_MTT_SPLIT_CU_VERTICAL_3 = 10'd24;
+  localparam logic [9:0] CTX_MTT_SPLIT_CU_BINARY_1 = 10'd25;
+  localparam logic [9:0] CTX_MTT_SPLIT_CU_BINARY_3 = 10'd26;
+  localparam logic [9:0] CTX_SPLIT_FLAG_1 = 10'd27;
+  localparam logic [9:0] CTX_SPLIT_FLAG_2 = 10'd28;
+  localparam logic [9:0] CTX_MTT_SPLIT_CU_VERTICAL_0 = 10'd29;
+  localparam logic [9:0] CTX_MTT_SPLIT_CU_VERTICAL_4 = 10'd30;
+  localparam logic [9:0] CTX_MTT_SPLIT_CU_BINARY_0 = 10'd31;
+  localparam logic [9:0] CTX_MTT_SPLIT_CU_BINARY_2 = 10'd32;
+  localparam logic [9:0] CTX_SPLIT_FLAG_4 = 10'd33;
+  localparam logic [9:0] CTX_SPLIT_QT_FLAG_1 = 10'd34;
+  localparam logic [9:0] CTX_SPLIT_QT_FLAG_2 = 10'd35;
+  localparam logic [9:0] CTX_SPLIT_QT_FLAG_4 = 10'd36;
+  localparam logic [9:0] CTX_SPLIT_QT_FLAG_5 = 10'd37;
+  localparam logic [9:0] CTX_SPLIT_FLAG_5 = 10'd38;
+  localparam logic [9:0] CTX_SPLIT_FLAG_8 = 10'd39;
+  localparam logic [9:0] CTX_MTT_SPLIT_CU_VERTICAL_1 = 10'd40;
+  localparam logic [9:0] CTX_MTT_SPLIT_CU_VERTICAL_2 = 10'd41;
+  localparam logic [9:0] CTX_INTRA_LUMA_PLANAR_FLAG_1 = 10'd53;
+  localparam logic [9:0] CTX_LAST_SIG_X_PREFIX_4 = 10'd54;
+  localparam logic [9:0] CTX_LAST_SIG_Y_PREFIX_4 = 10'd55;
+  localparam logic [9:0] CTX_SIG_COEFF_FLAG_1 = 10'd56;
+  localparam logic [9:0] CTX_SIG_COEFF_FLAG_4 = 10'd57;
+  localparam logic [9:0] CTX_SIG_COEFF_FLAG_5 = 10'd58;
+  localparam logic [9:0] CTX_SIG_COEFF_FLAG_9 = 10'd59;
+  localparam logic [9:0] CTX_ABS_LEVEL_GTX_FLAG_11 = 10'd60;
+  localparam logic [9:0] CTX_PAR_LEVEL_FLAG_11 = 10'd61;
+  localparam logic [9:0] CTX_ABS_LEVEL_GTX_FLAG_43 = 10'd62;
+  localparam logic [9:0] CTX_SIG_COEFF_FLAG_6 = 10'd63;
+  localparam logic [9:0] CTX_ABS_LEVEL_GTX_FLAG_7 = 10'd64;
+  localparam logic [9:0] CTX_PAR_LEVEL_FLAG_7 = 10'd65;
+  localparam logic [9:0] CTX_ABS_LEVEL_GTX_FLAG_39 = 10'd66;
+  localparam logic [9:0] CTX_ABS_LEVEL_GTX_FLAG_13 = 10'd67;
+  localparam logic [9:0] CTX_PAR_LEVEL_FLAG_13 = 10'd68;
+  localparam logic [9:0] CTX_ABS_LEVEL_GTX_FLAG_45 = 10'd69;
+
+  localparam int LUMA_RESIDUAL_SYMBOL_MAX = 64;
 
   localparam logic [4:0] ST_IDLE = 5'd0;
   localparam logic [4:0] ST_POP = 5'd1;
@@ -123,6 +143,7 @@ module ff_vvc_ctu_symbolizer #(
   localparam logic [4:0] ST_CHROMA_RESIDUAL = 5'd19;
   localparam logic [4:0] ST_DONE = 5'd20;
   localparam logic [4:0] ST_PALETTE_LEAF = 5'd21;
+  localparam logic [4:0] ST_LUMA_MPM_IDX = 5'd22;
 
   logic [4:0] state_q;
   logic [5:0] stack_count_q;
@@ -177,21 +198,21 @@ module ff_vvc_ctu_symbolizer #(
   logic [15:0] split_h_q;
   logic [2:0] split_cqt_q;
   logic [2:0] split_mtt_q;
-  logic [5:0] split_ctx_q;
+  logic [9:0] split_ctx_q;
   logic split_write_split_q;
-  logic [5:0] split_qt_ctx_q;
+  logic [9:0] split_qt_ctx_q;
   logic split_qt_bin_q;
   logic split_write_qt_q;
   logic split_write_mtt_q;
-  logic [5:0] split_mtt_ctx_q;
+  logic [9:0] split_mtt_ctx_q;
   logic split_write_binary_q;
-  logic [5:0] split_binary_ctx_q;
+  logic [9:0] split_binary_ctx_q;
 
   logic leaf_cbf_q;
   logic chroma_cbf_cb_q;
-  logic [3:0] residual_step_q;
-  logic [4:0] rem_abs_value;
-  logic [4:0] rem_code_value;
+  logic [7:0] residual_step_q;
+  logic [7:0] rem_abs_value;
+  logic [7:0] rem_code_value;
   logic [2:0] rem_prefix_extra_len;
   logic [5:0] rem_prefix_count;
   logic [31:0] rem_prefix_pattern;
@@ -203,9 +224,9 @@ module ff_vvc_ctu_symbolizer #(
   logic [31:0] cb_rem_prefix_pattern;
   logic [5:0] cb_rem_suffix_count;
   logic [31:0] cb_rem_suffix_pattern;
-  logic [5:0] cur_last_sig_x_ctx;
-  logic [5:0] cur_last_sig_y_ctx;
-  logic [5:0] cur_leaf_split_ctx;
+  logic [9:0] cur_last_sig_x_ctx;
+  logic [9:0] cur_last_sig_y_ctx;
+  logic [9:0] cur_leaf_split_ctx;
   logic cur_leaf_writes_split;
   logic [15:0] cur_visible_width;
   logic [15:0] cur_visible_height;
@@ -218,7 +239,7 @@ module ff_vvc_ctu_symbolizer #(
   logic cur_qt_left_deeper;
   logic cur_qt_above_deeper;
   logic [2:0] cur_qt_ctx_inc;
-  logic [5:0] cur_split_qt_ctx;
+  logic [9:0] cur_split_qt_ctx;
   logic [16:0] cur_right;
   logic [16:0] cur_bottom;
   logic cur_intersects;
@@ -231,10 +252,10 @@ module ff_vvc_ctu_symbolizer #(
   logic [1:0] cur_mtt_vertical_alternatives;
   logic [15:0] cur_mtt_dep_above;
   logic [15:0] cur_mtt_dep_left;
-  logic [5:0] cur_mtt_vertical_ctx;
+  logic [9:0] cur_mtt_vertical_ctx;
   logic cur_mtt_write_vertical;
   logic cur_mtt_write_binary;
-  logic [5:0] cur_mtt_binary_ctx;
+  logic [9:0] cur_mtt_binary_ctx;
   logic cur_luma_can_qt;
   logic cur_luma_can_btt;
   logic [3:0] cur_luma_max_btt_depth;
@@ -246,7 +267,7 @@ module ff_vvc_ctu_symbolizer #(
   logic [3:0] cur_luma_split_alternatives;
   logic [1:0] cur_luma_split_neighbour_ctx;
   logic [3:0] cur_luma_split_ctx_inc;
-  logic [5:0] cur_luma_split_ctx;
+  logic [9:0] cur_luma_split_ctx;
   logic cur_luma_writes_split;
   logic [15:0] cur_chroma_luma_width;
   logic [15:0] cur_chroma_luma_height;
@@ -263,9 +284,45 @@ module ff_vvc_ctu_symbolizer #(
   logic [3:0] cur_chroma_split_alternatives;
   logic [1:0] cur_chroma_split_neighbour_ctx;
   logic [3:0] cur_chroma_split_ctx_inc;
-  logic [5:0] cur_chroma_split_ctx;
+  logic [9:0] cur_chroma_split_ctx;
   logic cur_chroma_writes_split;
   logic [2:0] unused_luma_log2;
+  logic signed [7:0] luma_coeff_level [0:15];
+  logic [7:0] luma_coeff_abs [0:15];
+  logic       luma_coeff_negative [0:15];
+  logic [7:0] luma_coeff_template_abs [0:15];
+  logic       luma_has_coeff;
+  logic [4:0] luma_last_scan_pos;
+  logic [1:0] luma_last_x;
+  logic [1:0] luma_last_y;
+  logic [7:0] luma_res_symbol_count;
+  logic [7:0] luma_res_kind [0:LUMA_RESIDUAL_SYMBOL_MAX - 1];
+  logic [31:0] luma_res_data [0:LUMA_RESIDUAL_SYMBOL_MAX - 1];
+  integer coeff_i;
+  integer scan_i;
+  integer bin_i;
+  integer res_i;
+  integer local_i;
+  integer local_x_i;
+  integer local_y_i;
+  integer mark_coeff_i;
+  logic [3:0] scan_x_tmp;
+  logic [3:0] scan_y_tmp;
+  logic [4:0] scan_raster_tmp;
+  logic [4:0] last_scan_pos_tmp;
+  logic [1:0] last_x_tmp;
+  logic [1:0] last_y_tmp;
+  logic [7:0] coeff_abs_tmp;
+  logic coeff_negative_tmp;
+  logic [9:0] residual_ctx_tmp;
+  logic [7:0] loc_num_sig_tmp;
+  logic [7:0] loc_sum_abs_tmp;
+  logic [7:0] sum_bucket_tmp;
+  logic [7:0] ctx_offset_tmp;
+  logic [7:0] d_sum_tmp;
+  logic [31:0] sign_bits_tmp;
+  logic [5:0] sign_count_tmp;
+  logic [7:0] regular_bins_left_tmp;
 
   assign busy = (state_q != ST_IDLE) || m_axis_valid;
   assign dual_tree_chroma_enabled = (chroma_format_idc != 2'd0) && (chroma_format_idc != 2'd3);
@@ -540,21 +597,22 @@ module ff_vvc_ctu_symbolizer #(
   end
 
 
-  assign rem_abs_value = (luma_abs_level - 5'd4) >> 1;
-  assign rem_code_value = rem_abs_value - 5'd5;
+  assign rem_abs_value = (luma_abs_level - 8'd4) >> 1;
+  assign rem_code_value = rem_abs_value - 8'd5;
   assign rem_prefix_extra_len =
-    (rem_code_value <= 5'd0) ? 3'd0 :
-    ((rem_code_value <= 5'd2) ? 3'd1 :
-    ((rem_code_value <= 5'd6) ? 3'd2 : 3'd3));
+    (rem_code_value <= 8'd0) ? 3'd0 :
+    ((rem_code_value <= 8'd2) ? 3'd1 :
+    ((rem_code_value <= 8'd6) ? 3'd2 : 3'd3));
   assign rem_prefix_count =
-    (rem_abs_value < 5'd5) ? {1'b0, rem_abs_value + 5'd1} : {3'd0, rem_prefix_extra_len} + 6'd5;
+    (rem_abs_value < 8'd5) ? {1'b0, rem_abs_value[4:0] + 5'd1} :
+    {3'd0, rem_prefix_extra_len} + 6'd5;
   assign rem_prefix_pattern =
-    (rem_abs_value < 5'd5) ?
+    (rem_abs_value < 8'd5) ?
     ((32'd1 << rem_prefix_count) - 32'd2) :
     ((32'd1 << rem_prefix_count) - 32'd1);
-  assign rem_suffix_count = (rem_abs_value < 5'd5) ? 6'd0 : {3'd0, rem_prefix_extra_len} + 6'd1;
+  assign rem_suffix_count = (rem_abs_value < 8'd5) ? 6'd0 : {3'd0, rem_prefix_extra_len} + 6'd1;
   assign rem_suffix_pattern =
-    (rem_abs_value < 5'd5) ? 32'd0 :
+    (rem_abs_value < 8'd5) ? 32'd0 :
     (rem_code_value - ((32'd1 << rem_prefix_extra_len) - 32'd1));
 
   assign cb_rem_code_value = cb_abs_level - 5'd5;
@@ -573,6 +631,271 @@ module ff_vvc_ctu_symbolizer #(
   assign cb_rem_suffix_pattern =
     (cb_abs_level < 5'd5) ? 32'd0 :
     (cb_rem_code_value - ((32'd1 << cb_rem_prefix_extra_len) - 32'd1));
+
+  always @* begin
+    for (res_i = 0; res_i < LUMA_RESIDUAL_SYMBOL_MAX; res_i = res_i + 1) begin
+      luma_res_kind[res_i] = 8'd0;
+      luma_res_data[res_i] = 32'd0;
+    end
+
+    for (coeff_i = 0; coeff_i < 16; coeff_i = coeff_i + 1) begin
+      luma_coeff_level[coeff_i] = 8'sd0;
+      luma_coeff_abs[coeff_i] = 8'd0;
+      luma_coeff_negative[coeff_i] = 1'b0;
+      luma_coeff_template_abs[coeff_i] = 8'd0;
+    end
+
+    luma_coeff_level[0] = (luma_negative && (luma_abs_level != 8'd0)) ?
+      -$signed({1'b0, luma_abs_level}) : $signed({1'b0, luma_abs_level});
+    for (coeff_i = 1; coeff_i < 16; coeff_i = coeff_i + 1) begin
+      luma_coeff_level[coeff_i] =
+        $signed(luma_ac_levels[((15 - coeff_i) * 8) +: 8]);
+    end
+
+    luma_has_coeff = 1'b0;
+    for (coeff_i = 0; coeff_i < 16; coeff_i = coeff_i + 1) begin
+      coeff_abs_tmp = luma_coeff_level[coeff_i][7] ?
+        -luma_coeff_level[coeff_i] : luma_coeff_level[coeff_i];
+      luma_coeff_abs[coeff_i] = coeff_abs_tmp;
+      luma_coeff_negative[coeff_i] = luma_coeff_level[coeff_i][7];
+      luma_coeff_template_abs[coeff_i] =
+        (coeff_abs_tmp < (8'd4 + {7'd0, coeff_abs_tmp[0]})) ?
+        coeff_abs_tmp : (8'd4 + {7'd0, coeff_abs_tmp[0]});
+      if (coeff_abs_tmp != 8'd0) begin
+        luma_has_coeff = 1'b1;
+      end
+    end
+
+    last_scan_pos_tmp = 5'd0;
+    last_x_tmp = 2'd0;
+    last_y_tmp = 2'd0;
+    for (scan_i = 0; scan_i < 16; scan_i = scan_i + 1) begin
+      case (scan_i)
+        0: begin scan_x_tmp = 4'd0; scan_y_tmp = 4'd0; scan_raster_tmp = 5'd0; end
+        1: begin scan_x_tmp = 4'd0; scan_y_tmp = 4'd1; scan_raster_tmp = 5'd4; end
+        2: begin scan_x_tmp = 4'd1; scan_y_tmp = 4'd0; scan_raster_tmp = 5'd1; end
+        3: begin scan_x_tmp = 4'd0; scan_y_tmp = 4'd2; scan_raster_tmp = 5'd8; end
+        4: begin scan_x_tmp = 4'd1; scan_y_tmp = 4'd1; scan_raster_tmp = 5'd5; end
+        5: begin scan_x_tmp = 4'd2; scan_y_tmp = 4'd0; scan_raster_tmp = 5'd2; end
+        6: begin scan_x_tmp = 4'd0; scan_y_tmp = 4'd3; scan_raster_tmp = 5'd12; end
+        7: begin scan_x_tmp = 4'd1; scan_y_tmp = 4'd2; scan_raster_tmp = 5'd9; end
+        8: begin scan_x_tmp = 4'd2; scan_y_tmp = 4'd1; scan_raster_tmp = 5'd6; end
+        9: begin scan_x_tmp = 4'd3; scan_y_tmp = 4'd0; scan_raster_tmp = 5'd3; end
+        10: begin scan_x_tmp = 4'd1; scan_y_tmp = 4'd3; scan_raster_tmp = 5'd13; end
+        11: begin scan_x_tmp = 4'd2; scan_y_tmp = 4'd2; scan_raster_tmp = 5'd10; end
+        12: begin scan_x_tmp = 4'd3; scan_y_tmp = 4'd1; scan_raster_tmp = 5'd7; end
+        13: begin scan_x_tmp = 4'd2; scan_y_tmp = 4'd3; scan_raster_tmp = 5'd14; end
+        14: begin scan_x_tmp = 4'd3; scan_y_tmp = 4'd2; scan_raster_tmp = 5'd11; end
+        default: begin scan_x_tmp = 4'd3; scan_y_tmp = 4'd3; scan_raster_tmp = 5'd15; end
+      endcase
+      if (luma_coeff_abs[scan_raster_tmp] != 8'd0) begin
+        last_scan_pos_tmp = scan_i[4:0];
+        last_x_tmp = scan_x_tmp[1:0];
+        last_y_tmp = scan_y_tmp[1:0];
+      end
+    end
+    luma_last_scan_pos = last_scan_pos_tmp;
+    luma_last_x = last_x_tmp;
+    luma_last_y = last_y_tmp;
+
+    luma_res_symbol_count = 8'd0;
+    sign_bits_tmp = 32'd0;
+    sign_count_tmp = 6'd0;
+    regular_bins_left_tmp = 8'd112;
+
+    if (luma_has_coeff) begin
+      for (bin_i = 0; bin_i < 4; bin_i = bin_i + 1) begin
+        if (bin_i <= {30'd0, luma_last_x}) begin
+          residual_ctx_tmp = (bin_i < 2) ? CTX_LAST_SIG_X_PREFIX_3 : CTX_LAST_SIG_X_PREFIX_4;
+          luma_res_kind[luma_res_symbol_count] = SYMBOL_BIN_CTX;
+          luma_res_data[luma_res_symbol_count] = {
+            14'd0, residual_ctx_tmp, 7'd0, (bin_i < {30'd0, luma_last_x})
+          };
+          luma_res_symbol_count = luma_res_symbol_count + 8'd1;
+        end
+      end
+      for (bin_i = 0; bin_i < 4; bin_i = bin_i + 1) begin
+        if (bin_i <= {30'd0, luma_last_y}) begin
+          residual_ctx_tmp = (bin_i < 2) ? CTX_LAST_SIG_Y_PREFIX_3 : CTX_LAST_SIG_Y_PREFIX_4;
+          luma_res_kind[luma_res_symbol_count] = SYMBOL_BIN_CTX;
+          luma_res_data[luma_res_symbol_count] = {
+            14'd0, residual_ctx_tmp, 7'd0, (bin_i < {30'd0, luma_last_y})
+          };
+          luma_res_symbol_count = luma_res_symbol_count + 8'd1;
+        end
+      end
+
+      for (scan_i = 15; scan_i >= 0; scan_i = scan_i - 1) begin
+        case (scan_i)
+          0: begin scan_x_tmp = 4'd0; scan_y_tmp = 4'd0; scan_raster_tmp = 5'd0; end
+          1: begin scan_x_tmp = 4'd0; scan_y_tmp = 4'd1; scan_raster_tmp = 5'd4; end
+          2: begin scan_x_tmp = 4'd1; scan_y_tmp = 4'd0; scan_raster_tmp = 5'd1; end
+          3: begin scan_x_tmp = 4'd0; scan_y_tmp = 4'd2; scan_raster_tmp = 5'd8; end
+          4: begin scan_x_tmp = 4'd1; scan_y_tmp = 4'd1; scan_raster_tmp = 5'd5; end
+          5: begin scan_x_tmp = 4'd2; scan_y_tmp = 4'd0; scan_raster_tmp = 5'd2; end
+          6: begin scan_x_tmp = 4'd0; scan_y_tmp = 4'd3; scan_raster_tmp = 5'd12; end
+          7: begin scan_x_tmp = 4'd1; scan_y_tmp = 4'd2; scan_raster_tmp = 5'd9; end
+          8: begin scan_x_tmp = 4'd2; scan_y_tmp = 4'd1; scan_raster_tmp = 5'd6; end
+          9: begin scan_x_tmp = 4'd3; scan_y_tmp = 4'd0; scan_raster_tmp = 5'd3; end
+          10: begin scan_x_tmp = 4'd1; scan_y_tmp = 4'd3; scan_raster_tmp = 5'd13; end
+          11: begin scan_x_tmp = 4'd2; scan_y_tmp = 4'd2; scan_raster_tmp = 5'd10; end
+          12: begin scan_x_tmp = 4'd3; scan_y_tmp = 4'd1; scan_raster_tmp = 5'd7; end
+          13: begin scan_x_tmp = 4'd2; scan_y_tmp = 4'd3; scan_raster_tmp = 5'd14; end
+          14: begin scan_x_tmp = 4'd3; scan_y_tmp = 4'd2; scan_raster_tmp = 5'd11; end
+          default: begin scan_x_tmp = 4'd3; scan_y_tmp = 4'd3; scan_raster_tmp = 5'd15; end
+        endcase
+
+        if (scan_i <= {27'd0, luma_last_scan_pos}) begin
+          loc_num_sig_tmp = 8'd0;
+          loc_sum_abs_tmp = 8'd0;
+          for (local_i = 0; local_i < 5; local_i = local_i + 1) begin
+            case (local_i)
+              0: begin local_x_i = scan_x_tmp + 1; local_y_i = scan_y_tmp; end
+              1: begin local_x_i = scan_x_tmp + 2; local_y_i = scan_y_tmp; end
+              2: begin local_x_i = scan_x_tmp + 1; local_y_i = scan_y_tmp + 1; end
+              3: begin local_x_i = scan_x_tmp; local_y_i = scan_y_tmp + 1; end
+              default: begin local_x_i = scan_x_tmp; local_y_i = scan_y_tmp + 2; end
+            endcase
+            mark_coeff_i = (local_y_i * 4) + local_x_i;
+            if ((local_x_i < 4) && (local_y_i < 4) && (luma_coeff_abs[mark_coeff_i] != 8'd0)) begin
+              loc_num_sig_tmp = loc_num_sig_tmp + 8'd1;
+              loc_sum_abs_tmp = loc_sum_abs_tmp + luma_coeff_template_abs[mark_coeff_i];
+            end
+          end
+
+          if ((sign_count_tmp != 6'd0) || (scan_i != {27'd0, luma_last_scan_pos})) begin
+            sum_bucket_tmp = (loc_sum_abs_tmp + 8'd1) >> 1;
+            if (sum_bucket_tmp > 8'd3) begin
+              sum_bucket_tmp = 8'd3;
+            end
+            d_sum_tmp = {4'd0, scan_x_tmp} + {4'd0, scan_y_tmp};
+            if (d_sum_tmp < 8'd2) begin
+              residual_ctx_tmp = 6'd8 + sum_bucket_tmp[5:0];
+            end else if (d_sum_tmp < 8'd5) begin
+              residual_ctx_tmp = 6'd4 + sum_bucket_tmp[5:0];
+            end else begin
+              residual_ctx_tmp = sum_bucket_tmp[5:0];
+            end
+            case (residual_ctx_tmp)
+              6'd1: residual_ctx_tmp = CTX_SIG_COEFF_FLAG_1;
+              6'd4: residual_ctx_tmp = CTX_SIG_COEFF_FLAG_4;
+              6'd5: residual_ctx_tmp = CTX_SIG_COEFF_FLAG_5;
+              6'd6: residual_ctx_tmp = CTX_SIG_COEFF_FLAG_6;
+              6'd9: residual_ctx_tmp = CTX_SIG_COEFF_FLAG_9;
+              default: residual_ctx_tmp = CTX_SIG_COEFF_FLAG_5;
+            endcase
+            luma_res_kind[luma_res_symbol_count] = SYMBOL_BIN_CTX;
+            luma_res_data[luma_res_symbol_count] = {
+              14'd0, residual_ctx_tmp, 7'd0, luma_coeff_abs[scan_raster_tmp] != 8'd0
+            };
+            luma_res_symbol_count = luma_res_symbol_count + 8'd1;
+            regular_bins_left_tmp = regular_bins_left_tmp - 8'd1;
+          end
+
+          if (luma_coeff_abs[scan_raster_tmp] != 8'd0) begin
+            if ((scan_x_tmp[1:0] == luma_last_x) && (scan_y_tmp[1:0] == luma_last_y)) begin
+              ctx_offset_tmp = 8'd0;
+              residual_ctx_tmp = CTX_ABS_LEVEL_GTX_FLAG_0;
+            end else begin
+              ctx_offset_tmp = loc_sum_abs_tmp - loc_num_sig_tmp;
+              if (ctx_offset_tmp > 8'd4) begin
+                ctx_offset_tmp = 8'd4;
+              end
+              d_sum_tmp = {4'd0, scan_x_tmp} + {4'd0, scan_y_tmp};
+              residual_ctx_tmp = 6'd1 + ctx_offset_tmp[5:0] +
+                ((d_sum_tmp == 8'd0) ? 6'd15 :
+                ((d_sum_tmp < 8'd3) ? 6'd10 : 6'd5));
+            end
+
+            case (residual_ctx_tmp)
+              6'd0: residual_ctx_tmp = CTX_ABS_LEVEL_GTX_FLAG_0;
+              6'd7: residual_ctx_tmp = CTX_ABS_LEVEL_GTX_FLAG_7;
+              6'd11: residual_ctx_tmp = CTX_ABS_LEVEL_GTX_FLAG_11;
+              6'd13: residual_ctx_tmp = CTX_ABS_LEVEL_GTX_FLAG_13;
+              default: residual_ctx_tmp = CTX_ABS_LEVEL_GTX_FLAG_0;
+            endcase
+            luma_res_kind[luma_res_symbol_count] = SYMBOL_BIN_CTX;
+            luma_res_data[luma_res_symbol_count] = {
+              14'd0, residual_ctx_tmp, 7'd0, luma_coeff_abs[scan_raster_tmp] > 8'd1
+            };
+            luma_res_symbol_count = luma_res_symbol_count + 8'd1;
+            regular_bins_left_tmp = regular_bins_left_tmp - 8'd1;
+
+            if (luma_coeff_abs[scan_raster_tmp] > 8'd1) begin
+              if ((scan_x_tmp[1:0] == luma_last_x) && (scan_y_tmp[1:0] == luma_last_y)) begin
+                residual_ctx_tmp = CTX_PAR_LEVEL_FLAG_0;
+              end else begin
+                ctx_offset_tmp = loc_sum_abs_tmp - loc_num_sig_tmp;
+                if (ctx_offset_tmp > 8'd4) begin
+                  ctx_offset_tmp = 8'd4;
+                end
+                d_sum_tmp = {4'd0, scan_x_tmp} + {4'd0, scan_y_tmp};
+                residual_ctx_tmp = 6'd1 + ctx_offset_tmp[5:0] +
+                  ((d_sum_tmp == 8'd0) ? 6'd15 :
+                  ((d_sum_tmp < 8'd3) ? 6'd10 : 6'd5));
+                case (residual_ctx_tmp)
+                  6'd7: residual_ctx_tmp = CTX_PAR_LEVEL_FLAG_7;
+                  6'd11: residual_ctx_tmp = CTX_PAR_LEVEL_FLAG_11;
+                  6'd13: residual_ctx_tmp = CTX_PAR_LEVEL_FLAG_13;
+                  default: residual_ctx_tmp = CTX_PAR_LEVEL_FLAG_0;
+                endcase
+              end
+              luma_res_kind[luma_res_symbol_count] = SYMBOL_BIN_CTX;
+              luma_res_data[luma_res_symbol_count] = {
+                14'd0, residual_ctx_tmp, 7'd0, luma_coeff_abs[scan_raster_tmp][0]
+              };
+              luma_res_symbol_count = luma_res_symbol_count + 8'd1;
+
+              if ((scan_x_tmp[1:0] == luma_last_x) && (scan_y_tmp[1:0] == luma_last_y)) begin
+                residual_ctx_tmp = CTX_ABS_LEVEL_GTX_FLAG_32;
+              end else begin
+                ctx_offset_tmp = loc_sum_abs_tmp - loc_num_sig_tmp;
+                if (ctx_offset_tmp > 8'd4) begin
+                  ctx_offset_tmp = 8'd4;
+                end
+                d_sum_tmp = {4'd0, scan_x_tmp} + {4'd0, scan_y_tmp};
+                residual_ctx_tmp = 6'd33 + ctx_offset_tmp[5:0] +
+                  ((d_sum_tmp == 8'd0) ? 6'd15 :
+                  ((d_sum_tmp < 8'd3) ? 6'd10 : 6'd5));
+                case (residual_ctx_tmp)
+                  6'd39: residual_ctx_tmp = CTX_ABS_LEVEL_GTX_FLAG_39;
+                  6'd43: residual_ctx_tmp = CTX_ABS_LEVEL_GTX_FLAG_43;
+                  6'd45: residual_ctx_tmp = CTX_ABS_LEVEL_GTX_FLAG_45;
+                  default: residual_ctx_tmp = CTX_ABS_LEVEL_GTX_FLAG_32;
+                endcase
+              end
+              luma_res_kind[luma_res_symbol_count] = SYMBOL_BIN_CTX;
+              luma_res_data[luma_res_symbol_count] = {
+                14'd0, residual_ctx_tmp, 7'd0, luma_coeff_abs[scan_raster_tmp] > 8'd3
+              };
+              luma_res_symbol_count = luma_res_symbol_count + 8'd1;
+            end
+
+            if ((scan_raster_tmp == 5'd0) && (luma_coeff_abs[scan_raster_tmp] > 8'd3)) begin
+              luma_res_kind[luma_res_symbol_count] = SYMBOL_BINS_EP;
+              luma_res_data[luma_res_symbol_count] = (rem_prefix_pattern << 6) | {26'd0, rem_prefix_count};
+              luma_res_symbol_count = luma_res_symbol_count + 8'd1;
+              luma_res_kind[luma_res_symbol_count] = SYMBOL_BINS_EP;
+              luma_res_data[luma_res_symbol_count] = (rem_suffix_pattern << 6) | {26'd0, rem_suffix_count};
+              luma_res_symbol_count = luma_res_symbol_count + 8'd1;
+            end
+
+            if (sign_count_tmp != 6'd0) begin
+              sign_bits_tmp = sign_bits_tmp << 1;
+            end
+            sign_bits_tmp = sign_bits_tmp | {31'd0, luma_coeff_negative[scan_raster_tmp]};
+            sign_count_tmp = sign_count_tmp + 6'd1;
+          end
+        end
+      end
+
+      if (sign_count_tmp != 6'd0) begin
+        luma_res_kind[luma_res_symbol_count] = SYMBOL_BINS_EP;
+        luma_res_data[luma_res_symbol_count] = (sign_bits_tmp << 6) | {26'd0, sign_count_tmp};
+        luma_res_symbol_count = luma_res_symbol_count + 8'd1;
+      end
+    end
+  end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -612,7 +935,7 @@ module ff_vvc_ctu_symbolizer #(
       split_binary_ctx_q <= 6'd0;
       leaf_cbf_q <= 1'b0;
       chroma_cbf_cb_q <= 1'b0;
-      residual_step_q <= 4'd0;
+      residual_step_q <= 8'd0;
       for (neighbour_i = 0; neighbour_i < LUMA_NEIGHBOUR_CELLS; neighbour_i = neighbour_i + 1) begin
         luma_neighbour_valid[neighbour_i] <= 1'b0;
         luma_neighbour_width[neighbour_i] <= 16'd0;
@@ -699,12 +1022,12 @@ module ff_vvc_ctu_symbolizer #(
           if (!cur_intersects) begin
             state_q <= ST_POP;
           end else if (cur_fits && cur_leaf_allowed) begin
-            residual_step_q <= 4'd0;
+            residual_step_q <= 8'd0;
             if (cur_chroma_q) begin
               chroma_cbf_cb_q <= 1'b0;
               state_q <= ST_CHROMA_SPLIT;
             end else begin
-              leaf_cbf_q <= (cur_x_q == 16'd0) && (cur_y_q == 16'd0) && (luma_abs_level != 5'd0);
+              leaf_cbf_q <= (cur_x_q == 16'd0) && (cur_y_q == 16'd0) && luma_has_coeff;
               state_q <= ST_LUMA_SPLIT;
             end
           end else if (!cur_fits) begin
@@ -839,7 +1162,7 @@ module ff_vvc_ctu_symbolizer #(
           if (split_write_split_q) begin
             m_axis_valid <= 1'b1;
             m_axis_kind <= SYMBOL_BIN_CTX;
-            m_axis_data <= {18'd0, split_ctx_q, 7'd0, 1'b1};
+            m_axis_data <= {14'd0, split_ctx_q, 7'd0, 1'b1};
           end
           state_q <= ST_SPLIT_QT;
         end
@@ -848,7 +1171,7 @@ module ff_vvc_ctu_symbolizer #(
           if (split_write_qt_q) begin
             m_axis_valid <= 1'b1;
             m_axis_kind <= SYMBOL_BIN_CTX;
-            m_axis_data <= {18'd0, split_qt_ctx_q, 7'd0, split_qt_bin_q};
+            m_axis_data <= {14'd0, split_qt_ctx_q, 7'd0, split_qt_bin_q};
             state_q <= ST_SPLIT_MTT;
           end else begin
             state_q <= ST_SPLIT_MTT;
@@ -859,7 +1182,7 @@ module ff_vvc_ctu_symbolizer #(
           if (split_write_mtt_q) begin
             m_axis_valid <= 1'b1;
             m_axis_kind <= SYMBOL_BIN_CTX;
-            m_axis_data <= {18'd0, split_mtt_ctx_q, 7'd0, split_vertical_q};
+            m_axis_data <= {14'd0, split_mtt_ctx_q, 7'd0, split_vertical_q};
             state_q <= ST_SPLIT_BIN;
           end else begin
             state_q <= ST_SPLIT_BIN;
@@ -870,7 +1193,7 @@ module ff_vvc_ctu_symbolizer #(
           if (split_write_binary_q) begin
             m_axis_valid <= 1'b1;
             m_axis_kind <= SYMBOL_BIN_CTX;
-            m_axis_data <= {18'd0, split_binary_ctx_q, 7'd0, 1'b1};
+            m_axis_data <= {14'd0, split_binary_ctx_q, 7'd0, 1'b1};
             state_q <= ST_SPLIT_PUSH;
           end else begin
             state_q <= ST_SPLIT_PUSH;
@@ -956,7 +1279,7 @@ module ff_vvc_ctu_symbolizer #(
           if (cur_leaf_writes_split) begin
             m_axis_valid <= 1'b1;
             m_axis_kind <= SYMBOL_BIN_CTX;
-            m_axis_data <= {18'd0, cur_leaf_split_ctx, 7'd0, 1'b0};
+            m_axis_data <= {14'd0, cur_leaf_split_ctx, 7'd0, 1'b0};
           end
           state_q <= palette_partition_mode ? ST_PALETTE_LEAF : ST_LUMA_MRL;
         end
@@ -986,7 +1309,7 @@ module ff_vvc_ctu_symbolizer #(
           if (sps_mrl_enabled_flag && (cur_y_q != 16'd0)) begin
             m_axis_valid <= 1'b1;
             m_axis_kind <= SYMBOL_BIN_CTX;
-            m_axis_data <= {18'd0, CTX_MULTI_REF_LINE_IDX_0, 7'd0, 1'b0};
+            m_axis_data <= {14'd0, CTX_MULTI_REF_LINE_IDX_0, 7'd0, 1'b0};
           end
           state_q <= ST_LUMA_MPM;
         end
@@ -994,21 +1317,28 @@ module ff_vvc_ctu_symbolizer #(
         ST_LUMA_MPM: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_CTX;
-          m_axis_data <= {18'd0, CTX_INTRA_LUMA_MPM_FLAG, 7'd0, 1'b0};
+          m_axis_data <= {14'd0, CTX_INTRA_LUMA_MPM_FLAG, 7'd0, 1'b1};
           state_q <= ST_LUMA_MODE;
         end
 
         ST_LUMA_MODE: begin
           m_axis_valid <= 1'b1;
-          m_axis_kind <= SYMBOL_BINS_EP;
-          m_axis_data <= (32'd26 << 6) | 32'd6;
+          m_axis_kind <= SYMBOL_BIN_CTX;
+          m_axis_data <= {14'd0, CTX_INTRA_LUMA_PLANAR_FLAG_1, 7'd0, 1'b1};
+          state_q <= ST_LUMA_MPM_IDX;
+        end
+
+        ST_LUMA_MPM_IDX: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BIN_EP;
+          m_axis_data <= 32'd0;
           state_q <= ST_LUMA_CBF;
         end
 
         ST_LUMA_CBF: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_CTX;
-          m_axis_data <= {18'd0, CTX_QT_CBF_Y_0, 7'd0, leaf_cbf_q};
+          m_axis_data <= {14'd0, CTX_QT_CBF_Y_0, 7'd0, leaf_cbf_q};
           for (mark_y_i = 0; mark_y_i < LUMA_NEIGHBOUR_GRID; mark_y_i = mark_y_i + 1) begin
             for (mark_x_i = 0; mark_x_i < LUMA_NEIGHBOUR_GRID; mark_x_i = mark_x_i + 1) begin
               if (((mark_x_i * LUMA_MAX_LEAF_SIZE) >= cur_x_q) &&
@@ -1022,61 +1352,27 @@ module ff_vvc_ctu_symbolizer #(
               end
             end
           end
-          residual_step_q <= 4'd0;
+          residual_step_q <= 8'd0;
           state_q <= leaf_cbf_q ? ST_LUMA_RESIDUAL : ST_POP;
         end
 
         ST_LUMA_RESIDUAL: begin
           m_axis_valid <= 1'b1;
-          case (residual_step_q)
-            4'd0: begin
-              m_axis_kind <= SYMBOL_BIN_CTX;
-              m_axis_data <= {18'd0, cur_last_sig_x_ctx, 7'd0, 1'b0};
-              residual_step_q <= 4'd1;
-            end
-            4'd1: begin
-              m_axis_kind <= SYMBOL_BIN_CTX;
-              m_axis_data <= {18'd0, cur_last_sig_y_ctx, 7'd0, 1'b0};
-              residual_step_q <= 4'd2;
-            end
-            4'd2: begin
-              m_axis_kind <= SYMBOL_BIN_CTX;
-              m_axis_data <= {18'd0, CTX_ABS_LEVEL_GTX_FLAG_0, 7'd0, luma_abs_level > 5'd1};
-              residual_step_q <= (luma_abs_level <= 5'd1) ? 4'd7 : 4'd3;
-            end
-            4'd3: begin
-              m_axis_kind <= SYMBOL_BIN_CTX;
-              m_axis_data <= {18'd0, CTX_PAR_LEVEL_FLAG_0, 7'd0, luma_abs_level[0]};
-              residual_step_q <= 4'd4;
-            end
-            4'd4: begin
-              m_axis_kind <= SYMBOL_BIN_CTX;
-              m_axis_data <= {18'd0, CTX_ABS_LEVEL_GTX_FLAG_32, 7'd0, luma_abs_level > 5'd3};
-              residual_step_q <= (luma_abs_level <= 5'd3) ? 4'd7 : 4'd5;
-            end
-            4'd5: begin
-              m_axis_kind <= SYMBOL_BINS_EP;
-              m_axis_data <= (rem_prefix_pattern << 6) | {26'd0, rem_prefix_count};
-              residual_step_q <= 4'd6;
-            end
-            4'd6: begin
-              m_axis_kind <= SYMBOL_BINS_EP;
-              m_axis_data <= (rem_suffix_pattern << 6) | {26'd0, rem_suffix_count};
-              residual_step_q <= 4'd7;
-            end
-            default: begin
-              m_axis_kind <= SYMBOL_BIN_EP;
-              m_axis_data <= {31'd0, luma_negative};
-              state_q <= ST_POP;
-            end
-          endcase
+          m_axis_kind <= luma_res_kind[residual_step_q];
+          m_axis_data <= luma_res_data[residual_step_q];
+          if ((residual_step_q + 8'd1) >= luma_res_symbol_count) begin
+            residual_step_q <= 8'd0;
+            state_q <= ST_POP;
+          end else begin
+            residual_step_q <= residual_step_q + 8'd1;
+          end
         end
 
         ST_CHROMA_SPLIT: begin
           if (cur_leaf_writes_split) begin
             m_axis_valid <= 1'b1;
             m_axis_kind <= SYMBOL_BIN_CTX;
-            m_axis_data <= {18'd0, cur_leaf_split_ctx, 7'd0, 1'b0};
+            m_axis_data <= {14'd0, cur_leaf_split_ctx, 7'd0, 1'b0};
           end
           state_q <= (sps_cclm_enabled_flag && cur_chroma_cclm_allowed) ? ST_CHROMA_CCLM : ST_CHROMA_MODE;
         end
@@ -1084,30 +1380,30 @@ module ff_vvc_ctu_symbolizer #(
         ST_CHROMA_CCLM: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_CTX;
-          m_axis_data <= {18'd0, CTX_CCLM_MODE_FLAG, 7'd0, 1'b0};
+          m_axis_data <= {14'd0, CTX_CCLM_MODE_FLAG, 7'd0, 1'b0};
           state_q <= ST_CHROMA_MODE;
         end
 
         ST_CHROMA_MODE: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_CTX;
-          m_axis_data <= {18'd0, CTX_INTRA_CHROMA_PRED_MODE_0, 7'd0, 1'b0};
+          m_axis_data <= {14'd0, CTX_INTRA_CHROMA_PRED_MODE_0, 7'd0, 1'b0};
           chroma_cbf_cb_q <= 1'b0;
-          residual_step_q <= 4'd0;
+          residual_step_q <= 8'd0;
           state_q <= ST_CHROMA_CBF_CB;
         end
 
         ST_CHROMA_CBF_CB: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_CTX;
-          m_axis_data <= {18'd0, CTX_QT_CBF_CB_0, 7'd0, chroma_cbf_cb_q};
+          m_axis_data <= {14'd0, CTX_QT_CBF_CB_0, 7'd0, chroma_cbf_cb_q};
           state_q <= ST_CHROMA_CBF_CR;
         end
 
         ST_CHROMA_CBF_CR: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_CTX;
-          m_axis_data <= {18'd0, CTX_QT_CBF_CR_0, 7'd0, 1'b0};
+          m_axis_data <= {14'd0, CTX_QT_CBF_CR_0, 7'd0, 1'b0};
           state_q <= chroma_cbf_cb_q ? ST_CHROMA_RESIDUAL : ST_POP;
         end
 

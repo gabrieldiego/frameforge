@@ -1362,6 +1362,14 @@ fn vvc_cabac_vector_dump_json(
             "false"
         }
     ));
+    json.push_str(",\"luma_ac_levels\":[");
+    for (idx, level) in params.luma_tu_ac_levels[0].iter().enumerate() {
+        if idx != 0 {
+            json.push(',');
+        }
+        json.push_str(&level.to_string());
+    }
+    json.push(']');
     json.push_str(&format!(",\"cb_dc_abs_level\":{}", params.cb_dc_abs_level));
     json.push_str(&format!(
         ",\"cb_dc_negative\":{}",

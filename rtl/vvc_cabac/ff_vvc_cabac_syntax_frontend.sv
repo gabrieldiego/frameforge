@@ -19,7 +19,7 @@ module ff_vvc_cabac_syntax_frontend #(
   input  logic [15:0] ctu_y,
   input  logic [15:0] ctu_visible_width,
   input  logic [15:0] ctu_visible_height,
-  input  logic [4:0]  ctu_luma_dc_abs_level,
+  input  logic [7:0]  ctu_luma_dc_abs_level,
   input  logic        ctu_luma_dc_negative,
   input  logic        ctu_luma_only,
   input  logic        ctu_last,

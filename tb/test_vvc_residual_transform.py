@@ -23,7 +23,6 @@ async def reset(dut):
     dut.s_axis_sample.value = 0
     dut.s_axis_last.value = 0
     dut.m_axis_ready.value = 1
-    dut.luma_samples.value = 0
     for _ in range(2):
         await RisingEdge(dut.clk)
     dut.rst_n.value = 1
@@ -34,14 +33,15 @@ def _ctx_id(data):
     return (data >> 8) & 0x3FF
 
 
-def rust_luma_residual_symbols(width, height, y):
+def rust_luma_vector(width, height, luma):
     with tempfile.TemporaryDirectory(prefix="frameforge-residual-transform-vector-") as tmpdir:
         tmp = Path(tmpdir)
         luma_samples = width * height
         chroma_samples = luma_samples // 4
         input_yuv = tmp / "input.yuv"
         output_json = tmp / "cabac.json"
-        input_yuv.write_bytes(bytes([y] * luma_samples + [128] * chroma_samples * 2))
+        assert len(luma) == luma_samples
+        input_yuv.write_bytes(bytes(luma) + bytes([128] * chroma_samples * 2))
         subprocess.run(
             [
                 "cargo",
@@ -65,7 +65,11 @@ def rust_luma_residual_symbols(width, height, y):
             cwd=Path(__file__).resolve().parents[1],
             check=True,
         )
-        vector = json.loads(output_json.read_text())
+        return json.loads(output_json.read_text())
+
+
+def rust_luma_residual_symbols(width, height, y):
+    vector = rust_luma_vector(width, height, [y] * (width * height))
 
     raw_symbols = bytes.fromhex(vector["semantic_symbols_hex"])
     symbols = []
@@ -129,3 +133,28 @@ async def residual_stream_emits_quantized_packets(dut):
 
     expected = rust_luma_residual_symbols(8, 8, 64)
     assert observed == expected, (observed, expected)
+
+
+@cocotb.test()
+async def residual_transform_exposes_ac_levels_for_pattern(dut):
+    await reset(dut)
+    luma = [32 if (x + y) % 2 == 0 else 224 for y in range(8) for x in range(8)]
+
+    for index, sample in enumerate(luma):
+        while int(dut.s_axis_ready.value) != 1:
+            await RisingEdge(dut.clk)
+        dut.s_axis_valid.value = 1
+        dut.s_axis_sample.value = sample
+        dut.s_axis_last.value = index == len(luma) - 1
+        await RisingEdge(dut.clk)
+    dut.s_axis_valid.value = 0
+    dut.s_axis_last.value = 0
+    await ReadOnly()
+
+    expected = rust_luma_vector(8, 8, luma)["luma_ac_levels"]
+    raw = int(dut.quant_luma_ac_levels.value)
+    observed = []
+    for index in range(15):
+        byte = (raw >> ((14 - index) * 8)) & 0xFF
+        observed.append(byte - 256 if byte & 0x80 else byte)
+    assert observed == expected

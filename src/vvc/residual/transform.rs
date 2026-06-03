@@ -2,8 +2,10 @@ use super::{VvcQuantizedTransformBlock, VvcTransformComponent, VvcTuTransformBlo
 
 pub(in crate::vvc) const VVC_LUMA_DC_BASE: i16 = 114;
 pub(in crate::vvc) const VVC_CHROMA_DC_BASE: i16 = 128;
-const VVC_LUMA_GREEDY_DC_LEVEL: i16 = 64;
-const VVC_LUMA_GREEDY_AC_LEVEL: i16 = 8;
+const VVC_LUMA_DC_NUM: i32 = 5;
+const VVC_LUMA_DC_DEN: i32 = 16;
+const VVC_LUMA_AC_QUANT_SHIFT: u32 = 19;
+const VVC_LUMA_AC_LEVEL_LIMIT: i16 = 2;
 const VVC_DCT2_4: [[i32; 4]; 4] = [
     [64, 64, 64, 64],
     [83, 36, -36, -83],
@@ -64,16 +66,15 @@ pub(in crate::vvc) fn quantize_vvc_luma_residual_greedy(
     debug_assert!([4, 8].contains(&width));
     debug_assert!([4, 8].contains(&height));
 
+    let residual_sum: i32 = residuals.iter().map(|value| i32::from(*value)).sum();
+    let residual_avg =
+        div_round_nearest_i32(residual_sum, i32::from(width) * i32::from(height));
+    let dc_level =
+        div_round_nearest_i32(residual_avg * VVC_LUMA_DC_NUM, VVC_LUMA_DC_DEN)
+            .clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
+
     let mut coeff_levels = vec![0; coefficient_count];
-    coeff_levels[0] = best_luma_residual_level(
-        residuals,
-        width,
-        height,
-        &coeff_levels,
-        0,
-        -VVC_LUMA_GREEDY_DC_LEVEL,
-        VVC_LUMA_GREEDY_DC_LEVEL,
-    );
+    coeff_levels[0] = dc_level;
 
     // The current residual_coding() writer is audited for the first 4x4
     // subblock. Keep AC search inside that area until scan-position suffixes
@@ -84,15 +85,7 @@ pub(in crate::vvc) fn quantize_vvc_luma_residual_greedy(
             if coeff_index == 0 {
                 continue;
             }
-            coeff_levels[coeff_index] = best_luma_residual_level(
-                residuals,
-                width,
-                height,
-                &coeff_levels,
-                coeff_index,
-                -VVC_LUMA_GREEDY_AC_LEVEL,
-                VVC_LUMA_GREEDY_AC_LEVEL,
-            );
+            coeff_levels[coeff_index] = quantize_direct_luma_ac_coeff(residuals, width, x, y);
         }
     }
 
@@ -184,42 +177,41 @@ pub(in crate::vvc) fn reconstruct_vvc_chroma(chroma_residual: u8) -> u8 {
     (((16 - chroma_residual.min(16)) as u16 * 128 + 8) / 16) as u8
 }
 
-fn best_luma_residual_level(
-    target: &[i16],
-    width: u16,
-    height: u16,
-    coeff_levels: &[i16],
-    coeff_index: usize,
-    min_level: i16,
-    max_level: i16,
-) -> i16 {
-    let current_level = coeff_levels[coeff_index];
-    let mut best_level = current_level;
-    let mut best_error = i64::MAX;
-    let mut candidate = coeff_levels.to_vec();
-    for level in min_level..=max_level {
-        candidate[coeff_index] = level;
-        let reconstructed = inverse_transform_vvc_luma_residual_levels(width, height, &candidate);
-        let error = residual_sse(target, &reconstructed);
-        if error < best_error
-            || (error == best_error && level.unsigned_abs() < best_level.unsigned_abs())
-        {
-            best_level = level;
-            best_error = error;
+fn quantize_direct_luma_ac_coeff(residuals: &[i16], width: u16, kx: usize, ky: usize) -> i16 {
+    let width_usize = usize::from(width);
+    let height_usize = residuals.len() / width_usize;
+    let mut acc = 0i64;
+    for y in 0..height_usize {
+        for x in 0..width_usize {
+            acc += i64::from(residuals[y * width_usize + x])
+                * i64::from(dct2_value(width, kx, x))
+                * i64::from(dct2_value(height_usize as u16, ky, y));
         }
     }
-    best_level
+    let level = div_round_nearest_i64(acc, 1i64 << VVC_LUMA_AC_QUANT_SHIFT);
+    level
+        .clamp(
+            i64::from(-VVC_LUMA_AC_LEVEL_LIMIT),
+            i64::from(VVC_LUMA_AC_LEVEL_LIMIT),
+        ) as i16
 }
 
-fn residual_sse(target: &[i16], reconstructed: &[i16]) -> i64 {
-    target
-        .iter()
-        .zip(reconstructed)
-        .map(|(a, b)| {
-            let diff = i64::from(*a) - i64::from(*b);
-            diff * diff
-        })
-        .sum()
+fn div_round_nearest_i32(value: i32, divisor: i32) -> i32 {
+    debug_assert!(divisor > 0);
+    if value < 0 {
+        -(((-value) + (divisor / 2)) / divisor)
+    } else {
+        (value + (divisor / 2)) / divisor
+    }
+}
+
+fn div_round_nearest_i64(value: i64, divisor: i64) -> i64 {
+    debug_assert!(divisor > 0);
+    if value < 0 {
+        -(((-value) + (divisor / 2)) / divisor)
+    } else {
+        (value + (divisor / 2)) / divisor
+    }
 }
 
 fn dequantize_vvc_transform_level(level: i16, tb_width: u16, tb_height: u16) -> i32 {

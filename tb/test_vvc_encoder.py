@@ -138,36 +138,6 @@ def rtl_input_samples(data):
     return list(data)
 
 
-def packed_rtl_luma_value(data):
-    return packed_luma_value(residual_luma_block(data, 0, 0))
-
-
-def packed_luma_value(samples):
-    bits = rtl_sample_bits()
-    value = 0
-    for sample in rtl_input_samples(samples):
-        value = (value << bits) | sample
-    return value
-
-
-def residual_luma_block(data, origin_x, origin_y):
-    return residual_luma_block_sized(
-        data, origin_x, origin_y, VVC_LUMA_TU_SIZE, VVC_LUMA_TU_SIZE
-    )
-
-
-def residual_luma_block_sized(data, origin_x, origin_y, width, height):
-    block = []
-    for y in range(min(height, rtl_visible_height() - origin_y)):
-        start = (origin_y + y) * rtl_visible_width() + origin_x
-        block.extend(data[start : start + min(width, rtl_visible_width() - origin_x)])
-    block.extend([0] * ((width * height) - len(block)))
-    return block
-
-
-VVC_LUMA_TU_SIZE = 8
-
-
 def tile_yuv420p8_frame(frame, source_width, source_height, tiled_width, tiled_height):
     source_luma = source_width * source_height
     source_chroma_width = source_width // 2
@@ -678,7 +648,6 @@ async def drain_sampled_color(dut, frames, y, u, v):
     assert int(dut.sampled_y.value) == samples[0]
     assert int(dut.sampled_u.value) == samples[luma_samples()]
     assert int(dut.sampled_v.value) == samples[v_sample_index()]
-    assert int(dut.luma_samples_q.value) == packed_rtl_luma_value(data[-frame_samples():])
 
 
 @cocotb.test()
@@ -710,6 +679,38 @@ async def vvc_encoder_matches_software_stream(dut):
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(recon)
     assert bitstream, "RTL encoder top emitted no bytes"
+    assert bitstream == reference
+
+
+@cocotb.test()
+async def vvc_encoder_matches_software_stream_with_ac_pattern(dut):
+    if (
+        rtl_visible_width() != 8
+        or rtl_visible_height() != 8
+        or rtl_chroma_format_idc() != 1
+        or rtl_sample_bits() != 8
+        or rtl_source_sample_bits() != 8
+    ):
+        return
+
+    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
+    with tempfile.TemporaryDirectory(prefix="frameforge-rtl-ac-pattern-") as tmpdir:
+        path = Path(tmpdir) / "pattern_8x8_1f_yuv420p8.yuv"
+        y = bytearray()
+        for row in range(8):
+            for col in range(8):
+                y.append(32 if (row + col) % 2 == 0 else 224)
+        path.write_bytes(bytes(y) + bytes([128] * 32))
+        previous = os.environ.get("FRAMEFORGE_RTL_VVC_ENCODER_INPUT_1F")
+        os.environ["FRAMEFORGE_RTL_VVC_ENCODER_INPUT_1F"] = str(path)
+        try:
+            bitstream, source = await collect_stream(dut, frames=1)
+            reference, _ = software_artifacts_for_source(frames=1, source=source)
+        finally:
+            if previous is None:
+                os.environ.pop("FRAMEFORGE_RTL_VVC_ENCODER_INPUT_1F", None)
+            else:
+                os.environ["FRAMEFORGE_RTL_VVC_ENCODER_INPUT_1F"] = previous
     assert bitstream == reference
 
 

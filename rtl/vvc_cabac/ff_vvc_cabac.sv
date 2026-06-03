@@ -14,7 +14,7 @@ module ff_vvc_cabac #(
   input  logic [15:0] visible_height,
   input  logic [15:0] coded_width,
   input  logic [15:0] coded_height,
-  input  logic [4:0]  luma_rem,
+  input  logic [7:0]  luma_rem,
   input  logic [4:0]  cb_rem,
   input  logic [4:0]  cr_rem,
 

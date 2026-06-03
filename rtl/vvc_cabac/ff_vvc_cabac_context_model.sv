@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 module ff_vvc_cabac_context_model #(
-  parameter int VVC_CTX_COUNT = 53,
+  parameter int VVC_CTX_COUNT = 70,
   parameter int VVC_CTX_QP = 32,
   parameter int VVC_CABAC_CTX_ID_BITS = 10
 ) (
@@ -76,12 +76,46 @@ module ff_vvc_cabac_context_model #(
   localparam int VVC_CTX_RUN_COPY_FLAG_5           = 50;
   localparam int VVC_CTX_RUN_COPY_FLAG_6           = 51;
   localparam int VVC_CTX_RUN_COPY_FLAG_7           = 52;
+  localparam int VVC_CTX_INTRA_LUMA_PLANAR_FLAG_1  = 53;
+  localparam int VVC_CTX_LAST_SIG_X_PREFIX_4       = 54;
+  localparam int VVC_CTX_LAST_SIG_Y_PREFIX_4       = 55;
+  localparam int VVC_CTX_SIG_COEFF_FLAG_1          = 56;
+  localparam int VVC_CTX_SIG_COEFF_FLAG_4          = 57;
+  localparam int VVC_CTX_SIG_COEFF_FLAG_5          = 58;
+  localparam int VVC_CTX_SIG_COEFF_FLAG_9          = 59;
+  localparam int VVC_CTX_ABS_LEVEL_GTX_FLAG_11     = 60;
+  localparam int VVC_CTX_PAR_LEVEL_FLAG_11         = 61;
+  localparam int VVC_CTX_ABS_LEVEL_GTX_FLAG_43     = 62;
+  localparam int VVC_CTX_SIG_COEFF_FLAG_6          = 63;
+  localparam int VVC_CTX_ABS_LEVEL_GTX_FLAG_7      = 64;
+  localparam int VVC_CTX_PAR_LEVEL_FLAG_7          = 65;
+  localparam int VVC_CTX_ABS_LEVEL_GTX_FLAG_39     = 66;
+  localparam int VVC_CTX_ABS_LEVEL_GTX_FLAG_13     = 67;
+  localparam int VVC_CTX_PAR_LEVEL_FLAG_13         = 68;
+  localparam int VVC_CTX_ABS_LEVEL_GTX_FLAG_45     = 69;
   localparam logic [VVC_CABAC_CTX_ID_BITS - 1:0] VVC_CTX_COUNT_LIMIT = VVC_CTX_COUNT;
 
   // ITU-T H.266 (V4) Table 62, initType 0 / I-slice gives
   // mtt_split_cu_binary_flag ctxIdx 0..3 initValue = 36,45,36,45
   // and shiftIdx = 12,13,12,13.
   localparam logic [(VVC_CTX_COUNT * 8) - 1:0] INIT_VALUE_LUT = {
+    8'd26, // 69: AbsLevelGtxFlag(45)
+    8'd27, // 68: ParLevelFlag(13)
+    8'd29, // 67: AbsLevelGtxFlag(13)
+    8'd25, // 66: AbsLevelGtxFlag(39)
+    8'd26, // 65: ParLevelFlag(7)
+    8'd12, // 64: AbsLevelGtxFlag(7)
+    8'd29, // 63: SigCoeffFlag(6)
+    8'd17, // 62: AbsLevelGtxFlag(43)
+    8'd33, // 61: ParLevelFlag(11)
+    8'd34, // 60: AbsLevelGtxFlag(11)
+    8'd37, // 59: SigCoeffFlag(9)
+    8'd20, // 58: SigCoeffFlag(5)
+    8'd25, // 57: SigCoeffFlag(4)
+    8'd19, // 56: SigCoeffFlag(1)
+    8'd13, // 55: LastSigCoeffYPrefix(4)
+    8'd14, // 54: LastSigCoeffXPrefix(4)
+    8'd28, // 53: IntraLumaPlanarFlag(1)
     8'd46, // 52: RunCopyFlag(7) / CopyRunModel(2)
     8'd38, // 51: RunCopyFlag(6) / CopyRunModel(1)
     8'd45, // 50: RunCopyFlag(5) / CopyRunModel(0)
@@ -137,6 +171,23 @@ module ff_vvc_cabac_context_model #(
     8'd19  //  0: SplitFlag(0)
   };
   localparam logic [(VVC_CTX_COUNT * 4) - 1:0] LOG2_WINDOW_LUT = {
+    4'd9,  // 69: AbsLevelGtxFlag(45)
+    4'd13, // 68: ParLevelFlag(13)
+    4'd10, // 67: AbsLevelGtxFlag(13)
+    4'd9,  // 66: AbsLevelGtxFlag(39)
+    4'd13, // 65: ParLevelFlag(7)
+    4'd10, // 64: AbsLevelGtxFlag(7)
+    4'd9,  // 63: SigCoeffFlag(6)
+    4'd9,  // 62: AbsLevelGtxFlag(43)
+    4'd13, // 61: ParLevelFlag(11)
+    4'd9,  // 60: AbsLevelGtxFlag(11)
+    4'd8,  // 59: SigCoeffFlag(9)
+    4'd9,  // 58: SigCoeffFlag(5)
+    4'd9,  // 57: SigCoeffFlag(4)
+    4'd9,  // 56: SigCoeffFlag(1)
+    4'd5,  // 55: LastSigCoeffYPrefix(4)
+    4'd4,  // 54: LastSigCoeffXPrefix(4)
+    4'd5,  // 53: IntraLumaPlanarFlag(1)
     4'd5,  // 52: RunCopyFlag(7) / CopyRunModel(2)
     4'd9,  // 51: RunCopyFlag(6) / CopyRunModel(1)
     4'd0,  // 50: RunCopyFlag(5) / CopyRunModel(0)

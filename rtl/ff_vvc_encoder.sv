@@ -59,12 +59,15 @@ module ff_vvc_encoder #(
   logic [INPUT_COUNT_BITS - 1:0] input_count_q;
   logic [INPUT_COUNT_BITS - 1:0] input_len_q;
   logic       input_active_q;
-  logic [(SAMPLE_BITS * VVC_RESIDUAL_LUMA_SAMPLES) - 1:0] luma_samples_q;
-  logic [4:0] quant_luma_rem_q;
+  logic [7:0] quant_luma_rem_q;
+  logic       quant_luma_negative_q;
+  logic [(8 * 15) - 1:0] quant_luma_ac_levels_q;
   logic [4:0] quant_cb_rem_q;
   logic [4:0] quant_cr_rem_q;
   logic       quant_cb_negative_q;
-  logic [4:0] residual_quant_luma_rem;
+  logic [7:0] residual_quant_luma_rem;
+  logic       residual_quant_luma_negative;
+  logic [(8 * 15) - 1:0] residual_quant_luma_ac_levels;
   logic [7:0] residual_recon_luma_sample;
   logic [15:0] coding_tree_coded_width;
   logic [15:0] coding_tree_coded_height;
@@ -88,11 +91,6 @@ module ff_vvc_encoder #(
   logic        palette_request_last;
   logic        residual_sample_valid;
   logic        residual_sample_last;
-  logic        m_axis_residual_valid;
-  logic        m_axis_residual_ready;
-  logic [7:0]  m_axis_residual_kind;
-  logic [31:0] m_axis_residual_data;
-  logic        m_axis_residual_last;
   logic        ctu_symbol_valid;
   logic        ctu_symbol_ready;
   logic [7:0]  ctu_symbol_kind;
@@ -279,8 +277,8 @@ module ff_vvc_encoder #(
   assign input_sample_clamped_w = (input_sample_8bit_w > 8'd128) ? 9'd128 : {1'b0, input_sample_8bit_w};
   assign input_quant_level_w = (input_sample_clamped_w + 9'd4) >> 3;
 
-  // Current residual subset emits one DC coefficient for an 8x8 luma TU.
-  // AC coefficients are present in the transform data model but zero-coded for now.
+  // Current residual subset uses one 8x8 luma TU and emits the first 4x4
+  // coefficient group: DC plus bounded AC levels from the residual transform.
   assign luma_log2_tb_width_w = 3'd3;
   assign luma_log2_tb_height_w = 3'd3;
 
@@ -322,8 +320,6 @@ module ff_vvc_encoder #(
     (generated_out_state_q == GENERATED_OUT_CABAC) && !cabac_start_q && !cabac_input_valid_q;
   assign palette_stream_ready =
     ctu_has_palette_cu && (palette_mux_state_q == PALETTE_MUX_CU) && source_symbol_ready;
-  assign m_axis_residual_ready = !ctu_has_palette_cu && cabac_symbol_ready;
-
   ff_vvc_cu_activity_mask #(
     .CTU_SIZE(CTU_SIZE),
     .CU_SIZE(PALETTE_CU_SIZE),
@@ -545,27 +541,10 @@ module ff_vvc_encoder #(
     .m_axis_kind(),
     .m_axis_data(),
     .m_axis_last(),
-    .luma_samples(luma_samples_q),
     .quant_luma_rem(residual_quant_luma_rem),
-    .quant_luma_ac_tokens(),
+    .quant_luma_negative(residual_quant_luma_negative),
+    .quant_luma_ac_levels(residual_quant_luma_ac_levels),
     .recon_luma_sample(residual_recon_luma_sample)
-  );
-
-  ff_vvc_residual_dc_symbolizer residual_dc_symbols (
-    .clk(clk),
-    .rst_n(rst_n),
-    .clear(frame_pipeline_clear_w),
-    .start(cabac_start_q && !ctu_has_palette_cu),
-    .abs_level(quant_luma_rem_q),
-    .negative(quant_luma_rem_q != 5'd0),
-    .log2_tb_width(luma_log2_tb_width_w),
-    .log2_tb_height(luma_log2_tb_height_w),
-    .m_axis_valid(m_axis_residual_valid),
-    .m_axis_ready(m_axis_residual_ready),
-    .m_axis_kind(m_axis_residual_kind),
-    .m_axis_data(m_axis_residual_data),
-    .m_axis_last(m_axis_residual_last),
-    .busy()
   );
 
   ff_vvc_ctu_symbolizer #(
@@ -579,7 +558,8 @@ module ff_vvc_encoder #(
     .visible_height(ctu_visible_height_w),
     .chroma_format_idc(chroma_format_idc),
     .luma_abs_level(quant_luma_rem_q),
-    .luma_negative(quant_luma_rem_q != 5'd0),
+    .luma_negative(quant_luma_negative_q),
+    .luma_ac_levels(quant_luma_ac_levels_q),
     .cb_abs_level(quant_cb_rem_q),
     .cb_negative(quant_cb_negative_q && (quant_cb_rem_q != 5'd0)),
     .luma_log2_tb_width(luma_log2_tb_width_w),
@@ -612,8 +592,9 @@ module ff_vvc_encoder #(
       sampled_y <= '0;
       sampled_u <= '0;
       sampled_v <= '0;
-      luma_samples_q <= '0;
-      quant_luma_rem_q <= 5'd16;
+      quant_luma_rem_q <= 8'd0;
+      quant_luma_negative_q <= 1'b0;
+      quant_luma_ac_levels_q <= '0;
       quant_cb_rem_q <= 5'd16;
       quant_cr_rem_q <= 5'd16;
       quant_cb_negative_q <= 1'b1;
@@ -651,8 +632,9 @@ module ff_vvc_encoder #(
         input_len_q    <= input_len_w;
         input_error    <= visible_width == 16'd0 || visible_height == 16'd0;
         sampled_color_valid <= 1'b0;
-        luma_samples_q <= '0;
-        quant_luma_rem_q <= 5'd16;
+        quant_luma_rem_q <= 8'd0;
+        quant_luma_negative_q <= 1'b0;
+        quant_luma_ac_levels_q <= '0;
         quant_cb_rem_q <= 5'd16;
         quant_cr_rem_q <= 5'd16;
         quant_cb_negative_q <= 1'b1;
@@ -679,8 +661,9 @@ module ff_vvc_encoder #(
         input_count_q <= '0;
         input_len_q <= input_len_w;
         sampled_color_valid <= 1'b0;
-        luma_samples_q <= '0;
-        quant_luma_rem_q <= 5'd16;
+        quant_luma_rem_q <= 8'd0;
+        quant_luma_negative_q <= 1'b0;
+        quant_luma_ac_levels_q <= '0;
         quant_cb_rem_q <= 5'd16;
         quant_cr_rem_q <= 5'd16;
         quant_cb_negative_q <= 1'b1;
@@ -697,11 +680,10 @@ module ff_vvc_encoder #(
         if (input_count_q == '0) begin
           sampled_y <= s_axis_data;
         end
-        if (residual_luma_sample_w) begin
-          luma_samples_q[(VVC_RESIDUAL_LUMA_SAMPLES - 1 - residual_luma_sample_index_w) * SAMPLE_BITS +: SAMPLE_BITS] <= s_axis_data;
-        end
         if (input_count_q == luma_samples_w) begin
           quant_luma_rem_q <= residual_quant_luma_rem;
+          quant_luma_negative_q <= residual_quant_luma_negative;
+          quant_luma_ac_levels_q <= residual_quant_luma_ac_levels;
         end
         if (input_count_q == luma_samples_w) begin
           sampled_u <= s_axis_data;
