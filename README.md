@@ -4,9 +4,9 @@ FrameForge is an open-source lab for video compression, bitstream generation, RT
 
 FrameForge is starting with a minimal VVC/H.266 encoder foundation, but the project is not limited to VVC, H.266, screen-content coding, FPGA work, or encoding only. The long-term goal is a practical research workspace for codec block experiments, software golden models, bitstream generation, RTL acceleration, FPGA-oriented blocks, encoder and decoder research, and hardware/software co-verification.
 
-Current status: experimental, not production-ready, and not conforming. The current VVC path generates small Annex-B VVC streams for software/RTL validation from planar YUV 4:2:0, 4:2:2, or 4:4:4 input at 8, 10, 12, or 16 bits. The software path can emit larger pictures as a stream of 64x64 CTU-local slices, with one slice per CTU and caller-provided validation limits rather than a compiled geometry ceiling. RTL validation remains bounded by the instantiated maximum geometry parameters. Non-4:4:4 inputs currently use a 4:2:0 residual path with internally generated CTU/CU syntax, fixed quantization, local reconstruction, and coefficient-coded luma residuals with AC support limited to the first 4x4 coefficient group. 4:4:4 inputs currently select an experimental palette path with 8x8 palette CUs and no escape coding; it is lossless only when each 8x8 CU uses at most 31 unique YCbCr colors. Software, RTL, and VTM-backed validation are wired for the current subset, and unsupported syntax must remain explicit instead of being hidden in sideband payloads.
+Current status: experimental, not production-ready. The current VVC software and RTL encoders generate small Annex-B VVC streams from planar YUV 4:2:0 or 4:4:4 input at 8 bits. The encoder can emit larger pictures as a stream of 64x64 CTU-local slices, with one slice per CTU and caller-provided validation limits. RTL validation remains bounded by the instantiated maximum geometry parameters. 4:2:0 inputs currently use a residual path with internally generated CTU/CU syntax, fixed quantization, local reconstruction, and coefficient-coded residuals with AC support limited to the first 4x4 coefficient group. 4:4:4 inputs currently select an experimental palette path with 8x8 palette CUs and no escape coding; it is lossless only when each 8x8 CU uses at most 31 unique YCbCr colors. Software, RTL, and VTM-backed validation are wired for the current subset, and unsupported syntax must remain explicit instead of being hidden in sideband payloads.
 
-## Near-Term Direction
+## Current Status
 
 - Minimal bitstream utilities and packet structures.
 - Clean-room VVC/H.266 first-target modules where exact syntax is known.
@@ -30,7 +30,7 @@ Current status: experimental, not production-ready, and not conforming. The curr
 Prerequisites:
 
 - Rust stable toolchain with `cargo` and `rustfmt`.
-- Python 3 for helper scripts and cocotb tests.
+- Python 3.12 or 3.13 for helper scripts and cocotb tests.
 - Optional RTL verification tools: cocotb and Icarus Verilog. cocotb can be installed from `requirements-dev.txt`.
 
 Check local tool availability:
@@ -108,7 +108,7 @@ cargo run -- vvc-encode --input /tmp/frameforge-vvc-16x16-1f.yuv --frames 1 --ou
 make validate-decode BITSTREAM=/tmp/frameforge-vvc-16x16-1f.vvc DECODED=/tmp/frameforge-vvc-16x16-1f-dec.yuv
 ```
 
-This example uses a 16x16 planar YUV input, but the encoder entry point accepts explicit width and height parameters for visible geometries up to 64x64. FrameForge emits the sequence header, picture header, slice header, internally generated CTU/CU syntax, and CABAC-coded slice payload. On the current non-4:4:4 residual path, only the DC coefficient is derived from the transform path; AC coefficients are still zero. The decoded luma is therefore a lossy flat approximation per coded residual block, and decoded chroma is limited by the current residual subset.
+This example uses a 16x16 planar YUV input, but the encoder entry point accepts explicit width and height parameters for visible geometries of any geometry, but only tested up to 512x512 so far. FrameForge emits the sequence header, picture header, slice header, internally generated CTU/CU syntax, and CABAC-coded slice payload. On the current non-4:4:4 residual path, only the DC coefficient is derived from the transform path; AC coefficients are still zero. The decoded luma is therefore a lossy flat approximation per coded residual block, and decoded chroma is limited by the current residual subset.
 
 Generate a two-frame VVC validation stream:
 
