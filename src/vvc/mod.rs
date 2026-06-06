@@ -51,7 +51,7 @@ use residual::VVC_LUMA_DC_BASE;
 use residual::{
     quantize_vvc_frame, reconstruct_vvc_residual_frame, VvcQuantizedColor, VvcResidualCabacOptions,
     VvcResidualComponent, MAX_VVC_CHROMA_TUS, MAX_VVC_LUMA_TUS, VVC_CHROMA_AC_COEFFS_PER_TU,
-    VVC_LUMA_AC_COEFFS_PER_TU,
+    VVC_CHROMA_AC_POSITIONS_2X2, VVC_LUMA_AC_COEFFS_PER_TU,
 };
 #[cfg(test)]
 use residual::{VvcResidualCabacEncoder, VvcResidualCtxConfig, VvcResidualPass1State};

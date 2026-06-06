@@ -19,7 +19,7 @@ module ff_vvc_luma_quant_recon_8x8 (
   input  logic [(8 * 8) - 1:0] left_ref,
   output logic [7:0] abs_level,
   output logic negative,
-  output logic [(8 * 15) - 1:0] ac_levels,
+  output logic [(4 * 15) - 1:0] ac_levels,
   output logic [(8 * 64) - 1:0] recon_samples,
   output logic done,
   output logic busy
@@ -422,7 +422,7 @@ module ff_vvc_luma_quant_recon_8x8 (
           acc_q <= ac_acc_next_w;
           if (ac_cell_q == 4'd15) begin
             coeff_level_q[ac_coeff_q] <= {{8{ac_level_w[7]}}, ac_level_w};
-            ac_levels[((15 - ac_coeff_q) * 8) +: 8] <= ac_level_w[7:0];
+            ac_levels[((15 - ac_coeff_q) * 4) +: 4] <= ac_level_w[3:0];
             if (ac_coeff_q == 4'd15) begin
               state_q <= ST_VERTICAL;
               vertical_index_q <= 5'd0;

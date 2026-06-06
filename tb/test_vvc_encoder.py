@@ -228,10 +228,17 @@ def signed_value(value, bits):
     return (value ^ sign) - sign
 
 
-def unpack_chroma_ac_levels(packed):
+def unpack_luma_ac_levels(packed, bits=8):
     return [
-        signed_value((packed >> ((14 - idx) * 8)) & 0xFF, 8)
+        signed_value((packed >> ((14 - idx) * bits)) & ((1 << bits) - 1), bits)
         for idx in range(15)
+    ]
+
+
+def unpack_chroma_ac_levels(packed, bits=8):
+    return [
+        signed_value((packed >> (idx * bits)) & ((1 << bits) - 1), bits)
+        for idx in range(3)
     ]
 
 
@@ -239,9 +246,22 @@ def unpack_signed_slots(packed, bits, count):
     return [signed_value((packed >> (idx * bits)) & ((1 << bits) - 1), bits) for idx in range(count)]
 
 
-def unpack_chroma_tu_ac_slots(packed, tu_count):
+def unpack_luma_tu_ac_slots(packed, tu_count, bits=8):
     return [
-        unpack_chroma_ac_levels((packed >> (idx * 8 * 15)) & ((1 << (8 * 15)) - 1))
+        unpack_luma_ac_levels(
+            (packed >> (idx * bits * 15)) & ((1 << (bits * 15)) - 1),
+            bits,
+        )
+        for idx in range(tu_count)
+    ]
+
+
+def unpack_chroma_tu_ac_slots(packed, tu_count, bits=8):
+    return [
+        unpack_chroma_ac_levels(
+            (packed >> (idx * bits * 3)) & ((1 << (bits * 3)) - 1),
+            bits,
+        )
         for idx in range(tu_count)
     ]
 
@@ -1159,8 +1179,8 @@ async def vvc_encoder_matches_software_stream(dut):
             if pending or output_pending:
                 await RisingEdge(dut.clk)
                 await ReadOnly()
-                cb_direct = unpack_chroma_ac_levels(int(dut.quant_cb_ac_levels_q.value))
-                cr_direct = unpack_chroma_ac_levels(int(dut.quant_cr_ac_levels_q.value))
+                cb_direct = unpack_chroma_ac_levels(int(dut.quant_cb_ac_levels_q.value), bits=4)
+                cr_direct = unpack_chroma_ac_levels(int(dut.quant_cr_ac_levels_q.value), bits=4)
                 dut._log.info(
                     "RTL chroma quant direct cb_dc=%d cb_ac=%s cr_dc=%d cr_ac=%s",
                     signed_value(int(dut.quant_cb_dc_level_q.value), 9),
@@ -1169,8 +1189,8 @@ async def vvc_encoder_matches_software_stream(dut):
                     cr_direct,
                 )
                 try:
-                    cb_ctu = unpack_chroma_ac_levels(int(dut.quant_cb_ac_levels_ctu_q[0].value))
-                    cr_ctu = unpack_chroma_ac_levels(int(dut.quant_cr_ac_levels_ctu_q[0].value))
+                    cb_ctu = unpack_chroma_ac_levels(int(dut.quant_cb_ac_levels_ctu_q[0].value), bits=4)
+                    cr_ctu = unpack_chroma_ac_levels(int(dut.quant_cr_ac_levels_ctu_q[0].value), bits=4)
                     dut._log.info(
                         "RTL chroma quant CTU0/TU0 cb_dc=%d cb_ac=%s cr_dc=%d cr_ac=%s",
                         signed_value(int(dut.quant_cb_dc_level_ctu_q[0].value), 9),
@@ -1189,7 +1209,9 @@ async def vvc_encoder_matches_software_stream(dut):
                         (luma_dc_packed >> (tu_idx * 8)) & 0xFF
                         for tu_idx in range(luma_tu_count)
                     ]
-                    luma_ac = unpack_chroma_tu_ac_slots(int(dut.selected_quant_luma_ac_levels_w.value), luma_tu_count)
+                    luma_ac = unpack_luma_tu_ac_slots(
+                        int(dut.selected_quant_luma_ac_levels_w.value), luma_tu_count, bits=4
+                    )
                     for tu_idx in range(luma_tu_count):
                         dut._log.info(
                             "RTL luma quant selected TU%d dc_abs=%d ac=%s",
@@ -1205,8 +1227,12 @@ async def vvc_encoder_matches_software_stream(dut):
                     tu_count = min(chroma_cols * chroma_rows, 64)
                     cb_dc = unpack_signed_slots(int(dut.selected_quant_cb_dc_levels_w.value), 9, tu_count)
                     cr_dc = unpack_signed_slots(int(dut.selected_quant_cr_dc_levels_w.value), 9, tu_count)
-                    cb_ac = unpack_chroma_tu_ac_slots(int(dut.selected_quant_cb_ac_levels_w.value), tu_count)
-                    cr_ac = unpack_chroma_tu_ac_slots(int(dut.selected_quant_cr_ac_levels_w.value), tu_count)
+                    cb_ac = unpack_chroma_tu_ac_slots(
+                        int(dut.selected_quant_cb_ac_levels_w.value), tu_count, bits=4
+                    )
+                    cr_ac = unpack_chroma_tu_ac_slots(
+                        int(dut.selected_quant_cr_ac_levels_w.value), tu_count, bits=4
+                    )
                     for tu_idx in range(tu_count):
                         dut._log.info(
                             "RTL chroma quant selected TU%d cb_dc=%d cb_ac=%s cr_dc=%d cr_ac=%s",
@@ -1323,9 +1349,9 @@ async def vvc_encoder_matches_software_stream_with_chroma_ac_pattern(dut):
                     captured_coeffs.append(
                         (
                             signed_value(int(dut.quant_cb_dc_level_q.value), 9),
-                            unpack_chroma_ac_levels(cb_packed),
+                            unpack_chroma_ac_levels(cb_packed, bits=4),
                             signed_value(int(dut.quant_cr_dc_level_q.value), 9),
-                            unpack_chroma_ac_levels(cr_packed),
+                            unpack_chroma_ac_levels(cr_packed, bits=4),
                         )
                     )
                     return

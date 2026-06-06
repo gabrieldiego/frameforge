@@ -1,4 +1,7 @@
-use super::{VvcQuantizedTransformBlock, VvcTransformComponent, VvcTuTransformBlock};
+use super::{
+    VvcQuantizedTransformBlock, VvcTransformComponent, VvcTuTransformBlock,
+    VVC_CHROMA_AC_POSITIONS_2X2,
+};
 
 pub(in crate::vvc) const VVC_LUMA_DC_BASE: i16 = 114;
 pub(in crate::vvc) const VVC_CHROMA_DC_BASE: i16 = 128;
@@ -11,7 +14,6 @@ const VVC_CHROMA_AC_QUANT_SHIFT_FOR_8X8: i32 = 19;
 const VVC_LUMA_AC_LEVEL_LIMIT: i16 = 2;
 const VVC_CHROMA_DC_LEVEL_LIMIT: i16 = 255;
 const VVC_CHROMA_AC_LEVEL_LIMIT: i16 = 2;
-const VVC_CHROMA_LOSSY_AC_SUBSET_2X2: [(usize, usize); 3] = [(1, 0), (0, 1), (1, 1)];
 const VVC_DCT2_4: [[i32; 4]; 4] = [
     [64, 64, 64, 64],
     [83, 36, -36, -83],
@@ -291,7 +293,7 @@ pub(in crate::vvc) fn quantize_vvc_chroma_residual_greedy(
         // H.266 7.3.11.10 transform_unit() can carry all chroma AC
         // coefficients. The current lossy 4:2:0 path keeps a 2x2
         // low-frequency coefficient group for hardware cost control.
-        for (x, y) in VVC_CHROMA_LOSSY_AC_SUBSET_2X2 {
+        for (x, y) in VVC_CHROMA_AC_POSITIONS_2X2 {
             if x < usize::from(width) && y < usize::from(height) {
                 let coeff_index = y * usize::from(width) + x;
                 let level = quantize_direct_chroma_ac_coeff(residuals, width, x, y);

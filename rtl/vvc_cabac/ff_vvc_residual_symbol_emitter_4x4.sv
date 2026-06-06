@@ -10,9 +10,9 @@ module ff_vvc_residual_symbol_emitter_4x4 (
   input  logic [15:0] tb_height,
   input  logic [7:0]  luma_dc_abs,
   input  logic        luma_dc_negative,
-  input  logic [(8 * 15) - 1:0] luma_ac_levels,
+  input  logic [(4 * 15) - 1:0] luma_ac_levels,
   input  logic signed [8:0] chroma_dc_level,
-  input  logic [(8 * 15) - 1:0] chroma_ac_levels,
+  input  logic [(4 * 3) - 1:0] chroma_ac_levels,
 
   output logic        m_axis_valid,
   input  logic        m_axis_ready,
@@ -135,15 +135,29 @@ module ff_vvc_residual_symbol_emitter_4x4 (
       if (chroma_mode) begin
         if (load_i == 0) begin
           load_level_tmp = chroma_dc_level;
+        end else if (load_i == 1) begin
+          load_level_tmp =
+            $signed({{5{chroma_ac_levels[(0 * 4) + 3]}},
+                     chroma_ac_levels[(0 * 4) +: 4]});
+        end else if (load_i == 4) begin
+          load_level_tmp =
+            $signed({{5{chroma_ac_levels[(1 * 4) + 3]}},
+                     chroma_ac_levels[(1 * 4) +: 4]});
+        end else if (load_i == 5) begin
+          load_level_tmp =
+            $signed({{5{chroma_ac_levels[(2 * 4) + 3]}},
+                     chroma_ac_levels[(2 * 4) +: 4]});
         end else begin
-          load_level_tmp = $signed(chroma_ac_levels[((15 - load_i) * 8) +: 8]);
+          load_level_tmp = 9'sd0;
         end
       end else begin
         if (load_i == 0) begin
           load_level_tmp = (luma_dc_negative && (luma_dc_abs != 8'd0)) ?
             -$signed({1'b0, luma_dc_abs}) : $signed({1'b0, luma_dc_abs});
         end else begin
-          load_level_tmp = $signed(luma_ac_levels[((15 - load_i) * 8) +: 8]);
+          load_level_tmp =
+            $signed({{5{luma_ac_levels[((15 - load_i) * 4) + 3]}},
+                     luma_ac_levels[((15 - load_i) * 4) +: 4]});
         end
       end
       load_abs_tmp = load_level_tmp[8] ? -load_level_tmp : load_level_tmp;

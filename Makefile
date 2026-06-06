@@ -19,6 +19,7 @@ SYNTH_CLOCK_MHZ ?= 50
 SYNTH_TIMEOUT_SEC ?= 120
 SYNTH_MEMORY_LIMIT_MB ?=
 SYNTH_WARN_AFTER_SEC ?= 60
+SYNTH_YOSYS_QUIET ?= 1
 SYNTH_MAX_VISIBLE_WIDTH ?= 1024
 SYNTH_MAX_VISIBLE_HEIGHT ?= 1024
 SYNTH_SUPPORT_PALETTE_444 ?= 1
@@ -63,7 +64,7 @@ help:
 	@printf '%s\n' '  make reference-vvc BITSTREAM=out.vvc [INPUT=in.yuv WIDTH=<w> HEIGHT=<h> FRAMES=1 BIT_DEPTH=8|10|12|16 CHROMA_FORMAT=420|422|444] - create real VVC using VTM'
 	@printf '%s\n' '  make synth-env - install/detect optional local synthesis tools under .tools/'
 	@printf '%s\n' '  make synth-check - detect Yosys/Icarus/Vivado synthesis tools'
-	@printf '%s\n' '  make synth [yosys|vivado] [SYNTH_DUT=vvc-cabac-stream-writer SYNTH_BOARD=synth/boards/arty-z7-10.env SYNTH_TOP=<override> SYNTH_FILELIST=<override> SYNTH_CLOCK_MHZ=50 SYNTH_TIMEOUT_SEC=120 SYNTH_WARN_AFTER_SEC=60 SYNTH_MEMORY_LIMIT_MB=2048|0 SYNTH_MAX_VISIBLE_WIDTH=1024 SYNTH_MAX_VISIBLE_HEIGHT=1024 SYNTH_SUPPORT_PALETTE_444=0|1] - run selected synthesis estimate plus critical-path report'
+	@printf '%s\n' '  make synth [yosys|vivado] [SYNTH_DUT=vvc-cabac-stream-writer SYNTH_BOARD=synth/boards/arty-z7-10.env SYNTH_TOP=<override> SYNTH_FILELIST=<override> SYNTH_CLOCK_MHZ=50 SYNTH_TIMEOUT_SEC=120 SYNTH_WARN_AFTER_SEC=60 SYNTH_YOSYS_QUIET=1 SYNTH_MEMORY_LIMIT_MB=2048|0 SYNTH_MAX_VISIBLE_WIDTH=1024 SYNTH_MAX_VISIBLE_HEIGHT=1024 SYNTH_SUPPORT_PALETTE_444=0|1] - run selected synthesis estimate plus critical-path report'
 	@printf '%s\n' '  make synth-postsim - run Yosys synthesis and a post-synthesis smoke sim when supported'
 	@printf '%s\n' '  make synth-vivado - run optional Vivado synthesis/timing if Vivado is installed'
 	@printf '%s\n' '  make synth-vivado-remote [VIVADO_REMOTE=user@host VIVADO_REMOTE_ROOT=/path/to/frameforge VIVADO_REMOTE_SSH="ssh -F /dev/null"] - run Vivado synthesis/timing over SSH'
@@ -148,10 +149,10 @@ synth-check:
 	python3 scripts/install_synth_env.py --skip-download
 
 synth:
-	python3 scripts/run_synth.py --tool "$(SYNTH_TOOL)" --dut "$(SYNTH_DUT)" --board "$(SYNTH_BOARD)" $(if $(SYNTH_FILELIST),--filelist "$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),--top "$(SYNTH_TOP)") --clock-mhz "$(SYNTH_CLOCK_MHZ)" --timeout-sec "$(SYNTH_TIMEOUT_SEC)" --warn-after-sec "$(SYNTH_WARN_AFTER_SEC)" --max-visible-width "$(SYNTH_MAX_VISIBLE_WIDTH)" --max-visible-height "$(SYNTH_MAX_VISIBLE_HEIGHT)" --support-palette-444 "$(SYNTH_SUPPORT_PALETTE_444)" $(if $(SYNTH_MEMORY_LIMIT_MB),--memory-limit-mb "$(SYNTH_MEMORY_LIMIT_MB)")
+	python3 scripts/run_synth.py --tool "$(SYNTH_TOOL)" --dut "$(SYNTH_DUT)" --board "$(SYNTH_BOARD)" $(if $(SYNTH_FILELIST),--filelist "$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),--top "$(SYNTH_TOP)") --clock-mhz "$(SYNTH_CLOCK_MHZ)" --timeout-sec "$(SYNTH_TIMEOUT_SEC)" --warn-after-sec "$(SYNTH_WARN_AFTER_SEC)" --yosys-quiet "$(SYNTH_YOSYS_QUIET)" --max-visible-width "$(SYNTH_MAX_VISIBLE_WIDTH)" --max-visible-height "$(SYNTH_MAX_VISIBLE_HEIGHT)" --support-palette-444 "$(SYNTH_SUPPORT_PALETTE_444)" $(if $(SYNTH_MEMORY_LIMIT_MB),--memory-limit-mb "$(SYNTH_MEMORY_LIMIT_MB)")
 
 synth-postsim:
-	python3 scripts/run_synth.py --dut "$(SYNTH_DUT)" --board "$(SYNTH_BOARD)" $(if $(SYNTH_FILELIST),--filelist "$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),--top "$(SYNTH_TOP)") --clock-mhz "$(SYNTH_CLOCK_MHZ)" --timeout-sec "$(SYNTH_TIMEOUT_SEC)" --warn-after-sec "$(SYNTH_WARN_AFTER_SEC)" --max-visible-width "$(SYNTH_MAX_VISIBLE_WIDTH)" --max-visible-height "$(SYNTH_MAX_VISIBLE_HEIGHT)" --support-palette-444 "$(SYNTH_SUPPORT_PALETTE_444)" $(if $(SYNTH_MEMORY_LIMIT_MB),--memory-limit-mb "$(SYNTH_MEMORY_LIMIT_MB)") --post-synth-smoke
+	python3 scripts/run_synth.py --dut "$(SYNTH_DUT)" --board "$(SYNTH_BOARD)" $(if $(SYNTH_FILELIST),--filelist "$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),--top "$(SYNTH_TOP)") --clock-mhz "$(SYNTH_CLOCK_MHZ)" --timeout-sec "$(SYNTH_TIMEOUT_SEC)" --warn-after-sec "$(SYNTH_WARN_AFTER_SEC)" --yosys-quiet "$(SYNTH_YOSYS_QUIET)" --max-visible-width "$(SYNTH_MAX_VISIBLE_WIDTH)" --max-visible-height "$(SYNTH_MAX_VISIBLE_HEIGHT)" --support-palette-444 "$(SYNTH_SUPPORT_PALETTE_444)" $(if $(SYNTH_MEMORY_LIMIT_MB),--memory-limit-mb "$(SYNTH_MEMORY_LIMIT_MB)") --post-synth-smoke
 
 synth-vivado:
 	python3 scripts/run_synth.py --tool vivado --dut "$(SYNTH_DUT)" --board "$(SYNTH_BOARD)" $(if $(SYNTH_FILELIST),--filelist "$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),--top "$(SYNTH_TOP)") --clock-mhz "$(SYNTH_CLOCK_MHZ)" --timeout-sec "$(SYNTH_TIMEOUT_SEC)" --warn-after-sec "$(SYNTH_WARN_AFTER_SEC)" --max-visible-width "$(SYNTH_MAX_VISIBLE_WIDTH)" --max-visible-height "$(SYNTH_MAX_VISIBLE_HEIGHT)" --support-palette-444 "$(SYNTH_SUPPORT_PALETTE_444)" $(if $(SYNTH_MEMORY_LIMIT_MB),--memory-limit-mb "$(SYNTH_MEMORY_LIMIT_MB)")

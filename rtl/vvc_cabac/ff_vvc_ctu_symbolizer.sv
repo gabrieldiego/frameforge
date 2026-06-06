@@ -14,11 +14,11 @@ module ff_vvc_ctu_symbolizer #(
   input  logic [1:0]  chroma_format_idc,
   input  logic [(8 * LUMA_TUS_PER_CTU) - 1:0] luma_abs_levels,
   input  logic [LUMA_TUS_PER_CTU - 1:0] luma_negative,
-  input  logic [(8 * 15 * LUMA_TUS_PER_CTU) - 1:0] luma_ac_levels,
+  input  logic [(4 * 15 * LUMA_TUS_PER_CTU) - 1:0] luma_ac_levels,
   input  logic [(9 * CHROMA_TUS_PER_CTU) - 1:0] cb_dc_levels,
   input  logic [(9 * CHROMA_TUS_PER_CTU) - 1:0] cr_dc_levels,
-  input  logic [(8 * 15 * CHROMA_TUS_PER_CTU) - 1:0] cb_ac_levels,
-  input  logic [(8 * 15 * CHROMA_TUS_PER_CTU) - 1:0] cr_ac_levels,
+  input  logic [(4 * 3 * CHROMA_TUS_PER_CTU) - 1:0] cb_ac_levels,
+  input  logic [(4 * 3 * CHROMA_TUS_PER_CTU) - 1:0] cr_ac_levels,
   input  logic [2:0]  luma_log2_tb_width,
   input  logic [2:0]  luma_log2_tb_height,
   input  logic        sps_mrl_enabled_flag,
@@ -206,10 +206,10 @@ module ff_vvc_ctu_symbolizer #(
   logic [5:0] cur_luma_tu_index;
   logic [7:0] selected_luma_abs_level_w;
   logic       selected_luma_negative_w;
-  logic [(8 * 15) - 1:0] selected_luma_ac_levels_w;
+  logic [(4 * 15) - 1:0] selected_luma_ac_levels_w;
   logic [7:0] cur_luma_abs_level;
   logic       cur_luma_negative;
-  logic [(8 * 15) - 1:0] cur_luma_ac_levels;
+  logic [(4 * 15) - 1:0] cur_luma_ac_levels;
   logic [7:0] rem_abs_value;
   logic [7:0] rem_code_value;
   logic [2:0] rem_prefix_extra_len;
@@ -293,19 +293,12 @@ module ff_vvc_ctu_symbolizer #(
   logic cur_chroma_writes_split;
   logic signed [8:0] dispatch_cb_dc_level_w;
   logic signed [8:0] dispatch_cr_dc_level_w;
-  logic [(8 * 15) - 1:0] dispatch_cb_ac_levels_w;
-  logic [(8 * 15) - 1:0] dispatch_cr_ac_levels_w;
+  logic [(4 * 3) - 1:0] dispatch_cb_ac_levels_w;
+  logic [(4 * 3) - 1:0] dispatch_cr_ac_levels_w;
   logic signed [8:0] cur_cb_dc_level_q;
   logic signed [8:0] cur_cr_dc_level_q;
-  logic [(8 * 15) - 1:0] cur_cb_ac_levels_q;
-  logic [(8 * 15) - 1:0] cur_cr_ac_levels_q;
-  logic [7:0] luma_abs_level_slots [0:LUMA_TUS_PER_CTU - 1];
-  logic luma_negative_slots [0:LUMA_TUS_PER_CTU - 1];
-  logic [(8 * 15) - 1:0] luma_ac_level_slots [0:LUMA_TUS_PER_CTU - 1];
-  logic signed [8:0] cb_dc_level_slots [0:CHROMA_TUS_PER_CTU - 1];
-  logic signed [8:0] cr_dc_level_slots [0:CHROMA_TUS_PER_CTU - 1];
-  logic [(8 * 15) - 1:0] cb_ac_level_slots [0:CHROMA_TUS_PER_CTU - 1];
-  logic [(8 * 15) - 1:0] cr_ac_level_slots [0:CHROMA_TUS_PER_CTU - 1];
+  logic [(4 * 3) - 1:0] cur_cb_ac_levels_q;
+  logic [(4 * 3) - 1:0] cur_cr_ac_levels_q;
   logic cb_has_coeff;
   logic cr_has_coeff;
   logic cur_chroma_cbf_cb;
@@ -357,7 +350,6 @@ module ff_vvc_ctu_symbolizer #(
   logic [31:0] sign_bits_tmp;
   logic [5:0] sign_count_tmp;
   logic [7:0] regular_bins_left_tmp;
-  genvar tu_slot_i;
   integer chroma_coeff_i;
   integer chroma_scan_i;
   integer chroma_bin_i;
@@ -402,23 +394,6 @@ module ff_vvc_ctu_symbolizer #(
   logic [31:0] chroma_rem_prefix_pattern_tmp;
   logic [5:0] chroma_rem_suffix_count_tmp;
   logic [31:0] chroma_rem_suffix_pattern_tmp;
-
-  generate
-    for (tu_slot_i = 0; tu_slot_i < LUMA_TUS_PER_CTU; tu_slot_i = tu_slot_i + 1) begin : gen_luma_tu_slots
-      assign luma_abs_level_slots[tu_slot_i] = luma_abs_levels[tu_slot_i * 8 +: 8];
-      assign luma_negative_slots[tu_slot_i] = luma_negative[tu_slot_i];
-      assign luma_ac_level_slots[tu_slot_i] =
-        luma_ac_levels[tu_slot_i * (8 * 15) +: (8 * 15)];
-    end
-    for (tu_slot_i = 0; tu_slot_i < CHROMA_TUS_PER_CTU; tu_slot_i = tu_slot_i + 1) begin : gen_chroma_tu_slots
-      assign cb_dc_level_slots[tu_slot_i] = $signed(cb_dc_levels[tu_slot_i * 9 +: 9]);
-      assign cr_dc_level_slots[tu_slot_i] = $signed(cr_dc_levels[tu_slot_i * 9 +: 9]);
-      assign cb_ac_level_slots[tu_slot_i] =
-        cb_ac_levels[tu_slot_i * (8 * 15) +: (8 * 15)];
-      assign cr_ac_level_slots[tu_slot_i] =
-        cr_ac_levels[tu_slot_i * (8 * 15) +: (8 * 15)];
-    end
-  endgenerate
 
   assign busy = (state_q != ST_IDLE) || m_axis_valid;
   assign stack_pop_index = stack_count_q[3:0] - 4'd1;
@@ -783,13 +758,19 @@ module ff_vvc_ctu_symbolizer #(
   end
 
   assign cur_luma_tu_index = cur_grid_index;
-  assign selected_luma_abs_level_w = luma_abs_level_slots[cur_luma_tu_index];
-  assign selected_luma_negative_w = luma_negative_slots[cur_luma_tu_index];
-  assign selected_luma_ac_levels_w = luma_ac_level_slots[cur_luma_tu_index];
-  assign dispatch_cb_dc_level_w = cb_dc_level_slots[chroma_tu_index_q];
-  assign dispatch_cr_dc_level_w = cr_dc_level_slots[chroma_tu_index_q];
-  assign dispatch_cb_ac_levels_w = cb_ac_level_slots[chroma_tu_index_q];
-  assign dispatch_cr_ac_levels_w = cr_ac_level_slots[chroma_tu_index_q];
+  assign selected_luma_abs_level_w =
+    luma_abs_levels[{cur_luma_tu_index, 3'b000} +: 8];
+  assign selected_luma_negative_w = luma_negative[cur_luma_tu_index];
+  assign selected_luma_ac_levels_w =
+    luma_ac_levels[(cur_luma_tu_index * (4 * 15)) +: (4 * 15)];
+  assign dispatch_cb_dc_level_w =
+    $signed(cb_dc_levels[(chroma_tu_index_q * 9) +: 9]);
+  assign dispatch_cr_dc_level_w =
+    $signed(cr_dc_levels[(chroma_tu_index_q * 9) +: 9]);
+  assign dispatch_cb_ac_levels_w =
+    cb_ac_levels[(chroma_tu_index_q * (4 * 3)) +: (4 * 3)];
+  assign dispatch_cr_ac_levels_w =
+    cr_ac_levels[(chroma_tu_index_q * (4 * 3)) +: (4 * 3)];
 
   assign cb_has_coeff = (dispatch_cb_dc_level_w != 9'sd0) || (|dispatch_cb_ac_levels_w);
   assign cr_has_coeff = (dispatch_cr_dc_level_w != 9'sd0) || (|dispatch_cr_ac_levels_w);
@@ -820,7 +801,8 @@ module ff_vvc_ctu_symbolizer #(
       -$signed({1'b0, cur_luma_abs_level}) : $signed({1'b0, cur_luma_abs_level});
     for (coeff_i = 1; coeff_i < 16; coeff_i = coeff_i + 1) begin
       luma_coeff_level[coeff_i] =
-        $signed(cur_luma_ac_levels[((15 - coeff_i) * 8) +: 8]);
+        $signed({{4{cur_luma_ac_levels[((15 - coeff_i) * 4) + 3]}},
+                 cur_luma_ac_levels[((15 - coeff_i) * 4) +: 4]});
     end
 
     luma_has_coeff = 1'b0;
@@ -1154,8 +1136,10 @@ module ff_vvc_ctu_symbolizer #(
       chroma_res_cr_q ? cur_cr_dc_level_q : cur_cb_dc_level_q;
     for (chroma_coeff_i = 1; chroma_coeff_i < 16; chroma_coeff_i = chroma_coeff_i + 1) begin
       chroma_coeff_level[chroma_coeff_i] = chroma_res_cr_q ?
-        $signed(cur_cr_ac_levels_q[((15 - chroma_coeff_i) * 8) +: 8]) :
-        $signed(cur_cb_ac_levels_q[((15 - chroma_coeff_i) * 8) +: 8]);
+        $signed({{5{cur_cr_ac_levels_q[((15 - chroma_coeff_i) * 4) + 3]}},
+                 cur_cr_ac_levels_q[((15 - chroma_coeff_i) * 4) +: 4]}) :
+        $signed({{5{cur_cb_ac_levels_q[((15 - chroma_coeff_i) * 4) + 3]}},
+                 cur_cb_ac_levels_q[((15 - chroma_coeff_i) * 4) +: 4]});
     end
 
     chroma_has_coeff = 1'b0;

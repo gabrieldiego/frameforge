@@ -99,6 +99,11 @@ impl VvcResidualComponent {
 
 pub(super) const VVC_CHROMA_TU_SIZE: usize = 4;
 pub(super) const VVC_LUMA_AC_COEFFS_PER_TU: usize = 15;
-pub(super) const VVC_CHROMA_AC_COEFFS_PER_TU: usize = 15;
+pub(super) const VVC_CHROMA_AC_COEFFS_PER_TU: usize = 3;
+// Current lossy 4:2:0 subset stores only the 2x2 low-frequency chroma AC
+// positions. H.266 7.3.11.10 still codes them in their normal 4x4 transform
+// coordinates; reconstruction and CABAC expand these slots back to (x,y).
+pub(super) const VVC_CHROMA_AC_POSITIONS_2X2: [(usize, usize); VVC_CHROMA_AC_COEFFS_PER_TU] =
+    [(1, 0), (0, 1), (1, 1)];
 pub(super) const MAX_VVC_LUMA_TUS: usize = 16 * 16;
 pub(super) const MAX_VVC_CHROMA_TUS: usize = MAX_VVC_LUMA_TUS;

@@ -127,6 +127,40 @@ stream writer consumes the queried context in the same cycle. Moving to a true
 RAM-backed context table, like a staged xk265-style path, requires a pipeline
 boundary between symbol input, context read/update, and bin coding.
 
+## Top Encoder Baseline
+
+Measured on June 6, 2026 with:
+
+```sh
+make synth SYNTH_DUT=vvc-encoder SYNTH_TIMEOUT_SEC=300
+```
+
+Configuration:
+
+- target: Arty Z7-10 (`xc7z010clg400-1`)
+- clock metadata: 50 MHz
+- max visible size: 1024x1024
+- 4:4:4 palette support: enabled
+- synthesis timeout: 300 seconds
+- synthesis memory cap: 2048 MiB
+- Yosys quiet logging: enabled
+- chroma residual subset: DC plus the 2x2 low-frequency AC group
+
+Result:
+
+- Top `ff_vvc_encoder` synthesis completed in 288.1 seconds. This exceeds the
+  60 second review threshold but is inside the 300 second timeout.
+- The memory cap did not trip during synthesis.
+- Post-synthesis critical-path reporting completed in 70.3 seconds and reported
+  a peak memory of 1301.47 MB.
+- Longest topological path length: 155, from `current_ctu_y_q` through visible
+  CTU geometry and luma quantizer visibility/control into
+  `luma_quant_recon.negative`.
+- Reports and artifacts:
+  `synth/out/arty-z7-10/ff_vvc_encoder/yosys.log`,
+  `synth/out/arty-z7-10/ff_vvc_encoder/critical_path.log`,
+  `synth/out/arty-z7-10/ff_vvc_encoder/ff_vvc_encoder.post_synth.v`.
+
 ## Optional Vivado Synthesis
 
 FrameForge keeps a tracked Vivado install template at

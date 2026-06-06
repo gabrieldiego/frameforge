@@ -23,6 +23,7 @@ LOCAL_VIVADO_COMPAT_LIB = Path(".tools/vivado-compat/lib")
 DEFAULT_SYNTH_TIMEOUT_SEC = 120.0
 DEFAULT_SYNTH_WARN_AFTER_SEC = 60.0
 DEFAULT_YOSYS_MEMORY_LIMIT_MB = 2048.0
+DEFAULT_YOSYS_QUIET = True
 DEFAULT_SYNTH_MAX_VISIBLE_WIDTH = 1024
 DEFAULT_SYNTH_MAX_VISIBLE_HEIGHT = 1024
 DEFAULT_SYNTH_SUPPORT_PALETTE_444 = True
@@ -73,6 +74,12 @@ def main() -> int:
         default=default_synth_warn_after_sec(),
         help="warn when a synthesis command exceeds this elapsed time; use 0 to disable",
     )
+    parser.add_argument(
+        "--yosys-quiet",
+        type=parse_bool_int,
+        default=default_yosys_quiet(),
+        help="run the main Yosys synthesis command with -q to suppress verbose mapper logs",
+    )
     parser.add_argument("--post-synth-smoke", action="store_true")
     args = parser.parse_args()
 
@@ -113,6 +120,7 @@ def main() -> int:
         args.max_visible_width,
         args.max_visible_height,
         args.support_palette_444,
+        args.yosys_quiet,
     )
     if rc != 0 or not args.post_synth_smoke:
         return rc
@@ -170,6 +178,16 @@ def default_synth_memory_limit_mb() -> float | None:
         return float(value)
     except ValueError as err:
         raise SystemExit(f"SYNTH_MEMORY_LIMIT_MB must be numeric, got {value!r}") from err
+
+
+def default_yosys_quiet() -> bool:
+    value = os.environ.get("SYNTH_YOSYS_QUIET")
+    if value is None or value == "":
+        return DEFAULT_YOSYS_QUIET
+    try:
+        return parse_bool_int(value)
+    except argparse.ArgumentTypeError as err:
+        raise SystemExit(f"SYNTH_YOSYS_QUIET must be 0 or 1, got {value!r}") from err
 
 
 def resolve_memory_limit_mb(tool: str, explicit_limit: float | None) -> float | None:
@@ -446,6 +464,7 @@ def run_yosys(
     max_visible_width: int,
     max_visible_height: int,
     support_palette_444: bool,
+    yosys_quiet: bool,
 ) -> int:
     yosys = os.environ.get("SYNTH_YOSYS") or find_tool("yosys")
     family = board.get("FPGA_FAMILY", "xc7")
@@ -495,8 +514,13 @@ def run_yosys(
         print(f"Synthesis memory limit: {memory_limit_mb:g} MiB")
     if warn_after_sec is not None:
         print(f"Synthesis review threshold: {warn_after_sec:g} seconds")
+    print(f"Yosys quiet logging: {int(yosys_quiet)}")
+    yosys_cmd = [yosys]
+    if yosys_quiet:
+        yosys_cmd.append("-q")
+    yosys_cmd.extend(["-s", str(script)])
     rc = run_logged_command(
-        [yosys, "-s", str(script)],
+        yosys_cmd,
         log,
         "Yosys synthesis",
         timeout_sec,

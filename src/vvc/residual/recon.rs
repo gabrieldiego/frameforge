@@ -95,10 +95,8 @@ fn quantized_chroma_coeff_levels(
     let height = usize::from(node.height / 2);
     let mut levels = vec![0; width * height];
     levels[0] = dc_level;
-    for (ac_idx, level) in ac_levels.iter().enumerate() {
-        let local = ac_idx + 1;
-        let x = local % 4;
-        let y = local / 4;
+    for (slot, level) in ac_levels.iter().enumerate() {
+        let (x, y) = super::VVC_CHROMA_AC_POSITIONS_2X2[slot];
         if x < width && y < height {
             levels[y * width + x] = *level;
         }

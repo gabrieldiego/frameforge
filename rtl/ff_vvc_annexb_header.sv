@@ -32,7 +32,6 @@ module ff_vvc_annexb_header #(
   localparam logic [4:0] NAL_UNIT_TYPE_PPS = 5'd16;
   localparam logic [5:0] NAL_LAYER_ID = 6'd0;
   localparam logic [2:0] NAL_TEMPORAL_ID_PLUS1 = 3'd1;
-  localparam logic [15:0] CTU_SIZE_L = CTU_SIZE;
   localparam logic [6:0] SPS_FIELD_COUNT = 7'd106;
   localparam logic [6:0] PPS_FIELD_COUNT = 7'd27;
   localparam logic [3:0] ST_IDLE = 4'd0;
@@ -108,9 +107,30 @@ module ff_vvc_annexb_header #(
 
   assign coded_width = (visible_width + CODED_GRANULARITY - 16'd1) & ~(CODED_GRANULARITY - 16'd1);
   assign coded_height = (visible_height + CODED_GRANULARITY - 16'd1) & ~(CODED_GRANULARITY - 16'd1);
-  assign ctu_cols = (coded_width + CTU_SIZE_L - 16'd1) / CTU_SIZE_L;
-  assign ctu_rows = (coded_height + CTU_SIZE_L - 16'd1) / CTU_SIZE_L;
-  assign slice_count = ctu_cols * ctu_rows;
+  assign ctu_cols = (coded_width + 16'd63) >> 6;
+  assign ctu_rows = (coded_height + 16'd63) >> 6;
+  always @* begin
+    case (ctu_rows[4:0])
+      5'd0: slice_count = 16'd0;
+      5'd1: slice_count = ctu_cols;
+      5'd2: slice_count = ctu_cols << 1;
+      5'd3: slice_count = (ctu_cols << 1) + ctu_cols;
+      5'd4: slice_count = ctu_cols << 2;
+      5'd5: slice_count = (ctu_cols << 2) + ctu_cols;
+      5'd6: slice_count = (ctu_cols << 2) + (ctu_cols << 1);
+      5'd7: slice_count = (ctu_cols << 3) - ctu_cols;
+      5'd8: slice_count = ctu_cols << 3;
+      5'd9: slice_count = (ctu_cols << 3) + ctu_cols;
+      5'd10: slice_count = (ctu_cols << 3) + (ctu_cols << 1);
+      5'd11: slice_count = (ctu_cols << 3) + (ctu_cols << 1) + ctu_cols;
+      5'd12: slice_count = (ctu_cols << 3) + (ctu_cols << 2);
+      5'd13: slice_count = (ctu_cols << 3) + (ctu_cols << 2) + ctu_cols;
+      5'd14: slice_count = (ctu_cols << 4) - (ctu_cols << 1);
+      5'd15: slice_count = (ctu_cols << 4) - ctu_cols;
+      5'd16: slice_count = ctu_cols << 4;
+      default: slice_count = 16'd0;
+    endcase
+  end
   assign has_multiple_ctus = slice_count > 16'd1;
   assign crop_right_offset =
     ((chroma_format_idc == 2'd1) || (chroma_format_idc == 2'd2)) ?
@@ -134,8 +154,7 @@ module ff_vvc_annexb_header #(
   // This is equivalent to the previous CTU scan, but avoids synthesizing
   // a modulo/divide search tree over the configured maximum CTU count.
   assign pps_slice_geometry_field_count =
-    ((ctu_cols == 16'd0) || (ctu_rows == 16'd0)) ? 16'd0 :
-    ((ctu_rows * (ctu_cols - 16'd1)) + (ctu_rows - 16'd1));
+    (slice_count == 16'd0) ? 16'd0 : (slice_count - 16'd1);
   // Multi-CTU PPS fields:
   // 13 fields through pps_num_exp_tile_rows_minus1,
   // one ue(0) per tile column and row,

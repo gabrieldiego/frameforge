@@ -59,9 +59,9 @@ module ff_vvc_palette_symbolizer #(
   logic [PLANE_COUNT_BITS - 1:0] cr_write_count_q;
   logic [7:0] drain_cu_index_q;
   logic [7:0] feed_sample_q;
-  logic [15:0] coded_cu_count_x;
-  logic [15:0] coded_cu_count_y;
-  logic [15:0] root_leaf_count_value;
+  logic [3:0] coded_cu_count_x;
+  logic [3:0] coded_cu_count_y;
+  logic [7:0] root_leaf_count_value;
   logic [7:0] input_sample_8bit;
   logic input_valid;
   logic input_last_cr;
@@ -105,10 +105,26 @@ module ff_vvc_palette_symbolizer #(
   (* ram_style = "block" *) logic [7:0] frame_cb [0:MAX_PLANE_SAMPLES - 1];
   (* ram_style = "block" *) logic [7:0] frame_cr [0:MAX_PLANE_SAMPLES - 1];
 
-  assign coded_cu_count_x = (ctu_coded_width + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE;
-  assign coded_cu_count_y = (ctu_coded_height + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE;
-  assign root_leaf_count_value = coded_cu_count_x * coded_cu_count_y;
-  assign symbol_count = enable ? root_leaf_count_value[7:0] : 8'd0;
+  assign coded_cu_count_x = (ctu_coded_width + 16'd7) >> 3;
+  assign coded_cu_count_y = (ctu_coded_height + 16'd7) >> 3;
+  always @* begin
+    case (coded_cu_count_y)
+      4'd0: root_leaf_count_value = 8'd0;
+      4'd1: root_leaf_count_value = {4'd0, coded_cu_count_x};
+      4'd2: root_leaf_count_value = {3'd0, coded_cu_count_x, 1'b0};
+      4'd3: root_leaf_count_value = {3'd0, coded_cu_count_x, 1'b0} +
+                                     {4'd0, coded_cu_count_x};
+      4'd4: root_leaf_count_value = {2'd0, coded_cu_count_x, 2'b00};
+      4'd5: root_leaf_count_value = {2'd0, coded_cu_count_x, 2'b00} +
+                                     {4'd0, coded_cu_count_x};
+      4'd6: root_leaf_count_value = {2'd0, coded_cu_count_x, 2'b00} +
+                                     {3'd0, coded_cu_count_x, 1'b0};
+      4'd7: root_leaf_count_value = {1'd0, coded_cu_count_x, 3'b000} -
+                                     {4'd0, coded_cu_count_x};
+      default: root_leaf_count_value = {1'd0, coded_cu_count_x, 3'b000};
+    endcase
+  end
+  assign symbol_count = enable ? root_leaf_count_value : 8'd0;
 
   assign input_valid = s_axis_valid && s_axis_ready;
   assign input_sample_8bit = (SAMPLE_BITS <= 8) ? s_axis_sample[7:0] :
@@ -129,8 +145,8 @@ module ff_vvc_palette_symbolizer #(
   assign feed_y = {13'd0, feed_sample_q[5:3]};
   assign feed_abs_x = drain_origin_x + feed_x;
   assign feed_abs_y = drain_origin_y + feed_y;
-  assign visible_cu_cols_w = coded_cu_count_x[3:0];
-  assign visible_cu_rows_w = coded_cu_count_y[3:0];
+  assign visible_cu_cols_w = coded_cu_count_x;
+  assign visible_cu_rows_w = coded_cu_count_y;
   assign drain_cu_col_w = drain_origin_x_q[5:3];
   assign drain_cu_row_w = drain_origin_y_q[5:3];
   assign drain_cu_order_index_ext_w =

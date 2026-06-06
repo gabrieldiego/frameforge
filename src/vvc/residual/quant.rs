@@ -9,7 +9,7 @@ use super::{
     quantize_vvc_chroma_sample, quantize_vvc_luma_residual_greedy, reconstruct_vvc_chroma,
     transform_vvc_tu, VvcQuantizedColor, VvcQuantizedTransformBlock, VvcTransformComponent,
     VvcTuTransformBlock, MAX_VVC_CHROMA_TUS, MAX_VVC_LUMA_TUS, VVC_CHROMA_AC_COEFFS_PER_TU,
-    VVC_CHROMA_TU_SIZE,
+    VVC_CHROMA_AC_POSITIONS_2X2, VVC_CHROMA_TU_SIZE,
 };
 
 pub fn quantize_vvc_color(color: VvcSampledColor) -> VvcQuantizedColor {
@@ -124,8 +124,10 @@ pub(in crate::vvc) fn quantize_vvc_frame(frame: VvcSampledFrame) -> VvcQuantized
         );
         cb_tu_dc_levels[chroma_tu_count] = cb_quantized.reconstructed_dc_coeff;
         cr_tu_dc_levels[chroma_tu_count] = cr_quantized.reconstructed_dc_coeff;
-        cb_tu_ac_levels[chroma_tu_count] = cb_quantized.reconstructed_ac_coeffs;
-        cr_tu_ac_levels[chroma_tu_count] = cr_quantized.reconstructed_ac_coeffs;
+        cb_tu_ac_levels[chroma_tu_count] =
+            chroma_ac_subset_from_full_4x4(cb_quantized.reconstructed_ac_coeffs);
+        cr_tu_ac_levels[chroma_tu_count] =
+            chroma_ac_subset_from_full_4x4(cr_quantized.reconstructed_ac_coeffs);
         let cb_reconstructed_residual = inverse_transform_vvc_chroma_residual_levels(
             chroma_width as u16,
             chroma_height as u16,
@@ -310,6 +312,16 @@ fn quantized_chroma_coeff_levels(
         }
     }
     levels
+}
+
+fn chroma_ac_subset_from_full_4x4(
+    ac_levels: [i16; super::VVC_LUMA_AC_COEFFS_PER_TU],
+) -> [i16; VVC_CHROMA_AC_COEFFS_PER_TU] {
+    let mut subset = [0; VVC_CHROMA_AC_COEFFS_PER_TU];
+    for (slot, (x, y)) in VVC_CHROMA_AC_POSITIONS_2X2.iter().copied().enumerate() {
+        subset[slot] = ac_levels[y * 4 + x - 1];
+    }
+    subset
 }
 
 fn residual_luma_tu_at(
