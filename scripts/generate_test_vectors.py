@@ -4,12 +4,18 @@
 from __future__ import annotations
 
 import argparse
+import os
 import random
 from dataclasses import dataclass
 from pathlib import Path
 
 
 DEFAULT_OUT_DIR = Path("verification/generated/test_vectors")
+DEFAULT_RACEHORSES_SOURCE = Path(
+    "/media/gabriel/storage/YUV/class_d/RaceHorses_416x240_30.yuv"
+)
+RACEHORSES_WIDTH = 416
+RACEHORSES_HEIGHT = 240
 GEOMETRY_STEPS = range(8, 65, 8)
 PALETTE_COLORS_YUV = [
     (18, 128, 128),
@@ -44,6 +50,7 @@ def vector_sets() -> dict[str, list[TestVector]]:
         "smoke": smoke_vectors(),
         "sweep-420": sweep_vectors("yuv420p8"),
         "sweep-444": sweep_vectors("yuv444p8"),
+        "racehorses-sweep-420": racehorses_sweep_vectors(),
         "random-short": random_short_vectors(),
         "motion-short": motion_vectors(frames=3),
         "motion-long": motion_vectors(frames=300),
@@ -69,6 +76,14 @@ def sweep_vectors(fmt: str) -> list[TestVector]:
     pattern = "black" if fmt == "yuv420p8" else "screen_blocks"
     return [
         TestVector(pattern, width, height, 1, fmt, pattern)
+        for height in GEOMETRY_STEPS
+        for width in GEOMETRY_STEPS
+    ]
+
+
+def racehorses_sweep_vectors() -> list[TestVector]:
+    return [
+        TestVector("racehorses_crop", width, height, 1, "yuv420p8", "racehorses_crop")
         for height in GEOMETRY_STEPS
         for width in GEOMETRY_STEPS
     ]
@@ -135,11 +150,64 @@ def generate_vectors(set_name: str, out_dir: Path) -> list[Path]:
 
 
 def generate_yuv(vector: TestVector) -> bytes:
+    if vector.pattern == "racehorses_crop":
+        return generate_racehorses_crop(vector)
     if vector.fmt == "yuv420p8":
         return generate_yuv420p8(vector)
     if vector.fmt == "yuv444p8":
         return generate_yuv444p8(vector)
     raise ValueError(f"unsupported generated format: {vector.fmt}")
+
+
+def generate_racehorses_crop(vector: TestVector) -> bytes:
+    if vector.fmt != "yuv420p8":
+        raise ValueError("RaceHorses crop vectors are currently yuv420p8 only")
+    source = Path(os.environ.get("FRAMEFORGE_RACEHORSES_YUV", DEFAULT_RACEHORSES_SOURCE))
+    if not source.exists():
+        raise ValueError(
+            "RaceHorses source YUV is missing: "
+            f"{source}. Set FRAMEFORGE_RACEHORSES_YUV to override."
+        )
+    if vector.frames != 1:
+        raise ValueError("RaceHorses crop vectors currently use the first frame only")
+
+    frame_size = RACEHORSES_WIDTH * RACEHORSES_HEIGHT * 3 // 2
+    source_frame = source.read_bytes()[:frame_size]
+    if len(source_frame) != frame_size:
+        raise ValueError(f"RaceHorses source is smaller than one {RACEHORSES_WIDTH}x{RACEHORSES_HEIGHT} frame")
+
+    crop_x, crop_y = racehorses_crop_origin(vector.width, vector.height)
+    y_size = RACEHORSES_WIDTH * RACEHORSES_HEIGHT
+    uv_size = y_size // 4
+    source_y = source_frame[:y_size]
+    source_u = source_frame[y_size : y_size + uv_size]
+    source_v = source_frame[y_size + uv_size : y_size + (uv_size * 2)]
+
+    out = bytearray()
+    for row in range(vector.height):
+        start = (crop_y + row) * RACEHORSES_WIDTH + crop_x
+        out.extend(source_y[start : start + vector.width])
+
+    chroma_width = vector.width // 2
+    chroma_height = vector.height // 2
+    source_chroma_width = RACEHORSES_WIDTH // 2
+    crop_chroma_x = crop_x // 2
+    crop_chroma_y = crop_y // 2
+    for plane in (source_u, source_v):
+        for row in range(chroma_height):
+            start = (crop_chroma_y + row) * source_chroma_width + crop_chroma_x
+            out.extend(plane[start : start + chroma_width])
+    return bytes(out)
+
+
+def racehorses_crop_origin(width: int, height: int) -> tuple[int, int]:
+    max_x = RACEHORSES_WIDTH - width
+    max_y = RACEHORSES_HEIGHT - height
+    if max_x < 0 or max_y < 0:
+        raise ValueError(f"RaceHorses crop {width}x{height} exceeds source dimensions")
+    crop_x = (max_x * 3) // 8
+    crop_y = (max_y * 2) // 5
+    return crop_x - (crop_x % 2), crop_y - (crop_y % 2)
 
 
 def generate_yuv420p8(vector: TestVector) -> bytes:

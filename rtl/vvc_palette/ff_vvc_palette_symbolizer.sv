@@ -43,10 +43,12 @@ module ff_vvc_palette_symbolizer #(
   localparam int MAX_CU_SAMPLES = PALETTE_CU_SIZE * PALETTE_CU_SIZE;
   localparam int MAX_PLANE_SAMPLES = CTU_SIZE * CTU_SIZE;
   localparam int PLANE_COUNT_BITS = $clog2(MAX_PLANE_SAMPLES + 1);
+  localparam logic [PLANE_COUNT_BITS - 1:0] MAX_CU_SAMPLES_L = MAX_CU_SAMPLES;
 
   typedef enum logic [2:0] {
     ST_INPUT,
     ST_WAIT_CU,
+    ST_FEED_READ,
     ST_FEED_CU,
     ST_DRAIN_CU
   } state_t;
@@ -60,28 +62,37 @@ module ff_vvc_palette_symbolizer #(
   logic [15:0] coded_cu_count_x;
   logic [15:0] coded_cu_count_y;
   logic [15:0] root_leaf_count_value;
-  logic [7:0] last_symbol_index;
   logic [7:0] input_sample_8bit;
   logic input_valid;
   logic input_last_cr;
+  logic [PLANE_COUNT_BITS - 1:0] drain_cu_order_index_ext_w;
+  logic [PLANE_COUNT_BITS - 1:0] feed_sample_ext_w;
   logic drain_cu_selected;
   logic drain_cu_is_last_selected;
-  logic selected_after_current;
   logic [15:0] drain_origin_x;
   logic [15:0] drain_origin_y;
   logic [15:0] drain_origin_x_q;
   logic [15:0] drain_origin_y_q;
   logic        drain_cu_is_last_selected_q;
-  logic [7:0] drain_index_in_32;
-  logic [7:0] drain_index_in_16;
   logic [15:0] feed_x;
   logic [15:0] feed_y;
   logic [15:0] feed_abs_x;
   logic [15:0] feed_abs_y;
-  logic [31:0] feed_frame_index;
+  logic [PLANE_COUNT_BITS - 1:0] feed_frame_index;
+  logic [3:0] visible_cu_cols_w;
+  logic [3:0] visible_cu_rows_w;
+  logic [2:0] drain_cu_col_w;
+  logic [2:0] drain_cu_row_w;
+  logic       drain_cu_order_valid_w;
+  logic [5:0] drain_cu_order_index_w;
   logic [7:0] feed_y_sample;
   logic [7:0] feed_cb_sample;
   logic [7:0] feed_cr_sample;
+  logic [7:0] feed_y_sample_q;
+  logic [7:0] feed_cb_sample_q;
+  logic [7:0] feed_cr_sample_q;
+  logic       feed_sample_last_q;
+  logic       feed_sample_valid_q;
   logic cu_s_axis_valid;
   logic cu_s_axis_ready;
   logic cu_s_axis_last;
@@ -90,15 +101,14 @@ module ff_vvc_palette_symbolizer #(
   logic [31:0] cu_m_axis_data;
   logic cu_m_axis_last;
 
-  logic [7:0] frame_y [0:MAX_PLANE_SAMPLES - 1];
-  logic [7:0] frame_cb [0:MAX_PLANE_SAMPLES - 1];
-  logic [7:0] frame_cr [0:MAX_PLANE_SAMPLES - 1];
+  (* ram_style = "block" *) logic [7:0] frame_y [0:MAX_PLANE_SAMPLES - 1];
+  (* ram_style = "block" *) logic [7:0] frame_cb [0:MAX_PLANE_SAMPLES - 1];
+  (* ram_style = "block" *) logic [7:0] frame_cr [0:MAX_PLANE_SAMPLES - 1];
 
   assign coded_cu_count_x = (ctu_coded_width + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE;
   assign coded_cu_count_y = (ctu_coded_height + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE;
   assign root_leaf_count_value = coded_cu_count_x * coded_cu_count_y;
   assign symbol_count = enable ? root_leaf_count_value[7:0] : 8'd0;
-  assign last_symbol_index = symbol_count == 8'd0 ? 8'd0 : symbol_count - 8'd1;
 
   assign input_valid = s_axis_valid && s_axis_ready;
   assign input_sample_8bit = (SAMPLE_BITS <= 8) ? s_axis_sample[7:0] :
@@ -111,36 +121,51 @@ module ff_vvc_palette_symbolizer #(
   assign drain_cu_is_last_selected = drain_cu_is_last_selected_q;
 
   always @* begin
-    selected_after_current = 1'b0;
-    for (int i = 0; i < MAX_PALETTE_SYMBOLS; i = i + 1) begin
-      if ((i > drain_cu_index_q) && cu_select_mask[MAX_PALETTE_SYMBOLS - 1 - i]) begin
-        selected_after_current = 1'b1;
-      end
-    end
-  end
-
-  always @* begin
     drain_origin_x = drain_origin_x_q;
     drain_origin_y = drain_origin_y_q;
-    drain_index_in_32 = drain_cu_index_q;
-    drain_index_in_16 = drain_cu_index_q;
   end
 
   assign feed_x = {13'd0, feed_sample_q[2:0]};
   assign feed_y = {13'd0, feed_sample_q[5:3]};
   assign feed_abs_x = drain_origin_x + feed_x;
   assign feed_abs_y = drain_origin_y + feed_y;
-  assign feed_frame_index = (feed_abs_y * ctu_coded_width) + feed_abs_x;
-  assign feed_y_sample = frame_y[feed_frame_index];
-  assign feed_cb_sample = frame_cb[feed_frame_index];
-  assign feed_cr_sample = frame_cr[feed_frame_index];
-  assign cu_s_axis_valid = (state_q == ST_FEED_CU);
-  assign cu_s_axis_last = feed_sample_q == (MAX_CU_SAMPLES - 1);
+  assign visible_cu_cols_w = coded_cu_count_x[3:0];
+  assign visible_cu_rows_w = coded_cu_count_y[3:0];
+  assign drain_cu_col_w = drain_origin_x_q[5:3];
+  assign drain_cu_row_w = drain_origin_y_q[5:3];
+  assign drain_cu_order_index_ext_w =
+    {{(PLANE_COUNT_BITS - 6){1'b0}}, drain_cu_order_index_w};
+  assign feed_sample_ext_w = {{(PLANE_COUNT_BITS - 8){1'b0}}, feed_sample_q};
+  // H.266 7.3.11.4 coding_tree() leaf traversal requests the CU payload by
+  // origin. The input stream is the compact fixed-8x8 TU order used by the
+  // top-level interface, so address the stored block by origin rather than by
+  // request ordinal.
+  assign feed_frame_index =
+    ((drain_cu_order_valid_w ? drain_cu_order_index_ext_w : '0) *
+     MAX_CU_SAMPLES_L) + feed_sample_ext_w;
+  assign feed_y_sample = feed_y_sample_q;
+  assign feed_cb_sample = feed_cb_sample_q;
+  assign feed_cr_sample = feed_cr_sample_q;
+  assign cu_s_axis_valid = (state_q == ST_FEED_CU) && feed_sample_valid_q;
+  assign cu_s_axis_last = feed_sample_last_q;
   assign cu_m_axis_ready = m_axis_ready;
   assign m_axis_valid = cu_m_axis_valid;
   assign m_axis_data = cu_m_axis_data;
   assign m_axis_last = cu_m_axis_last && drain_cu_is_last_selected;
   assign m_axis_cu_last = cu_m_axis_last;
+
+  ff_vvc_tu_order_8x8 palette_input_order (
+    .visible_cols(visible_cu_cols_w),
+    .visible_rows(visible_cu_rows_w),
+    .sample_col(drain_cu_col_w),
+    .sample_row(drain_cu_row_w),
+    .target_index(6'd0),
+    .sample_valid(drain_cu_order_valid_w),
+    .sample_index(drain_cu_order_index_w),
+    .target_valid(),
+    .target_col(),
+    .target_row()
+  );
 
   ff_vvc_palette_cu_symbolizer #(
     .CU_SIZE(PALETTE_CU_SIZE)
@@ -173,6 +198,8 @@ module ff_vvc_palette_symbolizer #(
       drain_origin_x_q <= 16'd0;
       drain_origin_y_q <= 16'd0;
       drain_cu_is_last_selected_q <= 1'b0;
+      feed_sample_last_q <= 1'b0;
+      feed_sample_valid_q <= 1'b0;
     end else if (clear || !enable) begin
       state_q <= ST_INPUT;
       y_write_count_q <= '0;
@@ -183,19 +210,18 @@ module ff_vvc_palette_symbolizer #(
       drain_origin_x_q <= 16'd0;
       drain_origin_y_q <= 16'd0;
       drain_cu_is_last_selected_q <= 1'b0;
+      feed_sample_last_q <= 1'b0;
+      feed_sample_valid_q <= 1'b0;
     end else begin
       if (input_valid) begin
         case (s_axis_plane)
           PLANE_Y: begin
-            frame_y[y_write_count_q] <= input_sample_8bit;
             y_write_count_q <= y_write_count_q + {{(PLANE_COUNT_BITS - 1){1'b0}}, 1'b1};
           end
           PLANE_CB: begin
-            frame_cb[cb_write_count_q] <= input_sample_8bit;
             cb_write_count_q <= cb_write_count_q + {{(PLANE_COUNT_BITS - 1){1'b0}}, 1'b1};
           end
           default: begin
-            frame_cr[cr_write_count_q] <= input_sample_8bit;
             cr_write_count_q <= cr_write_count_q + {{(PLANE_COUNT_BITS - 1){1'b0}}, 1'b1};
           end
         endcase
@@ -216,18 +242,28 @@ module ff_vvc_palette_symbolizer #(
               drain_origin_x_q <= cu_request_origin_x;
               drain_origin_y_q <= cu_request_origin_y;
               drain_cu_is_last_selected_q <= cu_request_last;
-              state_q <= ST_FEED_CU;
+              state_q <= ST_FEED_READ;
               feed_sample_q <= 8'd0;
+              feed_sample_valid_q <= 1'b0;
             end
           end
 
+          ST_FEED_READ: begin
+            feed_sample_last_q <= feed_sample_q == (MAX_CU_SAMPLES - 1);
+            feed_sample_valid_q <= 1'b1;
+            state_q <= ST_FEED_CU;
+          end
+
           ST_FEED_CU: begin
-            if (cu_s_axis_ready) begin
+            if (cu_s_axis_ready && feed_sample_valid_q) begin
               if (cu_s_axis_last) begin
                 state_q <= ST_DRAIN_CU;
                 feed_sample_q <= 8'd0;
+                feed_sample_valid_q <= 1'b0;
               end else begin
                 feed_sample_q <= feed_sample_q + 8'd1;
+                feed_sample_valid_q <= 1'b0;
+                state_q <= ST_FEED_READ;
               end
             end
           end
@@ -239,6 +275,7 @@ module ff_vvc_palette_symbolizer #(
                 drain_cu_index_q <= 8'd0;
               end else begin
                 state_q <= ST_WAIT_CU;
+                drain_cu_index_q <= drain_cu_index_q + 8'd1;
               end
             end
           end
@@ -248,6 +285,28 @@ module ff_vvc_palette_symbolizer #(
           end
         endcase
       end
+    end
+  end
+
+  always_ff @(posedge clk) begin
+    if (input_valid) begin
+      case (s_axis_plane)
+        PLANE_Y: begin
+          frame_y[y_write_count_q] <= input_sample_8bit;
+        end
+        PLANE_CB: begin
+          frame_cb[cb_write_count_q] <= input_sample_8bit;
+        end
+        default: begin
+          frame_cr[cr_write_count_q] <= input_sample_8bit;
+        end
+      endcase
+    end
+
+    if (!input_valid && (state_q == ST_FEED_READ)) begin
+      feed_y_sample_q <= frame_y[feed_frame_index];
+      feed_cb_sample_q <= frame_cb[feed_frame_index];
+      feed_cr_sample_q <= frame_cr[feed_frame_index];
     end
   end
 endmodule

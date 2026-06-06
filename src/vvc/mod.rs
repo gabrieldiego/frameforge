@@ -111,10 +111,10 @@ const VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT: u16 = VVC_CURRENT_MAX_LUMA_LEAF_SIZE;
 const VVC_CURRENT_MAX_LUMA_BT_SIZE: u16 = VVC_CURRENT_MIN_LUMA_QT_SIZE << 2;
 const VVC_CURRENT_MAX_LUMA_TT_SIZE: u16 = VVC_CURRENT_MIN_LUMA_QT_SIZE << 2;
 const VVC_CURRENT_MAX_LUMA_MTT_DEPTH: u8 = 3;
-const VVC_CURRENT_MAX_CHROMA_420_TB_SIZE: u16 = 32;
+const VVC_CURRENT_ENCODER_CHROMA_420_TB_SIZE: u16 = 4;
 const VVC_CURRENT_MAX_CHROMA_420_BT_SIZE: u16 = VVC_CURRENT_MIN_CHROMA_420_QT_SIZE << 3;
 const VVC_CURRENT_MAX_CHROMA_420_TT_SIZE: u16 = VVC_CURRENT_MIN_CHROMA_420_QT_SIZE << 2;
-const VVC_CURRENT_MAX_CHROMA_420_MTT_DEPTH_WITH_BOUNDARY: u8 = 6;
+const VVC_CURRENT_MAX_CHROMA_420_MTT_DEPTH: u8 = 3;
 const VVC_CURRENT_MIN_CHROMA_420_QT_SIZE: u16 = VVC_CURRENT_MIN_LUMA_QT_SIZE;
 const VVC_CURRENT_MIN_LUMA_QT_SIZE: u16 = 8;
 
@@ -1402,6 +1402,42 @@ fn vvc_cabac_vector_dump_json(
         json.push_str(&level.to_string());
     }
     json.push(']');
+    json.push_str(&format!(",\"luma_tu_count\":{}", params.luma_tu_count));
+    json.push_str(",\"luma_tu_abs_levels_all\":[");
+    for idx in 0..params.luma_tu_count {
+        if idx != 0 {
+            json.push(',');
+        }
+        json.push_str(&params.luma_tu_abs_levels[idx].to_string());
+    }
+    json.push(']');
+    json.push_str(",\"luma_tu_negative_all\":[");
+    for idx in 0..params.luma_tu_count {
+        if idx != 0 {
+            json.push(',');
+        }
+        json.push_str(if params.luma_tu_negative[idx] {
+            "true"
+        } else {
+            "false"
+        });
+    }
+    json.push(']');
+    json.push_str(",\"luma_tu_ac_levels_all\":[");
+    for tu_idx in 0..params.luma_tu_count {
+        if tu_idx != 0 {
+            json.push(',');
+        }
+        json.push('[');
+        for (idx, level) in params.luma_tu_ac_levels[tu_idx].iter().enumerate() {
+            if idx != 0 {
+                json.push(',');
+            }
+            json.push_str(&level.to_string());
+        }
+        json.push(']');
+    }
+    json.push(']');
     json.push_str(&format!(",\"cb_dc_abs_level\":{}", params.cb_dc_abs_level));
     json.push_str(&format!(
         ",\"cb_dc_negative\":{}",
@@ -1411,6 +1447,77 @@ fn vvc_cabac_vector_dump_json(
             "false"
         }
     ));
+    json.push_str(&format!(
+        ",\"cb_tu_dc_level\":{}",
+        params.cb_tu_dc_levels[0]
+    ));
+    json.push_str(&format!(
+        ",\"cr_tu_dc_level\":{}",
+        params.cr_tu_dc_levels[0]
+    ));
+    json.push_str(",\"cb_tu_ac_levels\":[");
+    for (idx, level) in params.cb_tu_ac_levels[0].iter().enumerate() {
+        if idx != 0 {
+            json.push(',');
+        }
+        json.push_str(&level.to_string());
+    }
+    json.push(']');
+    json.push_str(",\"cr_tu_ac_levels\":[");
+    for (idx, level) in params.cr_tu_ac_levels[0].iter().enumerate() {
+        if idx != 0 {
+            json.push(',');
+        }
+        json.push_str(&level.to_string());
+    }
+    json.push(']');
+    json.push_str(&format!(",\"chroma_tu_count\":{}", params.chroma_tu_count));
+    json.push_str(",\"cb_tu_dc_levels_all\":[");
+    for idx in 0..params.chroma_tu_count {
+        if idx != 0 {
+            json.push(',');
+        }
+        json.push_str(&params.cb_tu_dc_levels[idx].to_string());
+    }
+    json.push(']');
+    json.push_str(",\"cr_tu_dc_levels_all\":[");
+    for idx in 0..params.chroma_tu_count {
+        if idx != 0 {
+            json.push(',');
+        }
+        json.push_str(&params.cr_tu_dc_levels[idx].to_string());
+    }
+    json.push(']');
+    json.push_str(",\"cb_tu_ac_levels_all\":[");
+    for tu_idx in 0..params.chroma_tu_count {
+        if tu_idx != 0 {
+            json.push(',');
+        }
+        json.push('[');
+        for (idx, level) in params.cb_tu_ac_levels[tu_idx].iter().enumerate() {
+            if idx != 0 {
+                json.push(',');
+            }
+            json.push_str(&level.to_string());
+        }
+        json.push(']');
+    }
+    json.push(']');
+    json.push_str(",\"cr_tu_ac_levels_all\":[");
+    for tu_idx in 0..params.chroma_tu_count {
+        if tu_idx != 0 {
+            json.push(',');
+        }
+        json.push('[');
+        for (idx, level) in params.cr_tu_ac_levels[tu_idx].iter().enumerate() {
+            if idx != 0 {
+                json.push(',');
+            }
+            json.push_str(&level.to_string());
+        }
+        json.push(']');
+    }
+    json.push(']');
     json.push_str(",\"symbol_record_bytes\":5");
     json.push_str(",\"context_id_bits\":10");
     json.push_str(",\"symbol_encoding\":\"kind_u8_data_u32be_hex\"");

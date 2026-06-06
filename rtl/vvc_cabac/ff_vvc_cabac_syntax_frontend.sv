@@ -41,17 +41,15 @@ module ff_vvc_cabac_syntax_frontend #(
   localparam logic [7:0] PALETTE_PKT_ENTRY_CB = 8'h84;
   localparam logic [7:0] PALETTE_PKT_ENTRY_CR = 8'h85;
 
-  localparam logic [VVC_CABAC_CTX_ID_BITS - 1:0] VVC_CTX_SPLIT_FLAG_0 = 10'd0;
-  localparam logic [VVC_CABAC_CTX_ID_BITS - 1:0] VVC_CTX_PRED_MODE_PLT_FLAG = 10'd42;
-  localparam logic [VVC_CABAC_CTX_ID_BITS - 1:0] VVC_CTX_PALETTE_TRANSPOSE_FLAG = 10'd43;
-  localparam logic [VVC_CABAC_CTX_ID_BITS - 1:0] VVC_CTX_COPY_ABOVE_PALETTE_FLAG = 10'd44;
-  localparam logic [VVC_CABAC_CTX_ID_BITS - 1:0] VVC_CTX_RUN_COPY_FLAG_0 = 10'd45;
+  `include "ff_vvc_cabac_context_ids.svh"
 
   typedef enum logic [3:0] {
     ST_IDLE,
     ST_PAL_PRED_MODE,
     ST_PAL_PREDICTOR_RUN,
+    ST_PAL_PREDICTOR_RUN_SUFFIX,
     ST_PAL_ENTRY_COUNT,
+    ST_PAL_ENTRY_COUNT_SUFFIX,
     ST_PAL_ESCAPE_FLAG,
     ST_PAL_INDEX_TRANSPOSE,
     ST_PAL_INDEX_RUN_FLAG,
@@ -76,8 +74,10 @@ module ff_vvc_cabac_syntax_frontend #(
   logic [7:0] index_prev_run_pos_q;
   logic       index_previous_run_type_copy_above_q;
   logic [7:0] index_prev_index_q;
-  logic [31:0] eg0_pattern;
-  logic [5:0] eg0_bit_count;
+  logic [31:0] eg0_prefix_pattern;
+  logic [5:0] eg0_prefix_count;
+  logic [31:0] eg0_suffix_pattern;
+  logic [5:0] eg0_suffix_count;
   logic [31:0] eg0_symbol_work;
   logic [5:0] eg0_order_work;
   logic [3:0] eg0_i;
@@ -105,23 +105,26 @@ module ff_vvc_cabac_syntax_frontend #(
   assign palette_raw_cu_last = raw_symbol_data[27];
 
   always @* begin
-    eg0_pattern = 32'd0;
-    eg0_bit_count = 6'd0;
+    eg0_prefix_pattern = 32'd0;
+    eg0_prefix_count = 6'd0;
+    eg0_suffix_pattern = 32'd0;
+    eg0_suffix_count = 6'd0;
     eg0_symbol_work =
-      (state_q == ST_PAL_PREDICTOR_RUN) ? 32'd1 : {24'd0, palette_entry_count_q};
+      ((state_q == ST_PAL_PREDICTOR_RUN) ||
+       (state_q == ST_PAL_PREDICTOR_RUN_SUFFIX)) ? 32'd1 : {24'd0, palette_entry_count_q};
     eg0_order_work = 6'd0;
     for (eg0_i = 4'd0; eg0_i < 4'd8; eg0_i = eg0_i + 4'd1) begin
       if (eg0_symbol_work >= (32'd1 << eg0_order_work)) begin
-        eg0_pattern = (eg0_pattern << 1) | 32'd1;
-        eg0_bit_count = eg0_bit_count + 6'd1;
+        eg0_prefix_pattern = (eg0_prefix_pattern << 1) | 32'd1;
+        eg0_prefix_count = eg0_prefix_count + 6'd1;
         eg0_symbol_work = eg0_symbol_work - (32'd1 << eg0_order_work);
         eg0_order_work = eg0_order_work + 6'd1;
       end
     end
-    eg0_pattern = (eg0_pattern << 1);
-    eg0_bit_count = eg0_bit_count + 6'd1;
-    eg0_pattern = (eg0_pattern << eg0_order_work) | eg0_symbol_work;
-    eg0_bit_count = eg0_bit_count + eg0_order_work;
+    eg0_prefix_pattern = (eg0_prefix_pattern << 1);
+    eg0_prefix_count = eg0_prefix_count + 6'd1;
+    eg0_suffix_pattern = eg0_symbol_work;
+    eg0_suffix_count = eg0_order_work;
   end
 
   assign index_cur_value = palette_indices_q[index_cur_pos_q[5:0]];
@@ -242,7 +245,7 @@ module ff_vvc_cabac_syntax_frontend #(
         ST_PAL_PRED_MODE: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_CTX;
-          m_axis_data <= 32'd1 | ({22'd0, VVC_CTX_PRED_MODE_PLT_FLAG} << 8);
+          m_axis_data <= 32'd1 | ({22'd0, CTX_PRED_MODE_PLT_FLAG} << 8);
           m_axis_last <= 1'b0;
           state_q <= palette_predictor_run_present_q ? ST_PAL_PREDICTOR_RUN : ST_PAL_ENTRY_COUNT;
         end
@@ -250,7 +253,18 @@ module ff_vvc_cabac_syntax_frontend #(
         ST_PAL_PREDICTOR_RUN: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BINS_EP;
-          m_axis_data <= (eg0_pattern << 6) | {26'd0, eg0_bit_count};
+          // H.266 cu_palette_info() codes palette_predictor_run as EG0
+          // bypass syntax. Keep prefix and suffix as separate bypass groups
+          // so the RTL CABAC stream matches the Rust reference byte-for-byte.
+          m_axis_data <= (eg0_prefix_pattern << 6) | {26'd0, eg0_prefix_count};
+          m_axis_last <= 1'b0;
+          state_q <= ST_PAL_PREDICTOR_RUN_SUFFIX;
+        end
+
+        ST_PAL_PREDICTOR_RUN_SUFFIX: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BINS_EP;
+          m_axis_data <= (eg0_suffix_pattern << 6) | {26'd0, eg0_suffix_count};
           m_axis_last <= 1'b0;
           state_q <= ST_PAL_ENTRY_COUNT;
         end
@@ -258,15 +272,28 @@ module ff_vvc_cabac_syntax_frontend #(
         ST_PAL_ENTRY_COUNT: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BINS_EP;
-          m_axis_data <= (eg0_pattern << 6) | {26'd0, eg0_bit_count};
+          // H.266 cu_palette_info() codes num_signalled_palette_entries as
+          // EG0 bypass syntax, matching encode_exp_golomb_ep() in software.
+          m_axis_data <= (eg0_prefix_pattern << 6) | {26'd0, eg0_prefix_count};
+          m_axis_last <= 1'b0;
+          state_q <= ST_PAL_ENTRY_COUNT_SUFFIX;
+        end
+
+        ST_PAL_ENTRY_COUNT_SUFFIX: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BINS_EP;
+          m_axis_data <= (eg0_suffix_pattern << 6) | {26'd0, eg0_suffix_count};
           m_axis_last <= 1'b0;
           state_q <= pending_raw_last_q ? ST_PAL_TERMINATE : ST_IDLE;
         end
 
         ST_PAL_ESCAPE_FLAG: begin
           m_axis_valid <= 1'b1;
-          m_axis_kind <= SYMBOL_BIN_EP;
-          m_axis_data <= 32'd0;
+          // H.266 cu_palette_info() carries palette_escape_val_present_flag
+          // as a fixed-length bypass syntax element, which the software model
+          // emits through encode_bins_ep(value=0, bit_count=1).
+          m_axis_kind <= SYMBOL_BINS_EP;
+          m_axis_data <= 32'd1;
           m_axis_last <= 1'b0;
           state_q <= pending_raw_last_q ? ST_PAL_TERMINATE : ST_IDLE;
         end
@@ -274,7 +301,7 @@ module ff_vvc_cabac_syntax_frontend #(
         ST_PAL_INDEX_TRANSPOSE: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_CTX;
-          m_axis_data <= ({22'd0, VVC_CTX_PALETTE_TRANSPOSE_FLAG} << 8);
+          m_axis_data <= ({22'd0, CTX_PALETTE_TRANSPOSE_FLAG} << 8);
           m_axis_last <= 1'b0;
           index_cur_pos_q <= 8'd0;
           index_min_sub_pos_q <= 8'd0;
@@ -302,7 +329,7 @@ module ff_vvc_cabac_syntax_frontend #(
           end else begin
             m_axis_valid <= 1'b1;
             m_axis_kind <= SYMBOL_BIN_CTX;
-            m_axis_data <= (({22'd0, VVC_CTX_RUN_COPY_FLAG_0 + index_run_copy_ctx_inc}) << 8) |
+            m_axis_data <= (({22'd0, CTX_RUN_COPY_FLAG_0 + index_run_copy_ctx_inc}) << 8) |
                            {31'd0, index_identity};
             m_axis_last <= 1'b0;
             palette_run_copy_flags_q[index_cur_pos_q[3:0]] <= index_identity;
@@ -322,7 +349,7 @@ module ff_vvc_cabac_syntax_frontend #(
         ST_PAL_INDEX_COPY_ABOVE: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_CTX;
-          m_axis_data <= ({22'd0, VVC_CTX_COPY_ABOVE_PALETTE_FLAG} << 8);
+          m_axis_data <= ({22'd0, CTX_COPY_ABOVE_PALETTE_FLAG} << 8);
           m_axis_last <= 1'b0;
           index_cur_pos_q <= index_cur_pos_q + 8'd1;
           state_q <= ST_PAL_INDEX_RUN_FLAG;

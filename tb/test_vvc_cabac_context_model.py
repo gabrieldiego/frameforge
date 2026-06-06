@@ -156,6 +156,29 @@ async def context_model_includes_audited_palette_contexts(dut):
 
 
 @cocotb.test()
+async def context_model_includes_complete_residual_context_ranges(dut):
+    await reset(dut)
+    cases = [
+        (118, 25, 12),  # SigCoeffFlag(0)
+        (160, 22, 10),  # AbsLevelGtxFlag(52)
+        (161, 13, 8),  # LastSigCoeffXPrefix(0)
+        (191, 18, 8),  # SbCodedFlag(0)
+        (198, 11, 9),  # SigCoeffFlag(12)
+        (246, 11, 6),  # ParLevelFlag(32)
+        (264, 3, 1),  # AbsLevelGtxFlag(71)
+    ]
+    for ctx_id, init_value, log2_window in cases:
+        dut.query_ctx_id.value = ctx_id
+        dut.query_range.value = 510
+        await ReadOnly()
+        expected_lps, expected_mps = expected_lps_mps(init_value, log2_window)
+        assert int(dut.query_bank_id.value) == ctx_id
+        assert int(dut.query_lps.value) == expected_lps, (ctx_id, expected_lps, int(dut.query_lps.value))
+        assert int(dut.query_mps.value) == expected_mps, (ctx_id, expected_mps, int(dut.query_mps.value))
+        await Timer(1, unit="ps")
+
+
+@cocotb.test()
 async def context_model_reset_restores_initial_state(dut):
     await reset(dut)
     event = load_rust_context_events(16, 16, 64)[0]

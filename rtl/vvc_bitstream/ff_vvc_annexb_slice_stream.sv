@@ -11,6 +11,7 @@ module ff_vvc_annexb_slice_stream (
   input  logic       multi_slice_picture,
   input  logic [15:0] slice_address,
   input  logic [5:0]  slice_address_bits,
+  input  logic       sps_joint_cbcr_enabled_flag,
   input  logic       sh_dep_quant_used_flag,
   input  logic       sh_sign_data_hiding_used_flag,
 
@@ -93,7 +94,7 @@ module ff_vvc_annexb_slice_stream (
         5'd5:  begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // ph_pic_parameter_set_id ue(0)
         5'd6:  begin prefix_syntax_value = {16'd0, poc_lsb}; prefix_syntax_bits = 6'd16; end // ph_pic_order_cnt_lsb
         5'd7:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // ph_partition_constraints_override_flag
-        5'd8:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // ph_joint_cbcr_sign_flag
+        5'd8:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = sps_joint_cbcr_enabled_flag ? 6'd1 : 6'd0; end // ph_joint_cbcr_sign_flag
         5'd9:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // sh_no_output_of_prior_pics_flag
         5'd10: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // sh_qp_delta se(0)
         5'd11: begin prefix_syntax_value = {31'd0, sh_dep_quant_used_flag}; prefix_syntax_bits = sh_dep_quant_used_flag ? 6'd1 : 6'd0; end // sh_dep_quant_used_flag

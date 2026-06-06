@@ -18,6 +18,7 @@ RTL_VISIBLE_HEIGHT ?= 8
 RTL_MAX_VISIBLE_WIDTH ?= 64
 RTL_MAX_VISIBLE_HEIGHT ?= 64
 RTL_CTU_SIZE ?= 64
+RTL_SUPPORT_PALETTE_444 ?= 1
 SIM_BUILD ?= sim_build/$(DUT)-$(RTL_VISIBLE_WIDTH)x$(RTL_VISIBLE_HEIGHT)-$(RTL_SAMPLE_BITS)b-src$(RTL_SOURCE_SAMPLE_BITS)b-cf$(RTL_CHROMA_FORMAT_IDC)
 export RTL_SAMPLE_BITS
 export RTL_SOURCE_SAMPLE_BITS
@@ -27,6 +28,7 @@ export RTL_VISIBLE_HEIGHT
 export RTL_MAX_VISIBLE_WIDTH
 export RTL_MAX_VISIBLE_HEIGHT
 export RTL_CTU_SIZE
+export RTL_SUPPORT_PALETTE_444
 
 ifeq ($(DUT),vvc-coding-tree-scheduler)
 VERILOG_SOURCES := $(RTL_DIR)/ff_vvc_coding_tree_scheduler.sv
@@ -84,8 +86,12 @@ else ifeq ($(DUT),vvc-emulation-prevention)
 VERILOG_SOURCES := $(RTL_DIR)/vvc_bitstream/ff_vvc_emulation_prevention_stream.sv
 TOPLEVEL := ff_vvc_emulation_prevention_stream
 COCOTB_TEST_MODULES := test_vvc_emulation_prevention_stream
+else ifeq ($(DUT),vvc-ctu-symbolizer)
+VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_residual_symbol_emitter_4x4.sv $(RTL_DIR)/vvc_cabac/ff_vvc_ctu_symbolizer.sv
+TOPLEVEL := ff_vvc_ctu_symbolizer
+COCOTB_TEST_MODULES := test_vvc_encoder
 else ifeq ($(DUT),vvc-encoder)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_residual/ff_vvc_residual_transform.sv $(RTL_DIR)/ff_vvc_coding_tree_scheduler.sv $(RTL_DIR)/ff_vvc_cu_activity_mask.sv $(RTL_DIR)/vvc_bitstream/ff_vvc_ue_code.sv $(RTL_DIR)/ff_vvc_annexb_header.sv $(RTL_DIR)/vvc_bitstream/ff_vvc_emulation_prevention_stream.sv $(RTL_DIR)/vvc_bitstream/ff_vvc_annexb_picture_header_stream.sv $(RTL_DIR)/vvc_bitstream/ff_vvc_annexb_slice_stream.sv $(RTL_DIR)/vvc_cabac/ff_vvc_ctu_symbolizer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_byte_queue.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_bit_writer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_bin_engine.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_context_model.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_stream_writer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_symbol_binarizer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_syntax_frontend.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_pipeline.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac.sv $(RTL_DIR)/vvc_cabac/ff_vvc_rbsp_payload_stream.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_cu_symbolizer.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_symbolizer.sv $(RTL_DIR)/ff_vvc_encoder.sv
+VERILOG_SOURCES := $(RTL_DIR)/vvc_residual/ff_vvc_residual_transform.sv $(RTL_DIR)/vvc_residual/ff_vvc_chroma_tu_mapper_420.sv $(RTL_DIR)/vvc_residual/ff_vvc_chroma_ac_project_4x4.sv $(RTL_DIR)/vvc_residual/ff_vvc_chroma_quant_recon_420.sv $(RTL_DIR)/vvc_residual/ff_vvc_luma_quant_recon_8x8.sv $(RTL_DIR)/ff_vvc_coding_tree_scheduler.sv $(RTL_DIR)/ff_vvc_cu_activity_mask.sv $(RTL_DIR)/vvc_bitstream/ff_vvc_ue_code.sv $(RTL_DIR)/ff_vvc_annexb_header.sv $(RTL_DIR)/vvc_bitstream/ff_vvc_emulation_prevention_stream.sv $(RTL_DIR)/vvc_bitstream/ff_vvc_annexb_picture_header_stream.sv $(RTL_DIR)/vvc_bitstream/ff_vvc_annexb_slice_stream.sv $(RTL_DIR)/vvc_cabac/ff_vvc_residual_symbol_emitter_4x4.sv $(RTL_DIR)/vvc_cabac/ff_vvc_ctu_symbolizer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_byte_queue.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_bit_writer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_bin_engine.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_context_model.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_stream_writer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_symbol_binarizer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_syntax_frontend.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_pipeline.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac.sv $(RTL_DIR)/vvc_cabac/ff_vvc_rbsp_payload_stream.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_cu_symbolizer.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_symbolizer.sv $(RTL_DIR)/ff_vvc_encoder.sv
 TOPLEVEL := ff_vvc_encoder
 COCOTB_TEST_MODULES := test_vvc_encoder
 else
@@ -93,6 +99,7 @@ $(error unsupported DUT '$(DUT)')
 endif
 
 COMPILE_ARGS += -g2012
+COMPILE_ARGS += -I$(RTL_DIR)/vvc_cabac
 ifeq ($(DUT),vvc-encoder)
 ifeq ($(SIM),icarus)
 COMPILE_ARGS += -P$(TOPLEVEL).SAMPLE_BITS=$(RTL_SAMPLE_BITS)
@@ -100,6 +107,7 @@ COMPILE_ARGS += -P$(TOPLEVEL).SOURCE_SAMPLE_BITS=$(RTL_SOURCE_SAMPLE_BITS)
 COMPILE_ARGS += -P$(TOPLEVEL).MAX_VISIBLE_WIDTH=$(RTL_MAX_VISIBLE_WIDTH)
 COMPILE_ARGS += -P$(TOPLEVEL).MAX_VISIBLE_HEIGHT=$(RTL_MAX_VISIBLE_HEIGHT)
 COMPILE_ARGS += -P$(TOPLEVEL).CTU_SIZE=$(RTL_CTU_SIZE)
+COMPILE_ARGS += -P$(TOPLEVEL).SUPPORT_PALETTE_444=$(RTL_SUPPORT_PALETTE_444)
 endif
 endif
 

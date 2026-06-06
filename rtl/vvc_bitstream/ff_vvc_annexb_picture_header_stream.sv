@@ -6,6 +6,7 @@ module ff_vvc_annexb_picture_header_stream (
   input  logic        clear,
   input  logic        start,
   input  logic [15:0] poc_lsb,
+  input  logic        sps_joint_cbcr_enabled_flag,
 
   input  logic        m_axis_ready,
   output logic        m_axis_valid,
@@ -118,7 +119,7 @@ module ff_vvc_annexb_picture_header_stream (
       4'd4: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // ph_pic_parameter_set_id ue(0)
       4'd5: begin syntax_value = {16'd0, poc_lsb}; syntax_bits = 6'd16; end
       4'd6: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // ph_partition_constraints_override_flag
-      4'd7: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // ph_joint_cbcr_sign_flag
+      4'd7: begin syntax_value = 32'd0; syntax_bits = sps_joint_cbcr_enabled_flag ? 6'd1 : 6'd0; end // ph_joint_cbcr_sign_flag
       default: begin syntax_value = 32'd0; syntax_bits = 6'd0; end
     endcase
   end

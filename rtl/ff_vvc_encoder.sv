@@ -1,11 +1,12 @@
 `timescale 1ns/1ps
 
 module ff_vvc_encoder #(
-  parameter int MAX_VISIBLE_WIDTH = 64,
-  parameter int MAX_VISIBLE_HEIGHT = 64,
+  parameter int MAX_VISIBLE_WIDTH = 1024,
+  parameter int MAX_VISIBLE_HEIGHT = 1024,
   parameter int CTU_SIZE = 64,
   parameter int SAMPLE_BITS = 8,
-  parameter int SOURCE_SAMPLE_BITS = SAMPLE_BITS
+  parameter int SOURCE_SAMPLE_BITS = SAMPLE_BITS,
+  parameter bit SUPPORT_PALETTE_444 = 1'b1
 ) (
   input  logic       clk,
   input  logic       rst_n,
@@ -33,14 +34,23 @@ module ff_vvc_encoder #(
 );
   localparam int CODED_DIMENSION_GRANULARITY = 8;
   localparam int NAL_OVERHEAD_LEN = 6;
-  localparam int MAX_LUMA_SAMPLES = MAX_VISIBLE_WIDTH * MAX_VISIBLE_HEIGHT;
-  localparam int MAX_CHROMA_PLANE_SAMPLES = MAX_LUMA_SAMPLES;
-  localparam int MAX_FRAME_SAMPLES = MAX_LUMA_SAMPLES + (MAX_CHROMA_PLANE_SAMPLES * 2);
-  localparam int INPUT_COUNT_BITS = $clog2(MAX_FRAME_SAMPLES + 1);
+  localparam int MAX_CTU_STREAM_SAMPLES = CTU_SIZE * CTU_SIZE * 3;
+  localparam int INPUT_COUNT_BITS = $clog2(MAX_CTU_STREAM_SAMPLES + 1);
   localparam int VVC_LUMA_TU_SIZE = 8;
   localparam int VVC_CHROMA_TU_SIZE = 4;
   localparam logic [15:0] CTU_SIZE_L = CTU_SIZE;
+  localparam logic [15:0] VVC_LUMA_TU_SIZE_L = VVC_LUMA_TU_SIZE;
   localparam int VVC_RESIDUAL_LUMA_SAMPLES = VVC_LUMA_TU_SIZE * VVC_LUMA_TU_SIZE;
+  localparam int VVC_CHROMA_TU_SAMPLES = VVC_CHROMA_TU_SIZE * VVC_CHROMA_TU_SIZE;
+  localparam int VVC_LUMA_TU_SAMPLE_BITS = 8 * VVC_RESIDUAL_LUMA_SAMPLES;
+  localparam int VVC_CHROMA_TU_SAMPLE_BITS = 8 * VVC_CHROMA_TU_SAMPLES;
+  localparam int VVC_LUMA_TU_COLS = CTU_SIZE / VVC_LUMA_TU_SIZE;
+  localparam logic [5:0] VVC_LUMA_TU_COLS_L = VVC_LUMA_TU_COLS;
+  localparam int VVC_LUMA_TUS_PER_CTU =
+    (CTU_SIZE / VVC_LUMA_TU_SIZE) * (CTU_SIZE / VVC_LUMA_TU_SIZE);
+  localparam int VVC_CHROMA_TUS_PER_CTU = VVC_LUMA_TUS_PER_CTU;
+  localparam int VVC_CHROMA_CTU_WIDTH = CTU_SIZE / 2;
+  localparam logic [15:0] VVC_CHROMA_TU_SIZE_L = VVC_CHROMA_TU_SIZE;
   localparam int PALETTE_CU_SIZE = 8;
   localparam int MAX_CTU_PALETTE_SYMBOLS =
     ((CTU_SIZE + PALETTE_CU_SIZE - 1) / PALETTE_CU_SIZE) *
@@ -49,7 +59,7 @@ module ff_vvc_encoder #(
   localparam logic [2:0] GENERATED_OUT_PREAMBLE = 3'd1;
   localparam logic [2:0] GENERATED_OUT_CABAC    = 3'd2;
   localparam logic [2:0] GENERATED_OUT_SLICE_START = 3'd3;
-  localparam logic [2:0] GENERATED_OUT_PH = 3'd4;
+  localparam logic [2:0] GENERATED_OUT_PICTURE_HEADER = 3'd4;
   localparam logic [7:0] SYMBOL_PALETTE_LEAF = 8'hfe;
   localparam logic [1:0] PALETTE_MUX_PARTITION = 2'd0;
   localparam logic [1:0] PALETTE_MUX_CU = 2'd1;
@@ -65,6 +75,17 @@ module ff_vvc_encoder #(
   logic [4:0] quant_cb_rem_q;
   logic [4:0] quant_cr_rem_q;
   logic       quant_cb_negative_q;
+  logic signed [8:0] quant_cb_dc_level_q;
+  logic signed [8:0] quant_cr_dc_level_q;
+  logic [(8 * 15) - 1:0] quant_cb_ac_levels_q;
+  logic [(8 * 15) - 1:0] quant_cr_ac_levels_q;
+  logic [7:0] quant_luma_rem_ctu_q [0:VVC_LUMA_TUS_PER_CTU - 1];
+  logic       quant_luma_negative_ctu_q [0:VVC_LUMA_TUS_PER_CTU - 1];
+  logic [(8 * 15) - 1:0] quant_luma_ac_levels_ctu_q [0:VVC_LUMA_TUS_PER_CTU - 1];
+  logic signed [8:0] quant_cb_dc_level_ctu_q [0:VVC_CHROMA_TUS_PER_CTU - 1];
+  logic signed [8:0] quant_cr_dc_level_ctu_q [0:VVC_CHROMA_TUS_PER_CTU - 1];
+  logic [(8 * 15) - 1:0] quant_cb_ac_levels_ctu_q [0:VVC_CHROMA_TUS_PER_CTU - 1];
+  logic [(8 * 15) - 1:0] quant_cr_ac_levels_ctu_q [0:VVC_CHROMA_TUS_PER_CTU - 1];
   logic [7:0] residual_quant_luma_rem;
   logic       residual_quant_luma_negative;
   logic [(8 * 15) - 1:0] residual_quant_luma_ac_levels;
@@ -131,33 +152,39 @@ module ff_vvc_encoder #(
   logic        pending_output_q;
   logic        resume_input_q;
   logic        frame_clear_q;
+  logic        frame_chroma_quant_pending_q;
+  logic        frame_quant_pending_q;
   logic [63:0] frame_index_q;
   logic [2:0]  generated_out_state_q;
   logic        generated_slice_cra_q;
   logic        generated_header_start_q;
+  logic        generated_picture_header_start_q;
   logic        generated_header_ready_w;
   logic        generated_header_valid_w;
   logic [7:0]  generated_header_byte_w;
   logic        generated_header_last_w;
   logic        generated_header_done_w;
-  logic        generated_ph_start_q;
-  logic        generated_ph_ready_w;
-  logic        generated_ph_valid_w;
-  logic [7:0]  generated_ph_byte_w;
-  logic        generated_ph_last_w;
-  logic        generated_ph_done_w;
+  logic        picture_header_ready_w;
+  logic        picture_header_valid_w;
+  logic [7:0]  picture_header_byte_w;
+  logic        picture_header_last_w;
+  logic        picture_header_done_w;
   logic [15:0] current_slice_q;
+  logic [15:0] current_ctu_x_q;
+  logic [15:0] current_ctu_y_q;
+  logic [15:0] coded_width_w;
+  logic [15:0] coded_height_w;
   logic [15:0] ctu_cols_w;
   logic [15:0] ctu_rows_w;
   logic [15:0] ctu_count_w;
-  logic [15:0] current_ctu_x_w;
-  logic [15:0] current_ctu_y_w;
   logic [15:0] current_ctu_origin_x_w;
   logic [15:0] current_ctu_origin_y_w;
+  logic [15:0] current_ctu_remaining_width_w;
+  logic [15:0] current_ctu_remaining_height_w;
   logic [15:0] ctu_visible_width_w;
   logic [15:0] ctu_visible_height_w;
   logic [5:0]  slice_address_bits_w;
-  logic        multi_ctu_picture_w;
+  logic        multi_slice_picture_w;
   logic        current_slice_last_w;
   logic        ctu_has_palette_cu;
   logic [1:0]  chroma_subsample_x_w;
@@ -165,14 +192,44 @@ module ff_vvc_encoder #(
   logic [INPUT_COUNT_BITS - 1:0] luma_samples_w;
   logic [INPUT_COUNT_BITS - 1:0] chroma_plane_samples_w;
   logic [INPUT_COUNT_BITS - 1:0] frame_samples_w;
+  logic [INPUT_COUNT_BITS - 1:0] luma_tu_stream_samples_w;
+  logic [INPUT_COUNT_BITS - 1:0] chroma_tu_stream_samples_w;
+  logic [INPUT_COUNT_BITS - 1:0] cb_tu_stream_base_w;
+  logic [INPUT_COUNT_BITS - 1:0] cr_tu_stream_base_w;
   logic [INPUT_COUNT_BITS - 1:0] input_len_w;
   logic [INPUT_COUNT_BITS - 1:0] v_sample_index_w;
   logic        input_frame_last_w;
+  logic [6:0]  input_stream_leaf_q;
+  logic [1:0]  input_stream_component_q;
+  logic [5:0]  input_stream_sample_q;
+  logic [6:0]  input_stream_leaf_next_w;
+  logic [1:0]  input_stream_component_next_w;
+  logic [5:0]  input_stream_sample_next_w;
+  logic [5:0]  input_chroma_stream_last_sample_w;
+  logic        input_stream_component_last_w;
   logic [1:0]  palette_sample_plane_w;
+  logic [3:0]  active_luma_tu_cols_w;
+  logic [3:0]  active_luma_tu_rows_w;
+  logic [6:0]  active_luma_tu_count_w;
+  logic [6:0]  active_chroma_tu_count_w;
+  logic [INPUT_COUNT_BITS - 1:0] input_luma_stream_index_w;
+  logic [INPUT_COUNT_BITS - 1:0] input_cb_stream_index_w;
+  logic [INPUT_COUNT_BITS - 1:0] input_cr_stream_index_w;
+  logic [6:0]  input_luma_tu_ordinal_w;
+  logic        input_luma_tu_valid_w;
+  logic [15:0] input_luma_tu_origin_x_w;
+  logic [15:0] input_luma_tu_origin_y_w;
   logic [15:0] input_luma_x_w;
   logic [15:0] input_luma_y_w;
+  logic [15:0] input_luma_ctu_local_x_w;
+  logic [15:0] input_luma_ctu_local_y_w;
   logic        residual_luma_sample_w;
+  logic        input_luma_tu_sample_w;
+  logic        input_luma_tu_last_sample_w;
+  logic [5:0]  input_luma_tu_sample_index_w;
   logic [5:0]  residual_luma_sample_index_w;
+  logic [15:0] input_luma_tu_index_full_w;
+  logic [5:0]  input_luma_tu_index_w;
   logic [7:0]  sampled_u_8bit_w;
   logic [7:0]  sampled_v_8bit_w;
   logic [8:0]  sampled_u_clamped_w;
@@ -182,13 +239,56 @@ module ff_vvc_encoder #(
   logic [7:0]  input_sample_8bit_w;
   logic [8:0]  input_sample_clamped_w;
   logic [8:0]  input_quant_level_w;
+  logic [INPUT_COUNT_BITS - 1:0] input_chroma_index_w;
+  logic [15:0] input_chroma_width_w;
+  logic [15:0] input_chroma_height_w;
+  logic [15:0] input_chroma_x_w;
+  logic [15:0] input_chroma_y_w;
+  logic [15:0] input_chroma_ctu_local_x_w;
+  logic [15:0] input_chroma_ctu_local_y_w;
+  logic        input_chroma_tu_valid_w;
+  logic        input_chroma_tu_sample_w;
+  logic [5:0]  input_chroma_tu_index_w;
+  logic [6:0]  input_chroma_tu_index_full_w;
+  logic [15:0] input_chroma_tu_origin_x_w;
+  logic [15:0] input_chroma_tu_origin_y_w;
+  logic [15:0] input_chroma_tu_width_w;
+  logic [15:0] input_chroma_tu_height_w;
+  logic [15:0] input_chroma_tu_local_x_w;
+  logic [15:0] input_chroma_tu_local_y_w;
+  logic [5:0]  input_chroma_tu_sample_index_w;
+  logic [VVC_LUMA_TU_SAMPLE_BITS - 1:0] luma_sample_tu_q;
+  logic [(8 * VVC_LUMA_TU_SIZE) - 1:0] luma_top_ref_row_q [0:VVC_LUMA_TU_COLS - 1];
+  logic [(8 * VVC_LUMA_TU_SIZE) - 1:0] luma_left_ref_col_q [0:VVC_LUMA_TU_COLS - 1];
+  logic        luma_tu_quant_pending_q;
+  logic [VVC_CHROMA_TU_SAMPLE_BITS - 1:0] cb_sample_tu_q [0:VVC_CHROMA_TUS_PER_CTU - 1];
+  logic [VVC_CHROMA_TU_SAMPLE_BITS - 1:0] cr_sample_tu_q [0:VVC_CHROMA_TUS_PER_CTU - 1];
+  logic [VVC_CHROMA_TU_SAMPLE_BITS - 1:0] cb_recon_tu_q [0:VVC_CHROMA_TUS_PER_CTU - 1];
+  logic [VVC_CHROMA_TU_SAMPLE_BITS - 1:0] cr_recon_tu_q [0:VVC_CHROMA_TUS_PER_CTU - 1];
+  logic [(8 * VVC_LUMA_TUS_PER_CTU) - 1:0] selected_quant_luma_rem_w;
+  logic [VVC_LUMA_TUS_PER_CTU - 1:0] selected_quant_luma_negative_w;
+  logic [(8 * 15 * VVC_LUMA_TUS_PER_CTU) - 1:0] selected_quant_luma_ac_levels_w;
+  logic [(9 * VVC_CHROMA_TUS_PER_CTU) - 1:0] selected_quant_cb_dc_levels_w;
+  logic [(9 * VVC_CHROMA_TUS_PER_CTU) - 1:0] selected_quant_cr_dc_levels_w;
+  logic [(8 * 15 * VVC_CHROMA_TUS_PER_CTU) - 1:0] selected_quant_cb_ac_levels_w;
+  logic [(8 * 15 * VVC_CHROMA_TUS_PER_CTU) - 1:0] selected_quant_cr_ac_levels_w;
   logic [2:0]  luma_log2_tb_width_w;
   logic [2:0]  luma_log2_tb_height_w;
   logic        frame_pipeline_clear_w;
+  logic [5:0]  luma_quant_tu_q;
+  logic [15:0] luma_quant_ctu_visible_width_w;
+  logic [15:0] luma_quant_ctu_visible_height_w;
+  logic [15:0] luma_quant_tu_origin_x_w;
+  logic [15:0] luma_quant_tu_origin_y_w;
+  logic        luma_quant_tu_visible_w;
+  logic [2:0]  luma_quant_tu_col_w;
+  logic [2:0]  luma_quant_tu_row_w;
+  logic [VVC_LUMA_TU_SAMPLE_BITS - 1:0] luma_quant_sample_tu_w;
 
   logic        vvc_tool_transform_skip_enabled;
   logic        vvc_tool_mts_enabled;
   logic        vvc_tool_lfnst_enabled;
+  logic        vvc_tool_joint_cbcr_enabled;
   logic        vvc_tool_mrl_enabled;
   logic        vvc_tool_cclm_enabled;
   logic        vvc_tool_dep_quant_enabled;
@@ -196,12 +296,80 @@ module ff_vvc_encoder #(
   logic        vvc_tool_palette_enabled;
   logic        vvc_sps_ref_pic_resampling_enabled;
   logic        vvc_sps_entry_point_offsets_present;
+  integer      luma_pack_tu_i;
+  integer      chroma_pack_tu_i;
+  integer      luma_quant_pack_i;
+  integer      chroma_quant_x_i;
+  integer      chroma_quant_y_i;
+  integer      chroma_quant_pack_i;
+  integer      luma_quant_x_i;
+  integer      luma_quant_y_i;
+  integer      luma_ref_i;
+  logic [15:0] luma_quant_src_x_tmp;
+  logic [15:0] luma_quant_src_y_tmp;
+  logic [15:0] luma_quant_ref_x_tmp;
+  logic [15:0] luma_quant_ref_y_tmp;
+  logic [(8 * VVC_RESIDUAL_LUMA_SAMPLES) - 1:0] luma_quant_samples_w;
+  logic [VVC_RESIDUAL_LUMA_SAMPLES - 1:0] luma_quant_visible_mask_w;
+  logic [(8 * VVC_LUMA_TU_SIZE) - 1:0] luma_quant_top_ref_w;
+  logic [(8 * VVC_LUMA_TU_SIZE) - 1:0] luma_quant_left_ref_w;
+  logic [7:0] luma_quant_abs_level_w;
+  logic luma_quant_negative_w;
+  logic [(8 * 15) - 1:0] luma_quant_ac_levels_w;
+  logic [(8 * VVC_RESIDUAL_LUMA_SAMPLES) - 1:0] luma_quant_recon_samples_w;
+  logic luma_quant_start_q;
+  logic luma_quant_done_w;
+  logic luma_quant_busy_w;
+  logic luma_quant_active_q;
+  logic [5:0]  chroma_quant_tu_q;
+  logic [15:0] chroma_quant_ctu_visible_width_w;
+  logic [15:0] chroma_quant_ctu_visible_height_w;
+  logic [15:0] chroma_quant_visible_chroma_width_w;
+  logic [15:0] chroma_quant_visible_chroma_height_w;
+  logic        chroma_quant_tu_valid_w;
+  logic [15:0] chroma_quant_tu_origin_x_w;
+  logic [15:0] chroma_quant_tu_origin_y_w;
+  logic [15:0] chroma_quant_tu_width_w;
+  logic [15:0] chroma_quant_tu_height_w;
+  logic [(8 * VVC_CHROMA_TU_SAMPLES) - 1:0] chroma_quant_cb_samples_w;
+  logic [(8 * VVC_CHROMA_TU_SAMPLES) - 1:0] chroma_quant_cr_samples_w;
+  logic [(8 * VVC_CHROMA_TU_SIZE) - 1:0] chroma_quant_cb_top_ref_w;
+  logic [(8 * VVC_CHROMA_TU_SIZE) - 1:0] chroma_quant_cb_left_ref_w;
+  logic [(8 * VVC_CHROMA_TU_SIZE) - 1:0] chroma_quant_cr_top_ref_w;
+  logic [(8 * VVC_CHROMA_TU_SIZE) - 1:0] chroma_quant_cr_left_ref_w;
+  logic signed [8:0] chroma_quant_cb_dc_level_w;
+  logic signed [8:0] chroma_quant_cr_dc_level_w;
+  logic [(8 * 15) - 1:0] chroma_quant_cb_ac_levels_w;
+  logic [(8 * 15) - 1:0] chroma_quant_cr_ac_levels_w;
+  logic [(8 * VVC_CHROMA_TU_SAMPLES) - 1:0] chroma_quant_cb_recon_samples_w;
+  logic [(8 * VVC_CHROMA_TU_SAMPLES) - 1:0] chroma_quant_cr_recon_samples_w;
+  logic [15:0] chroma_quant_ref_x_tmp;
+  logic [15:0] chroma_quant_ref_y_tmp;
+  logic        chroma_quant_top_tu_valid_w;
+  logic [5:0]  chroma_quant_top_tu_index_w;
+  logic [15:0] chroma_quant_top_tu_width_w;
+  logic [15:0] chroma_quant_top_tu_height_w;
+  logic [15:0] chroma_quant_top_tu_local_x_w;
+  logic [15:0] chroma_quant_top_tu_local_y_w;
+  logic        chroma_quant_left_tu_valid_w;
+  logic [5:0]  chroma_quant_left_tu_index_w;
+  logic [15:0] chroma_quant_left_tu_width_w;
+  logic [15:0] chroma_quant_left_tu_height_w;
+  logic [15:0] chroma_quant_left_tu_local_x_w;
+  logic [15:0] chroma_quant_left_tu_local_y_w;
+  logic [VVC_CHROMA_TU_SAMPLE_BITS - 1:0] chroma_quant_cb_sample_tu_w;
+  logic [VVC_CHROMA_TU_SAMPLE_BITS - 1:0] chroma_quant_cr_sample_tu_w;
+  logic [VVC_CHROMA_TU_SAMPLE_BITS - 1:0] chroma_quant_cb_top_recon_tu_w;
+  logic [VVC_CHROMA_TU_SAMPLE_BITS - 1:0] chroma_quant_cr_top_recon_tu_w;
+  logic [VVC_CHROMA_TU_SAMPLE_BITS - 1:0] chroma_quant_cb_left_recon_tu_w;
+  logic [VVC_CHROMA_TU_SAMPLE_BITS - 1:0] chroma_quant_cr_left_recon_tu_w;
 
   // Current subset policy: 4:4:4 input selects palette for every visible CU.
   // This is deliberately represented as a CU mask so later mixed
   // palette/residual decisions can be made per CU without changing the
   // palette and residual block interfaces.
-  assign ctu_cu_palette_mask = (chroma_format_idc == 2'd3) ? ctu_cu_active_mask : '0;
+  assign ctu_cu_palette_mask =
+    (SUPPORT_PALETTE_444 && (chroma_format_idc == 2'd3)) ? ctu_cu_active_mask : '0;
   assign ctu_cu_residual_mask = ctu_cu_active_mask & ~ctu_cu_palette_mask;
 
   // The output/CABAC mux is still slice-wide. For the current subset, a 4:4:4
@@ -214,6 +382,7 @@ module ff_vvc_encoder #(
   assign vvc_tool_transform_skip_enabled = 1'b0;
   assign vvc_tool_mts_enabled = 1'b0;
   assign vvc_tool_lfnst_enabled = 1'b0;
+  assign vvc_tool_joint_cbcr_enabled = 1'b0;
   assign vvc_tool_mrl_enabled = !ctu_has_palette_cu;
   assign vvc_tool_cclm_enabled = !ctu_has_palette_cu && (chroma_format_idc != 2'd0);
   assign vvc_tool_dep_quant_enabled = 1'b0;
@@ -224,48 +393,166 @@ module ff_vvc_encoder #(
   assign chroma_subsample_x_w = ((chroma_format_idc == 2'd1) || (chroma_format_idc == 2'd2)) ?
                                 2'd2 : 2'd1;
   assign chroma_subsample_y_w = (chroma_format_idc == 2'd1) ? 2'd2 : 2'd1;
-  assign ctu_cols_w = (visible_width + CTU_SIZE_L - 16'd1) / CTU_SIZE_L;
-  assign ctu_rows_w = (visible_height + CTU_SIZE_L - 16'd1) / CTU_SIZE_L;
+  assign coded_width_w =
+    (visible_width + CODED_DIMENSION_GRANULARITY - 16'd1) &
+    ~(CODED_DIMENSION_GRANULARITY - 16'd1);
+  assign coded_height_w =
+    (visible_height + CODED_DIMENSION_GRANULARITY - 16'd1) &
+    ~(CODED_DIMENSION_GRANULARITY - 16'd1);
+  assign ctu_cols_w = (coded_width_w + CTU_SIZE_L - 16'd1) / CTU_SIZE_L;
+  assign ctu_rows_w = (coded_height_w + CTU_SIZE_L - 16'd1) / CTU_SIZE_L;
   assign ctu_count_w = ctu_cols_w * ctu_rows_w;
-  assign multi_ctu_picture_w = ctu_count_w > 16'd1;
-  assign current_ctu_x_w = (ctu_cols_w == 16'd0) ? 16'd0 : (current_slice_q % ctu_cols_w);
-  assign current_ctu_y_w = (ctu_cols_w == 16'd0) ? 16'd0 : (current_slice_q / ctu_cols_w);
-  assign current_ctu_origin_x_w = current_ctu_x_w * CTU_SIZE_L;
-  assign current_ctu_origin_y_w = current_ctu_y_w * CTU_SIZE_L;
+  assign multi_slice_picture_w = ctu_count_w > 16'd1;
+  assign current_slice_last_w = (current_slice_q + 16'd1) >= ctu_count_w;
+  always_comb begin
+    slice_address_bits_w = 6'd0;
+    if (ctu_count_w > 16'd1) begin
+      slice_address_bits_w = 6'd1;
+    end
+    if (ctu_count_w > 16'd2) begin
+      slice_address_bits_w = 6'd2;
+    end
+    if (ctu_count_w > 16'd4) begin
+      slice_address_bits_w = 6'd3;
+    end
+    if (ctu_count_w > 16'd8) begin
+      slice_address_bits_w = 6'd4;
+    end
+    if (ctu_count_w > 16'd16) begin
+      slice_address_bits_w = 6'd5;
+    end
+    if (ctu_count_w > 16'd32) begin
+      slice_address_bits_w = 6'd6;
+    end
+    if (ctu_count_w > 16'd64) begin
+      slice_address_bits_w = 6'd7;
+    end
+    if (ctu_count_w > 16'd128) begin
+      slice_address_bits_w = 6'd8;
+    end
+  end
+  assign current_ctu_origin_x_w = current_ctu_x_q * CTU_SIZE_L;
+  assign current_ctu_origin_y_w = current_ctu_y_q * CTU_SIZE_L;
+  assign current_ctu_remaining_width_w =
+    (visible_width > current_ctu_origin_x_w) ?
+      (visible_width - current_ctu_origin_x_w) : 16'd1;
+  assign current_ctu_remaining_height_w =
+    (visible_height > current_ctu_origin_y_w) ?
+      (visible_height - current_ctu_origin_y_w) : 16'd1;
   assign ctu_visible_width_w =
-    (visible_width <= current_ctu_origin_x_w) ? 16'd1 :
-    (((visible_width - current_ctu_origin_x_w) > CTU_SIZE_L) ?
-      CTU_SIZE_L : (visible_width - current_ctu_origin_x_w));
+    (current_ctu_remaining_width_w > CTU_SIZE_L) ? CTU_SIZE_L :
+    current_ctu_remaining_width_w;
   assign ctu_visible_height_w =
-    (visible_height <= current_ctu_origin_y_w) ? 16'd1 :
-    (((visible_height - current_ctu_origin_y_w) > CTU_SIZE_L) ?
-      CTU_SIZE_L : (visible_height - current_ctu_origin_y_w));
-  assign current_slice_last_w = current_slice_q == (ctu_count_w - 16'd1);
-  assign slice_address_bits_w =
-    (ctu_count_w <= 16'd1) ? 6'd0 :
-    (ctu_count_w <= 16'd2) ? 6'd1 :
-    (ctu_count_w <= 16'd4) ? 6'd2 :
-    (ctu_count_w <= 16'd8) ? 6'd3 :
-    (ctu_count_w <= 16'd16) ? 6'd4 :
-    (ctu_count_w <= 16'd32) ? 6'd5 : 6'd6;
+    (current_ctu_remaining_height_w > CTU_SIZE_L) ? CTU_SIZE_L :
+    current_ctu_remaining_height_w;
   assign luma_samples_w = visible_width * visible_height;
   assign chroma_plane_samples_w =
-    (visible_width / chroma_subsample_x_w) * (visible_height / chroma_subsample_y_w);
-  assign frame_samples_w = luma_samples_w + (chroma_plane_samples_w << 1);
+    ((chroma_subsample_x_w == 2'd2) ? (visible_width >> 1) : visible_width) *
+    ((chroma_subsample_y_w == 2'd2) ? (visible_height >> 1) : visible_height);
+  assign active_luma_tu_cols_w =
+    (ctu_visible_width_w == 16'd0) ? 4'd1 : ((ctu_visible_width_w + 16'd7) >> 3);
+  assign active_luma_tu_rows_w =
+    (ctu_visible_height_w == 16'd0) ? 4'd1 : ((ctu_visible_height_w + 16'd7) >> 3);
+  assign active_luma_tu_count_w = active_luma_tu_cols_w * active_luma_tu_rows_w;
+  assign active_chroma_tu_count_w = active_luma_tu_count_w;
+  assign luma_tu_stream_samples_w =
+    active_luma_tu_count_w * VVC_RESIDUAL_LUMA_SAMPLES;
+  assign chroma_tu_stream_samples_w =
+    ctu_has_palette_cu ?
+      (active_luma_tu_count_w * VVC_RESIDUAL_LUMA_SAMPLES) :
+      (active_chroma_tu_count_w * VVC_CHROMA_TU_SAMPLES);
+  assign cb_tu_stream_base_w = luma_tu_stream_samples_w;
+  assign cr_tu_stream_base_w = luma_tu_stream_samples_w + chroma_tu_stream_samples_w;
+  assign frame_samples_w = luma_tu_stream_samples_w + (chroma_tu_stream_samples_w << 1);
   assign input_len_w = frame_samples_w;
-  assign v_sample_index_w = luma_samples_w + chroma_plane_samples_w;
+  assign v_sample_index_w = cr_tu_stream_base_w;
   assign input_frame_last_w = input_active_q && (input_count_q == input_len_q - 1'b1);
-  assign palette_sample_plane_w =
-    (input_count_q < luma_samples_w) ? 2'd0 :
-    ((input_count_q < v_sample_index_w) ? 2'd1 : 2'd2);
-  assign input_luma_x_w = (visible_width == 16'd0) ? 16'd0 : (input_count_q % visible_width);
-  assign input_luma_y_w = (visible_width == 16'd0) ? 16'd0 : (input_count_q / visible_width);
+  // RTL input stream contract for the current fixed-TU subset:
+  // samples arrive in CTU-local coding-tree leaf order, one 8x8 leaf at a
+  // time. Each leaf carries all luma samples first, then the colocated Cb
+  // block, then the colocated Cr block. For 4:2:0 residual mode the chroma
+  // blocks are 4x4; for 4:4:4 palette mode they are 8x8. This intentionally
+  // differs from planar YUV file storage and from xk265's raster CTU fetch
+  // buffer: the contract keeps the input-side live storage at TU scale
+  // instead of buffering a full 64x64 CTU. If future dynamic partitioning is
+  // added, this interface can be widened to 16x16 leaves or full CTUs.
+  assign input_chroma_stream_last_sample_w = ctu_has_palette_cu ? 6'd63 : 6'd15;
+  assign input_stream_component_last_w =
+    (input_stream_component_q == 2'd0) ?
+      (input_stream_sample_q == 6'd63) :
+      (input_stream_sample_q == input_chroma_stream_last_sample_w);
+  always_comb begin
+    input_stream_leaf_next_w = input_stream_leaf_q;
+    input_stream_component_next_w = input_stream_component_q;
+    input_stream_sample_next_w = input_stream_sample_q;
+    if (input_stream_component_last_w) begin
+      input_stream_sample_next_w = 6'd0;
+      if (input_stream_component_q == 2'd0) begin
+        input_stream_component_next_w = 2'd1;
+      end else if (input_stream_component_q == 2'd1) begin
+        input_stream_component_next_w = 2'd2;
+      end else begin
+        input_stream_component_next_w = 2'd0;
+        input_stream_leaf_next_w = input_stream_leaf_q + 7'd1;
+      end
+    end else begin
+      input_stream_sample_next_w = input_stream_sample_q + 6'd1;
+    end
+  end
+
+  assign palette_sample_plane_w = input_stream_component_q;
+  assign input_luma_stream_index_w = input_count_q;
+  assign input_luma_tu_ordinal_w = input_stream_leaf_q;
+  assign input_luma_tu_sample_index_w = input_stream_sample_q;
+  assign input_luma_x_w = input_luma_tu_origin_x_w + {13'd0, input_luma_tu_sample_index_w[2:0]};
+  assign input_luma_y_w = input_luma_tu_origin_y_w + {13'd0, input_luma_tu_sample_index_w[5:3]};
+  assign input_luma_ctu_local_x_w = input_luma_x_w;
+  assign input_luma_ctu_local_y_w = input_luma_y_w;
   assign residual_luma_sample_w =
-    (input_count_q < luma_samples_w) &&
-    (input_luma_x_w < VVC_LUMA_TU_SIZE[15:0]) &&
-    (input_luma_y_w < VVC_LUMA_TU_SIZE[15:0]);
-  assign residual_luma_sample_index_w =
-    ((input_luma_y_w[5:0] * VVC_LUMA_TU_SIZE[5:0]) + input_luma_x_w[5:0]);
+    !ctu_has_palette_cu &&
+    (input_stream_component_q == 2'd0) &&
+    (input_luma_ctu_local_x_w < CTU_SIZE_L) &&
+    (input_luma_ctu_local_y_w < CTU_SIZE_L);
+  assign input_luma_tu_index_full_w =
+    ((input_luma_tu_origin_y_w >> 3) * VVC_LUMA_TU_COLS_L) +
+    (input_luma_tu_origin_x_w >> 3);
+  assign input_luma_tu_index_w = input_luma_tu_index_full_w[5:0];
+  assign input_luma_tu_sample_w =
+    residual_luma_sample_w &&
+    input_luma_tu_valid_w &&
+    (input_luma_tu_ordinal_w < active_luma_tu_count_w) &&
+    (input_luma_tu_index_full_w < VVC_LUMA_TUS_PER_CTU);
+  assign input_luma_tu_last_sample_w =
+    input_luma_tu_sample_w && (input_luma_tu_sample_index_w == 6'd63);
+  assign residual_luma_sample_index_w = input_luma_tu_sample_index_w;
+  assign luma_quant_ctu_visible_width_w = ctu_visible_width_w;
+  assign luma_quant_ctu_visible_height_w = ctu_visible_height_w;
+  assign luma_quant_tu_col_w = luma_quant_tu_q % VVC_LUMA_TU_COLS_L;
+  assign luma_quant_tu_row_w = luma_quant_tu_q / VVC_LUMA_TU_COLS_L;
+  assign luma_quant_tu_origin_x_w =
+    {13'd0, luma_quant_tu_col_w} * VVC_LUMA_TU_SIZE_L;
+  assign luma_quant_tu_origin_y_w =
+    {13'd0, luma_quant_tu_row_w} * VVC_LUMA_TU_SIZE_L;
+  assign luma_quant_tu_visible_w =
+    (luma_quant_tu_origin_x_w < luma_quant_ctu_visible_width_w) &&
+    (luma_quant_tu_origin_y_w < luma_quant_ctu_visible_height_w);
+  assign luma_quant_sample_tu_w = luma_sample_tu_q;
+
+  ff_vvc_luma_tu_node_8x8 #(
+    .CTU_SIZE(CTU_SIZE)
+  ) input_luma_tu_node (
+    .visible_width(ctu_visible_width_w),
+    .visible_height(ctu_visible_height_w),
+    .target_index(input_luma_tu_ordinal_w[5:0]),
+    .valid(input_luma_tu_valid_w),
+    .tu_x(input_luma_tu_origin_x_w),
+    .tu_y(input_luma_tu_origin_y_w)
+  );
+  assign chroma_quant_ctu_visible_width_w = ctu_visible_width_w;
+  assign chroma_quant_ctu_visible_height_w = ctu_visible_height_w;
+  assign chroma_quant_visible_chroma_width_w = chroma_quant_ctu_visible_width_w >> 1;
+  assign chroma_quant_visible_chroma_height_w = chroma_quant_ctu_visible_height_w >> 1;
+
   assign sampled_u_8bit_w = (SAMPLE_BITS <= 8) ? sampled_u[7:0] : (sampled_u >> (SAMPLE_BITS - 8));
   assign sampled_v_8bit_w = (SAMPLE_BITS <= 8) ? sampled_v[7:0] : (sampled_v >> (SAMPLE_BITS - 8));
   assign sampled_u_clamped_w = (sampled_u_8bit_w > 8'd128) ? 9'd128 : {1'b0, sampled_u_8bit_w};
@@ -276,13 +563,297 @@ module ff_vvc_encoder #(
     (SAMPLE_BITS <= 8) ? s_axis_data[7:0] : (s_axis_data >> (SAMPLE_BITS - 8));
   assign input_sample_clamped_w = (input_sample_8bit_w > 8'd128) ? 9'd128 : {1'b0, input_sample_8bit_w};
   assign input_quant_level_w = (input_sample_clamped_w + 9'd4) >> 3;
+  assign input_chroma_width_w =
+    (chroma_subsample_x_w == 2'd2) ? (visible_width >> 1) : visible_width;
+  assign input_chroma_height_w =
+    (chroma_subsample_y_w == 2'd2) ? (visible_height >> 1) : visible_height;
+  assign input_cb_stream_index_w = '0;
+  assign input_cr_stream_index_w = '0;
+  assign input_chroma_index_w = input_count_q;
+  assign input_chroma_tu_index_full_w = input_stream_leaf_q;
+  assign input_chroma_tu_index_w = input_chroma_tu_index_full_w[5:0];
+  assign input_chroma_tu_sample_index_w = input_stream_sample_q;
+  assign input_chroma_tu_local_x_w = {14'd0, input_chroma_tu_sample_index_w[1:0]};
+  assign input_chroma_tu_local_y_w = {14'd0, input_chroma_tu_sample_index_w[3:2]};
+  assign input_chroma_x_w = input_chroma_tu_origin_x_w + input_chroma_tu_local_x_w;
+  assign input_chroma_y_w = input_chroma_tu_origin_y_w + input_chroma_tu_local_y_w;
+  assign input_chroma_ctu_local_x_w = input_chroma_x_w;
+  assign input_chroma_ctu_local_y_w = input_chroma_y_w;
+  assign input_chroma_tu_sample_w =
+    !ctu_has_palette_cu &&
+    (input_stream_component_q != 2'd0) &&
+    input_chroma_tu_valid_w &&
+    (input_chroma_tu_index_full_w < active_chroma_tu_count_w) &&
+    (input_chroma_tu_local_x_w < input_chroma_tu_width_w) &&
+    (input_chroma_tu_local_y_w < input_chroma_tu_height_w) &&
+    (input_chroma_x_w < input_chroma_width_w) &&
+    (input_chroma_y_w < input_chroma_height_w);
+
+  ff_vvc_chroma_tu_node_420 #(
+    .CTU_SIZE(CTU_SIZE)
+  ) input_chroma_tu_node (
+    .visible_width(ctu_visible_width_w),
+    .visible_height(ctu_visible_height_w),
+    .target_index(input_chroma_tu_index_w),
+    .valid(input_chroma_tu_valid_w),
+    .tu_x(input_chroma_tu_origin_x_w),
+    .tu_y(input_chroma_tu_origin_y_w),
+    .tu_width(input_chroma_tu_width_w),
+    .tu_height(input_chroma_tu_height_w)
+  );
+
+  ff_vvc_chroma_tu_mapper_420 #(
+    .CTU_SIZE(CTU_SIZE)
+  ) chroma_quant_top_tu_mapper (
+    .visible_width(chroma_quant_ctu_visible_width_w),
+    .visible_height(chroma_quant_ctu_visible_height_w),
+    .sample_x(chroma_quant_tu_origin_x_w),
+    .sample_y(chroma_quant_tu_origin_y_w - VVC_CHROMA_TU_SIZE_L),
+    .sample_valid(chroma_quant_top_tu_valid_w),
+    .tu_index(chroma_quant_top_tu_index_w),
+    .tu_width(chroma_quant_top_tu_width_w),
+    .tu_height(chroma_quant_top_tu_height_w),
+    .tu_local_x(chroma_quant_top_tu_local_x_w),
+    .tu_local_y(chroma_quant_top_tu_local_y_w)
+  );
+
+  ff_vvc_chroma_tu_mapper_420 #(
+    .CTU_SIZE(CTU_SIZE)
+  ) chroma_quant_left_tu_mapper (
+    .visible_width(chroma_quant_ctu_visible_width_w),
+    .visible_height(chroma_quant_ctu_visible_height_w),
+    .sample_x(chroma_quant_tu_origin_x_w - VVC_CHROMA_TU_SIZE_L),
+    .sample_y(chroma_quant_tu_origin_y_w),
+    .sample_valid(chroma_quant_left_tu_valid_w),
+    .tu_index(chroma_quant_left_tu_index_w),
+    .tu_width(chroma_quant_left_tu_width_w),
+    .tu_height(chroma_quant_left_tu_height_w),
+    .tu_local_x(chroma_quant_left_tu_local_x_w),
+    .tu_local_y(chroma_quant_left_tu_local_y_w)
+  );
+
+  assign chroma_quant_cb_sample_tu_w = cb_sample_tu_q[chroma_quant_tu_q];
+  assign chroma_quant_cr_sample_tu_w = cr_sample_tu_q[chroma_quant_tu_q];
+  assign chroma_quant_cb_top_recon_tu_w = cb_recon_tu_q[chroma_quant_top_tu_index_w];
+  assign chroma_quant_cr_top_recon_tu_w = cr_recon_tu_q[chroma_quant_top_tu_index_w];
+  assign chroma_quant_cb_left_recon_tu_w = cb_recon_tu_q[chroma_quant_left_tu_index_w];
+  assign chroma_quant_cr_left_recon_tu_w = cr_recon_tu_q[chroma_quant_left_tu_index_w];
+
+  always @* begin
+    luma_quant_samples_w = '0;
+    luma_quant_visible_mask_w = '0;
+    luma_quant_top_ref_w = {VVC_LUMA_TU_SIZE{8'd128}};
+    luma_quant_left_ref_w = {VVC_LUMA_TU_SIZE{8'd128}};
+    luma_quant_src_x_tmp = 16'd0;
+    luma_quant_src_y_tmp = 16'd0;
+    luma_quant_ref_x_tmp = 16'd0;
+    luma_quant_ref_y_tmp = 16'd0;
+
+    if (luma_quant_tu_visible_w) begin
+      luma_quant_samples_w = luma_quant_sample_tu_w;
+
+      for (luma_quant_pack_i = 0; luma_quant_pack_i < VVC_LUMA_TU_SIZE; luma_quant_pack_i = luma_quant_pack_i + 1) begin
+        if (luma_quant_tu_origin_y_w != 16'd0) begin
+          luma_quant_ref_x_tmp = luma_quant_tu_origin_x_w + luma_quant_pack_i[15:0];
+          if (luma_quant_ref_x_tmp >= luma_quant_ctu_visible_width_w) begin
+            luma_quant_ref_x_tmp = luma_quant_ctu_visible_width_w - 16'd1;
+          end
+          luma_quant_top_ref_w[luma_quant_pack_i * 8 +: 8] =
+            luma_top_ref_row_q[luma_quant_tu_col_w][luma_quant_ref_x_tmp[2:0] * 8 +: 8];
+        end else if ((luma_quant_tu_origin_x_w != 16'd0) &&
+                     (luma_quant_tu_origin_y_w < luma_quant_ctu_visible_height_w)) begin
+          // H.266 8.4.4.2 reference sample substitution: when the top row is
+          // unavailable but a left TU exists, substitute p[-1][0], not a
+          // lower-left edge sample from the previous TU.
+          luma_quant_top_ref_w[luma_quant_pack_i * 8 +: 8] =
+            luma_left_ref_col_q[luma_quant_tu_row_w][0 +: 8];
+        end
+
+        if (luma_quant_tu_origin_x_w != 16'd0) begin
+          luma_quant_ref_y_tmp = luma_quant_tu_origin_y_w + luma_quant_pack_i[15:0];
+          if (luma_quant_ref_y_tmp >= luma_quant_ctu_visible_height_w) begin
+            luma_quant_ref_y_tmp = luma_quant_ctu_visible_height_w - 16'd1;
+          end
+          luma_quant_left_ref_w[luma_quant_pack_i * 8 +: 8] =
+            luma_left_ref_col_q[luma_quant_tu_row_w][luma_quant_ref_y_tmp[2:0] * 8 +: 8];
+        end else if ((luma_quant_tu_origin_y_w != 16'd0) &&
+                     (luma_quant_tu_origin_x_w < luma_quant_ctu_visible_width_w)) begin
+          luma_quant_left_ref_w[luma_quant_pack_i * 8 +: 8] =
+            luma_top_ref_row_q[luma_quant_tu_col_w][0 +: 8];
+        end
+      end
+
+      for (luma_quant_y_i = 0; luma_quant_y_i < VVC_LUMA_TU_SIZE; luma_quant_y_i = luma_quant_y_i + 1) begin
+        for (luma_quant_x_i = 0; luma_quant_x_i < VVC_LUMA_TU_SIZE; luma_quant_x_i = luma_quant_x_i + 1) begin
+          luma_quant_pack_i = (luma_quant_y_i * VVC_LUMA_TU_SIZE) + luma_quant_x_i;
+          luma_quant_src_x_tmp = luma_quant_tu_origin_x_w + luma_quant_x_i[15:0];
+          luma_quant_src_y_tmp = luma_quant_tu_origin_y_w + luma_quant_y_i[15:0];
+          if ((luma_quant_src_x_tmp < luma_quant_ctu_visible_width_w) &&
+              (luma_quant_src_y_tmp < luma_quant_ctu_visible_height_w)) begin
+            luma_quant_visible_mask_w[luma_quant_pack_i] = 1'b1;
+          end
+        end
+      end
+    end
+  end
+
+  ff_vvc_chroma_tu_node_420 #(
+    .CTU_SIZE(CTU_SIZE)
+  ) chroma_quant_node (
+    .visible_width(chroma_quant_ctu_visible_width_w),
+    .visible_height(chroma_quant_ctu_visible_height_w),
+    .target_index(chroma_quant_tu_q),
+    .valid(chroma_quant_tu_valid_w),
+    .tu_x(chroma_quant_tu_origin_x_w),
+    .tu_y(chroma_quant_tu_origin_y_w),
+    .tu_width(chroma_quant_tu_width_w),
+    .tu_height(chroma_quant_tu_height_w)
+  );
+
+  always @* begin
+    chroma_quant_cb_samples_w = '0;
+    chroma_quant_cr_samples_w = '0;
+    chroma_quant_cb_top_ref_w = {VVC_CHROMA_TU_SIZE{8'd128}};
+    chroma_quant_cb_left_ref_w = {VVC_CHROMA_TU_SIZE{8'd128}};
+    chroma_quant_cr_top_ref_w = {VVC_CHROMA_TU_SIZE{8'd128}};
+    chroma_quant_cr_left_ref_w = {VVC_CHROMA_TU_SIZE{8'd128}};
+    chroma_quant_ref_x_tmp = 16'd0;
+    chroma_quant_ref_y_tmp = 16'd0;
+
+    if (chroma_quant_tu_valid_w) begin
+      chroma_quant_cb_samples_w = chroma_quant_cb_sample_tu_w;
+      chroma_quant_cr_samples_w = chroma_quant_cr_sample_tu_w;
+
+      for (chroma_quant_pack_i = 0; chroma_quant_pack_i < VVC_CHROMA_TU_SIZE; chroma_quant_pack_i = chroma_quant_pack_i + 1) begin
+        if (chroma_quant_pack_i[15:0] < chroma_quant_tu_width_w) begin
+          if (chroma_quant_tu_origin_y_w != 16'd0) begin
+            chroma_quant_ref_x_tmp = chroma_quant_tu_origin_x_w + chroma_quant_pack_i[15:0];
+            if (chroma_quant_ref_x_tmp >= chroma_quant_visible_chroma_width_w) begin
+              chroma_quant_ref_x_tmp = chroma_quant_visible_chroma_width_w - 16'd1;
+            end
+            chroma_quant_cb_top_ref_w[chroma_quant_pack_i * 8 +: 8] =
+              chroma_quant_cb_top_recon_tu_w[
+                (((VVC_CHROMA_TU_SIZE - 1) * VVC_CHROMA_TU_SIZE) +
+                 chroma_quant_ref_x_tmp[1:0]) * 8 +: 8
+              ];
+            chroma_quant_cr_top_ref_w[chroma_quant_pack_i * 8 +: 8] =
+              chroma_quant_cr_top_recon_tu_w[
+                (((VVC_CHROMA_TU_SIZE - 1) * VVC_CHROMA_TU_SIZE) +
+                 chroma_quant_ref_x_tmp[1:0]) * 8 +: 8
+              ];
+          end else if ((chroma_quant_tu_origin_x_w != 16'd0) &&
+                       (chroma_quant_tu_origin_y_w < chroma_quant_visible_chroma_height_w)) begin
+            chroma_quant_cb_top_ref_w[chroma_quant_pack_i * 8 +: 8] =
+              chroma_quant_cb_left_recon_tu_w[((VVC_CHROMA_TU_SIZE - 1) * 8) +: 8];
+            chroma_quant_cr_top_ref_w[chroma_quant_pack_i * 8 +: 8] =
+              chroma_quant_cr_left_recon_tu_w[((VVC_CHROMA_TU_SIZE - 1) * 8) +: 8];
+          end
+        end
+
+        if (chroma_quant_pack_i[15:0] < chroma_quant_tu_height_w) begin
+          if (chroma_quant_tu_origin_x_w != 16'd0) begin
+            chroma_quant_ref_y_tmp = chroma_quant_tu_origin_y_w + chroma_quant_pack_i[15:0];
+            if (chroma_quant_ref_y_tmp >= chroma_quant_visible_chroma_height_w) begin
+              chroma_quant_ref_y_tmp = chroma_quant_visible_chroma_height_w - 16'd1;
+            end
+            chroma_quant_cb_left_ref_w[chroma_quant_pack_i * 8 +: 8] =
+              chroma_quant_cb_left_recon_tu_w[
+                ((chroma_quant_ref_y_tmp[1:0] * VVC_CHROMA_TU_SIZE) +
+                 (VVC_CHROMA_TU_SIZE - 1)) * 8 +: 8
+              ];
+            chroma_quant_cr_left_ref_w[chroma_quant_pack_i * 8 +: 8] =
+              chroma_quant_cr_left_recon_tu_w[
+                ((chroma_quant_ref_y_tmp[1:0] * VVC_CHROMA_TU_SIZE) +
+                 (VVC_CHROMA_TU_SIZE - 1)) * 8 +: 8
+              ];
+          end else if ((chroma_quant_tu_origin_y_w != 16'd0) &&
+                       (chroma_quant_tu_origin_x_w < chroma_quant_visible_chroma_width_w)) begin
+            chroma_quant_cb_left_ref_w[chroma_quant_pack_i * 8 +: 8] =
+              chroma_quant_cb_top_recon_tu_w[
+                (((VVC_CHROMA_TU_SIZE - 1) * VVC_CHROMA_TU_SIZE) * 8) +: 8
+              ];
+            chroma_quant_cr_left_ref_w[chroma_quant_pack_i * 8 +: 8] =
+              chroma_quant_cr_top_recon_tu_w[
+                (((VVC_CHROMA_TU_SIZE - 1) * VVC_CHROMA_TU_SIZE) * 8) +: 8
+              ];
+          end
+        end
+      end
+    end
+  end
+
+  ff_vvc_luma_quant_recon_8x8 luma_quant_recon (
+    .clk(clk),
+    .rst_n(rst_n),
+    .clear(frame_pipeline_clear_w),
+    .start(luma_quant_start_q),
+    .samples(luma_quant_samples_w),
+    .visible_mask(luma_quant_visible_mask_w),
+    .top_ref(luma_quant_top_ref_w),
+    .left_ref(luma_quant_left_ref_w),
+    .abs_level(luma_quant_abs_level_w),
+    .negative(luma_quant_negative_w),
+    .ac_levels(luma_quant_ac_levels_w),
+    .recon_samples(luma_quant_recon_samples_w),
+    .done(luma_quant_done_w),
+    .busy(luma_quant_busy_w)
+  );
+
+  ff_vvc_chroma_quant_recon_420 cb_chroma_quant_recon (
+    .samples(chroma_quant_cb_samples_w),
+    .top_ref(chroma_quant_cb_top_ref_w),
+    .left_ref(chroma_quant_cb_left_ref_w),
+    .dc_level(chroma_quant_cb_dc_level_w),
+    .ac_levels(chroma_quant_cb_ac_levels_w),
+    .recon_samples(chroma_quant_cb_recon_samples_w)
+  );
+
+  ff_vvc_chroma_quant_recon_420 cr_chroma_quant_recon (
+    .samples(chroma_quant_cr_samples_w),
+    .top_ref(chroma_quant_cr_top_ref_w),
+    .left_ref(chroma_quant_cr_left_ref_w),
+    .dc_level(chroma_quant_cr_dc_level_w),
+    .ac_levels(chroma_quant_cr_ac_levels_w),
+    .recon_samples(chroma_quant_cr_recon_samples_w)
+  );
+
+  always @* begin
+    selected_quant_luma_rem_w = '0;
+    selected_quant_luma_negative_w = '0;
+    selected_quant_luma_ac_levels_w = '0;
+    selected_quant_cb_dc_levels_w = '0;
+    selected_quant_cr_dc_levels_w = '0;
+    selected_quant_cb_ac_levels_w = '0;
+    selected_quant_cr_ac_levels_w = '0;
+    for (luma_pack_tu_i = 0; luma_pack_tu_i < VVC_LUMA_TUS_PER_CTU; luma_pack_tu_i = luma_pack_tu_i + 1) begin
+      selected_quant_luma_rem_w[luma_pack_tu_i * 8 +: 8] =
+        quant_luma_rem_ctu_q[luma_pack_tu_i];
+      selected_quant_luma_negative_w[luma_pack_tu_i] =
+        quant_luma_negative_ctu_q[luma_pack_tu_i];
+      selected_quant_luma_ac_levels_w[luma_pack_tu_i * (8 * 15) +: (8 * 15)] =
+        quant_luma_ac_levels_ctu_q[luma_pack_tu_i];
+    end
+    for (chroma_pack_tu_i = 0; chroma_pack_tu_i < VVC_CHROMA_TUS_PER_CTU; chroma_pack_tu_i = chroma_pack_tu_i + 1) begin
+      selected_quant_cb_dc_levels_w[chroma_pack_tu_i * 9 +: 9] =
+        quant_cb_dc_level_ctu_q[chroma_pack_tu_i];
+      selected_quant_cr_dc_levels_w[chroma_pack_tu_i * 9 +: 9] =
+        quant_cr_dc_level_ctu_q[chroma_pack_tu_i];
+      selected_quant_cb_ac_levels_w[chroma_pack_tu_i * (8 * 15) +: (8 * 15)] =
+        quant_cb_ac_levels_ctu_q[chroma_pack_tu_i];
+      selected_quant_cr_ac_levels_w[chroma_pack_tu_i * (8 * 15) +: (8 * 15)] =
+        quant_cr_ac_levels_ctu_q[chroma_pack_tu_i];
+    end
+  end
 
   // Current residual subset uses one 8x8 luma TU and emits the first 4x4
   // coefficient group: DC plus bounded AC levels from the residual transform.
   assign luma_log2_tb_width_w = 3'd3;
   assign luma_log2_tb_height_w = 3'd3;
 
-  assign busy = input_active_q || pending_output_q || resume_input_q || frame_clear_q || m_axis_valid ||
+  assign busy = input_active_q || pending_output_q || resume_input_q || frame_clear_q ||
+                frame_chroma_quant_pending_q || frame_quant_pending_q ||
+                luma_tu_quant_pending_q || luma_quant_active_q || luma_quant_busy_w ||
+                m_axis_valid ||
                 (generated_out_state_q != GENERATED_OUT_IDLE);
   assign frame_pipeline_clear_w = (start && !busy) || frame_clear_q;
   assign cabac_enable = 1'b1;
@@ -340,8 +911,6 @@ module ff_vvc_encoder #(
   );
 
   ff_vvc_annexb_header #(
-    .MAX_VISIBLE_WIDTH(MAX_VISIBLE_WIDTH),
-    .MAX_VISIBLE_HEIGHT(MAX_VISIBLE_HEIGHT),
     .CTU_SIZE(CTU_SIZE)
   ) annexb_header (
     .clk(clk),
@@ -357,6 +926,7 @@ module ff_vvc_encoder #(
     .sps_transform_skip_enabled_flag(vvc_tool_transform_skip_enabled),
     .sps_mts_enabled_flag(vvc_tool_mts_enabled),
     .sps_lfnst_enabled_flag(vvc_tool_lfnst_enabled),
+    .sps_joint_cbcr_enabled_flag(vvc_tool_joint_cbcr_enabled),
     .sps_mrl_enabled_flag(vvc_tool_mrl_enabled),
     .sps_cclm_enabled_flag(vvc_tool_cclm_enabled),
     .sps_dep_quant_enabled_flag(vvc_tool_dep_quant_enabled),
@@ -376,17 +946,18 @@ module ff_vvc_encoder #(
     .clk(clk),
     .rst_n(rst_n),
     .clear(start && !busy),
-    .start(generated_ph_start_q),
+    .start(generated_picture_header_start_q),
     .poc_lsb(frame_index_q[15:0]),
-    .m_axis_ready(generated_ph_ready_w),
-    .m_axis_valid(generated_ph_valid_w),
-    .m_axis_data(generated_ph_byte_w),
-    .m_axis_last(generated_ph_last_w),
-    .done(generated_ph_done_w)
+    .sps_joint_cbcr_enabled_flag(vvc_tool_joint_cbcr_enabled),
+    .m_axis_ready(picture_header_ready_w),
+    .m_axis_valid(picture_header_valid_w),
+    .m_axis_data(picture_header_byte_w),
+    .m_axis_last(picture_header_last_w),
+    .done(picture_header_done_w)
   );
 
-  assign generated_ph_ready_w =
-    (generated_out_state_q == GENERATED_OUT_PH) &&
+  assign picture_header_ready_w =
+    (generated_out_state_q == GENERATED_OUT_PICTURE_HEADER) &&
     (!m_axis_valid || m_axis_ready);
 
   always @* begin
@@ -406,41 +977,49 @@ module ff_vvc_encoder #(
                            (residual_luma_sample_index_w == 6'd63);
   end
 
-  ff_vvc_palette_symbolizer #(
-    .CTU_SIZE(CTU_SIZE),
-    .PALETTE_CU_SIZE(PALETTE_CU_SIZE),
-    .SAMPLE_BITS(SAMPLE_BITS),
-    .MAX_PALETTE_SYMBOLS(MAX_CTU_PALETTE_SYMBOLS)
-  ) palette_symbolizer (
-    .clk(clk),
-    .rst_n(rst_n),
-    .clear(frame_pipeline_clear_w),
-    .enable(ctu_has_palette_cu),
-    .ctu_coded_width(coding_tree_coded_width),
-    .ctu_coded_height(coding_tree_coded_height),
-    .cu_select_mask(ctu_cu_palette_mask),
-    .cu_request_valid(palette_request_valid),
-    .cu_request_ready(palette_request_ready),
-    .cu_request_origin_x(palette_request_origin_x),
-    .cu_request_origin_y(palette_request_origin_y),
-    .cu_request_last(palette_request_last),
-    .s_axis_valid(palette_sample_valid),
-    .s_axis_ready(),
-    .s_axis_plane(palette_sample_plane),
-    .s_axis_sample(s_axis_data),
-    .s_axis_last(s_axis_last),
-    .m_axis_valid(palette_stream_valid),
-    .m_axis_ready(palette_stream_ready),
-    .m_axis_data(palette_stream_data),
-    .m_axis_last(palette_stream_last),
-    .m_axis_cu_last(palette_stream_cu_last),
-    .symbol_count(palette_symbol_count)
-  );
+  generate
+    if (SUPPORT_PALETTE_444) begin : gen_palette_symbolizer
+      ff_vvc_palette_symbolizer #(
+        .CTU_SIZE(CTU_SIZE),
+        .PALETTE_CU_SIZE(PALETTE_CU_SIZE),
+        .SAMPLE_BITS(SAMPLE_BITS),
+        .MAX_PALETTE_SYMBOLS(MAX_CTU_PALETTE_SYMBOLS)
+      ) palette_symbolizer (
+        .clk(clk),
+        .rst_n(rst_n),
+        .clear(frame_pipeline_clear_w),
+        .enable(ctu_has_palette_cu),
+        .ctu_coded_width(coding_tree_coded_width),
+        .ctu_coded_height(coding_tree_coded_height),
+        .cu_select_mask(ctu_cu_palette_mask),
+        .cu_request_valid(palette_request_valid),
+        .cu_request_ready(palette_request_ready),
+        .cu_request_origin_x(palette_request_origin_x),
+        .cu_request_origin_y(palette_request_origin_y),
+        .cu_request_last(palette_request_last),
+        .s_axis_valid(palette_sample_valid),
+        .s_axis_ready(),
+        .s_axis_plane(palette_sample_plane),
+        .s_axis_sample(s_axis_data),
+        .s_axis_last(s_axis_last),
+        .m_axis_valid(palette_stream_valid),
+        .m_axis_ready(palette_stream_ready),
+        .m_axis_data(palette_stream_data),
+        .m_axis_last(palette_stream_last),
+        .m_axis_cu_last(palette_stream_cu_last),
+        .symbol_count(palette_symbol_count)
+      );
+    end else begin : gen_no_palette_symbolizer
+      assign palette_request_ready = 1'b0;
+      assign palette_stream_valid = 1'b0;
+      assign palette_stream_data = 32'd0;
+      assign palette_stream_last = 1'b0;
+      assign palette_stream_cu_last = 1'b0;
+      assign palette_symbol_count = 8'd0;
+    end
+  endgenerate
 
-  ff_vvc_cabac #(
-    .MAX_VISIBLE_WIDTH(MAX_VISIBLE_WIDTH),
-    .MAX_VISIBLE_HEIGHT(MAX_VISIBLE_HEIGHT)
-  ) cabac_writer (
+  ff_vvc_cabac cabac_writer (
     .clk(clk),
     .rst_n(rst_n),
     .start(cabac_start_q),
@@ -503,10 +1082,11 @@ module ff_vvc_encoder #(
     .start(cabac_start_q),
     .nal_unit_type(generated_slice_cra_q ? VVC_NAL_UNIT_TYPE_CRA : VVC_NAL_UNIT_TYPE_IDR_W_RADL),
     .poc_lsb(frame_index_q[15:0]),
-    .include_picture_header(!multi_ctu_picture_w),
-    .multi_slice_picture(multi_ctu_picture_w),
+    .include_picture_header(!multi_slice_picture_w),
+    .multi_slice_picture(multi_slice_picture_w),
     .slice_address(current_slice_q),
     .slice_address_bits(slice_address_bits_w),
+    .sps_joint_cbcr_enabled_flag(vvc_tool_joint_cbcr_enabled),
     .sh_dep_quant_used_flag(vvc_tool_dep_quant_enabled),
     .sh_sign_data_hiding_used_flag(vvc_tool_sign_data_hiding_enabled),
     .s_axis_ready(slice_stream_ready),
@@ -548,7 +1128,9 @@ module ff_vvc_encoder #(
   );
 
   ff_vvc_ctu_symbolizer #(
-    .CTU_SIZE(CTU_SIZE)
+    .CTU_SIZE(CTU_SIZE),
+    .LUMA_TUS_PER_CTU(VVC_LUMA_TUS_PER_CTU),
+    .CHROMA_TUS_PER_CTU(VVC_CHROMA_TUS_PER_CTU)
   ) ctu_symbols (
     .clk(clk),
     .rst_n(rst_n),
@@ -557,11 +1139,13 @@ module ff_vvc_encoder #(
     .visible_width(ctu_visible_width_w),
     .visible_height(ctu_visible_height_w),
     .chroma_format_idc(chroma_format_idc),
-    .luma_abs_level(quant_luma_rem_q),
-    .luma_negative(quant_luma_negative_q),
-    .luma_ac_levels(quant_luma_ac_levels_q),
-    .cb_abs_level(quant_cb_rem_q),
-    .cb_negative(quant_cb_negative_q && (quant_cb_rem_q != 5'd0)),
+    .luma_abs_levels(selected_quant_luma_rem_w),
+    .luma_negative(selected_quant_luma_negative_w),
+    .luma_ac_levels(selected_quant_luma_ac_levels_w),
+    .cb_dc_levels(selected_quant_cb_dc_levels_w),
+    .cr_dc_levels(selected_quant_cr_dc_levels_w),
+    .cb_ac_levels(selected_quant_cb_ac_levels_w),
+    .cr_ac_levels(selected_quant_cr_ac_levels_w),
     .luma_log2_tb_width(luma_log2_tb_width_w),
     .luma_log2_tb_height(luma_log2_tb_height_w),
     .sps_mrl_enabled_flag(vvc_tool_mrl_enabled),
@@ -585,6 +1169,9 @@ module ff_vvc_encoder #(
     if (!rst_n) begin
       input_count_q <= '0;
       input_len_q   <= '0;
+      input_stream_leaf_q <= 7'd0;
+      input_stream_component_q <= 2'd0;
+      input_stream_sample_q <= 6'd0;
       input_active_q <= 1'b0;
       s_axis_ready <= 1'b0;
       input_error  <= 1'b0;
@@ -598,6 +1185,10 @@ module ff_vvc_encoder #(
       quant_cb_rem_q <= 5'd16;
       quant_cr_rem_q <= 5'd16;
       quant_cb_negative_q <= 1'b1;
+      quant_cb_dc_level_q <= 9'sd0;
+      quant_cr_dc_level_q <= 9'sd0;
+      quant_cb_ac_levels_q <= '0;
+      quant_cr_ac_levels_q <= '0;
       m_axis_valid <= 1'b0;
       m_axis_data  <= '0;
       m_axis_last  <= 1'b0;
@@ -605,12 +1196,26 @@ module ff_vvc_encoder #(
       pending_output_q <= 1'b0;
       resume_input_q <= 1'b0;
       frame_clear_q <= 1'b0;
+      frame_chroma_quant_pending_q <= 1'b0;
+      frame_quant_pending_q <= 1'b0;
+      chroma_quant_tu_q <= 6'd0;
+      luma_quant_tu_q <= 6'd0;
+      luma_quant_start_q <= 1'b0;
+      luma_quant_active_q <= 1'b0;
+      luma_tu_quant_pending_q <= 1'b0;
+      luma_sample_tu_q <= '0;
+      for (luma_ref_i = 0; luma_ref_i < VVC_LUMA_TU_COLS; luma_ref_i = luma_ref_i + 1) begin
+        luma_top_ref_row_q[luma_ref_i] <= {VVC_LUMA_TU_SIZE{8'd128}};
+        luma_left_ref_col_q[luma_ref_i] <= {VVC_LUMA_TU_SIZE{8'd128}};
+      end
       frame_index_q <= 64'd0;
       generated_out_state_q <= GENERATED_OUT_IDLE;
       generated_slice_cra_q <= 1'b0;
       generated_header_start_q <= 1'b0;
-      generated_ph_start_q <= 1'b0;
+      generated_picture_header_start_q <= 1'b0;
       current_slice_q <= 16'd0;
+      current_ctu_x_q <= 16'd0;
+      current_ctu_y_q <= 16'd0;
       cabac_input_valid_q <= 1'b0;
       cabac_input_kind_q <= 8'd0;
       cabac_input_data_q <= 32'd0;
@@ -619,8 +1224,9 @@ module ff_vvc_encoder #(
     end else begin
       cabac_start_q <= 1'b0;
       generated_header_start_q <= 1'b0;
-      generated_ph_start_q <= 1'b0;
+      generated_picture_header_start_q <= 1'b0;
       frame_clear_q <= 1'b0;
+      luma_quant_start_q <= 1'b0;
       if (m_axis_valid && m_axis_ready) begin
         m_axis_valid <= 1'b0;
         m_axis_last <= 1'b0;
@@ -630,7 +1236,12 @@ module ff_vvc_encoder #(
         s_axis_ready   <= 1'b1;
         input_count_q  <= '0;
         input_len_q    <= input_len_w;
-        input_error    <= visible_width == 16'd0 || visible_height == 16'd0;
+        input_stream_leaf_q <= 7'd0;
+        input_stream_component_q <= 2'd0;
+        input_stream_sample_q <= 6'd0;
+        input_error    <= (visible_width == 16'd0) || (visible_height == 16'd0) ||
+                          (visible_width > MAX_VISIBLE_WIDTH) ||
+                          (visible_height > MAX_VISIBLE_HEIGHT);
         sampled_color_valid <= 1'b0;
         quant_luma_rem_q <= 8'd0;
         quant_luma_negative_q <= 1'b0;
@@ -638,17 +1249,39 @@ module ff_vvc_encoder #(
         quant_cb_rem_q <= 5'd16;
         quant_cr_rem_q <= 5'd16;
         quant_cb_negative_q <= 1'b1;
+        quant_cb_dc_level_q <= 9'sd0;
+        quant_cr_dc_level_q <= 9'sd0;
+        quant_cb_ac_levels_q <= '0;
+        quant_cr_ac_levels_q <= '0;
         m_axis_valid   <= 1'b0;
         m_axis_last    <= 1'b0;
         pending_output_q <= 1'b0;
         resume_input_q <= 1'b0;
         frame_clear_q <= 1'b0;
+        frame_chroma_quant_pending_q <= 1'b0;
+        frame_quant_pending_q <= 1'b0;
+        chroma_quant_tu_q <= 6'd0;
+        luma_quant_tu_q <= 6'd0;
+        luma_quant_active_q <= 1'b0;
+        luma_tu_quant_pending_q <= 1'b0;
+        luma_sample_tu_q <= '0;
+        for (luma_ref_i = 0; luma_ref_i < VVC_LUMA_TU_COLS; luma_ref_i = luma_ref_i + 1) begin
+          luma_top_ref_row_q[luma_ref_i] <= {VVC_LUMA_TU_SIZE{8'd128}};
+          luma_left_ref_col_q[luma_ref_i] <= {VVC_LUMA_TU_SIZE{8'd128}};
+        end
+        for (luma_ref_i = 0; luma_ref_i < VVC_LUMA_TUS_PER_CTU; luma_ref_i = luma_ref_i + 1) begin
+          quant_luma_rem_ctu_q[luma_ref_i] <= 8'd0;
+          quant_luma_negative_ctu_q[luma_ref_i] <= 1'b0;
+          quant_luma_ac_levels_ctu_q[luma_ref_i] <= '0;
+        end
         frame_index_q <= 64'd0;
         generated_out_state_q <= GENERATED_OUT_IDLE;
         generated_slice_cra_q <= 1'b0;
         generated_header_start_q <= 1'b0;
-        generated_ph_start_q <= 1'b0;
+        generated_picture_header_start_q <= 1'b0;
         current_slice_q <= 16'd0;
+        current_ctu_x_q <= 16'd0;
+        current_ctu_y_q <= 16'd0;
         cabac_input_valid_q <= 1'b0;
         cabac_input_kind_q <= 8'd0;
         cabac_input_data_q <= 32'd0;
@@ -660,62 +1293,185 @@ module ff_vvc_encoder #(
         s_axis_ready <= 1'b1;
         input_count_q <= '0;
         input_len_q <= input_len_w;
+        input_stream_leaf_q <= 7'd0;
+        input_stream_component_q <= 2'd0;
+        input_stream_sample_q <= 6'd0;
         sampled_color_valid <= 1'b0;
+        frame_chroma_quant_pending_q <= 1'b0;
+        frame_quant_pending_q <= 1'b0;
+        chroma_quant_tu_q <= 6'd0;
+        luma_quant_tu_q <= 6'd0;
+        luma_quant_active_q <= 1'b0;
+        luma_tu_quant_pending_q <= 1'b0;
+        luma_sample_tu_q <= '0;
+        for (luma_ref_i = 0; luma_ref_i < VVC_LUMA_TU_COLS; luma_ref_i = luma_ref_i + 1) begin
+          luma_top_ref_row_q[luma_ref_i] <= {VVC_LUMA_TU_SIZE{8'd128}};
+          luma_left_ref_col_q[luma_ref_i] <= {VVC_LUMA_TU_SIZE{8'd128}};
+        end
+        for (luma_ref_i = 0; luma_ref_i < VVC_LUMA_TUS_PER_CTU; luma_ref_i = luma_ref_i + 1) begin
+          quant_luma_rem_ctu_q[luma_ref_i] <= 8'd0;
+          quant_luma_negative_ctu_q[luma_ref_i] <= 1'b0;
+          quant_luma_ac_levels_ctu_q[luma_ref_i] <= '0;
+        end
         quant_luma_rem_q <= 8'd0;
         quant_luma_negative_q <= 1'b0;
         quant_luma_ac_levels_q <= '0;
         quant_cb_rem_q <= 5'd16;
         quant_cr_rem_q <= 5'd16;
         quant_cb_negative_q <= 1'b1;
-        current_slice_q <= 16'd0;
+        quant_cb_dc_level_q <= 9'sd0;
+        quant_cr_dc_level_q <= 9'sd0;
+        quant_cb_ac_levels_q <= '0;
+        quant_cr_ac_levels_q <= '0;
         cabac_input_valid_q <= 1'b0;
         cabac_input_kind_q <= 8'd0;
         cabac_input_data_q <= 32'd0;
         cabac_input_last_q <= 1'b0;
         palette_mux_state_q <= PALETTE_MUX_PARTITION;
       end else if (input_active_q && s_axis_valid && s_axis_ready) begin
+        input_stream_leaf_q <= input_stream_leaf_next_w;
+        input_stream_component_q <= input_stream_component_next_w;
+        input_stream_sample_q <= input_stream_sample_next_w;
         if (s_axis_last != input_frame_last_w) begin
           input_error <= 1'b1;
         end
-        if (input_count_q == '0) begin
+        if ((input_stream_leaf_q == 7'd0) &&
+            (input_stream_component_q == 2'd0) &&
+            (input_stream_sample_q == 6'd0)) begin
           sampled_y <= s_axis_data;
         end
-        if (input_count_q == luma_samples_w) begin
+        if (input_luma_tu_last_sample_w) begin
           quant_luma_rem_q <= residual_quant_luma_rem;
           quant_luma_negative_q <= residual_quant_luma_negative;
           quant_luma_ac_levels_q <= residual_quant_luma_ac_levels;
         end
-        if (input_count_q == luma_samples_w) begin
+        if ((input_stream_leaf_q == 7'd0) &&
+            (input_stream_component_q == 2'd1) &&
+            (input_stream_sample_q == 6'd0)) begin
           sampled_u <= s_axis_data;
           quant_cb_rem_q <= 5'd16 - input_quant_level_w[4:0];
           quant_cb_negative_q <=
             ((SAMPLE_BITS <= 8) ? s_axis_data[7:0] :
              (s_axis_data >> (SAMPLE_BITS - 8))) < 8'd128;
         end
-        if (input_count_q == v_sample_index_w) begin
+        if ((input_stream_leaf_q == 7'd0) &&
+            (input_stream_component_q == 2'd2) &&
+            (input_stream_sample_q == 6'd0)) begin
           sampled_v <= s_axis_data;
           quant_cr_rem_q <= 5'd16 - input_quant_level_w[4:0];
+        end
+        if (input_luma_tu_sample_w) begin
+          luma_sample_tu_q[residual_luma_sample_index_w * 8 +: 8] <=
+            input_sample_8bit_w;
+        end
+        if ((chroma_format_idc == 2'd1) &&
+            (input_stream_component_q == 2'd1) &&
+            input_chroma_tu_sample_w) begin
+          cb_sample_tu_q[input_chroma_tu_index_w][input_chroma_tu_sample_index_w * 8 +: 8] <=
+            input_sample_8bit_w;
+        end
+        if ((chroma_format_idc == 2'd1) &&
+            (input_stream_component_q == 2'd2) &&
+            input_chroma_tu_sample_w) begin
+          cr_sample_tu_q[input_chroma_tu_index_w][input_chroma_tu_sample_index_w * 8 +: 8] <=
+            input_sample_8bit_w;
         end
 
         if (input_frame_last_w) begin
           input_active_q <= 1'b0;
           s_axis_ready   <= 1'b0;
           sampled_color_valid <= !input_error && (s_axis_last == input_frame_last_w);
-          pending_output_q <= 1'b1;
+          if (ctu_has_palette_cu) begin
+            frame_chroma_quant_pending_q <= 1'b0;
+            pending_output_q <= 1'b1;
+          end else begin
+            frame_chroma_quant_pending_q <= 1'b1;
+          end
+          frame_quant_pending_q <= 1'b0;
+          chroma_quant_tu_q <= 6'd0;
+          luma_quant_tu_q <= 6'd0;
+        end else if (input_luma_tu_last_sample_w) begin
+          input_active_q <= 1'b0;
+          s_axis_ready <= 1'b0;
+          luma_tu_quant_pending_q <= 1'b1;
+          luma_quant_tu_q <= input_luma_tu_index_w;
+          luma_quant_active_q <= 1'b0;
+          input_count_q <= input_count_q + 1'b1;
         end else begin
           input_count_q <= input_count_q + 1'b1;
         end
+      end else if (luma_tu_quant_pending_q) begin
+        // H.266 8.4.5 reconstructed-neighbor prediction, H.266 7.3.11.10
+        // transform_unit() residual payload generation, and H.266 8.7.3
+        // inverse coefficient scaling are implemented in
+        // ff_vvc_luma_quant_recon_8x8. This stage consumes one streamed 8x8
+        // luma TU and keeps only reconstructed neighbour edges for the next TU.
+        if (!luma_quant_active_q && !luma_quant_busy_w) begin
+          luma_quant_start_q <= 1'b1;
+          luma_quant_active_q <= 1'b1;
+        end else if (luma_quant_done_w) begin
+          quant_luma_rem_ctu_q[luma_quant_tu_q] <= luma_quant_abs_level_w;
+          quant_luma_negative_ctu_q[luma_quant_tu_q] <= luma_quant_negative_w;
+          quant_luma_ac_levels_ctu_q[luma_quant_tu_q] <= luma_quant_ac_levels_w;
+          for (luma_ref_i = 0; luma_ref_i < VVC_LUMA_TU_SIZE; luma_ref_i = luma_ref_i + 1) begin
+            luma_top_ref_row_q[luma_quant_tu_col_w][luma_ref_i * 8 +: 8] <=
+              luma_quant_recon_samples_w[
+                (((VVC_LUMA_TU_SIZE - 1) * VVC_LUMA_TU_SIZE) + luma_ref_i) * 8 +: 8
+              ];
+            luma_left_ref_col_q[luma_quant_tu_row_w][luma_ref_i * 8 +: 8] <=
+              luma_quant_recon_samples_w[
+                ((luma_ref_i * VVC_LUMA_TU_SIZE) + (VVC_LUMA_TU_SIZE - 1)) * 8 +: 8
+              ];
+          end
+          luma_quant_active_q <= 1'b0;
+          luma_tu_quant_pending_q <= 1'b0;
+          input_active_q <= 1'b1;
+          s_axis_ready <= 1'b1;
+        end
+      end else if (frame_chroma_quant_pending_q) begin
+        if (chroma_quant_tu_valid_w) begin
+          quant_cb_dc_level_ctu_q[chroma_quant_tu_q] <= chroma_quant_cb_dc_level_w;
+          quant_cr_dc_level_ctu_q[chroma_quant_tu_q] <= chroma_quant_cr_dc_level_w;
+          quant_cb_ac_levels_ctu_q[chroma_quant_tu_q] <= chroma_quant_cb_ac_levels_w;
+          quant_cr_ac_levels_ctu_q[chroma_quant_tu_q] <= chroma_quant_cr_ac_levels_w;
+          if (chroma_quant_tu_q == 6'd0) begin
+            quant_cb_dc_level_q <= chroma_quant_cb_dc_level_w;
+            quant_cr_dc_level_q <= chroma_quant_cr_dc_level_w;
+            quant_cb_ac_levels_q <= chroma_quant_cb_ac_levels_w;
+            quant_cr_ac_levels_q <= chroma_quant_cr_ac_levels_w;
+          end
+
+          cb_recon_tu_q[chroma_quant_tu_q] <= chroma_quant_cb_recon_samples_w;
+          cr_recon_tu_q[chroma_quant_tu_q] <= chroma_quant_cr_recon_samples_w;
+        end else begin
+          quant_cb_dc_level_ctu_q[chroma_quant_tu_q] <= 9'sd0;
+          quant_cr_dc_level_ctu_q[chroma_quant_tu_q] <= 9'sd0;
+          quant_cb_ac_levels_ctu_q[chroma_quant_tu_q] <= '0;
+          quant_cr_ac_levels_ctu_q[chroma_quant_tu_q] <= '0;
+        end
+
+        if (chroma_quant_tu_q == (VVC_CHROMA_TUS_PER_CTU - 1)) begin
+          chroma_quant_tu_q <= 6'd0;
+          frame_chroma_quant_pending_q <= 1'b0;
+          frame_quant_pending_q <= 1'b0;
+          pending_output_q <= 1'b1;
+          luma_quant_tu_q <= 6'd0;
+          luma_quant_active_q <= 1'b0;
+        end else begin
+          chroma_quant_tu_q <= chroma_quant_tu_q + 6'd1;
+        end
+      end else if (frame_quant_pending_q) begin
+        frame_quant_pending_q <= 1'b0;
       end else if (pending_output_q &&
                    (generated_out_state_q == GENERATED_OUT_IDLE)) begin
         pending_output_q <= 1'b0;
         generated_slice_cra_q <= frame_index_q != 64'd0;
-        current_slice_q <= 16'd0;
-        if (frame_index_q == 64'd0) begin
+        if ((frame_index_q == 64'd0) && (current_slice_q == 16'd0)) begin
           generated_out_state_q <= GENERATED_OUT_PREAMBLE;
           generated_header_start_q <= 1'b1;
-        end else if (multi_ctu_picture_w) begin
-          generated_out_state_q <= GENERATED_OUT_PH;
-          generated_ph_start_q <= 1'b1;
+        end else if (multi_slice_picture_w && (current_slice_q == 16'd0)) begin
+          generated_out_state_q <= GENERATED_OUT_PICTURE_HEADER;
+          generated_picture_header_start_q <= 1'b1;
         end else begin
           generated_out_state_q <= GENERATED_OUT_SLICE_START;
         end
@@ -758,9 +1514,9 @@ module ff_vvc_encoder #(
               m_axis_data <= generated_header_byte_w;
               m_axis_last <= 1'b0;
               if (generated_header_last_w && generated_header_ready_w) begin
-                if (multi_ctu_picture_w) begin
-                  generated_ph_start_q <= 1'b1;
-                  generated_out_state_q <= GENERATED_OUT_PH;
+                if (multi_slice_picture_w) begin
+                  generated_picture_header_start_q <= 1'b1;
+                  generated_out_state_q <= GENERATED_OUT_PICTURE_HEADER;
                 end else begin
                   cabac_start_q <= 1'b1;
                   generated_out_state_q <= GENERATED_OUT_CABAC;
@@ -769,9 +1525,9 @@ module ff_vvc_encoder #(
             end else if (generated_header_done_w) begin
               m_axis_valid <= 1'b0;
               m_axis_last <= 1'b0;
-              if (multi_ctu_picture_w) begin
-                generated_ph_start_q <= 1'b1;
-                generated_out_state_q <= GENERATED_OUT_PH;
+              if (multi_slice_picture_w) begin
+                generated_picture_header_start_q <= 1'b1;
+                generated_out_state_q <= GENERATED_OUT_PICTURE_HEADER;
               end else begin
                 cabac_start_q <= 1'b1;
                 generated_out_state_q <= GENERATED_OUT_CABAC;
@@ -781,18 +1537,20 @@ module ff_vvc_encoder #(
               m_axis_last <= 1'b0;
             end
           end
-          GENERATED_OUT_PH: begin
-            if (generated_ph_valid_w) begin
+          GENERATED_OUT_PICTURE_HEADER: begin
+            if (picture_header_valid_w) begin
               m_axis_valid <= 1'b1;
-              m_axis_data <= generated_ph_byte_w;
+              m_axis_data <= picture_header_byte_w;
               m_axis_last <= 1'b0;
-              if (generated_ph_last_w && generated_ph_ready_w) begin
-                generated_out_state_q <= GENERATED_OUT_SLICE_START;
+              if (picture_header_last_w && picture_header_ready_w) begin
+                cabac_start_q <= 1'b1;
+                generated_out_state_q <= GENERATED_OUT_CABAC;
               end
-            end else if (generated_ph_done_w) begin
+            end else if (picture_header_done_w) begin
               m_axis_valid <= 1'b0;
               m_axis_last <= 1'b0;
-              generated_out_state_q <= GENERATED_OUT_SLICE_START;
+              cabac_start_q <= 1'b1;
+              generated_out_state_q <= GENERATED_OUT_CABAC;
             end else begin
               m_axis_valid <= 1'b0;
               m_axis_last <= 1'b0;
@@ -811,18 +1569,25 @@ module ff_vvc_encoder #(
               m_axis_data <= slice_stream_data;
               m_axis_last <= slice_stream_last && current_slice_last_w;
               if (slice_stream_last) begin
+                generated_out_state_q <= GENERATED_OUT_IDLE;
+                frame_clear_q <= 1'b1;
+                resume_input_q <= 1'b1;
                 if (current_slice_last_w) begin
-                  // VPS/SPS/PPS are emitted once. Each subsequent frame is read
-                  // from the input stream and emitted as fresh CRA CTU slices.
-                  // The POC LSB naturally wraps through frame_index_q[15:0],
-                  // matching the 16-bit POC LSB width advertised in SPS.
-                  generated_out_state_q <= GENERATED_OUT_IDLE;
+                  // VPS/SPS/PPS are emitted once. Multi-CTU pictures emit a
+                  // standalone picture header followed by one CTU slice per
+                  // tile, matching the Rust one-slice-per-CTU model.
                   frame_index_q <= frame_index_q + 64'd1;
-                  frame_clear_q <= 1'b1;
-                  resume_input_q <= 1'b1;
+                  current_slice_q <= 16'd0;
+                  current_ctu_x_q <= 16'd0;
+                  current_ctu_y_q <= 16'd0;
                 end else begin
                   current_slice_q <= current_slice_q + 16'd1;
-                  generated_out_state_q <= GENERATED_OUT_SLICE_START;
+                  if ((current_ctu_x_q + 16'd1) >= ctu_cols_w) begin
+                    current_ctu_x_q <= 16'd0;
+                    current_ctu_y_q <= current_ctu_y_q + 16'd1;
+                  end else begin
+                    current_ctu_x_q <= current_ctu_x_q + 16'd1;
+                  end
                 end
               end
             end else begin

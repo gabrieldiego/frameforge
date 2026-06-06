@@ -1,8 +1,6 @@
 `timescale 1ns/1ps
 
 module ff_vvc_cabac #(
-  parameter int MAX_VISIBLE_WIDTH = 64,
-  parameter int MAX_VISIBLE_HEIGHT = 64,
   parameter int VVC_CABAC_CTX_ID_BITS = 10
 ) (
   input  logic        clk,

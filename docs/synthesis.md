@@ -85,6 +85,48 @@ This runs Yosys, writes a Xilinx-cell post-synthesis Verilog netlist, compiles i
 with Icarus using Yosys' Xilinx simulation cell library, and checks that the
 design can leave reset, accept `start`, and eventually assert `done`.
 
+## Recent CABAC Context Results
+
+On June 4, 2026, the VVC CABAC residual-context bank was expanded from 70 to
+265 context IDs so the RTL has initialized entries for the H.266 Table 132
+last-significant, subblock-coded, significant-coefficient, parity-level, and
+absolute-level residual ranges. The first expanded implementation bulk-reset a
+packed 40-bit context table and caused the focused context-model Yosys run to
+time out at 120 seconds.
+
+The xk265 CABAC context path keeps a narrow initialized context table and
+separates context initialization from live context updates. The VVC model uses
+the same separation but cannot reuse xk265's 7-bit H.265 state representation:
+H.266 stores two adaptive 16-bit probability states per context. To avoid a
+wide reset fabric, reset invalidates the VVC table state instead of rewriting
+every context entry in one cycle. The per-context rate byte is derived from the
+static H.266 init table because it never changes after initialization.
+
+Measured with `make synth SYNTH_DUT=vvc-cabac-context-model
+SYNTH_TIMEOUT_SEC=120` on the Arty Z7-10 target:
+
+- Yosys completed in 37.21 seconds user CPU, peak memory 562.55 MB.
+- Estimated LCs: 9,677.
+- Sequential cells: 8,480 `FDRE` for adaptive state and 265 `FDCE` for the
+  valid bitmap.
+- Longest topological path length: 11, from context ID bounds/mux through
+  initial-state selection, LPS calculation, and `query_lps_full`.
+
+Measured with `make synth SYNTH_DUT=vvc-cabac-stream-writer
+SYNTH_TIMEOUT_SEC=120`:
+
+- Yosys completed in 45.27 seconds user CPU, peak memory 567.25 MB.
+- Design hierarchy estimated LCs: 11,355.
+- Sequential cells: 8,480 `FDRE`, 489 `FDCE`, and 20 `FDPE`.
+- Longest topological path length: 33, from `s_axis_ctx_id` through context
+  lookup/LPS calculation, CABAC bin renormalization, and stream-writer state
+  update.
+
+Yosys still reports the context arrays as register lists because the current
+stream writer consumes the queried context in the same cycle. Moving to a true
+RAM-backed context table, like a staged xk265-style path, requires a pipeline
+boundary between symbol input, context read/update, and bin coding.
+
 ## Optional Vivado Synthesis
 
 FrameForge keeps a tracked Vivado install template at

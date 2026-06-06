@@ -1,4 +1,4 @@
-.PHONY: help check-tools build test fmt lint decoder-setup test-vectors validate-set validate-smoke validate-random-short validate-sweep-420 validate-sweep-444 validate-motion-short validate-all-short validate-all-sweeps validate validate-vtm-synth validate-decode rtl-test synth-env synth-check synth synth-postsim synth-vivado synth-vivado-remote yosys vivado vivado-prepare vivado-config vivado-auth vivado-install vivado-host-deps clean
+.PHONY: help check-tools build test fmt lint decoder-setup test-vectors validate-set validate-smoke validate-random-short validate-sweep-420 validate-sweep-444 validate-racehorses-sweep-420 validate-motion-short validate-all-short validate-all-sweeps validate validate-vtm-synth validate-decode rtl-test synth-env synth-check synth synth-postsim synth-vivado synth-vivado-remote yosys vivado vivado-prepare vivado-config vivado-auth vivado-install vivado-host-deps clean
 
 SIM ?= icarus
 TOPLEVEL_LANG ?= verilog
@@ -16,6 +16,12 @@ SYNTH_DUT ?= vvc-cabac-stream-writer
 SYNTH_FILELIST ?=
 SYNTH_TOP ?=
 SYNTH_CLOCK_MHZ ?= 50
+SYNTH_TIMEOUT_SEC ?= 120
+SYNTH_MEMORY_LIMIT_MB ?=
+SYNTH_WARN_AFTER_SEC ?= 60
+SYNTH_MAX_VISIBLE_WIDTH ?= 1024
+SYNTH_MAX_VISIBLE_HEIGHT ?= 1024
+SYNTH_SUPPORT_PALETTE_444 ?= 1
 SYNTH_TOOL ?= $(or $(filter yosys vivado,$(MAKECMDGOALS)),yosys)
 VIVADO_REMOTE ?= gabriel@192.168.50.55
 VIVADO_REMOTE_ROOT ?= /media/gabriel/Gabriel8TB/Development/frameforge
@@ -44,9 +50,9 @@ help:
 	@printf '%s\n' '  make fmt       - format Rust code'
 	@printf '%s\n' '  make lint      - run Rust Clippy lints'
 	@printf '%s\n' '  make decoder-setup - find or build external VTM decoder'
-	@printf '%s\n' '  make test-vectors [TEST_VECTOR_SET=smoke|sweep-420|sweep-444|random-short|motion-short|motion-long|all-short|all-sweeps TEST_VECTOR_DIR=verification/generated/test_vectors] - generate deterministic YUV test streams'
+	@printf '%s\n' '  make test-vectors [TEST_VECTOR_SET=smoke|sweep-420|sweep-444|racehorses-sweep-420|random-short|motion-short|motion-long|all-short|all-sweeps TEST_VECTOR_DIR=verification/generated/test_vectors] - generate deterministic YUV test streams'
 	@printf '%s\n' '  make validate-set [VALIDATION_SET=smoke VALIDATION_LIMIT=<n> VALIDATION_WITH_SYNTH=0|1 VALIDATION_STOP_ON_FAIL=0|1] - generate and run a named validation set'
-	@printf '%s\n' '  make validate-smoke | validate-random-short | validate-sweep-420 | validate-sweep-444 | validate-motion-short | validate-all-short | validate-all-sweeps - direct validation set entry points'
+	@printf '%s\n' '  make validate-smoke | validate-random-short | validate-sweep-420 | validate-sweep-444 | validate-racehorses-sweep-420 | validate-motion-short | validate-all-short | validate-all-sweeps - direct validation set entry points'
 	@printf '%s\n' '  make validate INPUT=input_64x64_300f_30fps_yuv420p8.yuv [WIDTH=<w> HEIGHT=<h> FRAMES=<n> FORMAT=<fmt> RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 VALIDATE_SW_ONLY=1 VALIDATE_SYNTH=1|0] - infer metadata from filename unless overridden'
 	@printf '%s\n' '  make validate-vtm-synth INPUT=input_64x64_1f_yuv420p8.yuv [WIDTH=<w> HEIGHT=<h> FRAMES=<n> FORMAT=<fmt> RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 VALIDATE_SYNTH_DUT=vvc-cabac-pipeline VALIDATE_SYNTH_BACKEND=yosys|vivado-remote|none] - compare software stream with VTM, then run synthesis'
 	@printf '%s\n' '  make validate-decode BITSTREAM=out.vvc [DECODED=out.yuv]'
@@ -57,7 +63,7 @@ help:
 	@printf '%s\n' '  make reference-vvc BITSTREAM=out.vvc [INPUT=in.yuv WIDTH=<w> HEIGHT=<h> FRAMES=1 BIT_DEPTH=8|10|12|16 CHROMA_FORMAT=420|422|444] - create real VVC using VTM'
 	@printf '%s\n' '  make synth-env - install/detect optional local synthesis tools under .tools/'
 	@printf '%s\n' '  make synth-check - detect Yosys/Icarus/Vivado synthesis tools'
-	@printf '%s\n' '  make synth [yosys|vivado] [SYNTH_DUT=vvc-cabac-stream-writer SYNTH_BOARD=synth/boards/arty-z7-10.env SYNTH_TOP=<override> SYNTH_FILELIST=<override> SYNTH_CLOCK_MHZ=50] - run selected synthesis estimate plus critical-path report'
+	@printf '%s\n' '  make synth [yosys|vivado] [SYNTH_DUT=vvc-cabac-stream-writer SYNTH_BOARD=synth/boards/arty-z7-10.env SYNTH_TOP=<override> SYNTH_FILELIST=<override> SYNTH_CLOCK_MHZ=50 SYNTH_TIMEOUT_SEC=120 SYNTH_WARN_AFTER_SEC=60 SYNTH_MEMORY_LIMIT_MB=2048|0 SYNTH_MAX_VISIBLE_WIDTH=1024 SYNTH_MAX_VISIBLE_HEIGHT=1024 SYNTH_SUPPORT_PALETTE_444=0|1] - run selected synthesis estimate plus critical-path report'
 	@printf '%s\n' '  make synth-postsim - run Yosys synthesis and a post-synthesis smoke sim when supported'
 	@printf '%s\n' '  make synth-vivado - run optional Vivado synthesis/timing if Vivado is installed'
 	@printf '%s\n' '  make synth-vivado-remote [VIVADO_REMOTE=user@host VIVADO_REMOTE_ROOT=/path/to/frameforge VIVADO_REMOTE_SSH="ssh -F /dev/null"] - run Vivado synthesis/timing over SSH'
@@ -104,6 +110,9 @@ validate-sweep-420:
 validate-sweep-444:
 	$(MAKE) validate-set VALIDATION_SET=sweep-444
 
+validate-racehorses-sweep-420:
+	$(MAKE) validate-set VALIDATION_SET=racehorses-sweep-420
+
 validate-motion-short:
 	$(MAKE) validate-set VALIDATION_SET=motion-short
 
@@ -139,16 +148,16 @@ synth-check:
 	python3 scripts/install_synth_env.py --skip-download
 
 synth:
-	python3 scripts/run_synth.py --tool "$(SYNTH_TOOL)" --dut "$(SYNTH_DUT)" --board "$(SYNTH_BOARD)" $(if $(SYNTH_FILELIST),--filelist "$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),--top "$(SYNTH_TOP)") --clock-mhz "$(SYNTH_CLOCK_MHZ)"
+	python3 scripts/run_synth.py --tool "$(SYNTH_TOOL)" --dut "$(SYNTH_DUT)" --board "$(SYNTH_BOARD)" $(if $(SYNTH_FILELIST),--filelist "$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),--top "$(SYNTH_TOP)") --clock-mhz "$(SYNTH_CLOCK_MHZ)" --timeout-sec "$(SYNTH_TIMEOUT_SEC)" --warn-after-sec "$(SYNTH_WARN_AFTER_SEC)" --max-visible-width "$(SYNTH_MAX_VISIBLE_WIDTH)" --max-visible-height "$(SYNTH_MAX_VISIBLE_HEIGHT)" --support-palette-444 "$(SYNTH_SUPPORT_PALETTE_444)" $(if $(SYNTH_MEMORY_LIMIT_MB),--memory-limit-mb "$(SYNTH_MEMORY_LIMIT_MB)")
 
 synth-postsim:
-	python3 scripts/run_synth.py --dut "$(SYNTH_DUT)" --board "$(SYNTH_BOARD)" $(if $(SYNTH_FILELIST),--filelist "$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),--top "$(SYNTH_TOP)") --clock-mhz "$(SYNTH_CLOCK_MHZ)" --post-synth-smoke
+	python3 scripts/run_synth.py --dut "$(SYNTH_DUT)" --board "$(SYNTH_BOARD)" $(if $(SYNTH_FILELIST),--filelist "$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),--top "$(SYNTH_TOP)") --clock-mhz "$(SYNTH_CLOCK_MHZ)" --timeout-sec "$(SYNTH_TIMEOUT_SEC)" --warn-after-sec "$(SYNTH_WARN_AFTER_SEC)" --max-visible-width "$(SYNTH_MAX_VISIBLE_WIDTH)" --max-visible-height "$(SYNTH_MAX_VISIBLE_HEIGHT)" --support-palette-444 "$(SYNTH_SUPPORT_PALETTE_444)" $(if $(SYNTH_MEMORY_LIMIT_MB),--memory-limit-mb "$(SYNTH_MEMORY_LIMIT_MB)") --post-synth-smoke
 
 synth-vivado:
-	python3 scripts/run_synth.py --tool vivado --dut "$(SYNTH_DUT)" --board "$(SYNTH_BOARD)" $(if $(SYNTH_FILELIST),--filelist "$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),--top "$(SYNTH_TOP)") --clock-mhz "$(SYNTH_CLOCK_MHZ)"
+	python3 scripts/run_synth.py --tool vivado --dut "$(SYNTH_DUT)" --board "$(SYNTH_BOARD)" $(if $(SYNTH_FILELIST),--filelist "$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),--top "$(SYNTH_TOP)") --clock-mhz "$(SYNTH_CLOCK_MHZ)" --timeout-sec "$(SYNTH_TIMEOUT_SEC)" --warn-after-sec "$(SYNTH_WARN_AFTER_SEC)" --max-visible-width "$(SYNTH_MAX_VISIBLE_WIDTH)" --max-visible-height "$(SYNTH_MAX_VISIBLE_HEIGHT)" --support-palette-444 "$(SYNTH_SUPPORT_PALETTE_444)" $(if $(SYNTH_MEMORY_LIMIT_MB),--memory-limit-mb "$(SYNTH_MEMORY_LIMIT_MB)")
 
 synth-vivado-remote:
-	$(VIVADO_REMOTE_SSH) "$(VIVADO_REMOTE)" 'cd "$(VIVADO_REMOTE_ROOT)" && make synth-vivado SYNTH_DUT="$(SYNTH_DUT)" SYNTH_BOARD="$(SYNTH_BOARD)" SYNTH_CLOCK_MHZ="$(SYNTH_CLOCK_MHZ)" $(if $(SYNTH_FILELIST),SYNTH_FILELIST="$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),SYNTH_TOP="$(SYNTH_TOP)")'
+	$(VIVADO_REMOTE_SSH) "$(VIVADO_REMOTE)" 'cd "$(VIVADO_REMOTE_ROOT)" && make synth-vivado SYNTH_DUT="$(SYNTH_DUT)" SYNTH_BOARD="$(SYNTH_BOARD)" SYNTH_CLOCK_MHZ="$(SYNTH_CLOCK_MHZ)" SYNTH_TIMEOUT_SEC="$(SYNTH_TIMEOUT_SEC)" SYNTH_WARN_AFTER_SEC="$(SYNTH_WARN_AFTER_SEC)" SYNTH_MAX_VISIBLE_WIDTH="$(SYNTH_MAX_VISIBLE_WIDTH)" SYNTH_MAX_VISIBLE_HEIGHT="$(SYNTH_MAX_VISIBLE_HEIGHT)" SYNTH_SUPPORT_PALETTE_444="$(SYNTH_SUPPORT_PALETTE_444)" $(if $(SYNTH_MEMORY_LIMIT_MB),SYNTH_MEMORY_LIMIT_MB="$(SYNTH_MEMORY_LIMIT_MB)") $(if $(SYNTH_FILELIST),SYNTH_FILELIST="$(SYNTH_FILELIST)") $(if $(SYNTH_TOP),SYNTH_TOP="$(SYNTH_TOP)")'
 
 yosys vivado:
 	@:

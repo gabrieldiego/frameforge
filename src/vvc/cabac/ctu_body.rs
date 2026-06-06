@@ -1,15 +1,14 @@
 use super::ctu_split::{
-    VvcCodingTreeNode, VvcCtuCabacOp, VvcCtuPartitionParams, VvcPartSplit, VvcQtSplitCtxInput,
-    VvcSplitCtxInput, VvcTreeType,
+    vvc_chroma_420_height, vvc_chroma_420_split_availability, vvc_chroma_420_width,
+    VvcChromaSplitAvailability, VvcCodingTreeNode, VvcCtuCabacOp, VvcCtuPartitionParams,
+    VvcPartSplit, VvcQtSplitCtxInput, VvcSplitCtxInput, VvcTreeType,
 };
 use super::{VvcCabacContext, VvcCabacContexts, VvcCabacEncoder};
 use crate::vvc::residual::{VvcResidualCabacEncoder, VvcResidualCabacSymbolStream};
 use crate::vvc::{
     VvcResidualComponent, VvcSliceSyntaxConfig, MAX_VVC_CHROMA_TUS, MAX_VVC_LUMA_TUS,
-    VVC_CHROMA_AC_COEFFS_PER_TU, VVC_CURRENT_MAX_CHROMA_420_BT_SIZE,
-    VVC_CURRENT_MAX_CHROMA_420_MTT_DEPTH_WITH_BOUNDARY, VVC_CURRENT_MAX_CHROMA_420_TB_SIZE,
-    VVC_CURRENT_MAX_CHROMA_420_TT_SIZE, VVC_CURRENT_MAX_LUMA_MTT_DEPTH,
-    VVC_CURRENT_MIN_CHROMA_420_QT_SIZE, VVC_LUMA_AC_COEFFS_PER_TU,
+    VVC_CHROMA_AC_COEFFS_PER_TU, VVC_CURRENT_ENCODER_CHROMA_420_TB_SIZE,
+    VVC_CURRENT_MAX_LUMA_MTT_DEPTH, VVC_LUMA_AC_COEFFS_PER_TU,
 };
 
 pub(in crate::vvc) fn encode_ctu_partition_body(
@@ -49,6 +48,83 @@ pub(in crate::vvc) struct VvcCtuCabacGenerator {
     cr_tu_ac_levels: [[i16; VVC_CHROMA_AC_COEFFS_PER_TU]; MAX_VVC_CHROMA_TUS],
     chroma_tu_index: usize,
     slice_config: VvcSliceSyntaxConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VvcChromaNeighbourInfo {
+    cb_width: u16,
+    cb_height: u16,
+    cqt_depth: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VvcChromaNeighbourState {
+    width: u16,
+    height: u16,
+    valid: Vec<bool>,
+    cb_width: Vec<u16>,
+    cb_height: Vec<u16>,
+    cqt_depth: Vec<u8>,
+}
+
+impl VvcChromaNeighbourState {
+    fn new(visible_width: u16, visible_height: u16) -> Self {
+        let width = visible_width / 2;
+        let height = visible_height / 2;
+        let samples = usize::from(width) * usize::from(height);
+        Self {
+            width,
+            height,
+            valid: vec![false; samples],
+            cb_width: vec![0; samples],
+            cb_height: vec![0; samples],
+            cqt_depth: vec![0; samples],
+        }
+    }
+
+    fn index(&self, x: u16, y: u16) -> Option<usize> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        Some(usize::from(y) * usize::from(self.width) + usize::from(x))
+    }
+
+    fn info_at(&self, x: u16, y: u16) -> Option<VvcChromaNeighbourInfo> {
+        let index = self.index(x, y)?;
+        self.valid[index].then_some(VvcChromaNeighbourInfo {
+            cb_width: self.cb_width[index],
+            cb_height: self.cb_height[index],
+            cqt_depth: self.cqt_depth[index],
+        })
+    }
+
+    fn left_of(&self, node: VvcCodingTreeNode) -> Option<VvcChromaNeighbourInfo> {
+        let y = node.y / 2;
+        (node.x / 2).checked_sub(1).and_then(|x| self.info_at(x, y))
+    }
+
+    fn above_of(&self, node: VvcCodingTreeNode) -> Option<VvcChromaNeighbourInfo> {
+        let x = node.x / 2;
+        (node.y / 2).checked_sub(1).and_then(|y| self.info_at(x, y))
+    }
+
+    fn mark_leaf(&mut self, node: VvcCodingTreeNode) {
+        let start_x = node.x / 2;
+        let start_y = node.y / 2;
+        let end_x = (start_x + vvc_chroma_420_width(node)).min(self.width);
+        let end_y = (start_y + vvc_chroma_420_height(node)).min(self.height);
+        for y in start_y..end_y {
+            for x in start_x..end_x {
+                let index = self
+                    .index(x, y)
+                    .expect("chroma leaf coordinates are in range");
+                self.valid[index] = true;
+                self.cb_width[index] = vvc_chroma_420_width(node);
+                self.cb_height[index] = vvc_chroma_420_height(node);
+                self.cqt_depth[index] = node.cqt_depth;
+            }
+        }
+    }
 }
 
 impl VvcCtuCabacGenerator {
@@ -297,7 +373,15 @@ impl VvcCtuCabacGenerator {
         visible_height: u16,
     ) {
         debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
-        self.emit_chroma_visible_qt_subtree(cabac, node, visible_width, visible_height, 4);
+        let mut neighbours = VvcChromaNeighbourState::new(visible_width, visible_height);
+        self.emit_chroma_visible_qt_subtree(
+            cabac,
+            node,
+            visible_width,
+            visible_height,
+            4,
+            &mut neighbours,
+        );
     }
 
     fn emit_chroma_visible_qt_subtree(
@@ -307,6 +391,7 @@ impl VvcCtuCabacGenerator {
         visible_width: u16,
         visible_height: u16,
         min_leaf_size: u16,
+        neighbours: &mut VvcChromaNeighbourState,
     ) {
         debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
         if !node.intersects_visible(visible_width, visible_height) {
@@ -316,8 +401,9 @@ impl VvcCtuCabacGenerator {
             self.emit_chroma_transform_only_leaf(
                 cabac,
                 node,
-                Self::chroma_split_availability(node),
+                vvc_chroma_420_split_availability(node, visible_width, visible_height),
                 0,
+                neighbours,
             );
             return;
         }
@@ -329,13 +415,14 @@ impl VvcCtuCabacGenerator {
                 visible_width,
                 visible_height,
                 min_leaf_size,
+                neighbours,
             );
             return;
         }
 
-        let split = Self::chroma_split_availability(node);
+        let split = vvc_chroma_420_split_availability(node, visible_width, visible_height);
         if split.allow_qt {
-            self.emit_chroma_visible_qt_split(cabac, node, split);
+            self.emit_chroma_visible_qt_split(cabac, node, split, neighbours);
             for child_idx in 0..4 {
                 self.emit_chroma_visible_qt_subtree(
                     cabac,
@@ -343,14 +430,16 @@ impl VvcCtuCabacGenerator {
                     visible_width,
                     visible_height,
                     min_leaf_size,
+                    neighbours,
                 );
             }
         } else {
-            // H.266 6.4.1 disables QT for 4:2:0 chroma when cbWidth/SubWidthC
-            // is less than or equal to 4. Tall 4xN chroma regions therefore
-            // continue with MTT rather than a forced quadtree split.
-            let vertical = false;
-            self.emit_chroma_visible_mtt_split(cabac, node, split, vertical, true);
+            // H.266 6.4.1 supplies the available MTT directions after QT is no
+            // longer signaled. The current hardware residual subset chooses a
+            // legal BT direction that drives the larger remaining axis toward
+            // the 8x8 luma-coordinate leaf.
+            let vertical = Self::chroma_prefer_vertical_bt(node, split);
+            self.emit_chroma_visible_mtt_split(cabac, node, split, vertical, true, neighbours);
             for child_idx in 0..2 {
                 self.emit_chroma_visible_qt_subtree(
                     cabac,
@@ -358,6 +447,7 @@ impl VvcCtuCabacGenerator {
                     visible_width,
                     visible_height,
                     min_leaf_size,
+                    neighbours,
                 );
             }
         }
@@ -370,11 +460,17 @@ impl VvcCtuCabacGenerator {
         visible_width: u16,
         visible_height: u16,
         min_leaf_size: u16,
+        neighbours: &mut VvcChromaNeighbourState,
     ) {
-        let bottom_left_in_pic =
-            node.x < visible_width && node.y + node.height - 1 < visible_height;
-        let top_right_in_pic = node.x + node.width - 1 < visible_width && node.y < visible_height;
-        if !bottom_left_in_pic && !top_right_in_pic {
+        let split = vvc_chroma_420_split_availability(node, visible_width, visible_height);
+        if split.allow_qt {
+            if split.allow_btt() {
+                self.contexts.encode(
+                    cabac,
+                    VvcCabacContext::SplitQtFlag(Self::chroma_qt_split_ctx(node, neighbours)),
+                    true,
+                );
+            }
             for child_idx in 0..4 {
                 self.emit_chroma_visible_qt_subtree(
                     cabac,
@@ -382,50 +478,50 @@ impl VvcCtuCabacGenerator {
                     visible_width,
                     visible_height,
                     min_leaf_size,
+                    neighbours,
                 );
             }
-        } else if !bottom_left_in_pic && Self::chroma_boundary_bt_allowed(node, false) {
-            self.emit_chroma_boundary_bt_split(cabac, node, false);
-            for child_idx in 0..2 {
-                self.emit_chroma_visible_qt_subtree(
-                    cabac,
-                    node.mtt_child(false, child_idx),
-                    visible_width,
-                    visible_height,
-                    min_leaf_size,
-                );
+            return;
+        }
+        match split.implicit_split {
+            VvcPartSplit::Quad => {
+                for child_idx in 0..4 {
+                    self.emit_chroma_visible_qt_subtree(
+                        cabac,
+                        node.qt_child(child_idx),
+                        visible_width,
+                        visible_height,
+                        min_leaf_size,
+                        neighbours,
+                    );
+                }
             }
-        } else if !top_right_in_pic && Self::chroma_boundary_bt_allowed(node, true) {
-            self.emit_chroma_boundary_bt_split(cabac, node, true);
-            for child_idx in 0..2 {
-                self.emit_chroma_visible_qt_subtree(
-                    cabac,
-                    node.mtt_child(true, child_idx),
-                    visible_width,
-                    visible_height,
-                    min_leaf_size,
-                );
+            VvcPartSplit::HorizontalBinary | VvcPartSplit::VerticalBinary => {
+                let vertical = split.implicit_split == VvcPartSplit::VerticalBinary;
+                self.emit_chroma_boundary_bt_split(cabac, node, split, vertical, neighbours);
+                for child_idx in 0..2 {
+                    self.emit_chroma_visible_qt_subtree(
+                        cabac,
+                        node.mtt_child_with_boundary_depth_offset(
+                            vertical,
+                            child_idx,
+                            visible_width,
+                            visible_height,
+                        ),
+                        visible_width,
+                        visible_height,
+                        min_leaf_size,
+                        neighbours,
+                    );
+                }
             }
-        } else {
-            for child_idx in 0..4 {
-                self.emit_chroma_visible_qt_subtree(
-                    cabac,
-                    node.qt_child(child_idx),
-                    visible_width,
-                    visible_height,
-                    min_leaf_size,
+            VvcPartSplit::None => {
+                debug_assert!(
+                    !node.intersects_visible(visible_width, visible_height),
+                    "boundary chroma node must have an implicit split"
                 );
             }
         }
-    }
-
-    fn chroma_boundary_bt_allowed(node: VvcCodingTreeNode, vertical: bool) -> bool {
-        // Mirrors the luma boundary split audit using the chroma MaxBtSizeC
-        // derived from the current SPS constraints. See H.266 6.4.2 and
-        // 7.4.12.4; this is split availability, not the final leaf size.
-        let _ = vertical;
-        node.width <= VVC_CURRENT_MAX_CHROMA_420_BT_SIZE
-            && node.height <= VVC_CURRENT_MAX_CHROMA_420_BT_SIZE
     }
 
     fn emit_chroma_visible_qt_split(
@@ -433,10 +529,16 @@ impl VvcCtuCabacGenerator {
         cabac: &mut VvcCabacEncoder,
         node: VvcCodingTreeNode,
         split: VvcChromaSplitAvailability,
+        neighbours: &VvcChromaNeighbourState,
     ) {
-        let qt_ctx = if node.cqt_depth >= 2 { 3 } else { 0 };
-        self.contexts
-            .encode(cabac, VvcCabacContext::SplitFlag(split.split_ctx()), true);
+        let qt_ctx = Self::chroma_qt_split_ctx(node, neighbours);
+        if split.can_no {
+            self.contexts.encode(
+                cabac,
+                VvcCabacContext::SplitFlag(Self::chroma_split_ctx(node, split, neighbours)),
+                true,
+            );
+        }
         if split.allow_btt() {
             self.contexts
                 .encode(cabac, VvcCabacContext::SplitQtFlag(qt_ctx), true);
@@ -450,12 +552,18 @@ impl VvcCtuCabacGenerator {
         split: VvcChromaSplitAvailability,
         vertical: bool,
         binary: bool,
+        neighbours: &VvcChromaNeighbourState,
     ) {
         debug_assert!(!split.allow_qt || split.allow_btt());
-        self.contexts
-            .encode(cabac, VvcCabacContext::SplitFlag(split.split_ctx()), true);
+        if split.can_no {
+            self.contexts.encode(
+                cabac,
+                VvcCabacContext::SplitFlag(Self::chroma_split_ctx(node, split, neighbours)),
+                true,
+            );
+        }
         if split.allow_qt {
-            let qt_ctx = if node.cqt_depth >= 2 { 3 } else { 0 };
+            let qt_ctx = Self::chroma_qt_split_ctx(node, neighbours);
             self.contexts
                 .encode(cabac, VvcCabacContext::SplitQtFlag(qt_ctx), false);
         }
@@ -463,8 +571,13 @@ impl VvcCtuCabacGenerator {
         let can_hor = split.allow_bt_horizontal || split.allow_tt_horizontal;
         let can_ver = split.allow_bt_vertical || split.allow_tt_vertical;
         if can_ver && can_hor {
-            self.contexts
-                .encode(cabac, VvcCabacContext::MttSplitCuVerticalFlag(3), vertical);
+            self.contexts.encode(
+                cabac,
+                VvcCabacContext::MttSplitCuVerticalFlag(Self::chroma_mtt_vertical_ctx(
+                    node, split, neighbours,
+                )),
+                vertical,
+            );
         }
 
         let can_binary = if vertical {
@@ -493,18 +606,20 @@ impl VvcCtuCabacGenerator {
         &mut self,
         cabac: &mut VvcCabacEncoder,
         node: VvcCodingTreeNode,
+        split: VvcChromaSplitAvailability,
         _vertical: bool,
+        neighbours: &VvcChromaNeighbourState,
     ) {
-        if !VvcCtuCabacOp::qt_flag_can_be_signaled(node) {
-            return;
+        // H.266 7.3.11.4 still signals split_qt_flag for an implicit
+        // boundary BT when both QT and BTT are available; split_cu_flag itself
+        // is inferred by 7.4.12.4 and therefore not written.
+        if split.allow_qt && split.allow_btt() {
+            self.contexts.encode(
+                cabac,
+                VvcCabacContext::SplitQtFlag(Self::chroma_qt_split_ctx(node, neighbours)),
+                false,
+            );
         }
-        self.contexts.encode(
-            cabac,
-            VvcCabacContext::SplitQtFlag(
-                VvcQtSplitCtxInput::from_node_without_deeper_neighbours(node).split_qt_flag_ctx(),
-            ),
-            false,
-        );
     }
 
     fn emit_chroma_residual(
@@ -515,8 +630,8 @@ impl VvcCtuCabacGenerator {
         dc_level: i16,
         ac_levels: [i16; VVC_CHROMA_AC_COEFFS_PER_TU],
     ) {
-        let width = usize::from(Self::chroma_420_width(node));
-        let height = usize::from(Self::chroma_420_height(node));
+        let width = usize::from(vvc_chroma_420_width(node));
+        let height = usize::from(vvc_chroma_420_height(node));
         let mut coeff_levels = vec![0; width * height];
         coeff_levels[0] = dc_level;
         for (ac_idx, level) in ac_levels.iter().enumerate() {
@@ -544,11 +659,15 @@ impl VvcCtuCabacGenerator {
         node: VvcCodingTreeNode,
         split: VvcChromaSplitAvailability,
         cbf_cb_ctx: u8,
+        neighbours: &mut VvcChromaNeighbourState,
     ) {
         debug_assert_eq!(node.tree_type, VvcTreeType::DualTreeChroma);
-        if split.can_split() {
-            self.contexts
-                .encode(cabac, VvcCabacContext::SplitFlag(split.split_ctx()), false);
+        if split.can_no && split.can_split() {
+            self.contexts.encode(
+                cabac,
+                VvcCabacContext::SplitFlag(Self::chroma_split_ctx(node, split, neighbours)),
+                false,
+            );
         }
         if self.chroma_cclm_enabled(node) {
             self.contexts
@@ -590,18 +709,19 @@ impl VvcCtuCabacGenerator {
                 cr_ac_levels,
             );
         }
+        neighbours.mark_leaf(node);
     }
 
     fn chroma_leaf_allowed(node: VvcCodingTreeNode) -> bool {
-        let chroma_width = Self::chroma_420_width(node);
-        let chroma_height = Self::chroma_420_height(node);
-        // H.266 7.3.11.10/7.3.11.11 allows a chroma transform block up to
-        // MaxTbSizeY/SubWidthC by MaxTbSizeY/SubHeightC. With
-        // sps_max_luma_transform_size_64_flag = 1 and 4:2:0 sampling, this is
-        // 32x32 chroma samples. The previous 4x4-era limit was an encoder
-        // implementation detail, not a coding-tree constraint.
-        chroma_width <= VVC_CURRENT_MAX_CHROMA_420_TB_SIZE
-            && chroma_height <= VVC_CURRENT_MAX_CHROMA_420_TB_SIZE
+        let chroma_width = vvc_chroma_420_width(node);
+        let chroma_height = vvc_chroma_420_height(node);
+        // H.266 7.3.11.10 transform_unit() is reached after the encoder's
+        // chosen legal coding-tree split. The spec maximum for this SPS remains
+        // MaxTbSizeY/SubWidthC by MaxTbSizeY/SubHeightC, but this hardware
+        // residual subset chooses 8x8 luma-coordinate leaves so each 4:2:0
+        // chroma TU is 4x4 samples and shares the luma TU cadence.
+        chroma_width <= VVC_CURRENT_ENCODER_CHROMA_420_TB_SIZE
+            && chroma_height <= VVC_CURRENT_ENCODER_CHROMA_420_TB_SIZE
     }
 
     fn chroma_cclm_enabled(&self, node: VvcCodingTreeNode) -> bool {
@@ -627,80 +747,89 @@ impl VvcCtuCabacGenerator {
                 && node.split_history[1] == VvcPartSplit::VerticalBinary)
     }
 
-    fn chroma_split_availability(node: VvcCodingTreeNode) -> VvcChromaSplitAvailability {
-        let chroma_width = Self::chroma_420_width(node);
-        let chroma_height = Self::chroma_420_height(node);
-        let chroma_area = chroma_width * chroma_height;
-        // H.266 7.3.11.4 increases depthOffset for boundary BT splits. The
-        // effective chroma MaxMttDepthC is therefore larger than the SPS base
-        // value on thin pictures such as 8x64, and split_cu_flag can still be
-        // present even when the raw mttDepth has reached 3.
-        let under_mtt_depth = node.mtt_depth < VVC_CURRENT_MAX_CHROMA_420_MTT_DEPTH_WITH_BOUNDARY;
-        let within_bt_size = node.width <= VVC_CURRENT_MAX_CHROMA_420_BT_SIZE
-            && node.height <= VVC_CURRENT_MAX_CHROMA_420_BT_SIZE;
-        let within_tt_size = node.width <= VVC_CURRENT_MAX_CHROMA_420_TT_SIZE
-            && node.height <= VVC_CURRENT_MAX_CHROMA_420_TT_SIZE;
-        let allow_qt = node.mtt_depth == 0 && chroma_width > 4;
-        let allow_bt_horizontal = under_mtt_depth && within_bt_size && chroma_area > 16;
-        let allow_bt_vertical = allow_bt_horizontal
-            && chroma_width != 4
-            && node.width > VVC_CURRENT_MIN_CHROMA_420_QT_SIZE;
-        let allow_tt_horizontal = under_mtt_depth && within_tt_size && chroma_area > 32;
-        let allow_tt_vertical = allow_tt_horizontal
-            && chroma_width != 8
-            && node.width > 2 * VVC_CURRENT_MIN_CHROMA_420_QT_SIZE;
-
-        VvcChromaSplitAvailability {
-            allow_qt,
-            allow_bt_vertical,
-            allow_bt_horizontal,
-            allow_tt_vertical,
-            allow_tt_horizontal,
-        }
-    }
-
-    fn chroma_420_width(node: VvcCodingTreeNode) -> u16 {
-        node.width / 2
-    }
-
-    fn chroma_420_height(node: VvcCodingTreeNode) -> u16 {
-        node.height / 2
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct VvcChromaSplitAvailability {
-    allow_qt: bool,
-    allow_bt_vertical: bool,
-    allow_bt_horizontal: bool,
-    allow_tt_vertical: bool,
-    allow_tt_horizontal: bool,
-}
-
-impl VvcChromaSplitAvailability {
-    fn can_split(self) -> bool {
-        self.allow_qt || self.allow_btt()
-    }
-
-    fn allow_btt(self) -> bool {
-        self.allow_bt_vertical
-            || self.allow_bt_horizontal
-            || self.allow_tt_vertical
-            || self.allow_tt_horizontal
-    }
-
-    fn split_ctx(self) -> u8 {
+    fn chroma_split_ctx(
+        node: VvcCodingTreeNode,
+        split: VvcChromaSplitAvailability,
+        neighbours: &VvcChromaNeighbourState,
+    ) -> u8 {
+        // H.266 9.3.4.2.2 Table 133 derives chroma split_cu_flag condL from
+        // the left chroma CU height being smaller than the current chroma CU
+        // height, and condA from the above chroma CU width being smaller.
+        let left = neighbours.left_of(node);
+        let above = neighbours.above_of(node);
         VvcSplitCtxInput {
-            available_left: false,
-            available_above: false,
-            condition_left: false,
-            condition_above: false,
-            allow_bt_vertical: self.allow_bt_vertical,
-            allow_bt_horizontal: self.allow_bt_horizontal,
-            allow_tt_vertical: self.allow_tt_vertical,
-            allow_tt_horizontal: self.allow_tt_horizontal,
-            allow_qt: self.allow_qt,
+            available_left: left.is_some(),
+            available_above: above.is_some(),
+            condition_left: left.is_some_and(|info| info.cb_height < vvc_chroma_420_height(node)),
+            condition_above: above.is_some_and(|info| info.cb_width < vvc_chroma_420_width(node)),
+            allow_bt_vertical: split.allow_bt_vertical,
+            allow_bt_horizontal: split.allow_bt_horizontal,
+            allow_tt_vertical: split.allow_tt_vertical,
+            allow_tt_horizontal: split.allow_tt_horizontal,
+            allow_qt: split.allow_qt,
         }
         .split_cu_flag_ctx()
+    }
+
+    fn chroma_qt_split_ctx(node: VvcCodingTreeNode, neighbours: &VvcChromaNeighbourState) -> u8 {
+        // H.266 9.3.4.2.2 Table 133 derives split_qt_flag condL/condA from
+        // neighbouring chroma CqtDepth being greater than the current depth.
+        let left = neighbours.left_of(node);
+        let above = neighbours.above_of(node);
+        VvcQtSplitCtxInput {
+            available_left: left.is_some(),
+            available_above: above.is_some(),
+            left_deeper_qt: left.is_some_and(|info| info.cqt_depth > node.cqt_depth),
+            above_deeper_qt: above.is_some_and(|info| info.cqt_depth > node.cqt_depth),
+            cqt_depth: node.cqt_depth,
+        }
+        .split_qt_flag_ctx()
+    }
+
+    fn chroma_mtt_vertical_ctx(
+        node: VvcCodingTreeNode,
+        split: VvcChromaSplitAvailability,
+        neighbours: &VvcChromaNeighbourState,
+    ) -> u8 {
+        // H.266 9.3.4.2.3 first compares vertical-vs-horizontal BT/TT choices.
+        // If tied, it uses the above chroma CU width and left chroma CU height.
+        let vertical_choices =
+            u8::from(split.allow_bt_vertical) + u8::from(split.allow_tt_vertical);
+        let horizontal_choices =
+            u8::from(split.allow_bt_horizontal) + u8::from(split.allow_tt_horizontal);
+        if vertical_choices > horizontal_choices {
+            return 4;
+        }
+        if vertical_choices < horizontal_choices {
+            return 3;
+        }
+        let Some(above) = neighbours.above_of(node) else {
+            return 0;
+        };
+        let Some(left) = neighbours.left_of(node) else {
+            return 0;
+        };
+        let d_a = vvc_chroma_420_width(node) / above.cb_width.max(1);
+        let d_l = vvc_chroma_420_height(node) / left.cb_height.max(1);
+        if d_a == d_l {
+            0
+        } else if d_a < d_l {
+            1
+        } else {
+            2
+        }
+    }
+
+    fn chroma_prefer_vertical_bt(
+        node: VvcCodingTreeNode,
+        split: VvcChromaSplitAvailability,
+    ) -> bool {
+        if !split.allow_bt_vertical {
+            return false;
+        }
+        if !split.allow_bt_horizontal {
+            return true;
+        }
+        node.width >= node.height
     }
 }

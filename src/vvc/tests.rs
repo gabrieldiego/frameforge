@@ -790,6 +790,44 @@ fn vvc_contexts_include_residual_init_tables() {
 }
 
 #[test]
+fn vvc_residual_contexts_have_rtl_ids_for_full_table_132_ranges() {
+    let mut ids = std::collections::BTreeSet::new();
+
+    for ctx in 0..=22 {
+        let id = VvcCabacContext::LastSigCoeffXPrefix(ctx).rtl_context_id();
+        assert!(id.is_some(), "missing last_sig_coeff_x_prefix({ctx})");
+        assert!(ids.insert(id.unwrap()));
+
+        let id = VvcCabacContext::LastSigCoeffYPrefix(ctx).rtl_context_id();
+        assert!(id.is_some(), "missing last_sig_coeff_y_prefix({ctx})");
+        assert!(ids.insert(id.unwrap()));
+    }
+    for ctx in 0..=6 {
+        let id = VvcCabacContext::SbCodedFlag(ctx).rtl_context_id();
+        assert!(id.is_some(), "missing sb_coded_flag({ctx})");
+        assert!(ids.insert(id.unwrap()));
+    }
+    for ctx in 0..=62 {
+        let id = VvcCabacContext::SigCoeffFlag(ctx).rtl_context_id();
+        assert!(id.is_some(), "missing sig_coeff_flag({ctx})");
+        assert!(ids.insert(id.unwrap()));
+    }
+    for ctx in 0..=32 {
+        let id = VvcCabacContext::ParLevelFlag(ctx).rtl_context_id();
+        assert!(id.is_some(), "missing par_level_flag({ctx})");
+        assert!(ids.insert(id.unwrap()));
+    }
+    for ctx in 0..=71 {
+        let id = VvcCabacContext::AbsLevelGtxFlag(ctx).rtl_context_id();
+        assert!(id.is_some(), "missing abs_level_gtx_flag({ctx})");
+        assert!(ids.insert(id.unwrap()));
+    }
+
+    assert_eq!(ids.len(), 221);
+    assert_eq!(ids.last().copied(), Some(264));
+}
+
+#[test]
 fn vvc_last_sig_chroma_prefix_ctx_uses_block_size_shift() {
     // H.266 9.3.4.2.4 defines chroma ctxShift as Clip3(0, 2,
     // (1 << Log2FullTbSize) >> 3). VTM CoeffCodingContext implements the same

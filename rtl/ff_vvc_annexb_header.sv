@@ -1,8 +1,6 @@
 `timescale 1ns/1ps
 
 module ff_vvc_annexb_header #(
-  parameter int MAX_VISIBLE_WIDTH = 64,
-  parameter int MAX_VISIBLE_HEIGHT = 64,
   parameter int CTU_SIZE = 64
 ) (
   input  logic        clk,
@@ -18,6 +16,7 @@ module ff_vvc_annexb_header #(
   input  logic        sps_transform_skip_enabled_flag,
   input  logic        sps_mts_enabled_flag,
   input  logic        sps_lfnst_enabled_flag,
+  input  logic        sps_joint_cbcr_enabled_flag,
   input  logic        sps_mrl_enabled_flag,
   input  logic        sps_cclm_enabled_flag,
   input  logic        sps_dep_quant_enabled_flag,
@@ -302,7 +301,7 @@ module ff_vvc_annexb_header #(
         7'd51: begin syntax_value = {31'd0, sps_transform_skip_enabled_flag}; syntax_bits = 6'd1; end // sps_transform_skip_enabled_flag
         7'd52: begin syntax_value = {31'd0, sps_mts_enabled_flag}; syntax_bits = 6'd1; end // sps_mts_enabled_flag
         7'd53: begin syntax_value = {31'd0, sps_lfnst_enabled_flag}; syntax_bits = 6'd1; end // sps_lfnst_enabled_flag
-        7'd54: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // joint cbcr
+        7'd54: begin syntax_value = {31'd0, sps_joint_cbcr_enabled_flag}; syntax_bits = 6'd1; end // sps_joint_cbcr_enabled_flag
         7'd55: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // same qp table
         7'd56: begin syntax_value = 32'd19; syntax_bits = 6'd9; end // se(-9)
         7'd57: begin syntax_value = 32'd3; syntax_bits = 6'd3; end // ue(2)

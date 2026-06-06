@@ -27,6 +27,17 @@ impl VvcLastSigCoeffPrefixCtxInput {
     }
 }
 
+fn missing_rtl_context_ordinal(ctx: u8, max_ctx: u8, explicitly_mapped: &[u8]) -> Option<u16> {
+    if ctx > max_ctx || explicitly_mapped.contains(&ctx) {
+        return None;
+    }
+    let prior_explicit = explicitly_mapped
+        .iter()
+        .filter(|&&mapped_ctx| mapped_ctx < ctx)
+        .count();
+    Some(u16::from(ctx) - prior_explicit as u16)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(in crate::vvc) enum VvcCabacContext {
     SplitFlag(u8),
@@ -79,6 +90,7 @@ impl VvcCabacContext {
             VvcCabacContext::IntraChromaPredMode(0) => Some(14),
             VvcCabacContext::QtCbfCb(0) => Some(15),
             VvcCabacContext::QtCbfCr(0) => Some(16),
+            VvcCabacContext::QtCbfCr(1) => Some(70),
             VvcCabacContext::LastSigCoeffXPrefix(10) => Some(17),
             VvcCabacContext::LastSigCoeffYPrefix(10) => Some(18),
             VvcCabacContext::SplitFlag(7) => Some(19),
@@ -129,6 +141,95 @@ impl VvcCabacContext {
             VvcCabacContext::AbsLevelGtxFlag(13) => Some(67),
             VvcCabacContext::ParLevelFlag(13) => Some(68),
             VvcCabacContext::AbsLevelGtxFlag(45) => Some(69),
+            VvcCabacContext::LastSigCoeffXPrefix(ctx @ 20..=22) => {
+                Some(71 + (u16::from(ctx - 20) * 2))
+            }
+            VvcCabacContext::LastSigCoeffYPrefix(ctx @ 20..=22) => {
+                Some(72 + (u16::from(ctx - 20) * 2))
+            }
+            VvcCabacContext::SigCoeffFlag(ctx @ 36..=43) => Some(77 + u16::from(ctx - 36)),
+            VvcCabacContext::ParLevelFlag(ctx @ 21..=31) => Some(85 + u16::from(ctx - 21)),
+            VvcCabacContext::AbsLevelGtxFlag(ctx @ 21..=31) => Some(96 + u16::from(ctx - 21)),
+            VvcCabacContext::AbsLevelGtxFlag(ctx @ 53..=63) => Some(107 + u16::from(ctx - 53)),
+            // H.266 Table 132 plus clauses 9.3.4.2.8 and 9.3.4.2.9 require
+            // these luma residual contexts for the current regular,
+            // non-transform-skip, first-4x4 coefficient group at QState 0.
+            VvcCabacContext::SigCoeffFlag(0) => Some(118),
+            VvcCabacContext::SigCoeffFlag(2) => Some(119),
+            VvcCabacContext::SigCoeffFlag(3) => Some(120),
+            VvcCabacContext::SigCoeffFlag(7) => Some(121),
+            VvcCabacContext::SigCoeffFlag(8) => Some(122),
+            VvcCabacContext::SigCoeffFlag(10) => Some(123),
+            VvcCabacContext::SigCoeffFlag(11) => Some(124),
+            VvcCabacContext::ParLevelFlag(6) => Some(125),
+            VvcCabacContext::ParLevelFlag(8) => Some(126),
+            VvcCabacContext::ParLevelFlag(9) => Some(127),
+            VvcCabacContext::ParLevelFlag(10) => Some(128),
+            VvcCabacContext::ParLevelFlag(12) => Some(129),
+            VvcCabacContext::ParLevelFlag(14) => Some(130),
+            VvcCabacContext::ParLevelFlag(15) => Some(131),
+            VvcCabacContext::ParLevelFlag(16) => Some(132),
+            VvcCabacContext::ParLevelFlag(17) => Some(133),
+            VvcCabacContext::ParLevelFlag(18) => Some(134),
+            VvcCabacContext::ParLevelFlag(19) => Some(135),
+            VvcCabacContext::ParLevelFlag(20) => Some(136),
+            VvcCabacContext::AbsLevelGtxFlag(6) => Some(137),
+            VvcCabacContext::AbsLevelGtxFlag(8) => Some(138),
+            VvcCabacContext::AbsLevelGtxFlag(9) => Some(139),
+            VvcCabacContext::AbsLevelGtxFlag(10) => Some(140),
+            VvcCabacContext::AbsLevelGtxFlag(12) => Some(141),
+            VvcCabacContext::AbsLevelGtxFlag(14) => Some(142),
+            VvcCabacContext::AbsLevelGtxFlag(15) => Some(143),
+            VvcCabacContext::AbsLevelGtxFlag(16) => Some(144),
+            VvcCabacContext::AbsLevelGtxFlag(17) => Some(145),
+            VvcCabacContext::AbsLevelGtxFlag(18) => Some(146),
+            VvcCabacContext::AbsLevelGtxFlag(19) => Some(147),
+            VvcCabacContext::AbsLevelGtxFlag(20) => Some(148),
+            VvcCabacContext::AbsLevelGtxFlag(38) => Some(149),
+            VvcCabacContext::AbsLevelGtxFlag(40) => Some(150),
+            VvcCabacContext::AbsLevelGtxFlag(41) => Some(151),
+            VvcCabacContext::AbsLevelGtxFlag(42) => Some(152),
+            VvcCabacContext::AbsLevelGtxFlag(44) => Some(153),
+            VvcCabacContext::AbsLevelGtxFlag(46) => Some(154),
+            VvcCabacContext::AbsLevelGtxFlag(47) => Some(155),
+            VvcCabacContext::AbsLevelGtxFlag(48) => Some(156),
+            VvcCabacContext::AbsLevelGtxFlag(49) => Some(157),
+            VvcCabacContext::AbsLevelGtxFlag(50) => Some(158),
+            VvcCabacContext::AbsLevelGtxFlag(51) => Some(159),
+            VvcCabacContext::AbsLevelGtxFlag(52) => Some(160),
+            // H.266 Table 132 assigns residual context ranges for the complete
+            // residual_coding() syntax. Keep the compact RTL bank populated for
+            // all residual contexts, even before every producer can emit them.
+            VvcCabacContext::LastSigCoeffXPrefix(ctx) => {
+                const EXPLICIT: &[u8] = &[3, 4, 6, 10, 15, 20, 21, 22];
+                missing_rtl_context_ordinal(ctx, 22, EXPLICIT).map(|ordinal| 161 + (ordinal * 2))
+            }
+            VvcCabacContext::LastSigCoeffYPrefix(ctx) => {
+                const EXPLICIT: &[u8] = &[3, 4, 6, 10, 15, 20, 21, 22];
+                missing_rtl_context_ordinal(ctx, 22, EXPLICIT).map(|ordinal| 162 + (ordinal * 2))
+            }
+            VvcCabacContext::SbCodedFlag(ctx @ 0..=6) => Some(191 + u16::from(ctx)),
+            VvcCabacContext::SigCoeffFlag(ctx) => {
+                const EXPLICIT: &[u8] = &[
+                    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 36, 37, 38, 39, 40, 41, 42, 43,
+                ];
+                missing_rtl_context_ordinal(ctx, 62, EXPLICIT).map(|ordinal| 198 + ordinal)
+            }
+            VvcCabacContext::ParLevelFlag(ctx) => {
+                const EXPLICIT: &[u8] = &[
+                    0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+                    26, 27, 28, 29, 30, 31,
+                ];
+                missing_rtl_context_ordinal(ctx, 32, EXPLICIT).map(|ordinal| 241 + ordinal)
+            }
+            VvcCabacContext::AbsLevelGtxFlag(ctx) => {
+                const EXPLICIT: &[u8] = &[
+                    0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+                    26, 27, 28, 29, 30, 31, 32, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50,
+                    51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
+                ];
+                missing_rtl_context_ordinal(ctx, 71, EXPLICIT).map(|ordinal| 247 + ordinal)
+            }
             _ => None,
         }
     }

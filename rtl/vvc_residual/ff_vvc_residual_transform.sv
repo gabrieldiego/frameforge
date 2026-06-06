@@ -32,11 +32,7 @@ module ff_vvc_residual_transform #(
   localparam logic [7:0] SYMBOL_BIN_EP  = 8'd0;
   localparam logic [7:0] SYMBOL_BIN_CTX = 8'd2;
   localparam logic [7:0] SYMBOL_BINS_EP = 8'd4;
-  localparam logic [4:0] CTX_LAST_SIG_COEFF_X_PREFIX_3 = 5'd6;
-  localparam logic [4:0] CTX_LAST_SIG_COEFF_Y_PREFIX_3 = 5'd7;
-  localparam logic [4:0] CTX_ABS_LEVEL_GTX_0 = 5'd10;
-  localparam logic [4:0] CTX_PAR_LEVEL_0 = 5'd11;
-  localparam logic [4:0] CTX_ABS_LEVEL_GTX_32 = 5'd12;
+  `include "ff_vvc_cabac_context_ids.svh"
   localparam int LUMA_AC_QUANT_SHIFT = 19;
 
   logic [SUM_BITS - 1:0] stream_sum_q;
@@ -205,25 +201,27 @@ module ff_vvc_residual_transform #(
   always @* begin
     case (stream_packet_index_q)
       4'd0: residual_packet_next = {
-        SYMBOL_BIN_CTX, 18'd0, 1'b0, CTX_LAST_SIG_COEFF_X_PREFIX_3, 8'd0, 1'b0
+        SYMBOL_BIN_CTX, 13'd0, 1'b0, CTX_LAST_SIG_X_PREFIX_3, 8'd0, 1'b0
       };
       4'd1: residual_packet_next = {
-        SYMBOL_BIN_CTX, 18'd0, 1'b0, CTX_LAST_SIG_COEFF_Y_PREFIX_3, 8'd0, stream_last_packet_index == 4'd1
+        SYMBOL_BIN_CTX, 13'd0, 1'b0, CTX_LAST_SIG_Y_PREFIX_3, 8'd0, stream_last_packet_index == 4'd1
       };
       4'd2: residual_packet_next = {
-        SYMBOL_BIN_CTX, 18'd0, 1'b0, CTX_ABS_LEVEL_GTX_0, 7'd0, stream_quant_luma_rem > 8'd1, 1'b0
+        SYMBOL_BIN_CTX, 13'd0, 1'b0, CTX_ABS_LEVEL_GTX_FLAG_0, 7'd0,
+        stream_quant_luma_rem > 8'd1, 1'b0
       };
       4'd3: begin
         if (stream_last_packet_index == 4'd3) begin
           residual_packet_next = {SYMBOL_BINS_EP, 25'd0, stream_negative, 6'd1, 1'b1};
         end else begin
           residual_packet_next = {
-            SYMBOL_BIN_CTX, 18'd0, 1'b0, CTX_PAR_LEVEL_0, 7'd0, stream_quant_luma_rem[0], 1'b0
+            SYMBOL_BIN_CTX, 13'd0, 1'b0, CTX_PAR_LEVEL_FLAG_0, 7'd0,
+            stream_quant_luma_rem[0], 1'b0
           };
         end
       end
       4'd4: residual_packet_next = {
-        SYMBOL_BIN_CTX, 18'd0, 1'b0, CTX_ABS_LEVEL_GTX_32, 7'd0, stream_quant_luma_rem > 8'd3,
+        SYMBOL_BIN_CTX, 13'd0, 1'b0, CTX_ABS_LEVEL_GTX_FLAG_32, 7'd0, stream_quant_luma_rem > 8'd3,
         stream_last_packet_index == 4'd4
       };
       4'd5: begin

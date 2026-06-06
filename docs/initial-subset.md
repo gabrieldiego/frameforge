@@ -30,9 +30,30 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - Optional external decoder wrapper that does not assume a decoder is installed.
 - Reference-decoder setup helper that uses local decoder settings first and can clone/build VTM under `verification/reference`.
 - SystemVerilog RTL blocks with stream-style handshakes.
-- RTL VVC generator that drains a parameterized planar YUV input stream up to 64x64, emits sequence headers, per-picture Annex-B start codes, VVC NAL headers, and CABAC-coded NAL payload bytes to match the Rust VVC stream.
+- RTL VVC generator that drains a parameterized CTU-local leaf stream converted from planar YUV by the testbench, emits sequence headers, per-picture Annex-B start codes, VVC NAL headers, and CABAC-coded NAL payload bytes to match the Rust VVC stream.
 - cocotb/Icarus verification fixtures.
 - Local contribution and license files for an open-source starting point.
+
+## RTL Input Stream Contract
+
+The software model and generated YUV files remain planar YUV: all luma samples,
+then all Cb samples, then all Cr samples. The current RTL top does not consume
+that storage order directly. The cocotb driver converts each frame into a
+CTU-local coding-tree leaf stream:
+
+```text
+for each active 8x8 leaf in coding-tree order:
+  8x8 Y samples
+  colocated Cb samples
+  colocated Cr samples
+```
+
+For the current 4:2:0 residual path, the colocated chroma blocks are 4x4. For
+the current 4:4:4 palette path, they are 8x8. This is an intentional hardware
+simplification: the input side only needs a TU-sized live buffer instead of a
+full 64x64 CTU fetch buffer. If dynamic partitioning becomes necessary later,
+the same contract can be widened to 16x16 leaves or eventually to full CTU
+raster fetches.
 
 ## First VVC/H.266 Subset Target
 

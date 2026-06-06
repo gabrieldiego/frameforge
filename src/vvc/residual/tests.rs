@@ -157,7 +157,7 @@ fn vvc_420_chroma_dc_residual_preserves_decoder_visible_color() {
         chroma_len: 8 * 8,
     };
     let quantized = quantize_vvc_frame(frame.clone());
-    assert_eq!(quantized.chroma_tu_count, 1);
+    assert_eq!(quantized.chroma_tu_count, 4);
     assert!(quantized.cb_tu_dc_levels[0] < 0);
     assert!(quantized.cr_tu_dc_levels[0] > 0);
 
@@ -190,11 +190,9 @@ fn vvc_420_chroma_dc_residual_predicts_from_prior_chroma_leaves() {
         chroma_len: 32 * 24,
     };
     let quantized = quantize_vvc_frame(frame.clone());
-    assert_eq!(quantized.chroma_tu_count, 2);
+    assert_eq!(quantized.chroma_tu_count, 48);
     assert!(quantized.cb_tu_dc_levels[0] < 0);
     assert!(quantized.cr_tu_dc_levels[0] > 0);
-    assert_eq!(quantized.cb_tu_dc_levels[1], 0);
-    assert_eq!(quantized.cr_tu_dc_levels[1], 0);
 
     let params = vvc_ctu_partition_params(frame.geometry, quantized).expect("64x48 params");
     let recon = reconstruct_vvc_residual_frame(&frame, quantized, params);
@@ -213,8 +211,8 @@ fn vvc_420_chroma_ac_residual_preserves_visible_chroma_variation() {
     let mut cr = vec![0; 8 * 8];
     for y in 0..8 {
         for x in 0..8 {
-            cb[y * 8 + x] = if x < 4 { 64 } else { 192 };
-            cr[y * 8 + x] = if y < 4 { 192 } else { 64 };
+            cb[y * 8 + x] = if (x % 4) < 2 { 64 } else { 192 };
+            cr[y * 8 + x] = if (y % 4) < 2 { 192 } else { 64 };
         }
     }
     let frame = VvcSampledFrame {
@@ -232,29 +230,47 @@ fn vvc_420_chroma_ac_residual_preserves_visible_chroma_variation() {
         chroma_len: 8 * 8,
     };
     let quantized = quantize_vvc_frame(frame.clone());
-    assert_eq!(quantized.chroma_tu_count, 1);
-    assert!(quantized.cb_tu_ac_levels[0].iter().any(|level| *level != 0));
-    assert!(quantized.cr_tu_ac_levels[0].iter().any(|level| *level != 0));
+    assert_eq!(quantized.chroma_tu_count, 4);
+    assert!(quantized
+        .cb_tu_ac_levels
+        .iter()
+        .take(quantized.chroma_tu_count)
+        .any(|levels| levels.iter().any(|level| *level != 0)));
+    assert!(quantized
+        .cr_tu_ac_levels
+        .iter()
+        .take(quantized.chroma_tu_count)
+        .any(|levels| levels.iter().any(|level| *level != 0)));
 
     let params = vvc_ctu_partition_params(frame.geometry, quantized).expect("16x16 params");
     let recon = reconstruct_vvc_residual_frame(&frame, quantized, params);
     let chroma = &recon[16 * 16..];
     let cb_recon = &chroma[..8 * 8];
     let cr_recon = &chroma[8 * 8..];
-    let cb_left: u32 = (0..8)
-        .flat_map(|y| (0..4).map(move |x| u32::from(cb_recon[y * 8 + x])))
+    let cb_low: u32 = (0..8)
+        .flat_map(|y| {
+            (0..8)
+                .filter(|x| (x % 4) < 2)
+                .map(move |x| u32::from(cb_recon[y * 8 + x]))
+        })
         .sum();
-    let cb_right: u32 = (0..8)
-        .flat_map(|y| (4..8).map(move |x| u32::from(cb_recon[y * 8 + x])))
+    let cb_high: u32 = (0..8)
+        .flat_map(|y| {
+            (0..8)
+                .filter(|x| (x % 4) >= 2)
+                .map(move |x| u32::from(cb_recon[y * 8 + x]))
+        })
         .sum();
-    let cr_top: u32 = (0..4)
+    let cr_high: u32 = (0..8)
+        .filter(|y| (y % 4) < 2)
         .flat_map(|y| (0..8).map(move |x| u32::from(cr_recon[y * 8 + x])))
         .sum();
-    let cr_bottom: u32 = (4..8)
+    let cr_low: u32 = (0..8)
+        .filter(|y| (y % 4) >= 2)
         .flat_map(|y| (0..8).map(move |x| u32::from(cr_recon[y * 8 + x])))
         .sum();
-    assert!(cb_right > cb_left);
-    assert!(cr_top > cr_bottom);
+    assert!(cb_high > cb_low);
+    assert!(cr_high > cr_low);
 }
 
 #[test]

@@ -6,10 +6,12 @@ const VVC_LUMA_DC_NUM: i32 = 5;
 const VVC_LUMA_DC_DEN: i32 = 16;
 const VVC_LUMA_QP: i32 = 32;
 const VVC_CHROMA_QP: i32 = 34;
-const VVC_LUMA_AC_QUANT_SHIFT: u32 = 19;
+const VVC_LUMA_AC_HADAMARD_QUANT_SHIFT: u32 = 8;
+const VVC_CHROMA_AC_QUANT_SHIFT_FOR_8X8: i32 = 19;
 const VVC_LUMA_AC_LEVEL_LIMIT: i16 = 2;
 const VVC_CHROMA_DC_LEVEL_LIMIT: i16 = 255;
 const VVC_CHROMA_AC_LEVEL_LIMIT: i16 = 2;
+const VVC_CHROMA_LOSSY_AC_SUBSET_2X2: [(usize, usize); 3] = [(1, 0), (0, 1), (1, 1)];
 const VVC_DCT2_4: [[i32; 4]; 4] = [
     [64, 64, 64, 64],
     [83, 36, -36, -83],
@@ -103,9 +105,9 @@ pub(in crate::vvc) fn quantize_vvc_luma_residual_greedy(
     let mut coeff_levels = vec![0; coefficient_count];
     coeff_levels[0] = dc_level;
 
-    // The current residual_coding() writer is audited for the first 4x4
-    // subblock. Keep AC search inside that area until scan-position suffixes
-    // and sb_coded_flag generation are expanded for larger coefficient groups.
+    // H.266 7.3.11.10 transform_unit() can carry all AC coefficients. The
+    // current luma subset keeps the full first 4x4 coefficient group so the
+    // residual syntax remains ready for the next transform expansion.
     for y in 0..usize::from(height).min(4) {
         for x in 0..usize::from(width).min(4) {
             let coeff_index = y * usize::from(width) + x;
@@ -123,8 +125,7 @@ pub(in crate::vvc) fn quantize_vvc_luma_residual_greedy(
             if coeff_index == 0 {
                 continue;
             }
-            let ac_index = y * 4 + x - 1;
-            ac_coeffs[ac_index] = coeff_levels[coeff_index];
+            ac_coeffs[y * 4 + x - 1] = coeff_levels[coeff_index];
         }
     }
     let dc_level = coeff_levels[0];
@@ -216,6 +217,38 @@ pub(in crate::vvc) fn quantize_vvc_chroma_residual_dc(
     debug_assert!([4, 8, 16, 32].contains(&height));
 
     let residual_sum: i64 = residuals.iter().map(|value| i64::from(*value)).sum();
+    if width == 4 && height == 4 {
+        return quantize_vvc_chroma_4x4_dc_level_from_sum(residual_sum);
+    }
+
+    quantize_vvc_chroma_residual_dc_by_search(residual_sum, residuals, width, height)
+}
+
+fn quantize_vvc_chroma_4x4_dc_level_from_sum(residual_sum: i64) -> i16 {
+    // H.266 8.7.3 inverse coefficient scaling plus 8.7.4 inverse transform
+    // reduces to reconstructed_residual = 8 * level for a 4x4 chroma TB at
+    // chroma QP 34. The older exhaustive SSE search initialized at level 0 and
+    // replaced only on strict improvement, so exact half-step ties keep the
+    // earlier level.
+    let level = if (-64..=64).contains(&residual_sum) {
+        0
+    } else if residual_sum > 64 {
+        (residual_sum + 63) / 128
+    } else {
+        -(((-residual_sum) + 64) / 128)
+    };
+    level.clamp(
+        i64::from(-VVC_CHROMA_DC_LEVEL_LIMIT),
+        i64::from(VVC_CHROMA_DC_LEVEL_LIMIT),
+    ) as i16
+}
+
+fn quantize_vvc_chroma_residual_dc_by_search(
+    residual_sum: i64,
+    residuals: &[i16],
+    width: u16,
+    height: u16,
+) -> i16 {
     let mut best_level = 0;
     let original_sse = residuals
         .iter()
@@ -230,7 +263,7 @@ pub(in crate::vvc) fn quantize_vvc_chroma_residual_dc(
             height,
             VVC_CHROMA_QP,
         ));
-        let sample_count = coefficient_count as i64;
+        let sample_count = residuals.len() as i64;
         let sse = original_sse + (sample_count * reconstructed * reconstructed)
             - (2 * reconstructed * residual_sum);
         if sse < best_sse {
@@ -253,47 +286,21 @@ pub(in crate::vvc) fn quantize_vvc_chroma_residual_greedy(
 
     let mut coeff_levels = vec![0; coefficient_count];
     coeff_levels[0] = quantize_vvc_chroma_residual_dc(residuals, width, height);
+    let mut ac_coeffs = [0; 15];
     if residuals_have_ac_energy(residuals) {
-        let mut best_sse =
-            residual_sse_after_inverse_transform(residuals, width, height, &coeff_levels);
-        for y in 0..usize::from(height).min(4) {
-            for x in 0..usize::from(width).min(4) {
+        // H.266 7.3.11.10 transform_unit() can carry all chroma AC
+        // coefficients. The current lossy 4:2:0 path keeps a 2x2
+        // low-frequency coefficient group for hardware cost control.
+        for (x, y) in VVC_CHROMA_LOSSY_AC_SUBSET_2X2 {
+            if x < usize::from(width) && y < usize::from(height) {
                 let coeff_index = y * usize::from(width) + x;
-                if coeff_index == 0 {
-                    continue;
-                }
-                let mut best_level = 0;
-                let mut local_best_sse = best_sse;
-                for level in -VVC_CHROMA_AC_LEVEL_LIMIT..=VVC_CHROMA_AC_LEVEL_LIMIT {
-                    coeff_levels[coeff_index] = level;
-                    let sse = residual_sse_after_inverse_transform(
-                        residuals,
-                        width,
-                        height,
-                        &coeff_levels,
-                    );
-                    if sse < local_best_sse {
-                        local_best_sse = sse;
-                        best_level = level;
-                    }
-                }
-                coeff_levels[coeff_index] = best_level;
-                best_sse = local_best_sse;
+                let level = quantize_direct_chroma_ac_coeff(residuals, width, x, y);
+                coeff_levels[coeff_index] = level;
+                ac_coeffs[y * 4 + x - 1] = level;
             }
         }
     }
 
-    let mut ac_coeffs = [0; 15];
-    for y in 0..usize::from(height).min(4) {
-        for x in 0..usize::from(width).min(4) {
-            let coeff_index = y * usize::from(width) + x;
-            if coeff_index == 0 {
-                continue;
-            }
-            let ac_index = y * 4 + x - 1;
-            ac_coeffs[ac_index] = coeff_levels[coeff_index];
-        }
-    }
     let dc_level = coeff_levels[0];
     VvcQuantizedTransformBlock {
         reconstructed_dc_coeff: dc_level,
@@ -328,6 +335,70 @@ pub(in crate::vvc) fn reconstruct_vvc_chroma(chroma_residual: u8) -> u8 {
 fn quantize_direct_luma_ac_coeff(residuals: &[i16], width: u16, kx: usize, ky: usize) -> i16 {
     let width_usize = usize::from(width);
     let height_usize = residuals.len() / width_usize;
+    let cell_width = (width_usize / 4).max(1);
+    let cell_height = (height_usize / 4).max(1);
+    let mut acc = 0i64;
+
+    // H.266 7.3.11.10 still carries the first 4x4 transform coefficient
+    // group. For the current lossy hardware subset, encoder-side luma
+    // projection is a 4x4 box/Hadamard approximation so the RTL does not need
+    // a full 8x8 DCT datapath. Decoder reconstruction remains the H.266 8.7.3
+    // and 8.7.4 inverse transform over these emitted coefficient levels.
+    for cell_y in 0..4 {
+        for cell_x in 0..4 {
+            let mut cell_sum = 0i64;
+            let y_start = cell_y * cell_height;
+            let y_end = ((cell_y + 1) * cell_height).min(height_usize);
+            let x_start = cell_x * cell_width;
+            let x_end = ((cell_x + 1) * cell_width).min(width_usize);
+            for y in y_start..y_end {
+                for x in x_start..x_end {
+                    cell_sum += i64::from(residuals[y * width_usize + x]);
+                }
+            }
+            acc += cell_sum
+                * i64::from(luma_lossy_hadamard4_basis(kx, cell_x))
+                * i64::from(luma_lossy_hadamard4_basis(ky, cell_y));
+        }
+    }
+    let level = div_round_nearest_i64(acc, 1i64 << VVC_LUMA_AC_HADAMARD_QUANT_SHIFT);
+    level.clamp(
+        i64::from(-VVC_LUMA_AC_LEVEL_LIMIT),
+        i64::from(VVC_LUMA_AC_LEVEL_LIMIT),
+    ) as i16
+}
+
+fn luma_lossy_hadamard4_basis(k: usize, n: usize) -> i32 {
+    match k {
+        0 => 1,
+        1 => {
+            if n < 2 {
+                1
+            } else {
+                -1
+            }
+        }
+        2 => {
+            if n == 0 || n == 3 {
+                1
+            } else {
+                -1
+            }
+        }
+        3 => {
+            if n == 0 || n == 2 {
+                1
+            } else {
+                -1
+            }
+        }
+        _ => 0,
+    }
+}
+
+fn quantize_direct_chroma_ac_coeff(residuals: &[i16], width: u16, kx: usize, ky: usize) -> i16 {
+    let width_usize = usize::from(width);
+    let height_usize = residuals.len() / width_usize;
     let mut acc = 0i64;
     for y in 0..height_usize {
         for x in 0..width_usize {
@@ -336,35 +407,25 @@ fn quantize_direct_luma_ac_coeff(residuals: &[i16], width: u16, kx: usize, ky: u
                 * i64::from(dct2_value(height_usize as u16, ky, y));
         }
     }
-    let level = div_round_nearest_i64(acc, 1i64 << VVC_LUMA_AC_QUANT_SHIFT);
+    let level = div_round_nearest_i64(
+        acc,
+        1i64 << chroma_ac_quant_shift(width, height_usize as u16),
+    );
     level.clamp(
-        i64::from(-VVC_LUMA_AC_LEVEL_LIMIT),
-        i64::from(VVC_LUMA_AC_LEVEL_LIMIT),
+        i64::from(-VVC_CHROMA_AC_LEVEL_LIMIT),
+        i64::from(VVC_CHROMA_AC_LEVEL_LIMIT),
     ) as i16
+}
+
+fn chroma_ac_quant_shift(width: u16, height: u16) -> u32 {
+    let log2_sum = width.ilog2() as i32 + height.ilog2() as i32;
+    (VVC_CHROMA_AC_QUANT_SHIFT_FOR_8X8 + log2_sum - 6).max(0) as u32
 }
 
 fn residuals_have_ac_energy(residuals: &[i16]) -> bool {
     residuals
         .first()
         .is_some_and(|first| residuals.iter().any(|value| value != first))
-}
-
-fn residual_sse_after_inverse_transform(
-    residuals: &[i16],
-    width: u16,
-    height: u16,
-    coeff_levels: &[i16],
-) -> i64 {
-    let reconstructed =
-        inverse_transform_vvc_residual_levels_with_qp(width, height, coeff_levels, VVC_CHROMA_QP);
-    residuals
-        .iter()
-        .zip(reconstructed.iter())
-        .map(|(target, reconstructed)| {
-            let diff = i64::from(*target) - i64::from(*reconstructed);
-            diff * diff
-        })
-        .sum()
 }
 
 fn div_round_nearest_i32(value: i32, divisor: i32) -> i32 {

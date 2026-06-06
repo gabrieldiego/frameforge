@@ -231,6 +231,10 @@ def main() -> int:
     env["RTL_SOURCE_SAMPLE_BITS"] = str(format_bit_depth(info.fmt))
     env["RTL_CHROMA_FORMAT_IDC"] = str(rtl_chroma_format_idc(info))
     env["FRAMEFORGE_RTL_VVC_ENCODER_FRAMES"] = str(info.frames)
+    env.setdefault(
+        "COCOTB_TEST_FILTER",
+        "^test_vvc_encoder\\.vvc_encoder_matches_software_stream$",
+    )
     if info.frames == 1:
         env["FRAMEFORGE_RTL_VVC_ENCODER_INPUT_1F"] = str(rtl_input_path)
         env["FRAMEFORGE_RTL_VVC_ENCODER_OUT_1F"] = str(rtl_bitstream)

@@ -1,8 +1,8 @@
 use crate::picture::ChromaSampling;
 use crate::vvc::{
-    MAX_VVC_CHROMA_TUS, MAX_VVC_LUMA_TUS, VVC_CHROMA_AC_COEFFS_PER_TU,
-    VVC_CURRENT_MAX_CHROMA_420_BT_SIZE, VVC_CURRENT_MAX_CHROMA_420_MTT_DEPTH_WITH_BOUNDARY,
-    VVC_CURRENT_MAX_CHROMA_420_TB_SIZE, VVC_CURRENT_MAX_CHROMA_420_TT_SIZE,
+    MAX_VVC_CHROMA_TUS, MAX_VVC_LUMA_TUS, VVC_CHROMA_AC_COEFFS_PER_TU, VVC_CTU_SIZE,
+    VVC_CURRENT_ENCODER_CHROMA_420_TB_SIZE, VVC_CURRENT_MAX_CHROMA_420_BT_SIZE,
+    VVC_CURRENT_MAX_CHROMA_420_MTT_DEPTH, VVC_CURRENT_MAX_CHROMA_420_TT_SIZE,
     VVC_CURRENT_MAX_LUMA_BT_SIZE, VVC_CURRENT_MAX_LUMA_LEAF_HEIGHT, VVC_CURRENT_MAX_LUMA_LEAF_SIZE,
     VVC_CURRENT_MAX_LUMA_MTT_DEPTH, VVC_CURRENT_MAX_LUMA_TT_SIZE,
     VVC_CURRENT_MIN_CHROMA_420_QT_SIZE, VVC_CURRENT_MIN_LUMA_CB_SIZE, VVC_CURRENT_MIN_LUMA_QT_SIZE,
@@ -100,7 +100,7 @@ fn append_chroma_visible_qt_subtree(
         return;
     }
 
-    let split = chroma_split_availability(node);
+    let split = vvc_chroma_420_split_availability(node, visible_width, visible_height);
     if split.allow_qt {
         for child_idx in 0..4 {
             append_chroma_visible_qt_subtree(
@@ -111,7 +111,7 @@ fn append_chroma_visible_qt_subtree(
             );
         }
     } else {
-        let vertical = false;
+        let vertical = chroma_prefer_vertical_bt(node, split);
         for child_idx in 0..2 {
             append_chroma_visible_qt_subtree(
                 nodes,
@@ -129,9 +129,8 @@ fn append_chroma_implicit_boundary_children(
     visible_width: u16,
     visible_height: u16,
 ) {
-    let bottom_left_in_pic = node.x < visible_width && node.y + node.height - 1 < visible_height;
-    let top_right_in_pic = node.x + node.width - 1 < visible_width && node.y < visible_height;
-    if !bottom_left_in_pic && !top_right_in_pic {
+    let split = vvc_chroma_420_split_availability(node, visible_width, visible_height);
+    if split.allow_qt {
         for child_idx in 0..4 {
             append_chroma_visible_qt_subtree(
                 nodes,
@@ -140,90 +139,273 @@ fn append_chroma_implicit_boundary_children(
                 visible_height,
             );
         }
-    } else if !bottom_left_in_pic && chroma_boundary_bt_allowed(node) {
-        for child_idx in 0..2 {
-            append_chroma_visible_qt_subtree(
-                nodes,
-                node.mtt_child(false, child_idx),
-                visible_width,
-                visible_height,
-            );
+        return;
+    }
+    match split.implicit_split {
+        VvcPartSplit::Quad => {
+            for child_idx in 0..4 {
+                append_chroma_visible_qt_subtree(
+                    nodes,
+                    node.qt_child(child_idx),
+                    visible_width,
+                    visible_height,
+                );
+            }
         }
-    } else if !top_right_in_pic && chroma_boundary_bt_allowed(node) {
-        for child_idx in 0..2 {
-            append_chroma_visible_qt_subtree(
-                nodes,
-                node.mtt_child(true, child_idx),
-                visible_width,
-                visible_height,
-            );
+        VvcPartSplit::HorizontalBinary => {
+            for child_idx in 0..2 {
+                append_chroma_visible_qt_subtree(
+                    nodes,
+                    node.mtt_child_with_boundary_depth_offset(
+                        false,
+                        child_idx,
+                        visible_width,
+                        visible_height,
+                    ),
+                    visible_width,
+                    visible_height,
+                );
+            }
         }
-    } else {
-        for child_idx in 0..4 {
-            append_chroma_visible_qt_subtree(
-                nodes,
-                node.qt_child(child_idx),
-                visible_width,
-                visible_height,
+        VvcPartSplit::VerticalBinary => {
+            for child_idx in 0..2 {
+                append_chroma_visible_qt_subtree(
+                    nodes,
+                    node.mtt_child_with_boundary_depth_offset(
+                        true,
+                        child_idx,
+                        visible_width,
+                        visible_height,
+                    ),
+                    visible_width,
+                    visible_height,
+                );
+            }
+        }
+        VvcPartSplit::None => {
+            debug_assert!(
+                !node.intersects_visible(visible_width, visible_height),
+                "boundary chroma node must have an implicit split"
             );
         }
     }
 }
 
-fn chroma_boundary_bt_allowed(node: VvcCodingTreeNode) -> bool {
-    node.width <= VVC_CURRENT_MAX_CHROMA_420_BT_SIZE
-        && node.height <= VVC_CURRENT_MAX_CHROMA_420_BT_SIZE
-}
-
 fn chroma_leaf_allowed(node: VvcCodingTreeNode) -> bool {
-    let chroma_width = chroma_420_width(node);
-    let chroma_height = chroma_420_height(node);
-    chroma_width <= VVC_CURRENT_MAX_CHROMA_420_TB_SIZE
-        && chroma_height <= VVC_CURRENT_MAX_CHROMA_420_TB_SIZE
+    let chroma_width = vvc_chroma_420_width(node);
+    let chroma_height = vvc_chroma_420_height(node);
+    // H.266 7.3.11.10 permits transform_unit() after any legal coding-tree
+    // leaf. The current residual hardware deliberately chooses legal splits
+    // down to 8x8 luma-coordinate leaves, which are 4x4 chroma TUs in 4:2:0.
+    // Split availability below still uses the SPS-derived max chroma TB size.
+    chroma_width <= VVC_CURRENT_ENCODER_CHROMA_420_TB_SIZE
+        && chroma_height <= VVC_CURRENT_ENCODER_CHROMA_420_TB_SIZE
 }
 
-fn chroma_split_availability(node: VvcCodingTreeNode) -> VvcChromaSplitAvailability {
-    let chroma_width = chroma_420_width(node);
-    let chroma_height = chroma_420_height(node);
+pub(in crate::vvc) fn vvc_chroma_420_width(node: VvcCodingTreeNode) -> u16 {
+    node.width / 2
+}
+
+pub(in crate::vvc) fn vvc_chroma_420_height(node: VvcCodingTreeNode) -> u16 {
+    node.height / 2
+}
+
+fn chroma_implicit_split(
+    node: VvcCodingTreeNode,
+    visible_width: u16,
+    visible_height: u16,
+) -> VvcPartSplit {
+    if node.fits_visible(visible_width, visible_height) {
+        return VvcPartSplit::None;
+    }
+
+    let bottom_left_in_pic = node.x < visible_width && node.y + node.height - 1 < visible_height;
+    let top_right_in_pic = node.x + node.width - 1 < visible_width && node.y < visible_height;
+    let max_mtt_depth = VVC_CURRENT_MAX_CHROMA_420_MTT_DEPTH + node.depth_offset;
+    let bt_allowed = node.width <= VVC_CURRENT_MAX_CHROMA_420_BT_SIZE
+        && node.height <= VVC_CURRENT_MAX_CHROMA_420_BT_SIZE
+        && node.mtt_depth < max_mtt_depth;
+    let qt_allowed = node.width > VVC_CURRENT_MIN_CHROMA_420_QT_SIZE
+        && node.height > VVC_CURRENT_MIN_CHROMA_420_QT_SIZE
+        && node.mtt_depth == 0;
+
+    // H.266 7.4.12.4 infers split_cu_flag for picture-boundary CUs. VTM's
+    // QTBTPartitioner::getImplicitSplit implements the same 6.4.1/6.4.2
+    // order: prefer QT when both BL/TR are outside and QT is legal, otherwise
+    // use a boundary BT on the out-of-picture axis when available, with QT as
+    // the fallback for any remaining boundary node.
+    if !bottom_left_in_pic && !top_right_in_pic && qt_allowed {
+        VvcPartSplit::Quad
+    } else if !bottom_left_in_pic && bt_allowed && node.width <= VVC_CTU_SIZE as u16 {
+        VvcPartSplit::HorizontalBinary
+    } else if !top_right_in_pic && bt_allowed && node.height <= VVC_CTU_SIZE as u16 {
+        VvcPartSplit::VerticalBinary
+    } else if node.width > VVC_CTU_SIZE as u16 || node.height > VVC_CTU_SIZE as u16 {
+        VvcPartSplit::Quad
+    } else if !bottom_left_in_pic || !top_right_in_pic {
+        VvcPartSplit::Quad
+    } else {
+        VvcPartSplit::None
+    }
+}
+
+pub(in crate::vvc) fn vvc_chroma_420_split_availability(
+    node: VvcCodingTreeNode,
+    visible_width: u16,
+    visible_height: u16,
+) -> VvcChromaSplitAvailability {
+    let chroma_width = vvc_chroma_420_width(node);
+    let chroma_height = vvc_chroma_420_height(node);
     let chroma_area = chroma_width * chroma_height;
-    let under_mtt_depth = node.mtt_depth < VVC_CURRENT_MAX_CHROMA_420_MTT_DEPTH_WITH_BOUNDARY;
-    let within_bt_size = node.width <= VVC_CURRENT_MAX_CHROMA_420_BT_SIZE
-        && node.height <= VVC_CURRENT_MAX_CHROMA_420_BT_SIZE;
-    let within_tt_size = node.width <= VVC_CURRENT_MAX_CHROMA_420_TT_SIZE
-        && node.height <= VVC_CURRENT_MAX_CHROMA_420_TT_SIZE;
-    let allow_qt = node.mtt_depth == 0 && chroma_width > 4;
-    let allow_bt_horizontal = under_mtt_depth && within_bt_size && chroma_area > 16;
-    let allow_bt_vertical =
-        allow_bt_horizontal && chroma_width != 4 && node.width > VVC_CURRENT_MIN_CHROMA_420_QT_SIZE;
-    let allow_tt_horizontal = under_mtt_depth && within_tt_size && chroma_area > 32;
-    let allow_tt_vertical = allow_tt_horizontal
-        && chroma_width != 8
-        && node.width > 2 * VVC_CURRENT_MIN_CHROMA_420_QT_SIZE;
+    let implicit_split = chroma_implicit_split(node, visible_width, visible_height);
+    let max_mtt_depth = VVC_CURRENT_MAX_CHROMA_420_MTT_DEPTH + node.depth_offset;
+    let mut can_no = true;
+    let mut allow_qt =
+        node.parent_split == VvcPartSplit::None || node.parent_split == VvcPartSplit::Quad;
+    allow_qt &= node.width > VVC_CURRENT_MIN_CHROMA_420_QT_SIZE;
+    allow_qt &= chroma_width > 4;
+
+    // H.266 6.4.2/6.4.3 derive chroma MTT availability from the SPS chroma
+    // MTT depth plus the implicit-boundary BT depthOffset carried by the node.
+    // The size checks are in luma coordinates except for the dual-tree 4:2:0
+    // chroma area/width guards.
+    let mut can_btt = node.mtt_depth < max_mtt_depth;
+    if can_btt
+        && node.width <= VVC_CURRENT_MIN_LUMA_CB_SIZE
+        && node.height <= VVC_CURRENT_MIN_LUMA_CB_SIZE
+    {
+        can_btt = false;
+    }
+    if can_btt
+        && node.width > VVC_CURRENT_MAX_CHROMA_420_BT_SIZE
+        && node.height > VVC_CURRENT_MAX_CHROMA_420_BT_SIZE
+        && node.width > VVC_CURRENT_MAX_CHROMA_420_TT_SIZE
+        && node.height > VVC_CURRENT_MAX_CHROMA_420_TT_SIZE
+    {
+        can_btt = false;
+    }
+
+    let mut allow_bt_horizontal = true;
+    let mut allow_bt_vertical = true;
+    let mut allow_tt_horizontal = true;
+    let mut allow_tt_vertical = true;
+
+    if implicit_split != VvcPartSplit::None {
+        can_no = false;
+        allow_tt_horizontal = false;
+        allow_tt_vertical = false;
+        allow_bt_horizontal = implicit_split == VvcPartSplit::HorizontalBinary;
+        allow_bt_vertical = implicit_split == VvcPartSplit::VerticalBinary;
+        if chroma_width == 4 {
+            allow_bt_vertical = false;
+        }
+        if !allow_bt_horizontal && !allow_bt_vertical && !allow_qt {
+            allow_qt = true;
+        }
+        return VvcChromaSplitAvailability {
+            can_no,
+            allow_qt,
+            allow_bt_vertical,
+            allow_bt_horizontal,
+            allow_tt_vertical,
+            allow_tt_horizontal,
+            implicit_split,
+        };
+    }
+
+    if !can_btt {
+        allow_bt_horizontal = false;
+        allow_bt_vertical = false;
+        allow_tt_horizontal = false;
+        allow_tt_vertical = false;
+    }
+
+    if node.width > VVC_CURRENT_MAX_CHROMA_420_BT_SIZE
+        || node.height > VVC_CURRENT_MAX_CHROMA_420_BT_SIZE
+    {
+        allow_bt_horizontal = false;
+        allow_bt_vertical = false;
+    }
+    if node.height <= VVC_CURRENT_MIN_LUMA_CB_SIZE
+        || (node.width > VVC_CTU_SIZE as u16 && node.height <= VVC_CTU_SIZE as u16)
+        || chroma_area <= 16
+    {
+        allow_bt_horizontal = false;
+    }
+    if node.width <= VVC_CURRENT_MIN_LUMA_CB_SIZE
+        || (node.width <= VVC_CTU_SIZE as u16 && node.height > VVC_CTU_SIZE as u16)
+        || chroma_area <= 16
+        || chroma_width == 4
+    {
+        allow_bt_vertical = false;
+    }
+
+    if node.height <= 2 * VVC_CURRENT_MIN_LUMA_CB_SIZE
+        || node.height > VVC_CURRENT_MAX_CHROMA_420_TT_SIZE
+        || node.width > VVC_CURRENT_MAX_CHROMA_420_TT_SIZE
+        || node.width > VVC_CTU_SIZE as u16
+        || node.height > VVC_CTU_SIZE as u16
+        || chroma_area <= 32
+    {
+        allow_tt_horizontal = false;
+    }
+    if node.width <= 2 * VVC_CURRENT_MIN_LUMA_CB_SIZE
+        || node.width > VVC_CURRENT_MAX_CHROMA_420_TT_SIZE
+        || node.height > VVC_CURRENT_MAX_CHROMA_420_TT_SIZE
+        || node.width > VVC_CTU_SIZE as u16
+        || node.height > VVC_CTU_SIZE as u16
+        || chroma_area <= 32
+        || chroma_width == 8
+    {
+        allow_tt_vertical = false;
+    }
 
     VvcChromaSplitAvailability {
+        can_no,
         allow_qt,
         allow_bt_vertical,
         allow_bt_horizontal,
         allow_tt_vertical,
         allow_tt_horizontal,
+        implicit_split,
     }
 }
 
-fn chroma_420_width(node: VvcCodingTreeNode) -> u16 {
-    node.width / 2
-}
-
-fn chroma_420_height(node: VvcCodingTreeNode) -> u16 {
-    node.height / 2
+fn chroma_prefer_vertical_bt(node: VvcCodingTreeNode, split: VvcChromaSplitAvailability) -> bool {
+    if !split.allow_bt_vertical {
+        return false;
+    }
+    if !split.allow_bt_horizontal {
+        return true;
+    }
+    // H.266 6.4.1 supplies the available BT directions; this encoder's
+    // residual policy chooses legal BT splits that drive both axes toward the
+    // 8x8 luma-coordinate leaf used by the current hardware datapath.
+    node.width >= node.height
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct VvcChromaSplitAvailability {
-    allow_qt: bool,
-    allow_bt_vertical: bool,
-    allow_bt_horizontal: bool,
-    allow_tt_vertical: bool,
-    allow_tt_horizontal: bool,
+pub(in crate::vvc) struct VvcChromaSplitAvailability {
+    pub(in crate::vvc) can_no: bool,
+    pub(in crate::vvc) allow_qt: bool,
+    pub(in crate::vvc) allow_bt_vertical: bool,
+    pub(in crate::vvc) allow_bt_horizontal: bool,
+    pub(in crate::vvc) allow_tt_vertical: bool,
+    pub(in crate::vvc) allow_tt_horizontal: bool,
+    pub(in crate::vvc) implicit_split: VvcPartSplit,
+}
+
+impl VvcChromaSplitAvailability {
+    pub(in crate::vvc) fn can_split(self) -> bool {
+        self.allow_qt || self.allow_btt()
+    }
+
+    pub(in crate::vvc) fn allow_btt(self) -> bool {
+        self.allow_bt_vertical
+            || self.allow_bt_horizontal
+            || self.allow_tt_vertical
+            || self.allow_tt_horizontal
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,6 +442,7 @@ pub(in crate::vvc) struct VvcCodingTreeNode {
     pub(in crate::vvc) mtt_depth: u8,
     pub(in crate::vvc) depth_offset: u8,
     pub(in crate::vvc) part_idx: u8,
+    pub(in crate::vvc) parent_split: VvcPartSplit,
     pub(in crate::vvc) tree_type: VvcTreeType,
     pub(in crate::vvc) split_history: [VvcPartSplit; 2],
 }
@@ -275,6 +458,7 @@ impl VvcCodingTreeNode {
             mtt_depth: 0,
             depth_offset: 0,
             part_idx: 0,
+            parent_split: VvcPartSplit::None,
             tree_type,
             split_history: [VvcPartSplit::None; 2],
         }
@@ -302,6 +486,7 @@ impl VvcCodingTreeNode {
             mtt_depth: 0,
             depth_offset: 0,
             part_idx: child_idx,
+            parent_split: VvcPartSplit::Quad,
             tree_type: self.tree_type,
             split_history: self.with_split_at_current_depth(VvcPartSplit::Quad),
         }
@@ -324,6 +509,11 @@ impl VvcCodingTreeNode {
             mtt_depth: self.mtt_depth + 1,
             depth_offset: self.depth_offset,
             part_idx: child_idx,
+            parent_split: if vertical {
+                VvcPartSplit::VerticalBinary
+            } else {
+                VvcPartSplit::HorizontalBinary
+            },
             tree_type: self.tree_type,
             split_history: self.with_split_at_current_depth(if vertical {
                 VvcPartSplit::VerticalBinary
@@ -535,6 +725,7 @@ pub(in crate::vvc) struct VvcQtSplitCtxInput {
 }
 
 impl VvcQtSplitCtxInput {
+    #[cfg(test)]
     pub(in crate::vvc) fn from_node_without_deeper_neighbours(node: VvcCodingTreeNode) -> Self {
         Self {
             available_left: false,
