@@ -20,6 +20,8 @@ LOCAL_LICENSE = Path(".tools/Xilinx.lic")
 LOCAL_VIVADO_ROOT = Path(".tools/Xilinx/Vivado")
 LOCAL_XILINX_ROOT = Path(".tools/Xilinx")
 LOCAL_VIVADO_COMPAT_LIB = Path(".tools/vivado-compat/lib")
+# Direct script fallback only; the Makefile passes SYNTH_TIMEOUT_SEC through
+# --timeout-sec for normal project synthesis runs.
 DEFAULT_SYNTH_TIMEOUT_SEC = 120.0
 DEFAULT_SYNTH_WARN_AFTER_SEC = 60.0
 DEFAULT_YOSYS_MEMORY_LIMIT_MB = 2048.0

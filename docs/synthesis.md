@@ -129,10 +129,10 @@ boundary between symbol input, context read/update, and bin coding.
 
 ## Top Encoder Baseline
 
-Measured on June 6, 2026 with:
+Measured on June 7, 2026 at commit `e8d2624` with a verbose diagnostic run:
 
 ```sh
-make synth SYNTH_DUT=vvc-encoder SYNTH_TIMEOUT_SEC=300
+make synth SYNTH_DUT=vvc-encoder SYNTH_TIMEOUT_SEC=900 SYNTH_MEMORY_LIMIT_MB=6144 SYNTH_YOSYS_QUIET=0
 ```
 
 Configuration:
@@ -141,21 +141,30 @@ Configuration:
 - clock metadata: 50 MHz
 - max visible size: 1024x1024
 - 4:4:4 palette support: enabled
-- synthesis timeout: 300 seconds
-- synthesis memory cap: 2048 MiB
-- Yosys quiet logging: enabled
+- synthesis timeout: 900 seconds for measurement; the Makefile default is 360
+  seconds so routine runs clear the observed 306.8 second synthesis time
+- synthesis memory cap: 6144 MiB for measurement; observed peak stayed below
+  2048 MiB, so the default Yosys memory cap remains 2048 MiB
+- Yosys quiet logging: disabled for the measurement so module pressure points
+  are visible in the log
 - chroma residual subset: DC plus the 2x2 low-frequency AC group
 
 Result:
 
-- Top `ff_vvc_encoder` synthesis completed in 288.1 seconds. This exceeds the
-  60 second review threshold but is inside the 300 second timeout.
-- The memory cap did not trip during synthesis.
-- Post-synthesis critical-path reporting completed in 70.3 seconds and reported
-  a peak memory of 1301.47 MB.
+- Top `ff_vvc_encoder` synthesis completed in 306.8 seconds with 1792.47 MB
+  peak memory. This exceeds the 60 second review threshold but is inside the
+  360 second default timeout.
+- Estimated area: 44,096 LCs and 107,946 total cells, including 16,348 `FDRE`,
+  8,288 `FDCE`, 288 `FDPE`, 4 `FDSE`, 24,558 `LUT6`, 11,795 `LUT2`,
+  9,299 `MUXF7`, 1,772 `MUXF8`, 3,776 `CARRY4`, 7 `DSP48E1`, and 3 `RAMB36E1`.
+- Post-synthesis critical-path reporting completed in 73.5 seconds and reported
+  a peak memory of 1781.84 MB.
 - Longest topological path length: 155, from `current_ctu_y_q` through visible
   CTU geometry and luma quantizer visibility/control into
   `luma_quant_recon.negative`.
+- Compared with the June 6, 2026 baseline, timing stayed at path length 155.
+  Runtime increased from 288.1 to 306.8 seconds, and critical-path report memory
+  increased from 1301.47 to 1781.84 MB.
 - Reports and artifacts:
   `synth/out/arty-z7-10/ff_vvc_encoder/yosys.log`,
   `synth/out/arty-z7-10/ff_vvc_encoder/critical_path.log`,
