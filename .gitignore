@@ -7,6 +7,7 @@
 /verification/reference/vtm/
 /verification/reference/build/
 /verification/generated/
+/verification/test_vector_sets/local/
 /synth/out/
 /.tools/
 /.Xil/

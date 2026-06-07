@@ -1,4 +1,4 @@
-.PHONY: help check-tools build test fmt lint decoder-setup test-vectors validate-set validate-smoke validate-random-short validate-sweep-420 validate-sweep-444 validate-racehorses-sweep-420 validate-motion-short validate-all-short validate-all-sweeps validate validate-vtm-synth validate-decode rtl-test synth-env synth-check synth synth-postsim synth-vivado synth-vivado-remote yosys vivado vivado-prepare vivado-config vivado-auth vivado-install vivado-host-deps clean
+.PHONY: help check-tools build test fmt lint decoder-setup test-vector-sets test-vectors validate-set validate-smoke validate-random-short validate-sweep-420 validate-sweep-444 validate-motion-short validate-all-short validate-all-sweeps validate validate-vtm-synth validate-decode rtl-test synth-env synth-check synth synth-postsim synth-vivado synth-vivado-remote yosys vivado vivado-prepare vivado-config vivado-auth vivado-install vivado-host-deps clean
 
 SIM ?= icarus
 TOPLEVEL_LANG ?= verilog
@@ -24,8 +24,8 @@ SYNTH_MAX_VISIBLE_WIDTH ?= 1024
 SYNTH_MAX_VISIBLE_HEIGHT ?= 1024
 SYNTH_SUPPORT_PALETTE_444 ?= 1
 SYNTH_TOOL ?= $(or $(filter yosys vivado,$(MAKECMDGOALS)),yosys)
-VIVADO_REMOTE ?= gabriel@192.168.50.55
-VIVADO_REMOTE_ROOT ?= /media/gabriel/Gabriel8TB/Development/frameforge
+VIVADO_REMOTE ?= user@example-host
+VIVADO_REMOTE_ROOT ?= $(CURDIR)
 VIVADO_REMOTE_SSH ?= ssh -F /dev/null
 VALIDATE_SYNTH ?= 1
 VALIDATE_SW_ONLY ?= 0
@@ -33,7 +33,9 @@ VALIDATE_SYNTH_DUT ?= vvc-cabac-pipeline
 VALIDATE_SYNTH_BACKEND ?= yosys
 TEST_VECTOR_SET ?= smoke
 TEST_VECTOR_DIR ?= verification/generated/test_vectors
+TEST_VECTOR_SET_DIR ?= verification/test_vector_sets
 VALIDATION_SET ?= smoke
+VALIDATION_SET_DIR ?= $(TEST_VECTOR_SET_DIR)
 VALIDATION_LOG_DIR ?= verification/generated/validation_logs
 VALIDATION_LIMIT ?=
 VALIDATION_STOP_ON_FAIL ?= 0
@@ -51,9 +53,10 @@ help:
 	@printf '%s\n' '  make fmt       - format Rust code'
 	@printf '%s\n' '  make lint      - run Rust Clippy lints'
 	@printf '%s\n' '  make decoder-setup - find or build external VTM decoder'
-	@printf '%s\n' '  make test-vectors [TEST_VECTOR_SET=smoke|sweep-420|sweep-444|racehorses-sweep-420|random-short|motion-short|motion-long|all-short|all-sweeps TEST_VECTOR_DIR=verification/generated/test_vectors] - generate deterministic YUV test streams'
-	@printf '%s\n' '  make validate-set [VALIDATION_SET=smoke VALIDATION_LIMIT=<n> VALIDATION_WITH_SYNTH=0|1 VALIDATION_STOP_ON_FAIL=0|1] - generate and run a named validation set'
-	@printf '%s\n' '  make validate-smoke | validate-random-short | validate-sweep-420 | validate-sweep-444 | validate-racehorses-sweep-420 | validate-motion-short | validate-all-short | validate-all-sweeps - direct validation set entry points'
+	@printf '%s\n' '  make test-vector-sets [TEST_VECTOR_SET_DIR=verification/test_vector_sets] - list available test vector manifests'
+	@printf '%s\n' '  make test-vectors [TEST_VECTOR_SET=smoke TEST_VECTOR_SET_DIR=verification/test_vector_sets TEST_VECTOR_DIR=verification/generated/test_vectors] - generate deterministic YUV test streams from a manifest'
+	@printf '%s\n' '  make validate-set [VALIDATION_SET=smoke VALIDATION_SET_DIR=verification/test_vector_sets VALIDATION_LIMIT=<n> VALIDATION_WITH_SYNTH=0|1 VALIDATION_STOP_ON_FAIL=0|1] - generate and run a named validation set'
+	@printf '%s\n' '  make validate-smoke | validate-random-short | validate-sweep-420 | validate-sweep-444 | validate-motion-short | validate-all-short | validate-all-sweeps - direct validation set entry points'
 	@printf '%s\n' '  make validate INPUT=input_64x64_300f_30fps_yuv420p8.yuv [WIDTH=<w> HEIGHT=<h> FRAMES=<n> FORMAT=<fmt> RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 VALIDATE_SW_ONLY=1 VALIDATE_SYNTH=1|0] - infer metadata from filename unless overridden'
 	@printf '%s\n' '  make validate-vtm-synth INPUT=input_64x64_1f_yuv420p8.yuv [WIDTH=<w> HEIGHT=<h> FRAMES=<n> FORMAT=<fmt> RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 VALIDATE_SYNTH_DUT=vvc-cabac-pipeline VALIDATE_SYNTH_BACKEND=yosys|vivado-remote|none] - compare software stream with VTM, then run synthesis'
 	@printf '%s\n' '  make validate-decode BITSTREAM=out.vvc [DECODED=out.yuv]'
@@ -68,12 +71,15 @@ help:
 	@printf '%s\n' '  make synth-postsim - run Yosys synthesis and a post-synthesis smoke sim when supported'
 	@printf '%s\n' '  make synth-vivado - run optional Vivado synthesis/timing if Vivado is installed'
 	@printf '%s\n' '  make synth-vivado-remote [VIVADO_REMOTE=user@host VIVADO_REMOTE_ROOT=/path/to/frameforge VIVADO_REMOTE_SSH="ssh -F /dev/null"] - run Vivado synthesis/timing over SSH'
-	@printf '%s\n' '  make vivado-prepare [VIVADO_LICENSE=~/Downloads/Xilinx.lic] - create local .tools Vivado directories and ~/.Xilinx cache symlink'
+	@printf '%s\n' '  make vivado-prepare [VIVADO_LICENSE=/path/to/Xilinx.lic] - create local .tools Vivado directories and ~/.Xilinx cache symlink'
 	@printf '%s\n' '  make vivado-config - generate a host-local Vivado install config from the tracked template'
 	@printf '%s\n' '  make vivado-auth - run AMD xsetup AuthTokenGen'
 	@printf '%s\n' '  make vivado-install - run AMD xsetup batch install using the generated config'
 	@printf '%s\n' '  sudo make vivado-host-deps - install host packages required by project-local Vivado'
 	@printf '%s\n' '  make clean     - remove local build outputs'
+	@printf '%s\n' ''
+	@printf '%s\n' 'Available test vector sets:'
+	@python3 scripts/generate_test_vectors.py --set-dir "$(TEST_VECTOR_SET_DIR)" --list-sets
 
 check-tools:
 	python3 scripts/configure_dev_env.py
@@ -93,11 +99,14 @@ lint:
 decoder-setup:
 	python3 scripts/ensure_reference_decoder.py
 
+test-vector-sets:
+	python3 scripts/generate_test_vectors.py --set-dir "$(TEST_VECTOR_SET_DIR)" --list-sets
+
 test-vectors:
-	python3 scripts/generate_test_vectors.py --set "$(TEST_VECTOR_SET)" --out-dir "$(TEST_VECTOR_DIR)"
+	python3 scripts/generate_test_vectors.py --set "$(TEST_VECTOR_SET)" --set-dir "$(TEST_VECTOR_SET_DIR)" --out-dir "$(TEST_VECTOR_DIR)"
 
 validate-set:
-	python3 scripts/run_validation_set.py "$(VALIDATION_SET)" --out-dir "$(TEST_VECTOR_DIR)" --log-dir "$(VALIDATION_LOG_DIR)" --max-width "$(RTL_MAX_VISIBLE_WIDTH)" --max-height "$(RTL_MAX_VISIBLE_HEIGHT)" $(if $(VALIDATION_LIMIT),--limit "$(VALIDATION_LIMIT)") $(if $(filter 1,$(VALIDATION_WITH_SYNTH)),--with-synth) $(if $(filter 1,$(VALIDATION_SW_ONLY)),--sw-only) $(if $(filter 1,$(VALIDATION_STOP_ON_FAIL)),--stop-on-fail)
+	python3 scripts/run_validation_set.py "$(VALIDATION_SET)" --set-dir "$(VALIDATION_SET_DIR)" --out-dir "$(TEST_VECTOR_DIR)" --log-dir "$(VALIDATION_LOG_DIR)" --max-width "$(RTL_MAX_VISIBLE_WIDTH)" --max-height "$(RTL_MAX_VISIBLE_HEIGHT)" $(if $(VALIDATION_LIMIT),--limit "$(VALIDATION_LIMIT)") $(if $(filter 1,$(VALIDATION_WITH_SYNTH)),--with-synth) $(if $(filter 1,$(VALIDATION_SW_ONLY)),--sw-only) $(if $(filter 1,$(VALIDATION_STOP_ON_FAIL)),--stop-on-fail)
 
 validate-smoke:
 	$(MAKE) validate-set VALIDATION_SET=smoke
@@ -110,9 +119,6 @@ validate-sweep-420:
 
 validate-sweep-444:
 	$(MAKE) validate-set VALIDATION_SET=sweep-444
-
-validate-racehorses-sweep-420:
-	$(MAKE) validate-set VALIDATION_SET=racehorses-sweep-420
 
 validate-motion-short:
 	$(MAKE) validate-set VALIDATION_SET=motion-short

@@ -1,0 +1,19 @@
+# generator=scripts/generate_test_vectors.py
+# description=Smoke vectors plus randomized short vectors and short motion vectors.
+name,width,height,frames,format,pattern,fps,source,crop_x,crop_y
+black,8,8,1,yuv420p8,black,,,,
+black,16,16,2,yuv420p8,black,,,,
+screen_blocks,16,16,1,yuv444p8,screen_blocks,,,,
+screen_blocks,64,64,1,yuv444p8,screen_blocks,,,,
+stick_walk,64,64,3,yuv420p8,stick_walk,30,,,
+stick_walk,64,64,3,yuv444p8,stick_walk,30,,,
+random_short_00,24,64,3,yuv420p8,black,,,,
+random_short_01,16,8,2,yuv444p8,moving_blocks,,,,
+random_short_02,56,48,3,yuv420p8,black,,,,
+random_short_03,24,32,4,yuv444p8,moving_blocks,,,,
+random_short_04,64,48,1,yuv420p8,black,,,,
+random_short_05,32,56,1,yuv444p8,moving_blocks,,,,
+random_short_06,32,32,2,yuv420p8,black,,,,
+random_short_07,56,48,1,yuv444p8,moving_blocks,,,,
+random_short_08,8,24,5,yuv420p8,black,,,,
+random_short_09,48,32,2,yuv444p8,moving_blocks,,,,

@@ -13,8 +13,8 @@ Examples:
   sudo scripts/install_vivado_host_deps.sh --local
 
   scripts/install_vivado_host_deps.sh \
-    --remote gabriel@192.168.50.55 \
-    --remote-root /media/gabriel/Gabriel8TB/Development/frameforge
+    --remote user@example-host \
+    --remote-root /path/to/frameforge
 
 Notes:
   - This runs AMD's Vivado scripts/installLibs.sh, which installs distro packages.

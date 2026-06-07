@@ -28,8 +28,9 @@ class ValidationResult:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("set", choices=sorted(generate_test_vectors.vector_sets()))
+    parser.add_argument("set", help="named vector set manifest to generate and validate")
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_VECTOR_DIR)
+    parser.add_argument("--set-dir", type=Path, default=generate_test_vectors.DEFAULT_SET_DIR)
     parser.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_DIR)
     parser.add_argument("--max-width", type=int, default=64)
     parser.add_argument("--max-height", type=int, default=64)
@@ -39,7 +40,7 @@ def main() -> int:
     parser.add_argument("--stop-on-fail", action="store_true")
     args = parser.parse_args()
 
-    vector_paths = generate_test_vectors.generate_vectors(args.set, args.out_dir)
+    vector_paths = generate_test_vectors.generate_vectors(args.set, args.out_dir, args.set_dir)
     if args.limit:
         vector_paths = vector_paths[: args.limit]
 

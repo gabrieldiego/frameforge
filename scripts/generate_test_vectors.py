@@ -1,22 +1,18 @@
 #!/usr/bin/env python3
-"""Generate deterministic YUV test vectors used by Makefile validation sets."""
+"""Generate deterministic YUV test vectors from manifest files."""
 
 from __future__ import annotations
 
 import argparse
-import os
-import random
+import csv
 from dataclasses import dataclass
 from pathlib import Path
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_DIR = Path("verification/generated/test_vectors")
-DEFAULT_RACEHORSES_SOURCE = Path(
-    "/media/gabriel/storage/YUV/class_d/RaceHorses_416x240_30.yuv"
-)
-RACEHORSES_WIDTH = 416
-RACEHORSES_HEIGHT = 240
-GEOMETRY_STEPS = range(8, 65, 8)
+DEFAULT_SET_DIR = REPO_ROOT / "verification" / "test_vector_sets"
+LOCAL_SET_DIR = "local"
 PALETTE_COLORS_YUV = [
     (18, 128, 128),
     (46, 144, 112),
@@ -30,6 +26,15 @@ PALETTE_COLORS_YUV = [
 
 
 @dataclass(frozen=True)
+class TestVectorSource:
+    id: str
+    path: Path
+    width: int
+    height: int
+    fmt: str
+
+
+@dataclass(frozen=True)
 class TestVector:
     name: str
     width: int
@@ -38,6 +43,9 @@ class TestVector:
     fmt: str
     pattern: str
     fps: int | None = None
+    source: str | None = None
+    crop_x: int | None = None
+    crop_y: int | None = None
 
     @property
     def filename(self) -> str:
@@ -45,113 +53,165 @@ class TestVector:
         return f"{self.name}_{self.width}x{self.height}_{self.frames}f{fps_part}_{self.fmt}.yuv"
 
 
-def vector_sets() -> dict[str, list[TestVector]]:
-    sets = {
-        "smoke": smoke_vectors(),
-        "sweep-420": sweep_vectors("yuv420p8"),
-        "sweep-444": sweep_vectors("yuv444p8"),
-        "racehorses-sweep-420": racehorses_sweep_vectors(),
-        "random-short": random_short_vectors(),
-        "motion-short": motion_vectors(frames=3),
-        "motion-long": motion_vectors(frames=300),
-    }
-    sets["all-short"] = unique_vectors(
-        sets["smoke"] + sets["random-short"] + sets["motion-short"]
-    )
-    sets["all-sweeps"] = unique_vectors(sets["sweep-420"] + sets["sweep-444"])
+@dataclass(frozen=True)
+class TestVectorSet:
+    name: str
+    manifest: Path
+    generator: str
+    description: str
+    vectors: list[TestVector]
+    sources: dict[str, TestVectorSource]
+
+
+def vector_sets(set_dir: Path = DEFAULT_SET_DIR) -> dict[str, TestVectorSet]:
+    sets: dict[str, TestVectorSet] = {}
+    for path in vector_set_paths(set_dir):
+        loaded = load_vector_set(path)
+        sets[loaded.name] = loaded
     return sets
 
 
-def smoke_vectors() -> list[TestVector]:
-    return [
-        TestVector("black", 8, 8, 1, "yuv420p8", "black"),
-        TestVector("black", 16, 16, 2, "yuv420p8", "black"),
-        TestVector("screen_blocks", 16, 16, 1, "yuv444p8", "screen_blocks"),
-        TestVector("screen_blocks", 64, 64, 1, "yuv444p8", "screen_blocks"),
-        *motion_vectors(frames=3),
-    ]
+def vector_set_paths(set_dir: Path) -> list[Path]:
+    paths = sorted(set_dir.glob("*.csv")) if set_dir.exists() else []
+    local_dir = set_dir / LOCAL_SET_DIR
+    if local_dir.exists():
+        paths.extend(sorted(local_dir.glob("*.csv")))
+    return paths
 
 
-def sweep_vectors(fmt: str) -> list[TestVector]:
-    pattern = "black" if fmt == "yuv420p8" else "screen_blocks"
-    return [
-        TestVector(pattern, width, height, 1, fmt, pattern)
-        for height in GEOMETRY_STEPS
-        for width in GEOMETRY_STEPS
-    ]
+def load_vector_set(path: Path) -> TestVectorSet:
+    generator = "scripts/generate_test_vectors.py"
+    description = ""
+    sources: dict[str, TestVectorSource] = {}
+    rows: list[str] = []
 
-
-def racehorses_sweep_vectors() -> list[TestVector]:
-    return [
-        TestVector("racehorses_crop", width, height, 1, "yuv420p8", "racehorses_crop")
-        for height in GEOMETRY_STEPS
-        for width in GEOMETRY_STEPS
-    ]
-
-
-def random_short_vectors() -> list[TestVector]:
-    rng = random.Random(0xF0F0_2026)
-    vectors: list[TestVector] = []
-    used: set[tuple[int, int, str]] = set()
-    while len(vectors) < 10:
-        width = rng.choice(list(GEOMETRY_STEPS))
-        height = rng.choice(list(GEOMETRY_STEPS))
-        fmt = "yuv420p8" if len(vectors) % 2 == 0 else "yuv444p8"
-        key = (width, height, fmt)
-        if key in used:
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line:
             continue
-        used.add(key)
-        frames = rng.randint(1, 5)
-        pattern = "moving_blocks" if fmt == "yuv444p8" else "black"
-        vectors.append(
-            TestVector(
-                f"random_short_{len(vectors):02d}",
-                width,
-                height,
-                frames,
-                fmt,
-                pattern,
-            )
-        )
-    return vectors
-
-
-def motion_vectors(frames: int) -> list[TestVector]:
-    return [
-        TestVector("stick_walk", 64, 64, frames, "yuv420p8", "stick_walk", fps=30),
-        TestVector("stick_walk", 64, 64, frames, "yuv444p8", "stick_walk", fps=30),
-    ]
-
-
-def unique_vectors(vectors: list[TestVector]) -> list[TestVector]:
-    seen: set[str] = set()
-    out: list[TestVector] = []
-    for vector in vectors:
-        if vector.filename in seen:
+        if line.startswith("#"):
+            body = line[1:].strip()
+            if body.startswith("generator="):
+                generator = body.removeprefix("generator=").strip()
+            elif body.startswith("description="):
+                description = body.removeprefix("description=").strip()
+            elif body.startswith("source="):
+                source = parse_source(body.removeprefix("source="))
+                sources[source.id] = source
             continue
-        seen.add(vector.filename)
-        out.append(vector)
+        rows.append(raw_line)
+
+    if not rows:
+        raise ValueError(f"test vector manifest has no CSV rows: {path}")
+
+    reader = csv.DictReader(rows)
+    vectors = [parse_vector(row, path) for row in reader]
+    if not vectors:
+        raise ValueError(f"test vector manifest has no vectors: {path}")
+
+    return TestVectorSet(
+        name=path.stem,
+        manifest=path,
+        generator=generator,
+        description=description,
+        vectors=vectors,
+        sources=sources,
+    )
+
+
+def parse_source(value: str) -> TestVectorSource:
+    fields = parse_key_value_fields(value)
+    return TestVectorSource(
+        id=required_field(fields, "id", "source"),
+        path=Path(required_field(fields, "path", "source")),
+        width=parse_positive_int(required_field(fields, "width", "source"), "source width"),
+        height=parse_positive_int(required_field(fields, "height", "source"), "source height"),
+        fmt=required_field(fields, "format", "source"),
+    )
+
+
+def parse_key_value_fields(value: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for field in next(csv.reader([value], skipinitialspace=True)):
+        key, sep, item = field.partition("=")
+        if not sep:
+            raise ValueError(f"expected key=value source field, got '{field}'")
+        out[key.strip()] = item.strip()
     return out
 
 
-def generate_vectors(set_name: str, out_dir: Path) -> list[Path]:
-    sets = vector_sets()
+def parse_vector(row: dict[str, str], path: Path) -> TestVector:
+    context = f"{path}:{row.get('name', '').strip() or '<unnamed>'}"
+    return TestVector(
+        name=required_field(row, "name", context),
+        width=parse_positive_int(required_field(row, "width", context), "width"),
+        height=parse_positive_int(required_field(row, "height", context), "height"),
+        frames=parse_positive_int(required_field(row, "frames", context), "frames"),
+        fmt=required_field(row, "format", context),
+        pattern=required_field(row, "pattern", context),
+        fps=parse_optional_int(row.get("fps", ""), "fps"),
+        source=optional_field(row.get("source", "")),
+        crop_x=parse_optional_int(row.get("crop_x", ""), "crop_x"),
+        crop_y=parse_optional_int(row.get("crop_y", ""), "crop_y"),
+    )
+
+
+def required_field(row: dict[str, str], key: str, context: str) -> str:
+    value = row.get(key, "").strip()
+    if not value:
+        raise ValueError(f"missing {key} in {context}")
+    return value
+
+
+def optional_field(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def parse_positive_int(value: str, field: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as err:
+        raise ValueError(f"{field} expects an integer, got '{value}'") from err
+    if parsed <= 0:
+        raise ValueError(f"{field} expects a positive integer, got {parsed}")
+    return parsed
+
+
+def parse_optional_int(value: str | None, field: str) -> int | None:
+    stripped = optional_field(value)
+    if stripped is None:
+        return None
+    try:
+        parsed = int(stripped)
+    except ValueError as err:
+        raise ValueError(f"{field} expects an integer, got '{stripped}'") from err
+    if parsed < 0:
+        raise ValueError(f"{field} expects a non-negative integer, got {parsed}")
+    return parsed
+
+
+def generate_vectors(set_name: str, out_dir: Path, set_dir: Path = DEFAULT_SET_DIR) -> list[Path]:
+    sets = vector_sets(set_dir)
     if set_name not in sets:
-        choices = ", ".join(sorted(sets))
+        choices = ", ".join(sorted(sets)) or "<none>"
         raise ValueError(f"unknown vector set '{set_name}'; choices: {choices}")
 
+    vector_set = sets[set_name]
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = []
-    for vector in sets[set_name]:
+    for vector in vector_set.vectors:
         path = out_dir / vector.filename
-        path.write_bytes(generate_yuv(vector))
+        path.write_bytes(generate_yuv(vector, vector_set.sources))
         paths.append(path)
     return paths
 
 
-def generate_yuv(vector: TestVector) -> bytes:
-    if vector.pattern == "racehorses_crop":
-        return generate_racehorses_crop(vector)
+def generate_yuv(vector: TestVector, sources: dict[str, TestVectorSource]) -> bytes:
+    if vector.pattern == "source_crop":
+        return generate_source_crop(vector, sources)
     if vector.fmt == "yuv420p8":
         return generate_yuv420p8(vector)
     if vector.fmt == "yuv444p8":
@@ -159,25 +219,30 @@ def generate_yuv(vector: TestVector) -> bytes:
     raise ValueError(f"unsupported generated format: {vector.fmt}")
 
 
-def generate_racehorses_crop(vector: TestVector) -> bytes:
-    if vector.fmt != "yuv420p8":
-        raise ValueError("RaceHorses crop vectors are currently yuv420p8 only")
-    source = Path(os.environ.get("FRAMEFORGE_RACEHORSES_YUV", DEFAULT_RACEHORSES_SOURCE))
-    if not source.exists():
-        raise ValueError(
-            "RaceHorses source YUV is missing: "
-            f"{source}. Set FRAMEFORGE_RACEHORSES_YUV to override."
-        )
+def generate_source_crop(vector: TestVector, sources: dict[str, TestVectorSource]) -> bytes:
+    if vector.source is None:
+        raise ValueError(f"{vector.filename} uses source_crop but has no source id")
+    if vector.source not in sources:
+        raise ValueError(f"{vector.filename} references unknown source '{vector.source}'")
+    if vector.crop_x is None or vector.crop_y is None:
+        raise ValueError(f"{vector.filename} uses source_crop but has no crop_x/crop_y")
     if vector.frames != 1:
-        raise ValueError("RaceHorses crop vectors currently use the first frame only")
+        raise ValueError("source_crop vectors currently use the first frame only")
 
-    frame_size = RACEHORSES_WIDTH * RACEHORSES_HEIGHT * 3 // 2
-    source_frame = source.read_bytes()[:frame_size]
+    source = sources[vector.source]
+    if source.fmt != "yuv420p8" or vector.fmt != "yuv420p8":
+        raise ValueError("source_crop currently supports yuv420p8 sources and outputs only")
+    if not source.path.exists():
+        raise ValueError(f"source YUV is missing for '{source.id}': {source.path}")
+    if vector.crop_x + vector.width > source.width or vector.crop_y + vector.height > source.height:
+        raise ValueError(f"{vector.filename} crop exceeds source dimensions")
+
+    frame_size = source.width * source.height * 3 // 2
+    source_frame = source.path.read_bytes()[:frame_size]
     if len(source_frame) != frame_size:
-        raise ValueError(f"RaceHorses source is smaller than one {RACEHORSES_WIDTH}x{RACEHORSES_HEIGHT} frame")
+        raise ValueError(f"{source.id} source is smaller than one {source.width}x{source.height} frame")
 
-    crop_x, crop_y = racehorses_crop_origin(vector.width, vector.height)
-    y_size = RACEHORSES_WIDTH * RACEHORSES_HEIGHT
+    y_size = source.width * source.height
     uv_size = y_size // 4
     source_y = source_frame[:y_size]
     source_u = source_frame[y_size : y_size + uv_size]
@@ -185,29 +250,19 @@ def generate_racehorses_crop(vector: TestVector) -> bytes:
 
     out = bytearray()
     for row in range(vector.height):
-        start = (crop_y + row) * RACEHORSES_WIDTH + crop_x
+        start = (vector.crop_y + row) * source.width + vector.crop_x
         out.extend(source_y[start : start + vector.width])
 
     chroma_width = vector.width // 2
     chroma_height = vector.height // 2
-    source_chroma_width = RACEHORSES_WIDTH // 2
-    crop_chroma_x = crop_x // 2
-    crop_chroma_y = crop_y // 2
+    source_chroma_width = source.width // 2
+    crop_chroma_x = vector.crop_x // 2
+    crop_chroma_y = vector.crop_y // 2
     for plane in (source_u, source_v):
         for row in range(chroma_height):
             start = (crop_chroma_y + row) * source_chroma_width + crop_chroma_x
             out.extend(plane[start : start + chroma_width])
     return bytes(out)
-
-
-def racehorses_crop_origin(width: int, height: int) -> tuple[int, int]:
-    max_x = RACEHORSES_WIDTH - width
-    max_y = RACEHORSES_HEIGHT - height
-    if max_x < 0 or max_y < 0:
-        raise ValueError(f"RaceHorses crop {width}x{height} exceeds source dimensions")
-    crop_x = (max_x * 3) // 8
-    crop_y = (max_y * 2) // 5
-    return crop_x - (crop_x % 2), crop_y - (crop_y % 2)
 
 
 def generate_yuv420p8(vector: TestVector) -> bytes:
@@ -339,16 +394,18 @@ def pixel_index(vector: TestVector, x: int, y: int) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--set",
-        default="smoke",
-        choices=sorted(vector_sets()),
-        help="named vector set to generate",
-    )
+    parser.add_argument("--set", default="smoke", help="named vector set manifest to generate")
+    parser.add_argument("--set-dir", type=Path, default=DEFAULT_SET_DIR)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
+    parser.add_argument("--list-sets", action="store_true", help="list available vector set manifests")
     args = parser.parse_args()
 
-    paths = generate_vectors(args.set, args.out_dir)
+    if args.list_sets:
+        for name, vector_set in sorted(vector_sets(args.set_dir).items()):
+            print(f"{name}\t{len(vector_set.vectors)}\t{vector_set.manifest}")
+        return 0
+
+    paths = generate_vectors(args.set, args.out_dir, args.set_dir)
     print(f"Generated {len(paths)} test vector(s) in {args.out_dir}")
     for path in paths:
         print(path)

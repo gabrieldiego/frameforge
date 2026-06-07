@@ -1,0 +1,5 @@
+# generator=scripts/generate_test_vectors.py
+# description=Long 300-frame 64x64 stick-walk vectors.
+name,width,height,frames,format,pattern,fps,source,crop_x,crop_y
+stick_walk,64,64,300,yuv420p8,stick_walk,30,,,
+stick_walk,64,64,300,yuv444p8,stick_walk,30,,,

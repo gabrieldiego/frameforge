@@ -171,7 +171,7 @@ paths.
 Prepare a local install area:
 
 ```sh
-make vivado-prepare VIVADO_LICENSE="$HOME/Downloads/Xilinx.lic"
+make vivado-prepare VIVADO_LICENSE="/path/to/Xilinx.lic"
 make vivado-config
 ```
 
@@ -179,7 +179,7 @@ If the AMD web installer has already been downloaded, extract it into `.tools`:
 
 ```sh
 python3 scripts/setup_vivado.py extract \
-  --installer "$HOME/Downloads/FPGAs_AdaptiveSoCs_Unified_SDI_2025.2_1114_2157_Lin64.bin"
+  --installer "/path/to/FPGAs_AdaptiveSoCs_Unified_SDI_2025.2_1114_2157_Lin64.bin"
 ```
 
 Generate an AMD authentication token when needed:

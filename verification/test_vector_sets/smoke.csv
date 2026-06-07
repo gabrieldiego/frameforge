@@ -1,0 +1,9 @@
+# generator=scripts/generate_test_vectors.py
+# description=Small 4:2:0, 4:4:4, and short motion vectors for first sanity checks.
+name,width,height,frames,format,pattern,fps,source,crop_x,crop_y
+black,8,8,1,yuv420p8,black,,,,
+black,16,16,2,yuv420p8,black,,,,
+screen_blocks,16,16,1,yuv444p8,screen_blocks,,,,
+screen_blocks,64,64,1,yuv444p8,screen_blocks,,,,
+stick_walk,64,64,3,yuv420p8,stick_walk,30,,,
+stick_walk,64,64,3,yuv444p8,stick_walk,30,,,
