@@ -91,6 +91,16 @@ Equivalent Rust command:
 cargo test
 ```
 
+Run the portable release sanity check:
+
+```sh
+make release-check
+```
+
+This checks Rust formatting, Rust tests, Python helper syntax, manifest loading,
+smoke vector generation, and the smoke software/RTL/VTM validation set without
+running synthesis.
+
 ## Quick Manual Workflow
 
 For a first manual experiment, run the commands in this order:

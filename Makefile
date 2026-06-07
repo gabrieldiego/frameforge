@@ -1,4 +1,4 @@
-.PHONY: help check-tools build test fmt lint decoder-setup test-vector-sets test-vectors validate-set validate-smoke validate-random-short validate-sweep-420 validate-sweep-444 validate-motion-short validate-all-short validate-all-sweeps validate validate-vtm-synth validate-decode rtl-test synth-env synth-check synth synth-postsim synth-vivado synth-vivado-remote yosys vivado vivado-prepare vivado-config vivado-auth vivado-install vivado-host-deps clean
+.PHONY: help check-tools build test fmt lint release-check decoder-setup test-vector-sets test-vectors validate-set validate-smoke validate-random-short validate-sweep-420 validate-sweep-444 validate-motion-short validate-all-short validate-all-sweeps validate validate-vtm-synth validate-decode rtl-test synth-env synth-check synth synth-postsim synth-vivado synth-vivado-remote yosys vivado vivado-prepare vivado-config vivado-auth vivado-install vivado-host-deps clean
 
 SIM ?= icarus
 TOPLEVEL_LANG ?= verilog
@@ -52,6 +52,7 @@ help:
 	@printf '%s\n' '  make test      - run Rust tests'
 	@printf '%s\n' '  make fmt       - format Rust code'
 	@printf '%s\n' '  make lint      - run Rust Clippy lints'
+	@printf '%s\n' '  make release-check - run portable release sanity checks without synthesis'
 	@printf '%s\n' '  make decoder-setup - find or build external VTM decoder'
 	@printf '%s\n' '  make test-vector-sets [TEST_VECTOR_SET_DIR=verification/test_vector_sets] - list available test vector manifests'
 	@printf '%s\n' '  make test-vectors [TEST_VECTOR_SET=smoke TEST_VECTOR_SET_DIR=verification/test_vector_sets TEST_VECTOR_DIR=verification/generated/test_vectors] - generate deterministic YUV test streams from a manifest'
@@ -95,6 +96,14 @@ fmt:
 
 lint:
 	cargo clippy --all-targets -- -D warnings
+
+release-check:
+	cargo fmt --check
+	cargo test
+	python3 -m py_compile scripts/*.py
+	$(MAKE) test-vector-sets
+	$(MAKE) test-vectors TEST_VECTOR_SET=smoke
+	$(MAKE) validate-smoke VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
 
 decoder-setup:
 	python3 scripts/ensure_reference_decoder.py
