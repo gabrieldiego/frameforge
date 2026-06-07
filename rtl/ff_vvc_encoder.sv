@@ -22,10 +22,6 @@ module ff_vvc_encoder #(
   input  logic [SAMPLE_BITS - 1:0] s_axis_data,
   input  logic       s_axis_last,
   output logic       input_error,
-  output logic       sampled_color_valid,
-  output logic [SAMPLE_BITS - 1:0] sampled_y,
-  output logic [SAMPLE_BITS - 1:0] sampled_u,
-  output logic [SAMPLE_BITS - 1:0] sampled_v,
 
   output logic       m_axis_valid,
   input  logic       m_axis_ready,
@@ -967,14 +963,6 @@ module ff_vvc_encoder #(
     .rst_n(rst_n),
     .start(cabac_start_q),
     .enable(cabac_enable),
-    .mode_palette_444(ctu_has_palette_cu),
-    .visible_width(ctu_visible_width_w),
-    .visible_height(ctu_visible_height_w),
-    .coded_width(coding_tree_coded_width),
-    .coded_height(coding_tree_coded_height),
-    .luma_rem(8'd0),
-    .cb_rem(5'd0),
-    .cr_rem(5'd0),
     .s_axis_valid(!cabac_start_q && cabac_input_valid_q),
     .s_axis_ready(cabac_symbol_ready),
     .s_axis_kind(cabac_input_kind_q),
@@ -1091,10 +1079,6 @@ module ff_vvc_encoder #(
       input_active_q <= 1'b0;
       s_axis_ready <= 1'b0;
       input_error  <= 1'b0;
-      sampled_color_valid <= 1'b0;
-      sampled_y <= '0;
-      sampled_u <= '0;
-      sampled_v <= '0;
       m_axis_valid <= 1'b0;
       m_axis_data  <= '0;
       m_axis_last  <= 1'b0;
@@ -1154,7 +1138,6 @@ module ff_vvc_encoder #(
         input_error    <= (visible_width == 16'd0) || (visible_height == 16'd0) ||
                           (visible_width > MAX_VISIBLE_WIDTH) ||
                           (visible_height > MAX_VISIBLE_HEIGHT);
-        sampled_color_valid <= 1'b0;
         m_axis_valid   <= 1'b0;
         m_axis_last    <= 1'b0;
         pending_output_q <= 1'b0;
@@ -1199,7 +1182,6 @@ module ff_vvc_encoder #(
         input_stream_leaf_q <= 7'd0;
         input_stream_component_q <= 2'd0;
         input_stream_sample_q <= 6'd0;
-        sampled_color_valid <= 1'b0;
         chroma_tu_quant_pending_q <= 1'b0;
         chroma_tu_quant_frame_last_q <= 1'b0;
         chroma_quant_tu_q <= 6'd0;
@@ -1229,21 +1211,6 @@ module ff_vvc_encoder #(
         if (s_axis_last != input_frame_last_w) begin
           input_error <= 1'b1;
         end
-        if ((input_stream_leaf_q == 7'd0) &&
-            (input_stream_component_q == 2'd0) &&
-            (input_stream_sample_q == 6'd0)) begin
-          sampled_y <= s_axis_data;
-        end
-        if ((input_stream_leaf_q == 7'd0) &&
-            (input_stream_component_q == 2'd1) &&
-            (input_stream_sample_q == 6'd0)) begin
-          sampled_u <= s_axis_data;
-        end
-        if ((input_stream_leaf_q == 7'd0) &&
-            (input_stream_component_q == 2'd2) &&
-            (input_stream_sample_q == 6'd0)) begin
-          sampled_v <= s_axis_data;
-        end
         if (input_luma_tu_sample_w) begin
           luma_sample_tu_q[residual_luma_sample_index_w * 8 +: 8] <=
             input_sample_8bit_w;
@@ -1264,7 +1231,6 @@ module ff_vvc_encoder #(
         if (input_frame_last_w) begin
           input_active_q <= 1'b0;
           s_axis_ready   <= 1'b0;
-          sampled_color_valid <= !input_error && (s_axis_last == input_frame_last_w);
           if (ctu_has_palette_cu) begin
             pending_output_q <= 1'b1;
           end else if (input_chroma_tu_last_cr_sample_w) begin

@@ -26,6 +26,8 @@ module ff_vvc_palette_cu_symbolizer #(
   localparam logic [3:0] PALETTE_PKT_ENTRY_CB = 4'h4;
   localparam logic [3:0] PALETTE_PKT_ENTRY_CR = 4'h5;
   localparam int MAX_CU_SAMPLES = CU_SIZE * CU_SIZE;
+  localparam int PALETTE_ENTRY_BANK_BITS = 8 * MAX_PALETTE_ENTRIES;
+  localparam int PALETTE_INDEX_BANK_BITS = 8 * MAX_CU_SAMPLES;
 
   typedef enum logic [2:0] {
     ST_BUILD,
@@ -41,10 +43,10 @@ module ff_vvc_palette_cu_symbolizer #(
   logic [7:0] sample_count_q;
   logic [7:0] drain_entry_q;
   logic [7:0] drain_sample_q;
-  logic [7:0] entry_y [0:MAX_PALETTE_ENTRIES - 1];
-  logic [7:0] entry_cb [0:MAX_PALETTE_ENTRIES - 1];
-  logic [7:0] entry_cr [0:MAX_PALETTE_ENTRIES - 1];
-  logic [7:0] indices [0:MAX_CU_SAMPLES - 1];
+  logic [PALETTE_ENTRY_BANK_BITS - 1:0] entry_y_q;
+  logic [PALETTE_ENTRY_BANK_BITS - 1:0] entry_cb_q;
+  logic [PALETTE_ENTRY_BANK_BITS - 1:0] entry_cr_q;
+  logic [PALETTE_INDEX_BANK_BITS - 1:0] indices_q;
   logic found;
   logic [7:0] found_index;
   logic [7:0] scan_y;
@@ -65,9 +67,9 @@ module ff_vvc_palette_cu_symbolizer #(
     found_index = 8'd0;
     for (int entry = 0; entry < MAX_PALETTE_ENTRIES; entry = entry + 1) begin
       if ((entry < palette_size_q) &&
-          (entry_y[entry] == s_axis_y) &&
-          (entry_cb[entry] == s_axis_cb) &&
-          (entry_cr[entry] == s_axis_cr)) begin
+          (entry_y_q[entry * 8 +: 8] == s_axis_y) &&
+          (entry_cb_q[entry * 8 +: 8] == s_axis_cb) &&
+          (entry_cr_q[entry * 8 +: 8] == s_axis_cr)) begin
         found = 1'b1;
         found_index = entry[7:0];
       end
@@ -84,14 +86,10 @@ module ff_vvc_palette_cu_symbolizer #(
       m_axis_valid <= 1'b0;
       m_axis_data <= 32'd0;
       m_axis_last <= 1'b0;
-      for (int i = 0; i < MAX_PALETTE_ENTRIES; i = i + 1) begin
-        entry_y[i] <= 8'd0;
-        entry_cb[i] <= 8'd0;
-        entry_cr[i] <= 8'd0;
-      end
-      for (int i = 0; i < MAX_CU_SAMPLES; i = i + 1) begin
-        indices[i] <= 8'd0;
-      end
+      entry_y_q <= '0;
+      entry_cb_q <= '0;
+      entry_cr_q <= '0;
+      indices_q <= '0;
     end else if (clear || !enable) begin
       state_q <= ST_BUILD;
       palette_size_q <= 8'd0;
@@ -101,14 +99,10 @@ module ff_vvc_palette_cu_symbolizer #(
       m_axis_valid <= 1'b0;
       m_axis_data <= 32'd0;
       m_axis_last <= 1'b0;
-      for (int i = 0; i < MAX_PALETTE_ENTRIES; i = i + 1) begin
-        entry_y[i] <= 8'd0;
-        entry_cb[i] <= 8'd0;
-        entry_cr[i] <= 8'd0;
-      end
-      for (int i = 0; i < MAX_CU_SAMPLES; i = i + 1) begin
-        indices[i] <= 8'd0;
-      end
+      entry_y_q <= '0;
+      entry_cb_q <= '0;
+      entry_cr_q <= '0;
+      indices_q <= '0;
     end else begin
       if (m_axis_valid && m_axis_ready) begin
         m_axis_valid <= 1'b0;
@@ -120,16 +114,16 @@ module ff_vvc_palette_cu_symbolizer #(
         ST_BUILD: begin
           if (accepted_sample && cu_selected) begin
             if (found) begin
-              indices[sample_count_q] <= found_index;
+              indices_q[sample_count_q * 8 +: 8] <= found_index;
             end else if (palette_size_q < MAX_PALETTE_ENTRIES) begin
-              entry_y[palette_size_q] <= s_axis_y;
-              entry_cb[palette_size_q] <= s_axis_cb;
-              entry_cr[palette_size_q] <= s_axis_cr;
-              indices[sample_count_q] <= palette_size_q;
+              entry_y_q[palette_size_q * 8 +: 8] <= s_axis_y;
+              entry_cb_q[palette_size_q * 8 +: 8] <= s_axis_cb;
+              entry_cr_q[palette_size_q * 8 +: 8] <= s_axis_cr;
+              indices_q[sample_count_q * 8 +: 8] <= palette_size_q;
               palette_size_q <= palette_size_q + 8'd1;
             end else begin
               // TODO: add escape-coded sample support for more than 31 colors per CU.
-              indices[sample_count_q] <= 8'd30;
+              indices_q[sample_count_q * 8 +: 8] <= 8'd30;
             end
             sample_count_q <= sample_count_q + 8'd1;
           end
@@ -163,7 +157,7 @@ module ff_vvc_palette_cu_symbolizer #(
         ST_DRAIN_ENTRY_Y: begin
           if (!m_axis_valid || m_axis_ready) begin
             m_axis_valid <= 1'b1;
-            m_axis_data <= {PALETTE_PKT_ENTRY_Y, 20'd0, entry_y[drain_entry_q]};
+            m_axis_data <= {PALETTE_PKT_ENTRY_Y, 20'd0, entry_y_q[drain_entry_q * 8 +: 8]};
             m_axis_last <= 1'b0;
             if ((drain_entry_q + 8'd1) >= palette_size_q) begin
               state_q <= ST_DRAIN_ENTRY_CB;
@@ -177,7 +171,7 @@ module ff_vvc_palette_cu_symbolizer #(
         ST_DRAIN_ENTRY_CB: begin
           if (!m_axis_valid || m_axis_ready) begin
             m_axis_valid <= 1'b1;
-            m_axis_data <= {PALETTE_PKT_ENTRY_CB, 20'd0, entry_cb[drain_entry_q]};
+            m_axis_data <= {PALETTE_PKT_ENTRY_CB, 20'd0, entry_cb_q[drain_entry_q * 8 +: 8]};
             m_axis_last <= 1'b0;
             if ((drain_entry_q + 8'd1) >= palette_size_q) begin
               state_q <= ST_DRAIN_ENTRY_CR;
@@ -191,7 +185,7 @@ module ff_vvc_palette_cu_symbolizer #(
         ST_DRAIN_ENTRY_CR: begin
           if (!m_axis_valid || m_axis_ready) begin
             m_axis_valid <= 1'b1;
-            m_axis_data <= {PALETTE_PKT_ENTRY_CR, 20'd0, entry_cr[drain_entry_q]};
+            m_axis_data <= {PALETTE_PKT_ENTRY_CR, 20'd0, entry_cr_q[drain_entry_q * 8 +: 8]};
             m_axis_last <= (palette_size_q <= 8'd1) &&
                            ((drain_entry_q + 8'd1) >= palette_size_q);
             if ((drain_entry_q + 8'd1) >= palette_size_q) begin
@@ -212,7 +206,7 @@ module ff_vvc_palette_cu_symbolizer #(
         ST_DRAIN_INDEX: begin
           if (!m_axis_valid || m_axis_ready) begin
             m_axis_valid <= 1'b1;
-            m_axis_data <= {PALETTE_PKT_INDEX, 20'd0, indices[scan_index]};
+            m_axis_data <= {PALETTE_PKT_INDEX, 20'd0, indices_q[scan_index * 8 +: 8]};
             m_axis_last <= (drain_sample_q + 8'd1) >= sample_count_q;
             if ((drain_sample_q + 8'd1) >= sample_count_q) begin
               state_q <= ST_BUILD;

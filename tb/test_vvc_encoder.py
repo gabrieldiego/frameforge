@@ -193,14 +193,6 @@ def v_sample_index():
     return luma_samples() + chroma_plane_samples()
 
 
-def rtl_u_sample_index():
-    return 64
-
-
-def rtl_v_sample_index():
-    return 64 + rtl_stream_chroma_block_samples()
-
-
 def software_format():
     suffix = "8" if rtl_source_sample_bits() <= 8 else f"{rtl_source_sample_bits()}le"
     return {1: f"yuv420p{suffix}", 2: f"yuv422p{suffix}", 3: f"yuv444p{suffix}"}.get(
@@ -401,21 +393,6 @@ def rtl_input_bursts_for_frame(frame):
     if rtl_chroma_format_idc() == 3:
         return [rtl_yuv444_ctu_ordered_samples(frame, index) for index in range(ctu_count())]
     return [list(frame)]
-
-
-def rtl_input_samples(data):
-    samples = list(data)
-    if rtl_chroma_format_idc() not in (1, 3):
-        return samples
-    out = []
-    source_frame_samples = frame_samples()
-    for offset in range(0, len(samples), source_frame_samples):
-        frame = samples[offset : offset + source_frame_samples]
-        if len(frame) < source_frame_samples:
-            break
-        for burst in rtl_input_bursts_for_frame(frame):
-            out.extend(burst)
-    return out
 
 
 def tile_yuv420p8_frame(frame, source_width, source_height, tiled_width, tiled_height):
@@ -1099,43 +1076,6 @@ async def collect_stream(
     return bytes(observed), source
 
 
-async def drain_sampled_color(dut, frames, y, u, v):
-    await Timer(1, unit="ns")
-
-    dut.rst_n.value = 0
-    dut.start.value = 0
-    dut.visible_width.value = rtl_visible_width()
-    dut.visible_height.value = rtl_visible_height()
-    dut.chroma_format_idc.value = rtl_chroma_format_idc()
-    dut.s_axis_valid.value = 0
-    dut.s_axis_data.value = 0
-    dut.s_axis_last.value = 0
-    dut.m_axis_ready.value = 1
-
-    for _ in range(2):
-        await RisingEdge(dut.clk)
-    dut.rst_n.value = 1
-    await RisingEdge(dut.clk)
-
-    dut.start.value = 1
-    await RisingEdge(dut.clk)
-    dut.start.value = 0
-
-    data = bytearray(solid_yuv_planar8(y, u, v, frames, chroma_plane_samples()))
-    data[3] = (y + 17) & 0xFF
-    data[luma_samples() + 1] = (u + 29) & 0xFF
-    data[v_sample_index() + 1] = (v + 43) & 0xFF
-    data = bytes(data)
-    await feed_input(dut, data, frames)
-    await ReadOnly()
-    assert_fail_fast(dut.input_error.value == 0, "RTL encoder reported input_error")
-    assert dut.sampled_color_valid.value == 1
-    samples = rtl_input_samples(data)
-    assert int(dut.sampled_y.value) == samples[0]
-    assert int(dut.sampled_u.value) == samples[rtl_u_sample_index()]
-    assert int(dut.sampled_v.value) == samples[rtl_v_sample_index()]
-
-
 @cocotb.test()
 async def vvc_encoder_matches_software_stream(dut):
     cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
@@ -1376,9 +1316,3 @@ async def vvc_encoder_matches_software_stream_with_chroma_ac_pattern(dut):
             cr_levels,
         )
     assert_stream_prefix_match(bitstream, reference, "chroma AC pattern end of stream")
-
-
-@cocotb.test()
-async def vvc_encoder_samples_first_yuv_values(dut):
-    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
-    await drain_sampled_color(dut, frames=2, y=64, u=128, v=192)

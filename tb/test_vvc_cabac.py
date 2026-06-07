@@ -22,14 +22,6 @@ async def reset_dut(dut):
     dut.rst_n.value = 0
     dut.start.value = 0
     dut.enable.value = 1
-    dut.mode_palette_444.value = 0
-    dut.visible_width.value = 8
-    dut.visible_height.value = 8
-    dut.coded_width.value = 8
-    dut.coded_height.value = 8
-    dut.luma_rem.value = 0
-    dut.cb_rem.value = 0
-    dut.cr_rem.value = 0
     dut.s_axis_valid.value = 0
     dut.s_axis_kind.value = SYMBOL_BIN_EP
     dut.s_axis_data.value = 0
@@ -129,7 +121,6 @@ async def cabac_top_matches_rust_residual_vector(dut):
 @cocotb.test()
 async def cabac_top_routes_palette_packets_through_common_pipeline(dut):
     await reset_dut(dut)
-    dut.mode_palette_444.value = 1
     await start_cabac(dut)
     symbols = [
         (PALETTE_PKT_CU_START, (1 << 24) | (1 << 16)),

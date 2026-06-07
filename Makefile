@@ -1,4 +1,4 @@
-.PHONY: help check-tools build test fmt lint release-check decoder-setup test-vector-sets test-vectors validate-set validate-smoke validate-random-short validate-sweep-420 validate-sweep-444 validate-motion-short validate-all-short validate-all-sweeps validate validate-decode rtl-test synth-env synth-check synth synth-postsim synth-vivado synth-vivado-remote yosys vivado vivado-prepare vivado-config vivado-auth vivado-install vivado-host-deps clean
+.PHONY: help check-tools build test fmt lint release-check hardware-regression decoder-setup test-vector-sets test-vectors validate-set validate-smoke validate-random-short validate-sweep-420 validate-sweep-444 validate-motion-short validate-all-short validate-all-sweeps validate validate-decode rtl-test synth-env synth-check synth synth-postsim synth-vivado synth-vivado-remote yosys vivado vivado-prepare vivado-config vivado-auth vivado-install vivado-host-deps clean
 
 SIM ?= icarus
 TOPLEVEL_LANG ?= verilog
@@ -40,6 +40,9 @@ VALIDATION_LIMIT ?=
 VALIDATION_STOP_ON_FAIL ?= 0
 VALIDATION_WITH_SYNTH ?= 0
 VALIDATION_SW_ONLY ?= $(VALIDATE_SW_ONLY)
+HARDWARE_REGRESSION_EXTRA_SET ?=
+HARDWARE_REGRESSION_SYNTH ?= 1
+HARDWARE_REGRESSION_SYNTH_DUT ?= vvc-encoder
 VIVADO_INSTALLER ?=
 VIVADO_LICENSE ?=
 VIVADO_INSTALL_LOG ?= .tools/vivado-install-run.log
@@ -52,6 +55,7 @@ help:
 	@printf '%s\n' '  make fmt       - format Rust code'
 	@printf '%s\n' '  make lint      - run Rust Clippy lints'
 	@printf '%s\n' '  make release-check - run portable release sanity checks without synthesis'
+	@printf '%s\n' '  make hardware-regression [HARDWARE_REGRESSION_EXTRA_SET=<set> HARDWARE_REGRESSION_SYNTH=1|0 HARDWARE_REGRESSION_SYNTH_DUT=vvc-encoder] - regenerate/run public 4:2:0 and 4:4:4 sweeps, optional extra set, then synthesis'
 	@printf '%s\n' '  make decoder-setup - find or build external VTM decoder'
 	@printf '%s\n' '  make test-vector-sets [TEST_VECTOR_SET_DIR=verification/test_vector_sets] - list available test vector manifests'
 	@printf '%s\n' '  make test-vectors [TEST_VECTOR_SET=smoke TEST_VECTOR_SET_DIR=verification/test_vector_sets TEST_VECTOR_DIR=verification/generated/test_vectors] - generate deterministic YUV test streams from a manifest'
@@ -102,6 +106,19 @@ release-check:
 	$(MAKE) test-vector-sets
 	$(MAKE) test-vectors TEST_VECTOR_SET=smoke
 	$(MAKE) validate-smoke VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+
+hardware-regression:
+	$(MAKE) test-vectors TEST_VECTOR_SET=sweep-420
+	$(MAKE) validate-sweep-420 VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+	$(MAKE) test-vectors TEST_VECTOR_SET=sweep-444
+	$(MAKE) validate-sweep-444 VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+ifneq ($(HARDWARE_REGRESSION_EXTRA_SET),)
+	$(MAKE) test-vectors TEST_VECTOR_SET="$(HARDWARE_REGRESSION_EXTRA_SET)"
+	$(MAKE) validate-set VALIDATION_SET="$(HARDWARE_REGRESSION_EXTRA_SET)" VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+endif
+ifeq ($(HARDWARE_REGRESSION_SYNTH),1)
+	$(MAKE) synth SYNTH_DUT="$(HARDWARE_REGRESSION_SYNTH_DUT)"
+endif
 
 decoder-setup:
 	python3 scripts/ensure_reference_decoder.py

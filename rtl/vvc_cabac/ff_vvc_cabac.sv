@@ -7,18 +7,9 @@ module ff_vvc_cabac #(
   input  logic        rst_n,
   input  logic        start,
   input  logic        enable,
-  input  logic        mode_palette_444,
-  input  logic [15:0] visible_width,
-  input  logic [15:0] visible_height,
-  input  logic [15:0] coded_width,
-  input  logic [15:0] coded_height,
-  input  logic [7:0]  luma_rem,
-  input  logic [4:0]  cb_rem,
-  input  logic [4:0]  cr_rem,
 
-  // Symbol stream boundary for future sequential CABAC. The current clean-room
-  // body generators still use the parameter inputs above, but upstream blocks
-  // should converge on this symbol-in/byte-out contract.
+  // Symbol stream input. Upstream syntax producers are responsible for selecting
+  // residual or palette packets before this common CABAC pipeline.
   input  logic        s_axis_valid,
   output logic        s_axis_ready,
   input  logic [7:0]  s_axis_kind,
@@ -37,7 +28,6 @@ module ff_vvc_cabac #(
   logic streamed_m_axis_last;
   logic [2:0] streamed_stream_last_byte_bits;
   logic streamed_s_axis_ready;
-  logic streamed_done;
 
   assign s_axis_ready = streamed_s_axis_ready;
   assign stream_last_byte_bits = streamed_stream_last_byte_bits;
@@ -62,11 +52,7 @@ module ff_vvc_cabac #(
     .m_axis_data(streamed_m_axis_data),
     .m_axis_last(streamed_m_axis_last),
     .stream_last_byte_bits(streamed_stream_last_byte_bits),
-    .done(streamed_done)
+    .done()
   );
-
-  logic unused_inputs;
-  assign unused_inputs = mode_palette_444 || (|visible_width) || (|visible_height) ||
-    (|coded_width) || (|coded_height) || (|luma_rem) || (|cb_rem) || (|cr_rem) || streamed_done;
 
 endmodule

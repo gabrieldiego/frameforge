@@ -304,6 +304,23 @@ make validate-sweep-444 VALIDATION_STOP_ON_FAIL=1
 
 `validate-sweep-420` runs generated 4:2:0 vectors from 8x8 through 64x64. `validate-sweep-444` runs generated 4:4:4 screen-content vectors from 8x8 through 64x64. Add `VALIDATION_LIMIT=<n>` for a short prefix of any named set, or `VALIDATION_WITH_SYNTH=1` only when intentionally running synthesis inside each validation case.
 
+For routine cleanup or RTL feature work, use two levels of regression:
+
+```sh
+make release-check
+make hardware-regression
+```
+
+`release-check` is the portable, fast sanity pass: Rust formatting/tests, Python syntax checks, smoke vector generation, and smoke validation without synthesis. `hardware-regression` is the slower hardware-facing pass: it regenerates and validates the public 4:2:0 and 4:4:4 geometry sweeps with fail-fast enabled, then runs top-encoder synthesis.
+
+Machine-local source-crop manifests can be added to the hardware regression without committing local paths:
+
+```sh
+make hardware-regression HARDWARE_REGRESSION_EXTRA_SET=my-local-crops
+```
+
+Use `HARDWARE_REGRESSION_SYNTH=0` when you want only the functional sweeps, and `HARDWARE_REGRESSION_SYNTH_DUT=<dut>` only when intentionally synthesizing a sub-block instead of the top encoder.
+
 ## Supported Manual Inputs
 
 The current VVC subset is deliberately narrow:
@@ -314,6 +331,13 @@ The current VVC subset is deliberately narrow:
 | `yuv444p8` / `i444` | 4:4:4 palette path, lossless only for CUs with at most 31 colors |
 | 10/12/16-bit YUV | Accepted by some software paths and normalized for validation, but the main RTL milestone is 8-bit |
 | 4:2:2 | Parsed as a format but not the main validated milestone path |
+
+The RTL encoder keeps `SAMPLE_BITS` and `SOURCE_SAMPLE_BITS` as explicit
+interface parameters because high-bit-depth input is a planned roadmap item.
+That support matters for modern sources where 10-bit or wider samples reduce
+visible banding and can improve bitrate efficiency. In the current validated
+hardware subset, wider input samples are still normalized to the 8-bit encode
+path; treat high-bit-depth coding as future work, not an implemented feature.
 
 Widths and heights must be even. The committed geometry sweeps currently cover 8x8 through 64x64. Larger software encodes are possible by passing `--max-width` and `--max-height`, but RTL validation requires matching `RTL_MAX_VISIBLE_WIDTH` and `RTL_MAX_VISIBLE_HEIGHT` parameters.
 
