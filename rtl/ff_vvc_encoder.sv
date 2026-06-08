@@ -315,8 +315,10 @@ module ff_vvc_encoder #(
   logic signed [8:0] chroma_quant_cr_dc_level_w;
   logic [(VVC_RESIDUAL_AC_BITS * VVC_CHROMA_AC_COEFFS) - 1:0] chroma_quant_cb_ac_levels_w;
   logic [(VVC_RESIDUAL_AC_BITS * VVC_CHROMA_AC_COEFFS) - 1:0] chroma_quant_cr_ac_levels_w;
-  logic [(8 * VVC_CHROMA_TU_SAMPLES) - 1:0] chroma_quant_cb_recon_samples_w;
-  logic [(8 * VVC_CHROMA_TU_SAMPLES) - 1:0] chroma_quant_cr_recon_samples_w;
+  logic [(8 * VVC_CHROMA_TU_SIZE) - 1:0] chroma_quant_cb_bottom_ref_w;
+  logic [(8 * VVC_CHROMA_TU_SIZE) - 1:0] chroma_quant_cr_bottom_ref_w;
+  logic [(8 * VVC_CHROMA_TU_SIZE) - 1:0] chroma_quant_cb_right_ref_w;
+  logic [(8 * VVC_CHROMA_TU_SIZE) - 1:0] chroma_quant_cr_right_ref_w;
   logic [15:0] chroma_quant_ref_x_tmp;
   logic [15:0] chroma_quant_ref_y_tmp;
   logic [VVC_CHROMA_TU_SAMPLE_BITS - 1:0] chroma_quant_cb_sample_tu_w;
@@ -741,7 +743,8 @@ module ff_vvc_encoder #(
     .left_ref(chroma_quant_cb_left_ref_w),
     .dc_level(chroma_quant_cb_dc_level_w),
     .ac_levels(chroma_quant_cb_ac_levels_w),
-    .recon_samples(chroma_quant_cb_recon_samples_w)
+    .bottom_ref(chroma_quant_cb_bottom_ref_w),
+    .right_ref(chroma_quant_cb_right_ref_w)
   );
 
   ff_vvc_chroma_quant_recon_420 cr_chroma_quant_recon (
@@ -750,7 +753,8 @@ module ff_vvc_encoder #(
     .left_ref(chroma_quant_cr_left_ref_w),
     .dc_level(chroma_quant_cr_dc_level_w),
     .ac_levels(chroma_quant_cr_ac_levels_w),
-    .recon_samples(chroma_quant_cr_recon_samples_w)
+    .bottom_ref(chroma_quant_cr_bottom_ref_w),
+    .right_ref(chroma_quant_cr_right_ref_w)
   );
 
   always @* begin
@@ -1293,21 +1297,13 @@ module ff_vvc_encoder #(
           quant_cr_ac_levels_ctu_q[chroma_quant_tu_q] <= chroma_quant_cr_ac_levels_w;
           for (luma_ref_i = 0; luma_ref_i < VVC_CHROMA_TU_SIZE; luma_ref_i = luma_ref_i + 1) begin
             chroma_cb_top_ref_row_q[chroma_quant_tu_col_w][luma_ref_i * 8 +: 8] <=
-              chroma_quant_cb_recon_samples_w[
-                (((VVC_CHROMA_TU_SIZE - 1) * VVC_CHROMA_TU_SIZE) + luma_ref_i) * 8 +: 8
-              ];
+              chroma_quant_cb_bottom_ref_w[luma_ref_i * 8 +: 8];
             chroma_cr_top_ref_row_q[chroma_quant_tu_col_w][luma_ref_i * 8 +: 8] <=
-              chroma_quant_cr_recon_samples_w[
-                (((VVC_CHROMA_TU_SIZE - 1) * VVC_CHROMA_TU_SIZE) + luma_ref_i) * 8 +: 8
-              ];
+              chroma_quant_cr_bottom_ref_w[luma_ref_i * 8 +: 8];
             chroma_cb_left_ref_col_q[chroma_quant_tu_row_w][luma_ref_i * 8 +: 8] <=
-              chroma_quant_cb_recon_samples_w[
-                ((luma_ref_i * VVC_CHROMA_TU_SIZE) + (VVC_CHROMA_TU_SIZE - 1)) * 8 +: 8
-              ];
+              chroma_quant_cb_right_ref_w[luma_ref_i * 8 +: 8];
             chroma_cr_left_ref_col_q[chroma_quant_tu_row_w][luma_ref_i * 8 +: 8] <=
-              chroma_quant_cr_recon_samples_w[
-                ((luma_ref_i * VVC_CHROMA_TU_SIZE) + (VVC_CHROMA_TU_SIZE - 1)) * 8 +: 8
-              ];
+              chroma_quant_cr_right_ref_w[luma_ref_i * 8 +: 8];
           end
         end else begin
           quant_cb_dc_level_ctu_q[chroma_quant_tu_q] <= 9'sd0;

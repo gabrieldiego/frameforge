@@ -10,7 +10,8 @@ module ff_vvc_chroma_quant_recon_420 (
   input  logic [(8 * 4) - 1:0] left_ref,
   output logic signed [8:0] dc_level,
   output logic [(4 * 3) - 1:0] ac_levels,
-  output logic [(8 * 4 * 4) - 1:0] recon_samples
+  output logic [(8 * 4) - 1:0] bottom_ref,
+  output logic [(8 * 4) - 1:0] right_ref
 );
   localparam int MAX_SIZE = 4;
   localparam int MAX_SAMPLES = MAX_SIZE * MAX_SIZE;
@@ -49,6 +50,7 @@ module ff_vvc_chroma_quant_recon_420 (
   logic [31:0] dc_ref_sum_tmp;
   logic [7:0] dc_pred_tmp;
   logic [7:0] predicted_value_tmp;
+  logic [7:0] recon_clipped_tmp;
   logic [7:0] sample_tmp;
 
   integer idx;
@@ -58,7 +60,8 @@ module ff_vvc_chroma_quant_recon_420 (
   always @* begin
     dc_level = 9'sd0;
     ac_levels = '0;
-    recon_samples = '0;
+    bottom_ref = '0;
+    right_ref = '0;
     predicted_pack_tmp = '0;
     residual_sum_tmp = 32'sd0;
     dc_ref_sum_tmp = 32'd0;
@@ -78,6 +81,7 @@ module ff_vvc_chroma_quant_recon_420 (
     basis_xy_term_tmp = 64'sd0;
     residual_wide_tmp = 32'sd0;
     dc_level_abs_wide_tmp = 32'sd0;
+    recon_clipped_tmp = 8'd0;
 
     for (idx = 0; idx < MAX_SIZE; idx = idx + 1) begin
       dc_ref_sum_tmp =
@@ -250,31 +254,39 @@ module ff_vvc_chroma_quant_recon_420 (
         (`FF_VVC_CHROMA_MUL64(dequant_10_tmp) + $signed(basis_xy_term_tmp[31:0]) + 32'sd64) >>> 7;
 
       for (x_i = 0; x_i < MAX_SIZE; x_i = x_i + 1) begin
-        case (x_i)
-          0: begin
-            basis_x_term_tmp = `FF_VVC_CHROMA_MUL83(vertical_1_tmp);
+        if ((y_i == (MAX_SIZE - 1)) || (x_i == (MAX_SIZE - 1))) begin
+          case (x_i)
+            0: begin
+              basis_x_term_tmp = `FF_VVC_CHROMA_MUL83(vertical_1_tmp);
+            end
+            1: begin
+              basis_x_term_tmp = `FF_VVC_CHROMA_MUL36(vertical_1_tmp);
+            end
+            2: begin
+              basis_x_term_tmp = -`FF_VVC_CHROMA_MUL36(vertical_1_tmp);
+            end
+            default: begin
+              basis_x_term_tmp = -`FF_VVC_CHROMA_MUL83(vertical_1_tmp);
+            end
+          endcase
+          recon_sum_tmp = `FF_VVC_CHROMA_MUL64(vertical_0_tmp) + basis_x_term_tmp;
+          recon_residual_tmp = (recon_sum_tmp + 64'sd2048) >>> 12;
+          idx = (y_i * MAX_SIZE) + x_i;
+          predicted_value_tmp = predicted_pack_tmp[idx * 8 +: 8];
+          recon_sample_tmp = $signed({24'd0, predicted_value_tmp}) + recon_residual_tmp;
+          if (recon_sample_tmp < 32'sd0) begin
+            recon_clipped_tmp = 8'd0;
+          end else if (recon_sample_tmp > 32'sd255) begin
+            recon_clipped_tmp = 8'd255;
+          end else begin
+            recon_clipped_tmp = recon_sample_tmp[7:0];
           end
-          1: begin
-            basis_x_term_tmp = `FF_VVC_CHROMA_MUL36(vertical_1_tmp);
+          if (y_i == (MAX_SIZE - 1)) begin
+            bottom_ref[x_i * 8 +: 8] = recon_clipped_tmp;
           end
-          2: begin
-            basis_x_term_tmp = -`FF_VVC_CHROMA_MUL36(vertical_1_tmp);
+          if (x_i == (MAX_SIZE - 1)) begin
+            right_ref[y_i * 8 +: 8] = recon_clipped_tmp;
           end
-          default: begin
-            basis_x_term_tmp = -`FF_VVC_CHROMA_MUL83(vertical_1_tmp);
-          end
-        endcase
-        recon_sum_tmp = `FF_VVC_CHROMA_MUL64(vertical_0_tmp) + basis_x_term_tmp;
-        recon_residual_tmp = (recon_sum_tmp + 64'sd2048) >>> 12;
-        idx = (y_i * MAX_SIZE) + x_i;
-        predicted_value_tmp = predicted_pack_tmp[idx * 8 +: 8];
-        recon_sample_tmp = $signed({24'd0, predicted_value_tmp}) + recon_residual_tmp;
-        if (recon_sample_tmp < 32'sd0) begin
-          recon_samples[idx * 8 +: 8] = 8'd0;
-        end else if (recon_sample_tmp > 32'sd255) begin
-          recon_samples[idx * 8 +: 8] = 8'd255;
-        end else begin
-          recon_samples[idx * 8 +: 8] = recon_sample_tmp[7:0];
         end
       end
     end

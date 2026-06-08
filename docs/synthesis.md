@@ -213,6 +213,46 @@ Result:
   estimated LCs, matching the intended removal of the visibility-mask muxing
   pressure.
 
+## Top Encoder Chroma Edge Optimization
+
+Measured on June 8, 2026 after changing `ff_vvc_chroma_quant_recon_420` to
+emit only the reconstructed bottom row and right column needed by the 4:2:0
+neighbour-reference path. The module no longer exports a full 4x4 reconstructed
+sample block because the current RTL only consumes those edge samples for the
+next chroma TU.
+
+Validation:
+
+```sh
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=1
+```
+
+The smoke test passed all three cocotb encoder checks, including the luma AC and
+chroma AC pattern cases.
+
+Synthesis:
+
+```sh
+make synth SYNTH_DUT=vvc-encoder
+```
+
+Result:
+
+- Top `ff_vvc_encoder` synthesis completed in 282.4 seconds with 1808.77 MiB
+  peak child RSS observed by the synthesis runner.
+- Critical-path reporting completed in 54.9 seconds. The Yosys report itself
+  recorded 1612.48 MB peak memory; the runner observed the same 1808.77 MiB
+  peak child RSS across the full synthesis plus report flow.
+- Longest topological path improved from 146 to 103. The path still starts at
+  visible CTU geometry, but now runs through chroma TU ordering and the chroma
+  quant/reconstruction edge update instead of the previous full reconstructed
+  chroma-sample mux chain.
+- Post-synth netlist restat reported 106,350 total cells and 43,758 estimated
+  LCs. Compared with the previous June 8 pass, total cells decreased by 1,252
+  and estimated LCs decreased by 533.
+- The standalone `ff_vvc_chroma_quant_recon_420` module restat reported 9,180
+  cells and 5,808 estimated LCs.
+
 ## Optional Vivado Synthesis
 
 FrameForge keeps a tracked Vivado install template at
