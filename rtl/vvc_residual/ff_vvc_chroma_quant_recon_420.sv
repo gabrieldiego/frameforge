@@ -39,9 +39,9 @@ module ff_vvc_chroma_quant_recon_420 (
   logic [(8 * CHROMA_TU_SIZE) - 1:0] left_ref_q;
   logic [7:0] dc_pred_q;
   logic signed [31:0] residual_sum_q;
-  logic signed [63:0] ac_acc_10_q;
-  logic signed [63:0] ac_acc_01_q;
-  logic signed [63:0] ac_acc_11_q;
+  logic signed [31:0] ac_acc_10_q;
+  logic signed [31:0] ac_acc_01_q;
+  logic signed [31:0] ac_acc_11_q;
   logic signed [31:0] dequant_dc_q;
   logic signed [31:0] dequant_10_q;
   logic signed [31:0] dequant_01_q;
@@ -64,27 +64,27 @@ module ff_vvc_chroma_quant_recon_420 (
   logic signed [31:0] residual_wide_w;
   logic signed [31:0] sample_basis_x_w;
   logic signed [31:0] sample_basis_y_w;
-  logic signed [63:0] sample_basis_xy_w;
-  logic signed [63:0] ac_acc_10_next_w;
-  logic signed [63:0] ac_acc_01_next_w;
-  logic signed [63:0] ac_acc_11_next_w;
+  logic signed [31:0] sample_basis_xy_w;
+  logic signed [31:0] ac_acc_10_next_w;
+  logic signed [31:0] ac_acc_01_next_w;
+  logic signed [31:0] ac_acc_11_next_w;
 
   logic signed [31:0] dc_level_abs_wide_w;
   logic signed [8:0] dc_level_abs_w;
   logic signed [8:0] dc_level_w;
-  logic signed [63:0] ac_abs_10_w;
-  logic signed [63:0] ac_abs_01_w;
-  logic signed [63:0] ac_abs_11_w;
-  logic signed [63:0] ac_rounded_10_w;
-  logic signed [63:0] ac_rounded_01_w;
-  logic signed [63:0] ac_rounded_11_w;
+  logic signed [31:0] ac_abs_10_w;
+  logic signed [31:0] ac_abs_01_w;
+  logic signed [31:0] ac_abs_11_w;
+  logic signed [31:0] ac_rounded_10_w;
+  logic signed [31:0] ac_rounded_01_w;
+  logic signed [31:0] ac_rounded_11_w;
   logic signed [8:0] quant_level_10_w;
   logic signed [8:0] quant_level_01_w;
   logic signed [8:0] quant_level_11_w;
   logic signed [8:0] ac_level_10_w;
   logic signed [8:0] ac_level_01_w;
   logic signed [8:0] ac_level_11_w;
-  logic signed [63:0] scaled_level_w;
+  logic signed [31:0] scaled_level_w;
   logic signed [31:0] dequant_dc_w;
   logic signed [31:0] dequant_10_w;
   logic signed [31:0] dequant_01_w;
@@ -96,11 +96,11 @@ module ff_vvc_chroma_quant_recon_420 (
   logic [1:0] recon_y_w;
   logic [7:0] recon_predicted_w;
   logic signed [31:0] recon_basis_y_w;
-  logic signed [63:0] recon_basis_xy_w;
+  logic signed [31:0] recon_basis_xy_w;
   logic signed [31:0] vertical_0_w;
   logic signed [31:0] vertical_1_w;
   logic signed [31:0] recon_basis_x_w;
-  logic signed [63:0] recon_sum_w;
+  logic signed [31:0] recon_sum_w;
   logic signed [31:0] recon_residual_w;
   logic signed [31:0] recon_sample_w;
   logic [7:0] recon_clipped_w;
@@ -197,31 +197,31 @@ module ff_vvc_chroma_quant_recon_420 (
       dc_level_w = -dc_level_abs_w;
     end
 
-    ac_abs_10_w = ac_acc_10_q[63] ? -ac_acc_10_q : ac_acc_10_q;
-    ac_abs_01_w = ac_acc_01_q[63] ? -ac_acc_01_q : ac_acc_01_q;
-    ac_abs_11_w = ac_acc_11_q[63] ? -ac_acc_11_q : ac_acc_11_q;
-    ac_rounded_10_w = (ac_abs_10_w + 64'sd65536) >>> 17;
-    ac_rounded_01_w = (ac_abs_01_w + 64'sd65536) >>> 17;
-    ac_rounded_11_w = (ac_abs_11_w + 64'sd65536) >>> 17;
-    quant_level_10_w = (ac_rounded_10_w > 64'sd2) ? 9'sd2 : $signed(ac_rounded_10_w[8:0]);
-    quant_level_01_w = (ac_rounded_01_w > 64'sd2) ? 9'sd2 : $signed(ac_rounded_01_w[8:0]);
-    quant_level_11_w = (ac_rounded_11_w > 64'sd2) ? 9'sd2 : $signed(ac_rounded_11_w[8:0]);
-    ac_level_10_w = ac_acc_10_q[63] ? -quant_level_10_w : quant_level_10_w;
-    ac_level_01_w = ac_acc_01_q[63] ? -quant_level_01_w : quant_level_01_w;
-    ac_level_11_w = ac_acc_11_q[63] ? -quant_level_11_w : quant_level_11_w;
+    ac_abs_10_w = ac_acc_10_q[31] ? -ac_acc_10_q : ac_acc_10_q;
+    ac_abs_01_w = ac_acc_01_q[31] ? -ac_acc_01_q : ac_acc_01_q;
+    ac_abs_11_w = ac_acc_11_q[31] ? -ac_acc_11_q : ac_acc_11_q;
+    ac_rounded_10_w = (ac_abs_10_w + 32'sd65536) >>> 17;
+    ac_rounded_01_w = (ac_abs_01_w + 32'sd65536) >>> 17;
+    ac_rounded_11_w = (ac_abs_11_w + 32'sd65536) >>> 17;
+    quant_level_10_w = (ac_rounded_10_w > 32'sd2) ? 9'sd2 : $signed(ac_rounded_10_w[8:0]);
+    quant_level_01_w = (ac_rounded_01_w > 32'sd2) ? 9'sd2 : $signed(ac_rounded_01_w[8:0]);
+    quant_level_11_w = (ac_rounded_11_w > 32'sd2) ? 9'sd2 : $signed(ac_rounded_11_w[8:0]);
+    ac_level_10_w = ac_acc_10_q[31] ? -quant_level_10_w : quant_level_10_w;
+    ac_level_01_w = ac_acc_01_q[31] ? -quant_level_01_w : quant_level_01_w;
+    ac_level_11_w = ac_acc_11_q[31] ? -quant_level_11_w : quant_level_11_w;
 
     ac_levels_w = '0;
     ac_levels_w[(0 * 4) +: 4] = ac_level_10_w[3:0];
     ac_levels_w[(1 * 4) +: 4] = ac_level_01_w[3:0];
     ac_levels_w[(2 * 4) +: 4] = ac_level_11_w[3:0];
 
-    scaled_level_w = ($signed(dc_level_w) <<< 15) + 64'sd16;
+    scaled_level_w = ($signed(dc_level_w) <<< 15) + 32'sd16;
     dequant_dc_w = (dc_level_w == 9'sd0) ? 32'sd0 : (scaled_level_w >>> 5);
-    scaled_level_w = ($signed(ac_level_10_w) <<< 15) + 64'sd16;
+    scaled_level_w = ($signed(ac_level_10_w) <<< 15) + 32'sd16;
     dequant_10_w = (ac_level_10_w == 9'sd0) ? 32'sd0 : (scaled_level_w >>> 5);
-    scaled_level_w = ($signed(ac_level_01_w) <<< 15) + 64'sd16;
+    scaled_level_w = ($signed(ac_level_01_w) <<< 15) + 32'sd16;
     dequant_01_w = (ac_level_01_w == 9'sd0) ? 32'sd0 : (scaled_level_w >>> 5);
-    scaled_level_w = ($signed(ac_level_11_w) <<< 15) + 64'sd16;
+    scaled_level_w = ($signed(ac_level_11_w) <<< 15) + 32'sd16;
     dequant_11_w = (ac_level_11_w == 9'sd0) ? 32'sd0 : (scaled_level_w >>> 5);
   end
 
@@ -267,7 +267,7 @@ module ff_vvc_chroma_quant_recon_420 (
       default: recon_basis_x_w = -`FF_VVC_CHROMA_MUL83(vertical_1_q);
     endcase
     recon_sum_w = $signed(`FF_VVC_CHROMA_MUL64(vertical_0_q)) + $signed(recon_basis_x_w);
-    recon_residual_w = (recon_sum_w + 64'sd2048) >>> 12;
+    recon_residual_w = (recon_sum_w + 32'sd2048) >>> 12;
     recon_sample_w = $signed({24'd0, recon_predicted_w}) + recon_residual_w;
     if (recon_sample_w < 32'sd0) begin
       recon_clipped_w = 8'd0;
@@ -288,9 +288,9 @@ module ff_vvc_chroma_quant_recon_420 (
       left_ref_q <= '0;
       dc_pred_q <= 8'd128;
       residual_sum_q <= 32'sd0;
-      ac_acc_10_q <= 64'sd0;
-      ac_acc_01_q <= 64'sd0;
-      ac_acc_11_q <= 64'sd0;
+      ac_acc_10_q <= 32'sd0;
+      ac_acc_01_q <= 32'sd0;
+      ac_acc_11_q <= 32'sd0;
       dequant_dc_q <= 32'sd0;
       dequant_10_q <= 32'sd0;
       dequant_01_q <= 32'sd0;
@@ -310,9 +310,9 @@ module ff_vvc_chroma_quant_recon_420 (
       left_ref_q <= '0;
       dc_pred_q <= 8'd128;
       residual_sum_q <= 32'sd0;
-      ac_acc_10_q <= 64'sd0;
-      ac_acc_01_q <= 64'sd0;
-      ac_acc_11_q <= 64'sd0;
+      ac_acc_10_q <= 32'sd0;
+      ac_acc_01_q <= 32'sd0;
+      ac_acc_11_q <= 32'sd0;
       dequant_dc_q <= 32'sd0;
       dequant_10_q <= 32'sd0;
       dequant_01_q <= 32'sd0;
@@ -335,9 +335,9 @@ module ff_vvc_chroma_quant_recon_420 (
             left_ref_q <= left_ref;
             dc_pred_q <= 8'd128;
             residual_sum_q <= 32'sd0;
-            ac_acc_10_q <= 64'sd0;
-            ac_acc_01_q <= 64'sd0;
-            ac_acc_11_q <= 64'sd0;
+            ac_acc_10_q <= 32'sd0;
+            ac_acc_01_q <= 32'sd0;
+            ac_acc_11_q <= 32'sd0;
             dequant_dc_q <= 32'sd0;
             dequant_10_q <= 32'sd0;
             dequant_01_q <= 32'sd0;
@@ -355,9 +355,9 @@ module ff_vvc_chroma_quant_recon_420 (
           dc_pred_q <= (dc_ref_sum_w + 32'd4) >> 3;
           sample_index_q <= 4'd0;
           residual_sum_q <= 32'sd0;
-          ac_acc_10_q <= 64'sd0;
-          ac_acc_01_q <= 64'sd0;
-          ac_acc_11_q <= 64'sd0;
+          ac_acc_10_q <= 32'sd0;
+          ac_acc_01_q <= 32'sd0;
+          ac_acc_11_q <= 32'sd0;
           state_q <= ST_SAMPLES;
         end
 

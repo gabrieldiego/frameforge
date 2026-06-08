@@ -645,6 +645,44 @@ Result:
 - The standalone `ff_vvc_luma_quant_recon_8x8` module restat reported 7,421
   cells and 3,338 estimated LCs, down from 7,715 cells and 3,411 estimated LCs.
 
+## Top Encoder Narrow Chroma AC Datapath
+
+Measured on June 8, 2026 after narrowing the 4:2:0 chroma quant/reconstruction
+AC accumulators, quantization intermediates, and reconstruction sums from 64
+bits to 32 bits. The fixed 4x4 chroma TU residual range and transform basis
+constants remain well inside signed 32-bit range, so the narrowed datapath keeps
+the same quantized DC/AC levels and reconstructed edge samples.
+
+Validation:
+
+```sh
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=1
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=3
+```
+
+Both top smoke checks passed all three cocotb encoder checks. The 4:2:0 run
+covers the narrowed chroma residual datapath, including the chroma AC pattern
+case.
+
+Synthesis:
+
+```sh
+make synth SYNTH_DUT=vvc-encoder
+```
+
+Result:
+
+- Top `ff_vvc_encoder` synthesis completed in 243.9 seconds with 1558.48 MiB
+  peak child RSS observed by the synthesis runner.
+- Critical-path reporting completed in 48.1 seconds.
+- Longest topological path remained 40. The reported path still runs through
+  CTU-visible-height/chroma-TU geometry into `s_axis_ready`.
+- Post-synth netlist restat reported 88,663 total cells and 33,278 estimated
+  LCs. Compared with the narrow luma residual-bank baseline, total cells
+  decreased by 2,086 and estimated LCs decreased by 285.
+- The standalone `ff_vvc_chroma_quant_recon_420` module restat reported 4,505
+  cells and 1,715 estimated LCs, down from 5,238 cells and 1,921 estimated LCs.
+
 ## Optional Vivado Synthesis
 
 FrameForge keeps a tracked Vivado install template at
