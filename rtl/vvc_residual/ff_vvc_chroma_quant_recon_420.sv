@@ -23,16 +23,20 @@ module ff_vvc_chroma_quant_recon_420 (
   localparam int CHROMA_SAMPLE_COUNT = CHROMA_TU_SIZE * CHROMA_TU_SIZE;
 
   localparam logic [2:0] ST_IDLE = 3'd0;
-  localparam logic [2:0] ST_SAMPLES = 3'd1;
-  localparam logic [2:0] ST_QUANT = 3'd2;
-  localparam logic [2:0] ST_RECON_VERTICAL = 3'd3;
-  localparam logic [2:0] ST_RECON_SAMPLE = 3'd4;
-  localparam logic [2:0] ST_DONE = 3'd5;
+  localparam logic [2:0] ST_LOAD = 3'd1;
+  localparam logic [2:0] ST_SAMPLES = 3'd2;
+  localparam logic [2:0] ST_QUANT = 3'd3;
+  localparam logic [2:0] ST_RECON_VERTICAL = 3'd4;
+  localparam logic [2:0] ST_RECON_SAMPLE = 3'd5;
+  localparam logic [2:0] ST_DONE = 3'd6;
 
   logic [2:0] state_q;
   logic [3:0] sample_index_q;
   logic [2:0] recon_edge_q;
 
+  logic [(8 * CHROMA_SAMPLE_COUNT) - 1:0] samples_q;
+  logic [(8 * CHROMA_TU_SIZE) - 1:0] top_ref_q;
+  logic [(8 * CHROMA_TU_SIZE) - 1:0] left_ref_q;
   logic [7:0] dc_pred_q;
   logic signed [31:0] residual_sum_q;
   logic signed [63:0] ac_acc_10_q;
@@ -108,21 +112,21 @@ module ff_vvc_chroma_quant_recon_420 (
 
   assign sample_x_w = sample_index_q[1:0];
   assign sample_y_w = sample_index_q[3:2];
-  assign sample_w = samples[sample_index_q * 8 +: 8];
+  assign sample_w = samples_q[sample_index_q * 8 +: 8];
 
   always @* begin
     dc_ref_sum_w = 32'd0;
     for (ref_i = 0; ref_i < CHROMA_TU_SIZE; ref_i = ref_i + 1) begin
       dc_ref_sum_w =
-        dc_ref_sum_w + {24'd0, top_ref[ref_i * 8 +: 8]} +
-        {24'd0, left_ref[ref_i * 8 +: 8]};
+        dc_ref_sum_w + {24'd0, top_ref_q[ref_i * 8 +: 8]} +
+        {24'd0, left_ref_q[ref_i * 8 +: 8]};
     end
   end
 
   always @* begin
-    left_diff_w = $signed({24'd0, left_ref[sample_y_w * 8 +: 8]}) -
+    left_diff_w = $signed({24'd0, left_ref_q[sample_y_w * 8 +: 8]}) -
                   $signed({24'd0, dc_pred_q});
-    top_diff_w = $signed({24'd0, top_ref[sample_x_w * 8 +: 8]}) -
+    top_diff_w = $signed({24'd0, top_ref_q[sample_x_w * 8 +: 8]}) -
                  $signed({24'd0, dc_pred_q});
     case (sample_x_w)
       2'd0: left_term_w = left_diff_w <<< 5;
@@ -279,6 +283,9 @@ module ff_vvc_chroma_quant_recon_420 (
       state_q <= ST_IDLE;
       sample_index_q <= 4'd0;
       recon_edge_q <= 3'd0;
+      samples_q <= '0;
+      top_ref_q <= '0;
+      left_ref_q <= '0;
       dc_pred_q <= 8'd128;
       residual_sum_q <= 32'sd0;
       ac_acc_10_q <= 64'sd0;
@@ -298,6 +305,9 @@ module ff_vvc_chroma_quant_recon_420 (
       state_q <= ST_IDLE;
       sample_index_q <= 4'd0;
       recon_edge_q <= 3'd0;
+      samples_q <= '0;
+      top_ref_q <= '0;
+      left_ref_q <= '0;
       dc_pred_q <= 8'd128;
       residual_sum_q <= 32'sd0;
       ac_acc_10_q <= 64'sd0;
@@ -317,10 +327,13 @@ module ff_vvc_chroma_quant_recon_420 (
       case (state_q)
         ST_IDLE: begin
           if (start) begin
-            state_q <= ST_SAMPLES;
+            state_q <= ST_LOAD;
             sample_index_q <= 4'd0;
             recon_edge_q <= 3'd0;
-            dc_pred_q <= (dc_ref_sum_w + 32'd4) >> 3;
+            samples_q <= samples;
+            top_ref_q <= top_ref;
+            left_ref_q <= left_ref;
+            dc_pred_q <= 8'd128;
             residual_sum_q <= 32'sd0;
             ac_acc_10_q <= 64'sd0;
             ac_acc_01_q <= 64'sd0;
@@ -336,6 +349,16 @@ module ff_vvc_chroma_quant_recon_420 (
             bottom_ref <= '0;
             right_ref <= '0;
           end
+        end
+
+        ST_LOAD: begin
+          dc_pred_q <= (dc_ref_sum_w + 32'd4) >> 3;
+          sample_index_q <= 4'd0;
+          residual_sum_q <= 32'sd0;
+          ac_acc_10_q <= 64'sd0;
+          ac_acc_01_q <= 64'sd0;
+          ac_acc_11_q <= 64'sd0;
+          state_q <= ST_SAMPLES;
         end
 
         ST_SAMPLES: begin

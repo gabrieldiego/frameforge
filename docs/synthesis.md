@@ -296,6 +296,45 @@ Result:
 - The standalone `ff_vvc_chroma_quant_recon_420` module restat reported 4,709
   cells and 1,829 estimated LCs, down from 9,180 cells and 5,808 estimated LCs.
 
+## Top Encoder Chroma Input Registering
+
+Measured on June 8, 2026 after adding an input-load state to
+`ff_vvc_chroma_quant_recon_420`. Each chroma quant/reconstruction instance now
+latches the 4x4 sample TU plus its top/left neighbour references before the
+sample-accumulation pass. This cuts the path from top-level chroma TU geometry
+and neighbour-reference muxing into the chroma AC accumulator.
+
+Validation:
+
+```sh
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=1
+```
+
+The smoke test passed all three cocotb encoder checks, including the luma AC and
+chroma AC pattern cases.
+
+Synthesis:
+
+```sh
+make synth SYNTH_DUT=vvc-encoder
+```
+
+Result:
+
+- Top `ff_vvc_encoder` synthesis completed in 273.0 seconds with 1729.66 MiB
+  peak child RSS observed by the synthesis runner.
+- Critical-path reporting completed in 55.0 seconds.
+- Longest topological path improved from 58 to 52. The path moved out of the
+  chroma quantizer and now ends in the residual symbol emitter's coefficient
+  scan/rice-prefix path.
+- Post-synth netlist restat reported 101,435 total cells and 37,957 estimated
+  LCs. Compared with the previous June 8 pass, total cells decreased by 156 and
+  estimated LCs increased by 138, keeping area effectively flat while improving
+  timing.
+- The standalone `ff_vvc_chroma_quant_recon_420` module restat reported 5,254
+  cells and 2,023 estimated LCs; the increase is the expected cost of the
+  registered input samples and references.
+
 ## Optional Vivado Synthesis
 
 FrameForge keeps a tracked Vivado install template at
