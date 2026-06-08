@@ -84,18 +84,15 @@ module ff_vvc_residual_symbol_emitter_4x4 (
   logic [3:0] scan_y_w;
   logic [4:0] scan_raster_w;
   logic [8:0] coeff_abs_w;
-  logic [8:0] coeff_template_abs_w;
   logic coeff_negative_w;
-  logic [8:0] coeff_abs_local_w;
-  logic [8:0] coeff_template_local_w;
   logic [8:0] loc_sum_abs_w;
   logic [7:0] loc_num_sig_w;
   logic [8:0] rice_sum_abs_w;
   logic [8:0] sum_abs_for_rice_w;
-  logic [3:0] local_x_w;
-  logic [3:0] local_y_w;
-  logic [4:0] local_raster_w;
-  integer local_i;
+  logic [8:0] coeff_abs_lane_w [0:15];
+  logic [8:0] coeff_template_sig_lane_w [0:15];
+  logic [15:0] coeff_sig_w;
+  genvar coeff_lane_i;
 
   logic [2:0] last_x_cmax_w;
   logic [2:0] last_y_cmax_w;
@@ -129,6 +126,18 @@ module ff_vvc_residual_symbol_emitter_4x4 (
 
   assign busy = (state_q != ST_IDLE);
   assign d_sum_w = {4'd0, scan_x_w} + {4'd0, scan_y_w};
+
+  generate
+    for (coeff_lane_i = 0; coeff_lane_i < 16; coeff_lane_i = coeff_lane_i + 1) begin : gen_coeff_lanes
+      assign coeff_abs_lane_w[coeff_lane_i] =
+        coeff_abs_q[(coeff_lane_i * 9) +: 9];
+      assign coeff_sig_w[coeff_lane_i] =
+        (coeff_abs_lane_w[coeff_lane_i] != 9'd0);
+      assign coeff_template_sig_lane_w[coeff_lane_i] =
+        coeff_sig_w[coeff_lane_i] ?
+        coeff_template_abs_q[(coeff_lane_i * 9) +: 9] : 9'd0;
+    end
+  endgenerate
 
   always @* begin
     load_coeff_abs = {(9 * 16){1'b0}};
@@ -214,57 +223,190 @@ module ff_vvc_residual_symbol_emitter_4x4 (
 
   always @* begin
     case (scan_pos_q)
-      5'd0: begin scan_x_w = 4'd0; scan_y_w = 4'd0; scan_raster_w = 5'd0; end
-      5'd1: begin scan_x_w = 4'd0; scan_y_w = 4'd1; scan_raster_w = 5'd4; end
-      5'd2: begin scan_x_w = 4'd1; scan_y_w = 4'd0; scan_raster_w = 5'd1; end
-      5'd3: begin scan_x_w = 4'd0; scan_y_w = 4'd2; scan_raster_w = 5'd8; end
-      5'd4: begin scan_x_w = 4'd1; scan_y_w = 4'd1; scan_raster_w = 5'd5; end
-      5'd5: begin scan_x_w = 4'd2; scan_y_w = 4'd0; scan_raster_w = 5'd2; end
-      5'd6: begin scan_x_w = 4'd0; scan_y_w = 4'd3; scan_raster_w = 5'd12; end
-      5'd7: begin scan_x_w = 4'd1; scan_y_w = 4'd2; scan_raster_w = 5'd9; end
-      5'd8: begin scan_x_w = 4'd2; scan_y_w = 4'd1; scan_raster_w = 5'd6; end
-      5'd9: begin scan_x_w = 4'd3; scan_y_w = 4'd0; scan_raster_w = 5'd3; end
-      5'd10: begin scan_x_w = 4'd1; scan_y_w = 4'd3; scan_raster_w = 5'd13; end
-      5'd11: begin scan_x_w = 4'd2; scan_y_w = 4'd2; scan_raster_w = 5'd10; end
-      5'd12: begin scan_x_w = 4'd3; scan_y_w = 4'd1; scan_raster_w = 5'd7; end
-      5'd13: begin scan_x_w = 4'd2; scan_y_w = 4'd3; scan_raster_w = 5'd14; end
-      5'd14: begin scan_x_w = 4'd3; scan_y_w = 4'd2; scan_raster_w = 5'd11; end
-      default: begin scan_x_w = 4'd3; scan_y_w = 4'd3; scan_raster_w = 5'd15; end
+      5'd0: begin
+        scan_x_w = 4'd0; scan_y_w = 4'd0; scan_raster_w = 5'd0;
+        coeff_abs_w = coeff_abs_lane_w[0]; coeff_negative_w = coeff_negative_q[0];
+      end
+      5'd1: begin
+        scan_x_w = 4'd0; scan_y_w = 4'd1; scan_raster_w = 5'd4;
+        coeff_abs_w = coeff_abs_lane_w[4]; coeff_negative_w = coeff_negative_q[4];
+      end
+      5'd2: begin
+        scan_x_w = 4'd1; scan_y_w = 4'd0; scan_raster_w = 5'd1;
+        coeff_abs_w = coeff_abs_lane_w[1]; coeff_negative_w = coeff_negative_q[1];
+      end
+      5'd3: begin
+        scan_x_w = 4'd0; scan_y_w = 4'd2; scan_raster_w = 5'd8;
+        coeff_abs_w = coeff_abs_lane_w[8]; coeff_negative_w = coeff_negative_q[8];
+      end
+      5'd4: begin
+        scan_x_w = 4'd1; scan_y_w = 4'd1; scan_raster_w = 5'd5;
+        coeff_abs_w = coeff_abs_lane_w[5]; coeff_negative_w = coeff_negative_q[5];
+      end
+      5'd5: begin
+        scan_x_w = 4'd2; scan_y_w = 4'd0; scan_raster_w = 5'd2;
+        coeff_abs_w = coeff_abs_lane_w[2]; coeff_negative_w = coeff_negative_q[2];
+      end
+      5'd6: begin
+        scan_x_w = 4'd0; scan_y_w = 4'd3; scan_raster_w = 5'd12;
+        coeff_abs_w = coeff_abs_lane_w[12]; coeff_negative_w = coeff_negative_q[12];
+      end
+      5'd7: begin
+        scan_x_w = 4'd1; scan_y_w = 4'd2; scan_raster_w = 5'd9;
+        coeff_abs_w = coeff_abs_lane_w[9]; coeff_negative_w = coeff_negative_q[9];
+      end
+      5'd8: begin
+        scan_x_w = 4'd2; scan_y_w = 4'd1; scan_raster_w = 5'd6;
+        coeff_abs_w = coeff_abs_lane_w[6]; coeff_negative_w = coeff_negative_q[6];
+      end
+      5'd9: begin
+        scan_x_w = 4'd3; scan_y_w = 4'd0; scan_raster_w = 5'd3;
+        coeff_abs_w = coeff_abs_lane_w[3]; coeff_negative_w = coeff_negative_q[3];
+      end
+      5'd10: begin
+        scan_x_w = 4'd1; scan_y_w = 4'd3; scan_raster_w = 5'd13;
+        coeff_abs_w = coeff_abs_lane_w[13]; coeff_negative_w = coeff_negative_q[13];
+      end
+      5'd11: begin
+        scan_x_w = 4'd2; scan_y_w = 4'd2; scan_raster_w = 5'd10;
+        coeff_abs_w = coeff_abs_lane_w[10]; coeff_negative_w = coeff_negative_q[10];
+      end
+      5'd12: begin
+        scan_x_w = 4'd3; scan_y_w = 4'd1; scan_raster_w = 5'd7;
+        coeff_abs_w = coeff_abs_lane_w[7]; coeff_negative_w = coeff_negative_q[7];
+      end
+      5'd13: begin
+        scan_x_w = 4'd2; scan_y_w = 4'd3; scan_raster_w = 5'd14;
+        coeff_abs_w = coeff_abs_lane_w[14]; coeff_negative_w = coeff_negative_q[14];
+      end
+      5'd14: begin
+        scan_x_w = 4'd3; scan_y_w = 4'd2; scan_raster_w = 5'd11;
+        coeff_abs_w = coeff_abs_lane_w[11]; coeff_negative_w = coeff_negative_q[11];
+      end
+      default: begin
+        scan_x_w = 4'd3; scan_y_w = 4'd3; scan_raster_w = 5'd15;
+        coeff_abs_w = coeff_abs_lane_w[15]; coeff_negative_w = coeff_negative_q[15];
+      end
     endcase
   end
-
-  assign coeff_abs_w = coeff_abs_q[(scan_raster_w * 9) +: 9];
-  assign coeff_template_abs_w = coeff_template_abs_q[(scan_raster_w * 9) +: 9];
-  assign coeff_negative_w = coeff_negative_q[scan_raster_w];
 
   always @* begin
     loc_sum_abs_w = 9'd0;
     loc_num_sig_w = 8'd0;
     rice_sum_abs_w = 9'd0;
-    local_x_w = 4'd0;
-    local_y_w = 4'd0;
-    local_raster_w = 5'd0;
-    coeff_abs_local_w = 9'd0;
-    coeff_template_local_w = 9'd0;
-    for (local_i = 0; local_i < 5; local_i = local_i + 1) begin
-      case (local_i)
-        0: begin local_x_w = scan_x_w + 4'd1; local_y_w = scan_y_w; end
-        1: begin local_x_w = scan_x_w + 4'd2; local_y_w = scan_y_w; end
-        2: begin local_x_w = scan_x_w + 4'd1; local_y_w = scan_y_w + 4'd1; end
-        3: begin local_x_w = scan_x_w; local_y_w = scan_y_w + 4'd1; end
-        default: begin local_x_w = scan_x_w; local_y_w = scan_y_w + 4'd2; end
-      endcase
-      local_raster_w = ({1'b0, local_y_w} * 5'd4) + {1'b0, local_x_w};
-      if ((local_x_w < 4'd4) && (local_y_w < 4'd4)) begin
-        coeff_abs_local_w = coeff_abs_q[(local_raster_w * 9) +: 9];
-        coeff_template_local_w = coeff_template_abs_q[(local_raster_w * 9) +: 9];
-        rice_sum_abs_w = rice_sum_abs_w + coeff_abs_local_w;
-        if (coeff_abs_local_w != 9'd0) begin
-          loc_num_sig_w = loc_num_sig_w + 8'd1;
-          loc_sum_abs_w = loc_sum_abs_w + coeff_template_local_w;
-        end
+    case (scan_pos_q)
+      5'd0: begin
+        rice_sum_abs_w = coeff_abs_lane_w[1] + coeff_abs_lane_w[2] +
+          coeff_abs_lane_w[5] + coeff_abs_lane_w[4] + coeff_abs_lane_w[8];
+        loc_num_sig_w = {7'd0, coeff_sig_w[1]} + {7'd0, coeff_sig_w[2]} +
+          {7'd0, coeff_sig_w[5]} + {7'd0, coeff_sig_w[4]} + {7'd0, coeff_sig_w[8]};
+        loc_sum_abs_w = coeff_template_sig_lane_w[1] + coeff_template_sig_lane_w[2] +
+          coeff_template_sig_lane_w[5] + coeff_template_sig_lane_w[4] +
+          coeff_template_sig_lane_w[8];
       end
-    end
+      5'd1: begin
+        rice_sum_abs_w = coeff_abs_lane_w[5] + coeff_abs_lane_w[6] +
+          coeff_abs_lane_w[9] + coeff_abs_lane_w[8] + coeff_abs_lane_w[12];
+        loc_num_sig_w = {7'd0, coeff_sig_w[5]} + {7'd0, coeff_sig_w[6]} +
+          {7'd0, coeff_sig_w[9]} + {7'd0, coeff_sig_w[8]} + {7'd0, coeff_sig_w[12]};
+        loc_sum_abs_w = coeff_template_sig_lane_w[5] + coeff_template_sig_lane_w[6] +
+          coeff_template_sig_lane_w[9] + coeff_template_sig_lane_w[8] +
+          coeff_template_sig_lane_w[12];
+      end
+      5'd2: begin
+        rice_sum_abs_w = coeff_abs_lane_w[2] + coeff_abs_lane_w[3] +
+          coeff_abs_lane_w[6] + coeff_abs_lane_w[5] + coeff_abs_lane_w[9];
+        loc_num_sig_w = {7'd0, coeff_sig_w[2]} + {7'd0, coeff_sig_w[3]} +
+          {7'd0, coeff_sig_w[6]} + {7'd0, coeff_sig_w[5]} + {7'd0, coeff_sig_w[9]};
+        loc_sum_abs_w = coeff_template_sig_lane_w[2] + coeff_template_sig_lane_w[3] +
+          coeff_template_sig_lane_w[6] + coeff_template_sig_lane_w[5] +
+          coeff_template_sig_lane_w[9];
+      end
+      5'd3: begin
+        rice_sum_abs_w = coeff_abs_lane_w[9] + coeff_abs_lane_w[10] +
+          coeff_abs_lane_w[13] + coeff_abs_lane_w[12];
+        loc_num_sig_w = {7'd0, coeff_sig_w[9]} + {7'd0, coeff_sig_w[10]} +
+          {7'd0, coeff_sig_w[13]} + {7'd0, coeff_sig_w[12]};
+        loc_sum_abs_w = coeff_template_sig_lane_w[9] + coeff_template_sig_lane_w[10] +
+          coeff_template_sig_lane_w[13] + coeff_template_sig_lane_w[12];
+      end
+      5'd4: begin
+        rice_sum_abs_w = coeff_abs_lane_w[6] + coeff_abs_lane_w[7] +
+          coeff_abs_lane_w[10] + coeff_abs_lane_w[9] + coeff_abs_lane_w[13];
+        loc_num_sig_w = {7'd0, coeff_sig_w[6]} + {7'd0, coeff_sig_w[7]} +
+          {7'd0, coeff_sig_w[10]} + {7'd0, coeff_sig_w[9]} + {7'd0, coeff_sig_w[13]};
+        loc_sum_abs_w = coeff_template_sig_lane_w[6] + coeff_template_sig_lane_w[7] +
+          coeff_template_sig_lane_w[10] + coeff_template_sig_lane_w[9] +
+          coeff_template_sig_lane_w[13];
+      end
+      5'd5: begin
+        rice_sum_abs_w = coeff_abs_lane_w[3] + coeff_abs_lane_w[7] +
+          coeff_abs_lane_w[6] + coeff_abs_lane_w[10];
+        loc_num_sig_w = {7'd0, coeff_sig_w[3]} + {7'd0, coeff_sig_w[7]} +
+          {7'd0, coeff_sig_w[6]} + {7'd0, coeff_sig_w[10]};
+        loc_sum_abs_w = coeff_template_sig_lane_w[3] + coeff_template_sig_lane_w[7] +
+          coeff_template_sig_lane_w[6] + coeff_template_sig_lane_w[10];
+      end
+      5'd6: begin
+        rice_sum_abs_w = coeff_abs_lane_w[13] + coeff_abs_lane_w[14];
+        loc_num_sig_w = {7'd0, coeff_sig_w[13]} + {7'd0, coeff_sig_w[14]};
+        loc_sum_abs_w = coeff_template_sig_lane_w[13] + coeff_template_sig_lane_w[14];
+      end
+      5'd7: begin
+        rice_sum_abs_w = coeff_abs_lane_w[10] + coeff_abs_lane_w[11] +
+          coeff_abs_lane_w[14] + coeff_abs_lane_w[13];
+        loc_num_sig_w = {7'd0, coeff_sig_w[10]} + {7'd0, coeff_sig_w[11]} +
+          {7'd0, coeff_sig_w[14]} + {7'd0, coeff_sig_w[13]};
+        loc_sum_abs_w = coeff_template_sig_lane_w[10] + coeff_template_sig_lane_w[11] +
+          coeff_template_sig_lane_w[14] + coeff_template_sig_lane_w[13];
+      end
+      5'd8: begin
+        rice_sum_abs_w = coeff_abs_lane_w[7] + coeff_abs_lane_w[11] +
+          coeff_abs_lane_w[10] + coeff_abs_lane_w[14];
+        loc_num_sig_w = {7'd0, coeff_sig_w[7]} + {7'd0, coeff_sig_w[11]} +
+          {7'd0, coeff_sig_w[10]} + {7'd0, coeff_sig_w[14]};
+        loc_sum_abs_w = coeff_template_sig_lane_w[7] + coeff_template_sig_lane_w[11] +
+          coeff_template_sig_lane_w[10] + coeff_template_sig_lane_w[14];
+      end
+      5'd9: begin
+        rice_sum_abs_w = coeff_abs_lane_w[7] + coeff_abs_lane_w[11];
+        loc_num_sig_w = {7'd0, coeff_sig_w[7]} + {7'd0, coeff_sig_w[11]};
+        loc_sum_abs_w = coeff_template_sig_lane_w[7] + coeff_template_sig_lane_w[11];
+      end
+      5'd10: begin
+        rice_sum_abs_w = coeff_abs_lane_w[14] + coeff_abs_lane_w[15];
+        loc_num_sig_w = {7'd0, coeff_sig_w[14]} + {7'd0, coeff_sig_w[15]};
+        loc_sum_abs_w = coeff_template_sig_lane_w[14] + coeff_template_sig_lane_w[15];
+      end
+      5'd11: begin
+        rice_sum_abs_w = coeff_abs_lane_w[11] + coeff_abs_lane_w[15] +
+          coeff_abs_lane_w[14];
+        loc_num_sig_w = {7'd0, coeff_sig_w[11]} + {7'd0, coeff_sig_w[15]} +
+          {7'd0, coeff_sig_w[14]};
+        loc_sum_abs_w = coeff_template_sig_lane_w[11] + coeff_template_sig_lane_w[15] +
+          coeff_template_sig_lane_w[14];
+      end
+      5'd12: begin
+        rice_sum_abs_w = coeff_abs_lane_w[11] + coeff_abs_lane_w[15];
+        loc_num_sig_w = {7'd0, coeff_sig_w[11]} + {7'd0, coeff_sig_w[15]};
+        loc_sum_abs_w = coeff_template_sig_lane_w[11] + coeff_template_sig_lane_w[15];
+      end
+      5'd13: begin
+        rice_sum_abs_w = coeff_abs_lane_w[15];
+        loc_num_sig_w = {7'd0, coeff_sig_w[15]};
+        loc_sum_abs_w = coeff_template_sig_lane_w[15];
+      end
+      5'd14: begin
+        rice_sum_abs_w = coeff_abs_lane_w[15];
+        loc_num_sig_w = {7'd0, coeff_sig_w[15]};
+        loc_sum_abs_w = coeff_template_sig_lane_w[15];
+      end
+      default: begin
+        loc_sum_abs_w = 9'd0;
+        loc_num_sig_w = 8'd0;
+        rice_sum_abs_w = 9'd0;
+      end
+    endcase
   end
 
   assign last_x_cmax_w = (tb_width_q <= 16'd4) ? 3'd3 :

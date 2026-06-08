@@ -373,6 +373,45 @@ Result:
   3,608 cells and 1,543 estimated LCs. The local module grew slightly from the
   added payload registers, but the top-level netlist simplified overall.
 
+## Top Encoder Residual Neighbor Table
+
+Measured on June 8, 2026 after replacing the residual symbol emitter's dynamic
+4x4 local-neighbor loop with a fixed scan-position neighbor table. The table
+keeps the VVC residual local-template candidates explicit for each supported
+4x4 scan position and avoids inferring local coordinate arithmetic and dynamic
+coefficient indexing in the rice/remainder path.
+
+Validation:
+
+```sh
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=1
+```
+
+The smoke test passed all three cocotb encoder checks, including the luma AC and
+chroma AC pattern cases.
+
+Synthesis:
+
+```sh
+make synth SYNTH_DUT=vvc-encoder
+```
+
+Result:
+
+- Top `ff_vvc_encoder` synthesis completed in 271.5 seconds with 1683.05 MiB
+  peak child RSS observed by the synthesis runner.
+- Critical-path reporting completed in 55.7 seconds.
+- Longest topological path improved from 49 to 47. The residual emitter is no
+  longer the longest path; the reported path now runs through the Annex B header
+  width/slice-count Exp-Golomb path.
+- Post-synth netlist restat reported 97,813 total cells and 36,608 estimated
+  LCs. Compared with the previous June 8 pass, total cells decreased by 147 and
+  estimated LCs decreased by 129.
+- The standalone `ff_vvc_residual_symbol_emitter_4x4` module restat reported
+  3,854 cells and 1,607 estimated LCs. The local module grows because the
+  neighbor table is explicit, but the top-level netlist simplifies and the
+  residual path stops limiting the topological timing report.
+
 ## Optional Vivado Synthesis
 
 FrameForge keeps a tracked Vivado install template at
