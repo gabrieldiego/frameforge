@@ -253,6 +253,49 @@ Result:
 - The standalone `ff_vvc_chroma_quant_recon_420` module restat reported 9,180
   cells and 5,808 estimated LCs.
 
+## Top Encoder Sequential Chroma Quantization
+
+Measured on June 8, 2026 after converting `ff_vvc_chroma_quant_recon_420` from
+a fully combinational 4x4 transform/quant/reconstruction block into a small
+registered datapath. The Cb and Cr instances still run in parallel, but each
+instance now accumulates the 16 chroma samples over time, registers the DC and
+2x2 low-frequency AC levels, and reconstructs only the bottom/right neighbour
+edges used by the next chroma TU.
+
+This trades the previous one-cycle chroma TU calculation for a short sequential
+TU pass, but removes the full residual-to-reconstruction chain from the
+top-level combinational timing path.
+
+Validation:
+
+```sh
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=1
+```
+
+The smoke test passed all three cocotb encoder checks, including the luma AC and
+chroma AC pattern cases.
+
+Synthesis:
+
+```sh
+make synth SYNTH_DUT=vvc-encoder
+```
+
+Result:
+
+- Top `ff_vvc_encoder` synthesis completed in 272.2 seconds with 1750.73 MiB
+  peak child RSS observed by the synthesis runner.
+- Critical-path reporting completed in 54.8 seconds. The Yosys report itself
+  recorded 1627.06 MB peak memory.
+- Longest topological path improved from 103 to 58. The path now ends at the
+  chroma AC accumulator register instead of continuing through chroma
+  quantization, inverse transform, clipping, and neighbour-reference update.
+- Post-synth netlist restat reported 101,591 total cells and 37,819 estimated
+  LCs. Compared with the previous June 8 pass, total cells decreased by 4,759
+  and estimated LCs decreased by 5,939.
+- The standalone `ff_vvc_chroma_quant_recon_420` module restat reported 4,709
+  cells and 1,829 estimated LCs, down from 9,180 cells and 5,808 estimated LCs.
+
 ## Optional Vivado Synthesis
 
 FrameForge keeps a tracked Vivado install template at

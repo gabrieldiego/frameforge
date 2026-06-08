@@ -293,6 +293,14 @@ module ff_vvc_encoder #(
   logic luma_quant_done_w;
   logic luma_quant_busy_w;
   logic luma_quant_active_q;
+  logic chroma_quant_start_q;
+  logic chroma_quant_done_w;
+  logic chroma_quant_busy_w;
+  logic chroma_quant_cb_done_w;
+  logic chroma_quant_cr_done_w;
+  logic chroma_quant_cb_busy_w;
+  logic chroma_quant_cr_busy_w;
+  logic chroma_quant_active_q;
   logic [5:0]  chroma_quant_tu_q;
   logic [15:0] chroma_quant_ctu_visible_width_w;
   logic [15:0] chroma_quant_ctu_visible_height_w;
@@ -738,24 +746,39 @@ module ff_vvc_encoder #(
   );
 
   ff_vvc_chroma_quant_recon_420 cb_chroma_quant_recon (
+    .clk(clk),
+    .rst_n(rst_n),
+    .clear(frame_pipeline_clear_w),
+    .start(chroma_quant_start_q),
     .samples(chroma_quant_cb_samples_w),
     .top_ref(chroma_quant_cb_top_ref_w),
     .left_ref(chroma_quant_cb_left_ref_w),
     .dc_level(chroma_quant_cb_dc_level_w),
     .ac_levels(chroma_quant_cb_ac_levels_w),
     .bottom_ref(chroma_quant_cb_bottom_ref_w),
-    .right_ref(chroma_quant_cb_right_ref_w)
+    .right_ref(chroma_quant_cb_right_ref_w),
+    .done(chroma_quant_cb_done_w),
+    .busy(chroma_quant_cb_busy_w)
   );
 
   ff_vvc_chroma_quant_recon_420 cr_chroma_quant_recon (
+    .clk(clk),
+    .rst_n(rst_n),
+    .clear(frame_pipeline_clear_w),
+    .start(chroma_quant_start_q),
     .samples(chroma_quant_cr_samples_w),
     .top_ref(chroma_quant_cr_top_ref_w),
     .left_ref(chroma_quant_cr_left_ref_w),
     .dc_level(chroma_quant_cr_dc_level_w),
     .ac_levels(chroma_quant_cr_ac_levels_w),
     .bottom_ref(chroma_quant_cr_bottom_ref_w),
-    .right_ref(chroma_quant_cr_right_ref_w)
+    .right_ref(chroma_quant_cr_right_ref_w),
+    .done(chroma_quant_cr_done_w),
+    .busy(chroma_quant_cr_busy_w)
   );
+
+  assign chroma_quant_done_w = chroma_quant_cb_done_w && chroma_quant_cr_done_w;
+  assign chroma_quant_busy_w = chroma_quant_cb_busy_w || chroma_quant_cr_busy_w;
 
   always @* begin
     selected_quant_luma_rem_w = '0;
@@ -800,7 +823,7 @@ module ff_vvc_encoder #(
   assign luma_log2_tb_height_w = 3'd3;
 
   assign busy = input_active_q || pending_output_q || resume_input_q || frame_clear_q ||
-                chroma_tu_quant_pending_q ||
+                chroma_tu_quant_pending_q || chroma_quant_active_q || chroma_quant_busy_w ||
                 luma_tu_quant_pending_q || luma_quant_active_q || luma_quant_busy_w ||
                 m_axis_valid ||
                 (generated_out_state_q != GENERATED_OUT_IDLE);
@@ -1092,6 +1115,8 @@ module ff_vvc_encoder #(
       chroma_tu_quant_pending_q <= 1'b0;
       chroma_tu_quant_frame_last_q <= 1'b0;
       chroma_quant_tu_q <= 6'd0;
+      chroma_quant_start_q <= 1'b0;
+      chroma_quant_active_q <= 1'b0;
       luma_quant_tu_q <= 6'd0;
       luma_quant_start_q <= 1'b0;
       luma_quant_active_q <= 1'b0;
@@ -1126,6 +1151,7 @@ module ff_vvc_encoder #(
       generated_picture_header_start_q <= 1'b0;
       frame_clear_q <= 1'b0;
       luma_quant_start_q <= 1'b0;
+      chroma_quant_start_q <= 1'b0;
       if (m_axis_valid && m_axis_ready) begin
         m_axis_valid <= 1'b0;
         m_axis_last <= 1'b0;
@@ -1149,6 +1175,7 @@ module ff_vvc_encoder #(
         chroma_tu_quant_pending_q <= 1'b0;
         chroma_tu_quant_frame_last_q <= 1'b0;
         chroma_quant_tu_q <= 6'd0;
+        chroma_quant_active_q <= 1'b0;
         luma_quant_tu_q <= 6'd0;
         luma_quant_active_q <= 1'b0;
         luma_tu_quant_pending_q <= 1'b0;
@@ -1188,6 +1215,7 @@ module ff_vvc_encoder #(
         chroma_tu_quant_pending_q <= 1'b0;
         chroma_tu_quant_frame_last_q <= 1'b0;
         chroma_quant_tu_q <= 6'd0;
+        chroma_quant_active_q <= 1'b0;
         luma_quant_tu_q <= 6'd0;
         luma_quant_active_q <= 1'b0;
         luma_tu_quant_pending_q <= 1'b0;
@@ -1290,7 +1318,28 @@ module ff_vvc_encoder #(
           s_axis_ready <= 1'b1;
         end
       end else if (chroma_tu_quant_pending_q) begin
-        if (chroma_quant_tu_valid_w) begin
+        if (!chroma_quant_tu_valid_w) begin
+          quant_cb_dc_level_ctu_q[chroma_quant_tu_q] <= 9'sd0;
+          quant_cr_dc_level_ctu_q[chroma_quant_tu_q] <= 9'sd0;
+          quant_cb_ac_levels_ctu_q[chroma_quant_tu_q] <= '0;
+          quant_cr_ac_levels_ctu_q[chroma_quant_tu_q] <= '0;
+          chroma_tu_quant_pending_q <= 1'b0;
+          chroma_quant_active_q <= 1'b0;
+          cb_sample_tu_q <= '0;
+          cr_sample_tu_q <= '0;
+          if (chroma_tu_quant_frame_last_q) begin
+            chroma_tu_quant_frame_last_q <= 1'b0;
+            pending_output_q <= 1'b1;
+            luma_quant_tu_q <= 6'd0;
+            luma_quant_active_q <= 1'b0;
+          end else begin
+            input_active_q <= 1'b1;
+            s_axis_ready <= 1'b1;
+          end
+        end else if (!chroma_quant_active_q && !chroma_quant_busy_w) begin
+          chroma_quant_start_q <= 1'b1;
+          chroma_quant_active_q <= 1'b1;
+        end else if (chroma_quant_done_w) begin
           quant_cb_dc_level_ctu_q[chroma_quant_tu_q] <= chroma_quant_cb_dc_level_w;
           quant_cr_dc_level_ctu_q[chroma_quant_tu_q] <= chroma_quant_cr_dc_level_w;
           quant_cb_ac_levels_ctu_q[chroma_quant_tu_q] <= chroma_quant_cb_ac_levels_w;
@@ -1305,24 +1354,19 @@ module ff_vvc_encoder #(
             chroma_cr_left_ref_col_q[chroma_quant_tu_row_w][luma_ref_i * 8 +: 8] <=
               chroma_quant_cr_right_ref_w[luma_ref_i * 8 +: 8];
           end
-        end else begin
-          quant_cb_dc_level_ctu_q[chroma_quant_tu_q] <= 9'sd0;
-          quant_cr_dc_level_ctu_q[chroma_quant_tu_q] <= 9'sd0;
-          quant_cb_ac_levels_ctu_q[chroma_quant_tu_q] <= '0;
-          quant_cr_ac_levels_ctu_q[chroma_quant_tu_q] <= '0;
-        end
-
-        chroma_tu_quant_pending_q <= 1'b0;
-        cb_sample_tu_q <= '0;
-        cr_sample_tu_q <= '0;
-        if (chroma_tu_quant_frame_last_q) begin
-          chroma_tu_quant_frame_last_q <= 1'b0;
-          pending_output_q <= 1'b1;
-          luma_quant_tu_q <= 6'd0;
-          luma_quant_active_q <= 1'b0;
-        end else begin
-          input_active_q <= 1'b1;
-          s_axis_ready <= 1'b1;
+          chroma_tu_quant_pending_q <= 1'b0;
+          chroma_quant_active_q <= 1'b0;
+          cb_sample_tu_q <= '0;
+          cr_sample_tu_q <= '0;
+          if (chroma_tu_quant_frame_last_q) begin
+            chroma_tu_quant_frame_last_q <= 1'b0;
+            pending_output_q <= 1'b1;
+            luma_quant_tu_q <= 6'd0;
+            luma_quant_active_q <= 1'b0;
+          end else begin
+            input_active_q <= 1'b1;
+            s_axis_ready <= 1'b1;
+          end
         end
       end else if (pending_output_q &&
                    (generated_out_state_q == GENERATED_OUT_IDLE)) begin

@@ -5,290 +5,396 @@
 `define FF_VVC_CHROMA_MUL83(V) (((V) <<< 6) + ((V) <<< 4) + ((V) <<< 1) + (V))
 
 module ff_vvc_chroma_quant_recon_420 (
+  input  logic clk,
+  input  logic rst_n,
+  input  logic clear,
+  input  logic start,
   input  logic [(8 * 4 * 4) - 1:0] samples,
   input  logic [(8 * 4) - 1:0] top_ref,
   input  logic [(8 * 4) - 1:0] left_ref,
   output logic signed [8:0] dc_level,
   output logic [(4 * 3) - 1:0] ac_levels,
   output logic [(8 * 4) - 1:0] bottom_ref,
-  output logic [(8 * 4) - 1:0] right_ref
+  output logic [(8 * 4) - 1:0] right_ref,
+  output logic done,
+  output logic busy
 );
-  localparam int MAX_SIZE = 4;
-  localparam int MAX_SAMPLES = MAX_SIZE * MAX_SIZE;
+  localparam int CHROMA_TU_SIZE = 4;
+  localparam int CHROMA_SAMPLE_COUNT = CHROMA_TU_SIZE * CHROMA_TU_SIZE;
 
-  logic [(8 * MAX_SAMPLES) - 1:0] predicted_pack_tmp;
-  logic signed [63:0] ac_acc_10_tmp;
-  logic signed [63:0] ac_acc_01_tmp;
-  logic signed [63:0] ac_acc_11_tmp;
-  logic signed [63:0] abs_acc_tmp;
-  logic signed [63:0] rounded_level_tmp;
-  logic signed [63:0] scaled_level_tmp;
-  logic signed [63:0] recon_sum_tmp;
-  logic signed [31:0] residual_sum_tmp;
-  logic signed [31:0] residual_value_tmp;
-  logic signed [31:0] pdpc_wl_tmp;
-  logic signed [31:0] pdpc_wt_tmp;
-  logic signed [31:0] pdpc_val_tmp;
-  logic signed [31:0] recon_residual_tmp;
-  logic signed [31:0] recon_sample_tmp;
-  logic signed [31:0] vertical_0_tmp;
-  logic signed [31:0] vertical_1_tmp;
-  logic signed [31:0] dequant_dc_tmp;
-  logic signed [31:0] dequant_10_tmp;
-  logic signed [31:0] dequant_01_tmp;
-  logic signed [31:0] dequant_11_tmp;
-  logic signed [31:0] residual_wide_tmp;
-  logic signed [31:0] basis_x_term_tmp;
-  logic signed [31:0] basis_y_term_tmp;
-  logic signed [63:0] basis_xy_term_tmp;
-  logic signed [8:0] ac_level_10_tmp;
-  logic signed [8:0] ac_level_01_tmp;
-  logic signed [8:0] ac_level_11_tmp;
-  logic signed [8:0] quant_level_tmp;
-  logic signed [8:0] dc_level_abs_tmp;
-  logic signed [31:0] dc_level_abs_wide_tmp;
-  logic [31:0] dc_ref_sum_tmp;
-  logic [7:0] dc_pred_tmp;
-  logic [7:0] predicted_value_tmp;
-  logic [7:0] recon_clipped_tmp;
-  logic [7:0] sample_tmp;
+  localparam logic [2:0] ST_IDLE = 3'd0;
+  localparam logic [2:0] ST_SAMPLES = 3'd1;
+  localparam logic [2:0] ST_QUANT = 3'd2;
+  localparam logic [2:0] ST_RECON_VERTICAL = 3'd3;
+  localparam logic [2:0] ST_RECON_SAMPLE = 3'd4;
+  localparam logic [2:0] ST_DONE = 3'd5;
 
-  integer idx;
-  integer x_i;
-  integer y_i;
+  logic [2:0] state_q;
+  logic [3:0] sample_index_q;
+  logic [2:0] recon_edge_q;
+
+  logic [7:0] dc_pred_q;
+  logic signed [31:0] residual_sum_q;
+  logic signed [63:0] ac_acc_10_q;
+  logic signed [63:0] ac_acc_01_q;
+  logic signed [63:0] ac_acc_11_q;
+  logic signed [31:0] dequant_dc_q;
+  logic signed [31:0] dequant_10_q;
+  logic signed [31:0] dequant_01_q;
+  logic signed [31:0] dequant_11_q;
+  logic signed [31:0] vertical_0_q;
+  logic signed [31:0] vertical_1_q;
+
+  logic [31:0] dc_ref_sum_w;
+  logic [1:0] sample_x_w;
+  logic [1:0] sample_y_w;
+  logic [7:0] sample_w;
+  logic signed [31:0] left_diff_w;
+  logic signed [31:0] top_diff_w;
+  logic signed [31:0] left_term_w;
+  logic signed [31:0] top_term_w;
+  logic signed [31:0] pdpc_w;
+  logic [7:0] predicted_w;
+  logic signed [31:0] residual_w;
+  logic signed [31:0] residual_sum_next_w;
+  logic signed [31:0] residual_wide_w;
+  logic signed [31:0] sample_basis_x_w;
+  logic signed [31:0] sample_basis_y_w;
+  logic signed [63:0] sample_basis_xy_w;
+  logic signed [63:0] ac_acc_10_next_w;
+  logic signed [63:0] ac_acc_01_next_w;
+  logic signed [63:0] ac_acc_11_next_w;
+
+  logic signed [31:0] dc_level_abs_wide_w;
+  logic signed [8:0] dc_level_abs_w;
+  logic signed [8:0] dc_level_w;
+  logic signed [63:0] ac_abs_10_w;
+  logic signed [63:0] ac_abs_01_w;
+  logic signed [63:0] ac_abs_11_w;
+  logic signed [63:0] ac_rounded_10_w;
+  logic signed [63:0] ac_rounded_01_w;
+  logic signed [63:0] ac_rounded_11_w;
+  logic signed [8:0] quant_level_10_w;
+  logic signed [8:0] quant_level_01_w;
+  logic signed [8:0] quant_level_11_w;
+  logic signed [8:0] ac_level_10_w;
+  logic signed [8:0] ac_level_01_w;
+  logic signed [8:0] ac_level_11_w;
+  logic signed [63:0] scaled_level_w;
+  logic signed [31:0] dequant_dc_w;
+  logic signed [31:0] dequant_10_w;
+  logic signed [31:0] dequant_01_w;
+  logic signed [31:0] dequant_11_w;
+  logic [(4 * 3) - 1:0] ac_levels_w;
+
+  logic recon_bottom_edge_w;
+  logic [1:0] recon_x_w;
+  logic [1:0] recon_y_w;
+  logic [7:0] recon_predicted_w;
+  logic signed [31:0] recon_basis_y_w;
+  logic signed [63:0] recon_basis_xy_w;
+  logic signed [31:0] vertical_0_w;
+  logic signed [31:0] vertical_1_w;
+  logic signed [31:0] recon_basis_x_w;
+  logic signed [63:0] recon_sum_w;
+  logic signed [31:0] recon_residual_w;
+  logic signed [31:0] recon_sample_w;
+  logic [7:0] recon_clipped_w;
+
+  integer ref_i;
+
+  assign busy = (state_q != ST_IDLE) && (state_q != ST_DONE);
+  assign done = (state_q == ST_DONE);
+
+  assign sample_x_w = sample_index_q[1:0];
+  assign sample_y_w = sample_index_q[3:2];
+  assign sample_w = samples[sample_index_q * 8 +: 8];
 
   always @* begin
-    dc_level = 9'sd0;
-    ac_levels = '0;
-    bottom_ref = '0;
-    right_ref = '0;
-    predicted_pack_tmp = '0;
-    residual_sum_tmp = 32'sd0;
-    dc_ref_sum_tmp = 32'd0;
-    dc_pred_tmp = 8'd128;
-    ac_acc_10_tmp = 64'sd0;
-    ac_acc_01_tmp = 64'sd0;
-    ac_acc_11_tmp = 64'sd0;
-    ac_level_10_tmp = 9'sd0;
-    ac_level_01_tmp = 9'sd0;
-    ac_level_11_tmp = 9'sd0;
-    dequant_dc_tmp = 32'sd0;
-    dequant_10_tmp = 32'sd0;
-    dequant_01_tmp = 32'sd0;
-    dequant_11_tmp = 32'sd0;
-    basis_x_term_tmp = 32'sd0;
-    basis_y_term_tmp = 32'sd0;
-    basis_xy_term_tmp = 64'sd0;
-    residual_wide_tmp = 32'sd0;
-    dc_level_abs_wide_tmp = 32'sd0;
-    recon_clipped_tmp = 8'd0;
-
-    for (idx = 0; idx < MAX_SIZE; idx = idx + 1) begin
-      dc_ref_sum_tmp =
-        dc_ref_sum_tmp + {24'd0, top_ref[idx * 8 +: 8]} + {24'd0, left_ref[idx * 8 +: 8]};
+    dc_ref_sum_w = 32'd0;
+    for (ref_i = 0; ref_i < CHROMA_TU_SIZE; ref_i = ref_i + 1) begin
+      dc_ref_sum_w =
+        dc_ref_sum_w + {24'd0, top_ref[ref_i * 8 +: 8]} +
+        {24'd0, left_ref[ref_i * 8 +: 8]};
     end
-    dc_pred_tmp = (dc_ref_sum_tmp + 32'd4) >> 3;
+  end
 
-    // H.266 8.4.5 derives DC/PDPC chroma prediction from reconstructed
-    // neighbouring samples before 7.3.11.10 transform_unit() residual syntax.
-    // This fixed 4:2:0 path keeps DC plus the 2x2 low-frequency AC group.
-    for (y_i = 0; y_i < MAX_SIZE; y_i = y_i + 1) begin
-      for (x_i = 0; x_i < MAX_SIZE; x_i = x_i + 1) begin
-        idx = (y_i * MAX_SIZE) + x_i;
-        case (x_i)
-          0: pdpc_wl_tmp = 32'sd32;
-          1: pdpc_wl_tmp = 32'sd8;
-          2: pdpc_wl_tmp = 32'sd2;
-          default: pdpc_wl_tmp = 32'sd0;
-        endcase
-        case (y_i)
-          0: pdpc_wt_tmp = 32'sd32;
-          1: pdpc_wt_tmp = 32'sd8;
-          2: pdpc_wt_tmp = 32'sd2;
-          default: pdpc_wt_tmp = 32'sd0;
-        endcase
-        pdpc_val_tmp =
-          $signed({24'd0, dc_pred_tmp}) +
-          (((((pdpc_wl_tmp == 32'sd32) ?
-              (($signed({24'd0, left_ref[y_i * 8 +: 8]}) -
-                $signed({24'd0, dc_pred_tmp})) <<< 5) :
-              ((pdpc_wl_tmp == 32'sd8) ?
-               (($signed({24'd0, left_ref[y_i * 8 +: 8]}) -
-                 $signed({24'd0, dc_pred_tmp})) <<< 3) :
-               ((pdpc_wl_tmp == 32'sd2) ?
-                (($signed({24'd0, left_ref[y_i * 8 +: 8]}) -
-                  $signed({24'd0, dc_pred_tmp})) <<< 1) :
-                32'sd0))) +
-             ((pdpc_wt_tmp == 32'sd32) ?
-              (($signed({24'd0, top_ref[x_i * 8 +: 8]}) -
-                $signed({24'd0, dc_pred_tmp})) <<< 5) :
-              ((pdpc_wt_tmp == 32'sd8) ?
-               (($signed({24'd0, top_ref[x_i * 8 +: 8]}) -
-                 $signed({24'd0, dc_pred_tmp})) <<< 3) :
-               ((pdpc_wt_tmp == 32'sd2) ?
-                (($signed({24'd0, top_ref[x_i * 8 +: 8]}) -
-                  $signed({24'd0, dc_pred_tmp})) <<< 1) :
-                32'sd0)))) +
-            32'sd32) >>> 6);
-        if (pdpc_val_tmp < 32'sd0) begin
-          predicted_value_tmp = 8'd0;
-        end else if (pdpc_val_tmp > 32'sd255) begin
-          predicted_value_tmp = 8'd255;
-        end else begin
-          predicted_value_tmp = pdpc_val_tmp[7:0];
-        end
-        predicted_pack_tmp[idx * 8 +: 8] = predicted_value_tmp;
-
-        sample_tmp = samples[idx * 8 +: 8];
-        residual_value_tmp =
-          $signed({8'd0, sample_tmp}) - $signed({8'd0, predicted_value_tmp});
-        residual_sum_tmp = residual_sum_tmp + residual_value_tmp;
-
-        residual_wide_tmp = $signed(residual_value_tmp[15:0]);
-        case (x_i)
-          0: begin
-            basis_x_term_tmp = `FF_VVC_CHROMA_MUL83(residual_wide_tmp);
-          end
-          1: begin
-            basis_x_term_tmp = `FF_VVC_CHROMA_MUL36(residual_wide_tmp);
-          end
-          2: begin
-            basis_x_term_tmp = -`FF_VVC_CHROMA_MUL36(residual_wide_tmp);
-          end
-          default: begin
-            basis_x_term_tmp = -`FF_VVC_CHROMA_MUL83(residual_wide_tmp);
-          end
-        endcase
-        case (y_i)
-          0: begin
-            basis_y_term_tmp = `FF_VVC_CHROMA_MUL83(residual_wide_tmp);
-            basis_xy_term_tmp = `FF_VVC_CHROMA_MUL83(basis_x_term_tmp);
-          end
-          1: begin
-            basis_y_term_tmp = `FF_VVC_CHROMA_MUL36(residual_wide_tmp);
-            basis_xy_term_tmp = `FF_VVC_CHROMA_MUL36(basis_x_term_tmp);
-          end
-          2: begin
-            basis_y_term_tmp = -`FF_VVC_CHROMA_MUL36(residual_wide_tmp);
-            basis_xy_term_tmp = -`FF_VVC_CHROMA_MUL36(basis_x_term_tmp);
-          end
-          default: begin
-            basis_y_term_tmp = -`FF_VVC_CHROMA_MUL83(residual_wide_tmp);
-            basis_xy_term_tmp = -`FF_VVC_CHROMA_MUL83(basis_x_term_tmp);
-          end
-        endcase
-        ac_acc_10_tmp = ac_acc_10_tmp + `FF_VVC_CHROMA_MUL64(basis_x_term_tmp);
-        ac_acc_01_tmp = ac_acc_01_tmp + `FF_VVC_CHROMA_MUL64(basis_y_term_tmp);
-        ac_acc_11_tmp = ac_acc_11_tmp + basis_xy_term_tmp;
-      end
-    end
-
-    // For H.266 8.7.3 and 8.7.4 at 4x4 chroma QP 34, the DC-only inverse
-    // residual is 8 * level. This is equivalent to the software SSE search,
-    // including its strict-improvement tie behaviour.
-    if ((residual_sum_tmp >= -32'sd64) && (residual_sum_tmp <= 32'sd64)) begin
-      dc_level = 9'sd0;
-    end else if (residual_sum_tmp > 32'sd64) begin
-      dc_level_abs_wide_tmp = (residual_sum_tmp + 32'sd63) >>> 7;
-      dc_level_abs_tmp = $signed(dc_level_abs_wide_tmp[8:0]);
-      dc_level = dc_level_abs_tmp;
+  always @* begin
+    left_diff_w = $signed({24'd0, left_ref[sample_y_w * 8 +: 8]}) -
+                  $signed({24'd0, dc_pred_q});
+    top_diff_w = $signed({24'd0, top_ref[sample_x_w * 8 +: 8]}) -
+                 $signed({24'd0, dc_pred_q});
+    case (sample_x_w)
+      2'd0: left_term_w = left_diff_w <<< 5;
+      2'd1: left_term_w = left_diff_w <<< 3;
+      2'd2: left_term_w = left_diff_w <<< 1;
+      default: left_term_w = 32'sd0;
+    endcase
+    case (sample_y_w)
+      2'd0: top_term_w = top_diff_w <<< 5;
+      2'd1: top_term_w = top_diff_w <<< 3;
+      2'd2: top_term_w = top_diff_w <<< 1;
+      default: top_term_w = 32'sd0;
+    endcase
+    pdpc_w = $signed({24'd0, dc_pred_q}) + ((left_term_w + top_term_w + 32'sd32) >>> 6);
+    if (pdpc_w < 32'sd0) begin
+      predicted_w = 8'd0;
+    end else if (pdpc_w > 32'sd255) begin
+      predicted_w = 8'd255;
     end else begin
-      dc_level_abs_wide_tmp = ((-residual_sum_tmp) + 32'sd64) >>> 7;
-      dc_level_abs_tmp = $signed(dc_level_abs_wide_tmp[8:0]);
-      dc_level = -dc_level_abs_tmp;
+      predicted_w = pdpc_w[7:0];
     end
 
-    abs_acc_tmp = ac_acc_10_tmp[63] ? -ac_acc_10_tmp : ac_acc_10_tmp;
-    rounded_level_tmp = (abs_acc_tmp + 64'sd65536) >>> 17;
-    quant_level_tmp = (rounded_level_tmp > 64'sd2) ? 9'sd2 : rounded_level_tmp[8:0];
-    ac_level_10_tmp = ac_acc_10_tmp[63] ? -quant_level_tmp : quant_level_tmp;
+    residual_w = $signed({24'd0, sample_w}) - $signed({24'd0, predicted_w});
+    residual_sum_next_w = residual_sum_q + residual_w;
+    residual_wide_w = residual_w;
 
-    abs_acc_tmp = ac_acc_01_tmp[63] ? -ac_acc_01_tmp : ac_acc_01_tmp;
-    rounded_level_tmp = (abs_acc_tmp + 64'sd65536) >>> 17;
-    quant_level_tmp = (rounded_level_tmp > 64'sd2) ? 9'sd2 : rounded_level_tmp[8:0];
-    ac_level_01_tmp = ac_acc_01_tmp[63] ? -quant_level_tmp : quant_level_tmp;
+    case (sample_x_w)
+      2'd0: sample_basis_x_w = `FF_VVC_CHROMA_MUL83(residual_wide_w);
+      2'd1: sample_basis_x_w = `FF_VVC_CHROMA_MUL36(residual_wide_w);
+      2'd2: sample_basis_x_w = -`FF_VVC_CHROMA_MUL36(residual_wide_w);
+      default: sample_basis_x_w = -`FF_VVC_CHROMA_MUL83(residual_wide_w);
+    endcase
+    case (sample_y_w)
+      2'd0: begin
+        sample_basis_y_w = `FF_VVC_CHROMA_MUL83(residual_wide_w);
+        sample_basis_xy_w = `FF_VVC_CHROMA_MUL83(sample_basis_x_w);
+      end
+      2'd1: begin
+        sample_basis_y_w = `FF_VVC_CHROMA_MUL36(residual_wide_w);
+        sample_basis_xy_w = `FF_VVC_CHROMA_MUL36(sample_basis_x_w);
+      end
+      2'd2: begin
+        sample_basis_y_w = -`FF_VVC_CHROMA_MUL36(residual_wide_w);
+        sample_basis_xy_w = -`FF_VVC_CHROMA_MUL36(sample_basis_x_w);
+      end
+      default: begin
+        sample_basis_y_w = -`FF_VVC_CHROMA_MUL83(residual_wide_w);
+        sample_basis_xy_w = -`FF_VVC_CHROMA_MUL83(sample_basis_x_w);
+      end
+    endcase
+    ac_acc_10_next_w = ac_acc_10_q + $signed(`FF_VVC_CHROMA_MUL64(sample_basis_x_w));
+    ac_acc_01_next_w = ac_acc_01_q + $signed(`FF_VVC_CHROMA_MUL64(sample_basis_y_w));
+    ac_acc_11_next_w = ac_acc_11_q + sample_basis_xy_w;
+  end
 
-    abs_acc_tmp = ac_acc_11_tmp[63] ? -ac_acc_11_tmp : ac_acc_11_tmp;
-    rounded_level_tmp = (abs_acc_tmp + 64'sd65536) >>> 17;
-    quant_level_tmp = (rounded_level_tmp > 64'sd2) ? 9'sd2 : rounded_level_tmp[8:0];
-    ac_level_11_tmp = ac_acc_11_tmp[63] ? -quant_level_tmp : quant_level_tmp;
+  always @* begin
+    dc_level_abs_wide_w = 32'sd0;
+    dc_level_abs_w = 9'sd0;
+    if ((residual_sum_q >= -32'sd64) && (residual_sum_q <= 32'sd64)) begin
+      dc_level_w = 9'sd0;
+    end else if (residual_sum_q > 32'sd64) begin
+      dc_level_abs_wide_w = (residual_sum_q + 32'sd63) >>> 7;
+      dc_level_abs_w = $signed(dc_level_abs_wide_w[8:0]);
+      dc_level_w = dc_level_abs_w;
+    end else begin
+      dc_level_abs_wide_w = ((-residual_sum_q) + 32'sd64) >>> 7;
+      dc_level_abs_w = $signed(dc_level_abs_wide_w[8:0]);
+      dc_level_w = -dc_level_abs_w;
+    end
 
-    // H.266 7.3.11.10 transform_unit() codes coefficients in 4x4 raster
-    // coordinates. This lossy 4:2:0 subset stores only the 2x2 AC positions:
-    // slot 0=(1,0), slot 1=(0,1), slot 2=(1,1).
-    ac_levels = '0;
-    ac_levels[(0 * 4) +: 4] = ac_level_10_tmp[3:0];
-    ac_levels[(1 * 4) +: 4] = ac_level_01_tmp[3:0];
-    ac_levels[(2 * 4) +: 4] = ac_level_11_tmp[3:0];
+    ac_abs_10_w = ac_acc_10_q[63] ? -ac_acc_10_q : ac_acc_10_q;
+    ac_abs_01_w = ac_acc_01_q[63] ? -ac_acc_01_q : ac_acc_01_q;
+    ac_abs_11_w = ac_acc_11_q[63] ? -ac_acc_11_q : ac_acc_11_q;
+    ac_rounded_10_w = (ac_abs_10_w + 64'sd65536) >>> 17;
+    ac_rounded_01_w = (ac_abs_01_w + 64'sd65536) >>> 17;
+    ac_rounded_11_w = (ac_abs_11_w + 64'sd65536) >>> 17;
+    quant_level_10_w = (ac_rounded_10_w > 64'sd2) ? 9'sd2 : $signed(ac_rounded_10_w[8:0]);
+    quant_level_01_w = (ac_rounded_01_w > 64'sd2) ? 9'sd2 : $signed(ac_rounded_01_w[8:0]);
+    quant_level_11_w = (ac_rounded_11_w > 64'sd2) ? 9'sd2 : $signed(ac_rounded_11_w[8:0]);
+    ac_level_10_w = ac_acc_10_q[63] ? -quant_level_10_w : quant_level_10_w;
+    ac_level_01_w = ac_acc_01_q[63] ? -quant_level_01_w : quant_level_01_w;
+    ac_level_11_w = ac_acc_11_q[63] ? -quant_level_11_w : quant_level_11_w;
 
-    scaled_level_tmp = ($signed(dc_level) <<< 15) + 64'sd16;
-    dequant_dc_tmp = (dc_level == 9'sd0) ? 32'sd0 : (scaled_level_tmp >>> 5);
-    scaled_level_tmp = ($signed(ac_level_10_tmp) <<< 15) + 64'sd16;
-    dequant_10_tmp = (ac_level_10_tmp == 9'sd0) ? 32'sd0 : (scaled_level_tmp >>> 5);
-    scaled_level_tmp = ($signed(ac_level_01_tmp) <<< 15) + 64'sd16;
-    dequant_01_tmp = (ac_level_01_tmp == 9'sd0) ? 32'sd0 : (scaled_level_tmp >>> 5);
-    scaled_level_tmp = ($signed(ac_level_11_tmp) <<< 15) + 64'sd16;
-    dequant_11_tmp = (ac_level_11_tmp == 9'sd0) ? 32'sd0 : (scaled_level_tmp >>> 5);
+    ac_levels_w = '0;
+    ac_levels_w[(0 * 4) +: 4] = ac_level_10_w[3:0];
+    ac_levels_w[(1 * 4) +: 4] = ac_level_01_w[3:0];
+    ac_levels_w[(2 * 4) +: 4] = ac_level_11_w[3:0];
 
-    for (y_i = 0; y_i < MAX_SIZE; y_i = y_i + 1) begin
-      case (y_i)
-        0: begin
-          basis_y_term_tmp = `FF_VVC_CHROMA_MUL83(dequant_01_tmp);
-          basis_xy_term_tmp = `FF_VVC_CHROMA_MUL83(dequant_11_tmp);
+    scaled_level_w = ($signed(dc_level_w) <<< 15) + 64'sd16;
+    dequant_dc_w = (dc_level_w == 9'sd0) ? 32'sd0 : (scaled_level_w >>> 5);
+    scaled_level_w = ($signed(ac_level_10_w) <<< 15) + 64'sd16;
+    dequant_10_w = (ac_level_10_w == 9'sd0) ? 32'sd0 : (scaled_level_w >>> 5);
+    scaled_level_w = ($signed(ac_level_01_w) <<< 15) + 64'sd16;
+    dequant_01_w = (ac_level_01_w == 9'sd0) ? 32'sd0 : (scaled_level_w >>> 5);
+    scaled_level_w = ($signed(ac_level_11_w) <<< 15) + 64'sd16;
+    dequant_11_w = (ac_level_11_w == 9'sd0) ? 32'sd0 : (scaled_level_w >>> 5);
+  end
+
+  assign recon_bottom_edge_w = (recon_edge_q < 3'd4);
+
+  always @* begin
+    if (recon_bottom_edge_w) begin
+      recon_y_w = 2'd3;
+      recon_x_w = recon_edge_q[1:0];
+      recon_predicted_w = bottom_ref[recon_edge_q[1:0] * 8 +: 8];
+    end else begin
+      recon_y_w = recon_edge_q[1:0];
+      recon_x_w = 2'd3;
+      recon_predicted_w = right_ref[recon_edge_q[1:0] * 8 +: 8];
+    end
+
+    case (recon_y_w)
+      2'd0: begin
+        recon_basis_y_w = `FF_VVC_CHROMA_MUL83(dequant_01_q);
+        recon_basis_xy_w = `FF_VVC_CHROMA_MUL83(dequant_11_q);
+      end
+      2'd1: begin
+        recon_basis_y_w = `FF_VVC_CHROMA_MUL36(dequant_01_q);
+        recon_basis_xy_w = `FF_VVC_CHROMA_MUL36(dequant_11_q);
+      end
+      2'd2: begin
+        recon_basis_y_w = -`FF_VVC_CHROMA_MUL36(dequant_01_q);
+        recon_basis_xy_w = -`FF_VVC_CHROMA_MUL36(dequant_11_q);
+      end
+      default: begin
+        recon_basis_y_w = -`FF_VVC_CHROMA_MUL83(dequant_01_q);
+        recon_basis_xy_w = -`FF_VVC_CHROMA_MUL83(dequant_11_q);
+      end
+    endcase
+    vertical_0_w = (`FF_VVC_CHROMA_MUL64(dequant_dc_q) + recon_basis_y_w + 32'sd64) >>> 7;
+    vertical_1_w =
+      (`FF_VVC_CHROMA_MUL64(dequant_10_q) + $signed(recon_basis_xy_w[31:0]) + 32'sd64) >>> 7;
+
+    case (recon_x_w)
+      2'd0: recon_basis_x_w = `FF_VVC_CHROMA_MUL83(vertical_1_q);
+      2'd1: recon_basis_x_w = `FF_VVC_CHROMA_MUL36(vertical_1_q);
+      2'd2: recon_basis_x_w = -`FF_VVC_CHROMA_MUL36(vertical_1_q);
+      default: recon_basis_x_w = -`FF_VVC_CHROMA_MUL83(vertical_1_q);
+    endcase
+    recon_sum_w = $signed(`FF_VVC_CHROMA_MUL64(vertical_0_q)) + $signed(recon_basis_x_w);
+    recon_residual_w = (recon_sum_w + 64'sd2048) >>> 12;
+    recon_sample_w = $signed({24'd0, recon_predicted_w}) + recon_residual_w;
+    if (recon_sample_w < 32'sd0) begin
+      recon_clipped_w = 8'd0;
+    end else if (recon_sample_w > 32'sd255) begin
+      recon_clipped_w = 8'd255;
+    end else begin
+      recon_clipped_w = recon_sample_w[7:0];
+    end
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      state_q <= ST_IDLE;
+      sample_index_q <= 4'd0;
+      recon_edge_q <= 3'd0;
+      dc_pred_q <= 8'd128;
+      residual_sum_q <= 32'sd0;
+      ac_acc_10_q <= 64'sd0;
+      ac_acc_01_q <= 64'sd0;
+      ac_acc_11_q <= 64'sd0;
+      dequant_dc_q <= 32'sd0;
+      dequant_10_q <= 32'sd0;
+      dequant_01_q <= 32'sd0;
+      dequant_11_q <= 32'sd0;
+      vertical_0_q <= 32'sd0;
+      vertical_1_q <= 32'sd0;
+      dc_level <= 9'sd0;
+      ac_levels <= '0;
+      bottom_ref <= '0;
+      right_ref <= '0;
+    end else if (clear) begin
+      state_q <= ST_IDLE;
+      sample_index_q <= 4'd0;
+      recon_edge_q <= 3'd0;
+      dc_pred_q <= 8'd128;
+      residual_sum_q <= 32'sd0;
+      ac_acc_10_q <= 64'sd0;
+      ac_acc_01_q <= 64'sd0;
+      ac_acc_11_q <= 64'sd0;
+      dequant_dc_q <= 32'sd0;
+      dequant_10_q <= 32'sd0;
+      dequant_01_q <= 32'sd0;
+      dequant_11_q <= 32'sd0;
+      vertical_0_q <= 32'sd0;
+      vertical_1_q <= 32'sd0;
+      dc_level <= 9'sd0;
+      ac_levels <= '0;
+      bottom_ref <= '0;
+      right_ref <= '0;
+    end else begin
+      case (state_q)
+        ST_IDLE: begin
+          if (start) begin
+            state_q <= ST_SAMPLES;
+            sample_index_q <= 4'd0;
+            recon_edge_q <= 3'd0;
+            dc_pred_q <= (dc_ref_sum_w + 32'd4) >> 3;
+            residual_sum_q <= 32'sd0;
+            ac_acc_10_q <= 64'sd0;
+            ac_acc_01_q <= 64'sd0;
+            ac_acc_11_q <= 64'sd0;
+            dequant_dc_q <= 32'sd0;
+            dequant_10_q <= 32'sd0;
+            dequant_01_q <= 32'sd0;
+            dequant_11_q <= 32'sd0;
+            vertical_0_q <= 32'sd0;
+            vertical_1_q <= 32'sd0;
+            dc_level <= 9'sd0;
+            ac_levels <= '0;
+            bottom_ref <= '0;
+            right_ref <= '0;
+          end
         end
-        1: begin
-          basis_y_term_tmp = `FF_VVC_CHROMA_MUL36(dequant_01_tmp);
-          basis_xy_term_tmp = `FF_VVC_CHROMA_MUL36(dequant_11_tmp);
+
+        ST_SAMPLES: begin
+          residual_sum_q <= residual_sum_next_w;
+          ac_acc_10_q <= ac_acc_10_next_w;
+          ac_acc_01_q <= ac_acc_01_next_w;
+          ac_acc_11_q <= ac_acc_11_next_w;
+          if (sample_y_w == 2'd3) begin
+            bottom_ref[sample_x_w * 8 +: 8] <= predicted_w;
+          end
+          if (sample_x_w == 2'd3) begin
+            right_ref[sample_y_w * 8 +: 8] <= predicted_w;
+          end
+          if (sample_index_q == (CHROMA_SAMPLE_COUNT - 1)) begin
+            state_q <= ST_QUANT;
+          end else begin
+            sample_index_q <= sample_index_q + 4'd1;
+          end
         end
-        2: begin
-          basis_y_term_tmp = -`FF_VVC_CHROMA_MUL36(dequant_01_tmp);
-          basis_xy_term_tmp = -`FF_VVC_CHROMA_MUL36(dequant_11_tmp);
+
+        ST_QUANT: begin
+          dc_level <= dc_level_w;
+          ac_levels <= ac_levels_w;
+          dequant_dc_q <= dequant_dc_w;
+          dequant_10_q <= dequant_10_w;
+          dequant_01_q <= dequant_01_w;
+          dequant_11_q <= dequant_11_w;
+          recon_edge_q <= 3'd0;
+          state_q <= ST_RECON_VERTICAL;
         end
+
+        ST_RECON_VERTICAL: begin
+          vertical_0_q <= vertical_0_w;
+          vertical_1_q <= vertical_1_w;
+          state_q <= ST_RECON_SAMPLE;
+        end
+
+        ST_RECON_SAMPLE: begin
+          if (recon_bottom_edge_w) begin
+            bottom_ref[recon_x_w * 8 +: 8] <= recon_clipped_w;
+          end else begin
+            right_ref[recon_y_w * 8 +: 8] <= recon_clipped_w;
+          end
+          if (recon_edge_q == 3'd7) begin
+            state_q <= ST_DONE;
+          end else begin
+            recon_edge_q <= recon_edge_q + 3'd1;
+            state_q <= ST_RECON_VERTICAL;
+          end
+        end
+
         default: begin
-          basis_y_term_tmp = -`FF_VVC_CHROMA_MUL83(dequant_01_tmp);
-          basis_xy_term_tmp = -`FF_VVC_CHROMA_MUL83(dequant_11_tmp);
+          state_q <= ST_IDLE;
         end
       endcase
-      vertical_0_tmp = (`FF_VVC_CHROMA_MUL64(dequant_dc_tmp) + basis_y_term_tmp + 32'sd64) >>> 7;
-      vertical_1_tmp =
-        (`FF_VVC_CHROMA_MUL64(dequant_10_tmp) + $signed(basis_xy_term_tmp[31:0]) + 32'sd64) >>> 7;
-
-      for (x_i = 0; x_i < MAX_SIZE; x_i = x_i + 1) begin
-        if ((y_i == (MAX_SIZE - 1)) || (x_i == (MAX_SIZE - 1))) begin
-          case (x_i)
-            0: begin
-              basis_x_term_tmp = `FF_VVC_CHROMA_MUL83(vertical_1_tmp);
-            end
-            1: begin
-              basis_x_term_tmp = `FF_VVC_CHROMA_MUL36(vertical_1_tmp);
-            end
-            2: begin
-              basis_x_term_tmp = -`FF_VVC_CHROMA_MUL36(vertical_1_tmp);
-            end
-            default: begin
-              basis_x_term_tmp = -`FF_VVC_CHROMA_MUL83(vertical_1_tmp);
-            end
-          endcase
-          recon_sum_tmp = `FF_VVC_CHROMA_MUL64(vertical_0_tmp) + basis_x_term_tmp;
-          recon_residual_tmp = (recon_sum_tmp + 64'sd2048) >>> 12;
-          idx = (y_i * MAX_SIZE) + x_i;
-          predicted_value_tmp = predicted_pack_tmp[idx * 8 +: 8];
-          recon_sample_tmp = $signed({24'd0, predicted_value_tmp}) + recon_residual_tmp;
-          if (recon_sample_tmp < 32'sd0) begin
-            recon_clipped_tmp = 8'd0;
-          end else if (recon_sample_tmp > 32'sd255) begin
-            recon_clipped_tmp = 8'd255;
-          end else begin
-            recon_clipped_tmp = recon_sample_tmp[7:0];
-          end
-          if (y_i == (MAX_SIZE - 1)) begin
-            bottom_ref[x_i * 8 +: 8] = recon_clipped_tmp;
-          end
-          if (x_i == (MAX_SIZE - 1)) begin
-            right_ref[y_i * 8 +: 8] = recon_clipped_tmp;
-          end
-        end
-      end
     end
   end
 endmodule
+
+`undef FF_VVC_CHROMA_MUL36
+`undef FF_VVC_CHROMA_MUL64
+`undef FF_VVC_CHROMA_MUL83
