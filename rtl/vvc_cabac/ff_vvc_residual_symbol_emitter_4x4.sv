@@ -40,6 +40,7 @@ module ff_vvc_residual_symbol_emitter_4x4 (
   localparam logic [2:0] SUB_REM_PREFIX = 3'd4;
   localparam logic [2:0] SUB_REM_SUFFIX = 3'd5;
   localparam logic [2:0] SUB_SIGN_ACCUM = 3'd6;
+  localparam logic [2:0] SUB_REM_PREP = 3'd7;
 
   logic [2:0] state_q;
   logic mode_q;
@@ -57,6 +58,11 @@ module ff_vvc_residual_symbol_emitter_4x4 (
   logic [9:0] regular_bins_left_q;
   logic scan_regular_active_q;
   logic signed [5:0] min_pos_2nd_pass_q;
+  logic [5:0] rem_prefix_count_q;
+  logic [31:0] rem_prefix_pattern_q;
+  logic [5:0] rem_suffix_count_q;
+  logic [31:0] rem_suffix_pattern_q;
+  logic rem_emit_needed_q;
 
   logic [(9 * 16) - 1:0] load_coeff_abs;
   logic [(9 * 16) - 1:0] load_coeff_template_abs;
@@ -579,17 +585,17 @@ module ff_vvc_residual_symbol_emitter_4x4 (
             end
           end
           SUB_REM_PREFIX: begin
-            if (scan_regular_active_q && rem_needed_w) begin
+            if (scan_regular_active_q && rem_emit_needed_q) begin
               m_axis_valid = 1'b1;
               m_axis_kind = SYMBOL_BINS_EP;
-              m_axis_data = (rem_prefix_pattern_w << 6) | {26'd0, rem_prefix_count_w};
+              m_axis_data = (rem_prefix_pattern_q << 6) | {26'd0, rem_prefix_count_q};
             end
           end
           SUB_REM_SUFFIX: begin
-            if (scan_regular_active_q && rem_needed_w) begin
+            if (scan_regular_active_q && rem_emit_needed_q) begin
               m_axis_valid = 1'b1;
               m_axis_kind = SYMBOL_BINS_EP;
-              m_axis_data = (rem_suffix_pattern_w << 6) | {26'd0, rem_suffix_count_w};
+              m_axis_data = (rem_suffix_pattern_q << 6) | {26'd0, rem_suffix_count_q};
             end
           end
           default: begin
@@ -602,11 +608,11 @@ module ff_vvc_residual_symbol_emitter_4x4 (
           if (subphase_q == SUB_REM_PREFIX) begin
             m_axis_valid = 1'b1;
             m_axis_kind = SYMBOL_BINS_EP;
-            m_axis_data = (rem_prefix_pattern_w << 6) | {26'd0, rem_prefix_count_w};
+            m_axis_data = (rem_prefix_pattern_q << 6) | {26'd0, rem_prefix_count_q};
           end else if (subphase_q == SUB_REM_SUFFIX) begin
             m_axis_valid = 1'b1;
             m_axis_kind = SYMBOL_BINS_EP;
-            m_axis_data = (rem_suffix_pattern_w << 6) | {26'd0, rem_suffix_count_w};
+            m_axis_data = (rem_suffix_pattern_q << 6) | {26'd0, rem_suffix_count_q};
           end
         end
       end
@@ -641,6 +647,11 @@ module ff_vvc_residual_symbol_emitter_4x4 (
       regular_bins_left_q <= 10'd0;
       scan_regular_active_q <= 1'b0;
       min_pos_2nd_pass_q <= -6'sd1;
+      rem_prefix_count_q <= 6'd0;
+      rem_prefix_pattern_q <= 32'd0;
+      rem_suffix_count_q <= 6'd0;
+      rem_suffix_pattern_q <= 32'd0;
+      rem_emit_needed_q <= 1'b0;
       done <= 1'b0;
     end else if (clear) begin
       state_q <= ST_IDLE;
@@ -653,6 +664,11 @@ module ff_vvc_residual_symbol_emitter_4x4 (
       regular_bins_left_q <= 10'd0;
       scan_regular_active_q <= 1'b0;
       min_pos_2nd_pass_q <= -6'sd1;
+      rem_prefix_count_q <= 6'd0;
+      rem_prefix_pattern_q <= 32'd0;
+      rem_suffix_count_q <= 6'd0;
+      rem_suffix_pattern_q <= 32'd0;
+      rem_emit_needed_q <= 1'b0;
       done <= 1'b0;
     end else begin
       if (state_q == ST_IDLE) begin
@@ -675,6 +691,11 @@ module ff_vvc_residual_symbol_emitter_4x4 (
             10'd112;
           scan_regular_active_q <= 1'b0;
           min_pos_2nd_pass_q <= -6'sd1;
+          rem_prefix_count_q <= 6'd0;
+          rem_prefix_pattern_q <= 32'd0;
+          rem_suffix_count_q <= 6'd0;
+          rem_suffix_pattern_q <= 32'd0;
+          rem_emit_needed_q <= 1'b0;
           if (load_has_coeff) begin
             state_q <= ST_LAST_X;
           end else begin
@@ -709,13 +730,13 @@ module ff_vvc_residual_symbol_emitter_4x4 (
             if (!scan_regular_active_q) begin
               if (scan_pos_q == 5'd0) begin
                 scan_pos_q <= 5'd15;
-                subphase_q <= SUB_REM_PREFIX;
+                subphase_q <= SUB_REM_PREP;
                 scan_regular_active_q <= 1'b0;
                 state_q <= (mode_q && (min_pos_2nd_pass_q >= 0)) ? ST_SECOND : ST_SIGN;
               end else if (mode_q && (regular_bins_left_q < 10'd4) &&
                            (scan_pos_q <= last_scan_pos_w)) begin
                 scan_pos_q <= 5'd15;
-                subphase_q <= SUB_REM_PREFIX;
+                subphase_q <= SUB_REM_PREP;
                 scan_regular_active_q <= 1'b0;
                 state_q <= (min_pos_2nd_pass_q >= 0) ? ST_SECOND : ST_SIGN;
               end else begin
@@ -752,6 +773,11 @@ module ff_vvc_residual_symbol_emitter_4x4 (
                   if ((coeff_abs_w > 9'd1) && (regular_bins_left_q != 10'd0)) begin
                     regular_bins_left_q <= regular_bins_left_q - 10'd1;
                   end
+                  rem_emit_needed_q <= rem_needed_w;
+                  rem_prefix_count_q <= rem_prefix_count_w;
+                  rem_prefix_pattern_q <= rem_prefix_pattern_w;
+                  rem_suffix_count_q <= rem_suffix_count_w;
+                  rem_suffix_pattern_q <= rem_suffix_pattern_w;
                   subphase_q <= rem_needed_w ? SUB_REM_PREFIX : SUB_SIGN_ACCUM;
                 end
                 SUB_REM_PREFIX: begin
@@ -772,7 +798,7 @@ module ff_vvc_residual_symbol_emitter_4x4 (
                   end
                   if (scan_pos_q == 5'd0) begin
                     scan_pos_q <= 5'd15;
-                    subphase_q <= SUB_REM_PREFIX;
+                    subphase_q <= SUB_REM_PREP;
                     scan_regular_active_q <= 1'b0;
                     state_q <= (mode_q && (min_pos_2nd_pass_q >= 0)) ? ST_SECOND : ST_SIGN;
                   end else begin
@@ -793,8 +819,15 @@ module ff_vvc_residual_symbol_emitter_4x4 (
                 state_q <= ST_SIGN;
               end else begin
                 scan_pos_q <= scan_pos_q - 5'd1;
-                subphase_q <= SUB_REM_PREFIX;
+                subphase_q <= SUB_REM_PREP;
               end
+            end else if (subphase_q == SUB_REM_PREP) begin
+              rem_emit_needed_q <= 1'b1;
+              rem_prefix_count_q <= rem_prefix_count_w;
+              rem_prefix_pattern_q <= rem_prefix_pattern_w;
+              rem_suffix_count_q <= rem_suffix_count_w;
+              rem_suffix_pattern_q <= rem_suffix_pattern_w;
+              subphase_q <= SUB_REM_PREFIX;
             end else if (subphase_q == SUB_REM_PREFIX) begin
               subphase_q <= SUB_REM_SUFFIX;
             end else if (subphase_q == SUB_REM_SUFFIX) begin
@@ -812,7 +845,7 @@ module ff_vvc_residual_symbol_emitter_4x4 (
                 state_q <= ST_SIGN;
               end else begin
                 scan_pos_q <= scan_pos_q - 5'd1;
-                subphase_q <= SUB_REM_PREFIX;
+                subphase_q <= SUB_REM_PREP;
               end
             end
           end

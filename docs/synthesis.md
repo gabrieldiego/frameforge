@@ -335,6 +335,44 @@ Result:
   cells and 2,023 estimated LCs; the increase is the expected cost of the
   registered input samples and references.
 
+## Top Encoder Residual Remainder Registering
+
+Measured on June 8, 2026 after registering the residual symbol emitter's
+remainder prefix/suffix EP payloads before presenting them on `m_axis_data`.
+The regular residual scan captures the payload after the `gt3` decision, and
+the second-pass residual path uses a short prep subphase before prefix/suffix
+emission. This removes remainder construction from the output mux timing path.
+
+Validation:
+
+```sh
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=1
+```
+
+The smoke test passed all three cocotb encoder checks, including the luma AC and
+chroma AC pattern cases.
+
+Synthesis:
+
+```sh
+make synth SYNTH_DUT=vvc-encoder
+```
+
+Result:
+
+- Top `ff_vvc_encoder` synthesis completed in 270.4 seconds with 1690.82 MiB
+  peak child RSS observed by the synthesis runner.
+- Critical-path reporting completed in 55.2 seconds.
+- Longest topological path improved from 52 to 49. The path remains in the
+  residual symbol emitter's scan/rice path, but no longer carries the full
+  remainder prefix/suffix payload construction through the output mux.
+- Post-synth netlist restat reported 97,960 total cells and 36,737 estimated
+  LCs. Compared with the previous June 8 pass, total cells decreased by 3,475
+  and estimated LCs decreased by 1,220.
+- The standalone `ff_vvc_residual_symbol_emitter_4x4` module restat reported
+  3,608 cells and 1,543 estimated LCs. The local module grew slightly from the
+  added payload registers, but the top-level netlist simplified overall.
+
 ## Optional Vivado Synthesis
 
 FrameForge keeps a tracked Vivado install template at
