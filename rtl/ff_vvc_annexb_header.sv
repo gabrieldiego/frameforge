@@ -107,8 +107,8 @@ module ff_vvc_annexb_header #(
 
   assign coded_width = (visible_width + CODED_GRANULARITY - 16'd1) & ~(CODED_GRANULARITY - 16'd1);
   assign coded_height = (visible_height + CODED_GRANULARITY - 16'd1) & ~(CODED_GRANULARITY - 16'd1);
-  assign ctu_cols = (coded_width + 16'd63) >> 6;
-  assign ctu_rows = (coded_height + 16'd63) >> 6;
+  assign ctu_cols = (visible_width + 16'd63) >> 6;
+  assign ctu_rows = (visible_height + 16'd63) >> 6;
   always @* begin
     case (ctu_rows[4:0])
       5'd0: slice_count = 16'd0;

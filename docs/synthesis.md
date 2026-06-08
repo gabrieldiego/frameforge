@@ -412,6 +412,43 @@ Result:
   neighbor table is explicit, but the top-level netlist simplifies and the
   residual path stops limiting the topological timing report.
 
+## Top Encoder Direct CTU Geometry
+
+Measured on June 8, 2026 after deriving Annex B header CTU column and row counts
+directly from the visible dimensions. Since `ceil(ceil(visible, 8) / 64)` is
+equivalent to `ceil(visible / 64)`, the header can keep coded-width/height
+alignment for SPS dimensions and crop offsets while avoiding that alignment
+logic on the CTU-count and slice-count path.
+
+Validation:
+
+```sh
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=1
+```
+
+The smoke test passed all three cocotb encoder checks, including the luma AC and
+chroma AC pattern cases.
+
+Synthesis:
+
+```sh
+make synth SYNTH_DUT=vvc-encoder
+```
+
+Result:
+
+- Top `ff_vvc_encoder` synthesis completed in 273.2 seconds with 1683.44 MiB
+  peak child RSS observed by the synthesis runner.
+- Critical-path reporting completed in 55.2 seconds.
+- Longest topological path improved from 47 to 45. The path remains in the
+  Annex B header slice-count Exp-Golomb path, but no longer passes through the
+  coded-width alignment stage.
+- Post-synth netlist restat reported 97,714 total cells and 36,602 estimated
+  LCs. Compared with the previous June 8 pass, total cells decreased by 99 and
+  estimated LCs decreased by 6.
+- The standalone `ff_vvc_annexb_header` module restat reported 1,438 cells and
+  725 estimated LCs, down from 1,537 cells and 747 estimated LCs.
+
 ## Optional Vivado Synthesis
 
 FrameForge keeps a tracked Vivado install template at
