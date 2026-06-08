@@ -21,7 +21,8 @@ module ff_vvc_luma_quant_recon_8x8 (
   output logic [7:0] abs_level,
   output logic negative,
   output logic [(4 * 15) - 1:0] ac_levels,
-  output logic [(8 * 64) - 1:0] recon_samples,
+  output logic [(8 * 8) - 1:0] bottom_ref,
+  output logic [(8 * 8) - 1:0] right_ref,
   output logic done,
   output logic busy
 );
@@ -276,7 +277,11 @@ module ff_vvc_luma_quant_recon_8x8 (
       recon_x_w = 3'd7;
     end
     recon_raster_w = {recon_y_w, recon_x_w};
-    recon_predicted_w = recon_samples[recon_raster_w * 8 +: 8];
+    if (recon_edge_q < 4'd8) begin
+      recon_predicted_w = bottom_ref[recon_x_w * 8 +: 8];
+    end else begin
+      recon_predicted_w = right_ref[recon_y_w * 8 +: 8];
+    end
     recon_term_w = 32'sd0;
     case (recon_k_q)
       2'd0: recon_term_w = `FF_VVC_LUMA_MUL64(vertical_q[{recon_y_w, recon_k_q}]);
@@ -345,7 +350,8 @@ module ff_vvc_luma_quant_recon_8x8 (
       abs_level <= 8'd0;
       negative <= 1'b0;
       ac_levels <= '0;
-      recon_samples <= '0;
+      bottom_ref <= '0;
+      right_ref <= '0;
       for (init_i = 0; init_i < LUMA_COEFF_COUNT; init_i = init_i + 1) begin
         cell_sum_q[init_i] <= 18'sd0;
         coeff_level_q[init_i] <= 16'sd0;
@@ -368,7 +374,8 @@ module ff_vvc_luma_quant_recon_8x8 (
       abs_level <= 8'd0;
       negative <= 1'b0;
       ac_levels <= '0;
-      recon_samples <= '0;
+      bottom_ref <= '0;
+      right_ref <= '0;
       for (init_i = 0; init_i < LUMA_COEFF_COUNT; init_i = init_i + 1) begin
         cell_sum_q[init_i] <= 18'sd0;
         coeff_level_q[init_i] <= 16'sd0;
@@ -394,7 +401,8 @@ module ff_vvc_luma_quant_recon_8x8 (
             abs_level <= 8'd0;
             negative <= 1'b0;
             ac_levels <= '0;
-            recon_samples <= '0;
+            bottom_ref <= '0;
+            right_ref <= '0;
             for (init_i = 0; init_i < LUMA_COEFF_COUNT; init_i = init_i + 1) begin
               cell_sum_q[init_i] <= 18'sd0;
               coeff_level_q[init_i] <= 16'sd0;
@@ -406,8 +414,11 @@ module ff_vvc_luma_quant_recon_8x8 (
           residual_sum_q <= residual_sum_next_w;
           cell_sum_q[sample_cell_index_w] <=
             cell_sum_q[sample_cell_index_w] + $signed(residual_w[17:0]);
-          if ((sample_x_w == 3'd7) || (sample_y_w == 3'd7)) begin
-            recon_samples[sample_raster_w * 8 +: 8] <= predicted_w;
+          if (sample_y_w == 3'd7) begin
+            bottom_ref[sample_x_w * 8 +: 8] <= predicted_w;
+          end
+          if (sample_x_w == 3'd7) begin
+            right_ref[sample_y_w * 8 +: 8] <= predicted_w;
           end
           if (sample_index_q == 6'd63) begin
             coeff_level_q[0] <= dc_level_w[15:0];
@@ -463,7 +474,14 @@ module ff_vvc_luma_quant_recon_8x8 (
         ST_RECON: begin
           acc_q <= recon_acc_next_w;
           if (recon_k_q == 2'd3) begin
-            recon_samples[recon_raster_w * 8 +: 8] <= recon_clipped_w;
+            if (recon_edge_q < 4'd8) begin
+              bottom_ref[recon_x_w * 8 +: 8] <= recon_clipped_w;
+              if (recon_x_w == 3'd7) begin
+                right_ref[3'd7 * 8 +: 8] <= recon_clipped_w;
+              end
+            end else begin
+              right_ref[recon_y_w * 8 +: 8] <= recon_clipped_w;
+            end
             acc_q <= 32'sd0;
             recon_k_q <= 2'd0;
             if (recon_edge_q == 4'd14) begin

@@ -288,7 +288,8 @@ module ff_vvc_encoder #(
   logic [7:0] luma_quant_abs_level_w;
   logic luma_quant_negative_w;
   logic [(VVC_RESIDUAL_AC_BITS * VVC_LUMA_AC_COEFFS) - 1:0] luma_quant_ac_levels_w;
-  logic [(8 * VVC_RESIDUAL_LUMA_SAMPLES) - 1:0] luma_quant_recon_samples_w;
+  logic [(8 * VVC_LUMA_TU_SIZE) - 1:0] luma_quant_bottom_ref_w;
+  logic [(8 * VVC_LUMA_TU_SIZE) - 1:0] luma_quant_right_ref_w;
   logic luma_quant_start_q;
   logic luma_quant_done_w;
   logic luma_quant_busy_w;
@@ -740,7 +741,8 @@ module ff_vvc_encoder #(
     .abs_level(luma_quant_abs_level_w),
     .negative(luma_quant_negative_w),
     .ac_levels(luma_quant_ac_levels_w),
-    .recon_samples(luma_quant_recon_samples_w),
+    .bottom_ref(luma_quant_bottom_ref_w),
+    .right_ref(luma_quant_right_ref_w),
     .done(luma_quant_done_w),
     .busy(luma_quant_busy_w)
   );
@@ -1306,13 +1308,9 @@ module ff_vvc_encoder #(
           quant_luma_ac_levels_ctu_q[luma_quant_tu_q] <= luma_quant_ac_levels_w;
           for (luma_ref_i = 0; luma_ref_i < VVC_LUMA_TU_SIZE; luma_ref_i = luma_ref_i + 1) begin
             luma_top_ref_row_q[luma_quant_tu_col_w][luma_ref_i * 8 +: 8] <=
-              luma_quant_recon_samples_w[
-                (((VVC_LUMA_TU_SIZE - 1) * VVC_LUMA_TU_SIZE) + luma_ref_i) * 8 +: 8
-              ];
+              luma_quant_bottom_ref_w[luma_ref_i * 8 +: 8];
             luma_left_ref_col_q[luma_quant_tu_row_w][luma_ref_i * 8 +: 8] <=
-              luma_quant_recon_samples_w[
-                ((luma_ref_i * VVC_LUMA_TU_SIZE) + (VVC_LUMA_TU_SIZE - 1)) * 8 +: 8
-              ];
+              luma_quant_right_ref_w[luma_ref_i * 8 +: 8];
           end
           luma_quant_active_q <= 1'b0;
           luma_tu_quant_pending_q <= 1'b0;

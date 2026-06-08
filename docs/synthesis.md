@@ -527,6 +527,44 @@ Result:
 - The standalone parameterized `ff_vvc_palette_cu_symbolizer` restat reported
   5,259 cells and 2,407 estimated LCs with the narrowed 5-bit index bank.
 
+## Top Encoder Luma Edge Optimization
+
+Measured on June 8, 2026 after changing `ff_vvc_luma_quant_recon_8x8` to emit
+only the reconstructed bottom row and right column needed by the luma
+neighbour-reference path. The module no longer exports a sparse 8x8
+reconstructed-sample bus because the current top-level RTL only consumes those
+edge samples for the next 8x8 luma TU.
+
+Validation:
+
+```sh
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=1
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=3
+```
+
+Both top smoke checks passed all three cocotb encoder checks. The 4:2:0 run
+covers the residual path, and the 4:4:4 run covers the palette path while
+sharing the same luma quant/reconstruction interface.
+
+Synthesis:
+
+```sh
+make synth SYNTH_DUT=vvc-encoder
+```
+
+Result:
+
+- Top `ff_vvc_encoder` synthesis completed in 253.1 seconds with 1535.06 MiB
+  peak child RSS observed by the synthesis runner.
+- Critical-path reporting completed in 52.6 seconds.
+- Longest topological path remained 40. The reported path still runs through
+  CTU-visible-height/chroma-TU geometry into `s_axis_ready`.
+- Post-synth netlist restat reported 91,841 total cells and 33,774 estimated
+  LCs. Compared with the palette index bank baseline, total cells decreased by
+  5,229 and estimated LCs decreased by 1,545.
+- The standalone `ff_vvc_luma_quant_recon_8x8` module restat reported 10,326
+  cells and 4,129 estimated LCs with the edge-only reconstruction output.
+
 ## Optional Vivado Synthesis
 
 FrameForge keeps a tracked Vivado install template at
