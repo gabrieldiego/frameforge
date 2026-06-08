@@ -34,15 +34,13 @@ module ff_vvc_luma_quant_recon_8x8 (
   localparam logic [2:0] ST_IDLE = 3'd0;
   localparam logic [2:0] ST_SAMPLES = 3'd1;
   localparam logic [2:0] ST_AC = 3'd2;
-  localparam logic [2:0] ST_VERTICAL = 3'd3;
-  localparam logic [2:0] ST_RECON = 3'd4;
-  localparam logic [2:0] ST_DONE = 3'd5;
+  localparam logic [2:0] ST_RECON = 3'd3;
+  localparam logic [2:0] ST_DONE = 3'd4;
 
   logic [2:0] state_q;
   logic [5:0] sample_index_q;
   logic [3:0] ac_coeff_q;
   logic [3:0] ac_cell_q;
-  logic [4:0] vertical_index_q;
   logic [1:0] vertical_k_q;
   logic [3:0] recon_edge_q;
   logic [1:0] recon_k_q;
@@ -50,9 +48,9 @@ module ff_vvc_luma_quant_recon_8x8 (
   logic [7:0] dc_pred_q;
   logic signed [31:0] residual_sum_q;
   logic signed [31:0] acc_q;
+  logic signed [31:0] recon_horizontal_acc_q;
   logic signed [17:0] cell_sum_q [0:LUMA_COEFF_COUNT - 1];
   logic signed [15:0] coeff_level_q [0:LUMA_COEFF_COUNT - 1];
-  logic signed [31:0] vertical_q [0:(LUMA_TU_SIZE * LUMA_COEFF_SIZE) - 1];
 
   logic [2:0] sample_x_w;
   logic [2:0] sample_y_w;
@@ -86,19 +84,16 @@ module ff_vvc_luma_quant_recon_8x8 (
   logic signed [31:0] ac_rounded_w;
   logic signed [7:0] ac_level_w;
 
-  logic [2:0] vertical_y_w;
-  logic [1:0] vertical_x_w;
-  logic [3:0] vertical_coeff_index_w;
+  logic [3:0] recon_coeff_index_w;
   logic signed [31:0] dequant_w;
-  logic signed [31:0] vertical_term_w;
-  logic signed [31:0] vertical_acc_next_w;
-  logic signed [31:0] vertical_value_w;
+  logic signed [31:0] recon_vertical_term_w;
+  logic signed [31:0] recon_vertical_acc_next_w;
+  logic signed [31:0] recon_vertical_value_w;
 
   logic [2:0] recon_x_w;
   logic [2:0] recon_y_w;
-  logic [5:0] recon_raster_w;
   logic signed [31:0] recon_term_w;
-  logic signed [31:0] recon_acc_next_w;
+  logic signed [31:0] recon_horizontal_acc_next_w;
   logic signed [31:0] recon_residual_w;
   logic signed [31:0] recon_sample_w;
   logic [7:0] recon_predicted_w;
@@ -210,62 +205,61 @@ module ff_vvc_luma_quant_recon_8x8 (
       $signed({5'd0, ac_rounded_w[2:0]});
   end
 
-  assign vertical_y_w = vertical_index_q[4:2];
-  assign vertical_x_w = vertical_index_q[1:0];
-  assign vertical_coeff_index_w = {vertical_k_q, vertical_x_w};
+  assign recon_coeff_index_w = {vertical_k_q, recon_k_q};
 
   always @* begin
     dequant_w =
-      ($signed({{16{coeff_level_q[vertical_coeff_index_w][15]}},
-                coeff_level_q[vertical_coeff_index_w]}) <<< 8) +
-      ($signed({{16{coeff_level_q[vertical_coeff_index_w][15]}},
-                coeff_level_q[vertical_coeff_index_w]}) <<< 7) +
-      ($signed({{16{coeff_level_q[vertical_coeff_index_w][15]}},
-                coeff_level_q[vertical_coeff_index_w]}) <<< 4) +
-      ($signed({{16{coeff_level_q[vertical_coeff_index_w][15]}},
-                coeff_level_q[vertical_coeff_index_w]}) <<< 3);
-    vertical_term_w = 32'sd0;
+      ($signed({{16{coeff_level_q[recon_coeff_index_w][15]}},
+                coeff_level_q[recon_coeff_index_w]}) <<< 8) +
+      ($signed({{16{coeff_level_q[recon_coeff_index_w][15]}},
+                coeff_level_q[recon_coeff_index_w]}) <<< 7) +
+      ($signed({{16{coeff_level_q[recon_coeff_index_w][15]}},
+                coeff_level_q[recon_coeff_index_w]}) <<< 4) +
+      ($signed({{16{coeff_level_q[recon_coeff_index_w][15]}},
+                coeff_level_q[recon_coeff_index_w]}) <<< 3);
+    recon_vertical_term_w = 32'sd0;
     case (vertical_k_q)
-      2'd0: vertical_term_w = `FF_VVC_LUMA_MUL64(dequant_w);
+      2'd0: recon_vertical_term_w = `FF_VVC_LUMA_MUL64(dequant_w);
       2'd1: begin
-        case (vertical_y_w)
-          3'd0: vertical_term_w = `FF_VVC_LUMA_MUL89(dequant_w);
-          3'd1: vertical_term_w = `FF_VVC_LUMA_MUL75(dequant_w);
-          3'd2: vertical_term_w = `FF_VVC_LUMA_MUL50(dequant_w);
-          3'd3: vertical_term_w = `FF_VVC_LUMA_MUL18(dequant_w);
-          3'd4: vertical_term_w = -`FF_VVC_LUMA_MUL18(dequant_w);
-          3'd5: vertical_term_w = -`FF_VVC_LUMA_MUL50(dequant_w);
-          3'd6: vertical_term_w = -`FF_VVC_LUMA_MUL75(dequant_w);
-          default: vertical_term_w = -`FF_VVC_LUMA_MUL89(dequant_w);
+        case (recon_y_w)
+          3'd0: recon_vertical_term_w = `FF_VVC_LUMA_MUL89(dequant_w);
+          3'd1: recon_vertical_term_w = `FF_VVC_LUMA_MUL75(dequant_w);
+          3'd2: recon_vertical_term_w = `FF_VVC_LUMA_MUL50(dequant_w);
+          3'd3: recon_vertical_term_w = `FF_VVC_LUMA_MUL18(dequant_w);
+          3'd4: recon_vertical_term_w = -`FF_VVC_LUMA_MUL18(dequant_w);
+          3'd5: recon_vertical_term_w = -`FF_VVC_LUMA_MUL50(dequant_w);
+          3'd6: recon_vertical_term_w = -`FF_VVC_LUMA_MUL75(dequant_w);
+          default: recon_vertical_term_w = -`FF_VVC_LUMA_MUL89(dequant_w);
         endcase
       end
       2'd2: begin
-        case (vertical_y_w)
-          3'd0: vertical_term_w = `FF_VVC_LUMA_MUL83(dequant_w);
-          3'd1: vertical_term_w = `FF_VVC_LUMA_MUL36(dequant_w);
-          3'd2: vertical_term_w = -`FF_VVC_LUMA_MUL36(dequant_w);
-          3'd3: vertical_term_w = -`FF_VVC_LUMA_MUL83(dequant_w);
-          3'd4: vertical_term_w = -`FF_VVC_LUMA_MUL83(dequant_w);
-          3'd5: vertical_term_w = -`FF_VVC_LUMA_MUL36(dequant_w);
-          3'd6: vertical_term_w = `FF_VVC_LUMA_MUL36(dequant_w);
-          default: vertical_term_w = `FF_VVC_LUMA_MUL83(dequant_w);
+        case (recon_y_w)
+          3'd0: recon_vertical_term_w = `FF_VVC_LUMA_MUL83(dequant_w);
+          3'd1: recon_vertical_term_w = `FF_VVC_LUMA_MUL36(dequant_w);
+          3'd2: recon_vertical_term_w = -`FF_VVC_LUMA_MUL36(dequant_w);
+          3'd3: recon_vertical_term_w = -`FF_VVC_LUMA_MUL83(dequant_w);
+          3'd4: recon_vertical_term_w = -`FF_VVC_LUMA_MUL83(dequant_w);
+          3'd5: recon_vertical_term_w = -`FF_VVC_LUMA_MUL36(dequant_w);
+          3'd6: recon_vertical_term_w = `FF_VVC_LUMA_MUL36(dequant_w);
+          default: recon_vertical_term_w = `FF_VVC_LUMA_MUL83(dequant_w);
         endcase
       end
       default: begin
-        case (vertical_y_w)
-          3'd0: vertical_term_w = `FF_VVC_LUMA_MUL75(dequant_w);
-          3'd1: vertical_term_w = -`FF_VVC_LUMA_MUL18(dequant_w);
-          3'd2: vertical_term_w = -`FF_VVC_LUMA_MUL89(dequant_w);
-          3'd3: vertical_term_w = -`FF_VVC_LUMA_MUL50(dequant_w);
-          3'd4: vertical_term_w = `FF_VVC_LUMA_MUL50(dequant_w);
-          3'd5: vertical_term_w = `FF_VVC_LUMA_MUL89(dequant_w);
-          3'd6: vertical_term_w = `FF_VVC_LUMA_MUL18(dequant_w);
-          default: vertical_term_w = -`FF_VVC_LUMA_MUL75(dequant_w);
+        case (recon_y_w)
+          3'd0: recon_vertical_term_w = `FF_VVC_LUMA_MUL75(dequant_w);
+          3'd1: recon_vertical_term_w = -`FF_VVC_LUMA_MUL18(dequant_w);
+          3'd2: recon_vertical_term_w = -`FF_VVC_LUMA_MUL89(dequant_w);
+          3'd3: recon_vertical_term_w = -`FF_VVC_LUMA_MUL50(dequant_w);
+          3'd4: recon_vertical_term_w = `FF_VVC_LUMA_MUL50(dequant_w);
+          3'd5: recon_vertical_term_w = `FF_VVC_LUMA_MUL89(dequant_w);
+          3'd6: recon_vertical_term_w = `FF_VVC_LUMA_MUL18(dequant_w);
+          default: recon_vertical_term_w = -`FF_VVC_LUMA_MUL75(dequant_w);
         endcase
       end
     endcase
-    vertical_acc_next_w = ((vertical_k_q == 2'd0) ? 32'sd0 : acc_q) + vertical_term_w;
-    vertical_value_w = (vertical_acc_next_w + 32'sd64) >>> 7;
+    recon_vertical_acc_next_w =
+      ((vertical_k_q == 2'd0) ? 32'sd0 : acc_q) + recon_vertical_term_w;
+    recon_vertical_value_w = (recon_vertical_acc_next_w + 32'sd64) >>> 7;
   end
 
   always @* begin
@@ -276,7 +270,6 @@ module ff_vvc_luma_quant_recon_8x8 (
       recon_y_w = recon_edge_q[2:0] - 3'd0;
       recon_x_w = 3'd7;
     end
-    recon_raster_w = {recon_y_w, recon_x_w};
     if (recon_edge_q < 4'd8) begin
       recon_predicted_w = bottom_ref[recon_x_w * 8 +: 8];
     end else begin
@@ -284,46 +277,47 @@ module ff_vvc_luma_quant_recon_8x8 (
     end
     recon_term_w = 32'sd0;
     case (recon_k_q)
-      2'd0: recon_term_w = `FF_VVC_LUMA_MUL64(vertical_q[{recon_y_w, recon_k_q}]);
+      2'd0: recon_term_w = `FF_VVC_LUMA_MUL64(recon_vertical_value_w);
       2'd1: begin
         case (recon_x_w)
-          3'd0: recon_term_w = `FF_VVC_LUMA_MUL89(vertical_q[{recon_y_w, recon_k_q}]);
-          3'd1: recon_term_w = `FF_VVC_LUMA_MUL75(vertical_q[{recon_y_w, recon_k_q}]);
-          3'd2: recon_term_w = `FF_VVC_LUMA_MUL50(vertical_q[{recon_y_w, recon_k_q}]);
-          3'd3: recon_term_w = `FF_VVC_LUMA_MUL18(vertical_q[{recon_y_w, recon_k_q}]);
-          3'd4: recon_term_w = -`FF_VVC_LUMA_MUL18(vertical_q[{recon_y_w, recon_k_q}]);
-          3'd5: recon_term_w = -`FF_VVC_LUMA_MUL50(vertical_q[{recon_y_w, recon_k_q}]);
-          3'd6: recon_term_w = -`FF_VVC_LUMA_MUL75(vertical_q[{recon_y_w, recon_k_q}]);
-          default: recon_term_w = -`FF_VVC_LUMA_MUL89(vertical_q[{recon_y_w, recon_k_q}]);
+          3'd0: recon_term_w = `FF_VVC_LUMA_MUL89(recon_vertical_value_w);
+          3'd1: recon_term_w = `FF_VVC_LUMA_MUL75(recon_vertical_value_w);
+          3'd2: recon_term_w = `FF_VVC_LUMA_MUL50(recon_vertical_value_w);
+          3'd3: recon_term_w = `FF_VVC_LUMA_MUL18(recon_vertical_value_w);
+          3'd4: recon_term_w = -`FF_VVC_LUMA_MUL18(recon_vertical_value_w);
+          3'd5: recon_term_w = -`FF_VVC_LUMA_MUL50(recon_vertical_value_w);
+          3'd6: recon_term_w = -`FF_VVC_LUMA_MUL75(recon_vertical_value_w);
+          default: recon_term_w = -`FF_VVC_LUMA_MUL89(recon_vertical_value_w);
         endcase
       end
       2'd2: begin
         case (recon_x_w)
-          3'd0: recon_term_w = `FF_VVC_LUMA_MUL83(vertical_q[{recon_y_w, recon_k_q}]);
-          3'd1: recon_term_w = `FF_VVC_LUMA_MUL36(vertical_q[{recon_y_w, recon_k_q}]);
-          3'd2: recon_term_w = -`FF_VVC_LUMA_MUL36(vertical_q[{recon_y_w, recon_k_q}]);
-          3'd3: recon_term_w = -`FF_VVC_LUMA_MUL83(vertical_q[{recon_y_w, recon_k_q}]);
-          3'd4: recon_term_w = -`FF_VVC_LUMA_MUL83(vertical_q[{recon_y_w, recon_k_q}]);
-          3'd5: recon_term_w = -`FF_VVC_LUMA_MUL36(vertical_q[{recon_y_w, recon_k_q}]);
-          3'd6: recon_term_w = `FF_VVC_LUMA_MUL36(vertical_q[{recon_y_w, recon_k_q}]);
-          default: recon_term_w = `FF_VVC_LUMA_MUL83(vertical_q[{recon_y_w, recon_k_q}]);
+          3'd0: recon_term_w = `FF_VVC_LUMA_MUL83(recon_vertical_value_w);
+          3'd1: recon_term_w = `FF_VVC_LUMA_MUL36(recon_vertical_value_w);
+          3'd2: recon_term_w = -`FF_VVC_LUMA_MUL36(recon_vertical_value_w);
+          3'd3: recon_term_w = -`FF_VVC_LUMA_MUL83(recon_vertical_value_w);
+          3'd4: recon_term_w = -`FF_VVC_LUMA_MUL83(recon_vertical_value_w);
+          3'd5: recon_term_w = -`FF_VVC_LUMA_MUL36(recon_vertical_value_w);
+          3'd6: recon_term_w = `FF_VVC_LUMA_MUL36(recon_vertical_value_w);
+          default: recon_term_w = `FF_VVC_LUMA_MUL83(recon_vertical_value_w);
         endcase
       end
       default: begin
         case (recon_x_w)
-          3'd0: recon_term_w = `FF_VVC_LUMA_MUL75(vertical_q[{recon_y_w, recon_k_q}]);
-          3'd1: recon_term_w = -`FF_VVC_LUMA_MUL18(vertical_q[{recon_y_w, recon_k_q}]);
-          3'd2: recon_term_w = -`FF_VVC_LUMA_MUL89(vertical_q[{recon_y_w, recon_k_q}]);
-          3'd3: recon_term_w = -`FF_VVC_LUMA_MUL50(vertical_q[{recon_y_w, recon_k_q}]);
-          3'd4: recon_term_w = `FF_VVC_LUMA_MUL50(vertical_q[{recon_y_w, recon_k_q}]);
-          3'd5: recon_term_w = `FF_VVC_LUMA_MUL89(vertical_q[{recon_y_w, recon_k_q}]);
-          3'd6: recon_term_w = `FF_VVC_LUMA_MUL18(vertical_q[{recon_y_w, recon_k_q}]);
-          default: recon_term_w = -`FF_VVC_LUMA_MUL75(vertical_q[{recon_y_w, recon_k_q}]);
+          3'd0: recon_term_w = `FF_VVC_LUMA_MUL75(recon_vertical_value_w);
+          3'd1: recon_term_w = -`FF_VVC_LUMA_MUL18(recon_vertical_value_w);
+          3'd2: recon_term_w = -`FF_VVC_LUMA_MUL89(recon_vertical_value_w);
+          3'd3: recon_term_w = -`FF_VVC_LUMA_MUL50(recon_vertical_value_w);
+          3'd4: recon_term_w = `FF_VVC_LUMA_MUL50(recon_vertical_value_w);
+          3'd5: recon_term_w = `FF_VVC_LUMA_MUL89(recon_vertical_value_w);
+          3'd6: recon_term_w = `FF_VVC_LUMA_MUL18(recon_vertical_value_w);
+          default: recon_term_w = -`FF_VVC_LUMA_MUL75(recon_vertical_value_w);
         endcase
       end
     endcase
-    recon_acc_next_w = ((recon_k_q == 2'd0) ? 32'sd0 : acc_q) + recon_term_w;
-    recon_residual_w = (recon_acc_next_w + 32'sd2048) >>> 12;
+    recon_horizontal_acc_next_w =
+      ((recon_k_q == 2'd0) ? 32'sd0 : recon_horizontal_acc_q) + recon_term_w;
+    recon_residual_w = (recon_horizontal_acc_next_w + 32'sd2048) >>> 12;
     recon_sample_w = $signed({24'd0, recon_predicted_w}) + recon_residual_w;
     if (recon_sample_w < 32'sd0) begin
       recon_clipped_w = 8'd0;
@@ -340,13 +334,13 @@ module ff_vvc_luma_quant_recon_8x8 (
       sample_index_q <= 6'd0;
       ac_coeff_q <= 4'd1;
       ac_cell_q <= 4'd0;
-      vertical_index_q <= 5'd0;
       vertical_k_q <= 2'd0;
       recon_edge_q <= 4'd0;
       recon_k_q <= 2'd0;
       dc_pred_q <= 8'd128;
       residual_sum_q <= 32'sd0;
       acc_q <= 32'sd0;
+      recon_horizontal_acc_q <= 32'sd0;
       abs_level <= 8'd0;
       negative <= 1'b0;
       ac_levels <= '0;
@@ -355,22 +349,19 @@ module ff_vvc_luma_quant_recon_8x8 (
       for (init_i = 0; init_i < LUMA_COEFF_COUNT; init_i = init_i + 1) begin
         cell_sum_q[init_i] <= 18'sd0;
         coeff_level_q[init_i] <= 16'sd0;
-      end
-      for (init_i = 0; init_i < (LUMA_TU_SIZE * LUMA_COEFF_SIZE); init_i = init_i + 1) begin
-        vertical_q[init_i] <= 32'sd0;
       end
     end else if (clear) begin
       state_q <= ST_IDLE;
       sample_index_q <= 6'd0;
       ac_coeff_q <= 4'd1;
       ac_cell_q <= 4'd0;
-      vertical_index_q <= 5'd0;
       vertical_k_q <= 2'd0;
       recon_edge_q <= 4'd0;
       recon_k_q <= 2'd0;
       dc_pred_q <= 8'd128;
       residual_sum_q <= 32'sd0;
       acc_q <= 32'sd0;
+      recon_horizontal_acc_q <= 32'sd0;
       abs_level <= 8'd0;
       negative <= 1'b0;
       ac_levels <= '0;
@@ -379,9 +370,6 @@ module ff_vvc_luma_quant_recon_8x8 (
       for (init_i = 0; init_i < LUMA_COEFF_COUNT; init_i = init_i + 1) begin
         cell_sum_q[init_i] <= 18'sd0;
         coeff_level_q[init_i] <= 16'sd0;
-      end
-      for (init_i = 0; init_i < (LUMA_TU_SIZE * LUMA_COEFF_SIZE); init_i = init_i + 1) begin
-        vertical_q[init_i] <= 32'sd0;
       end
     end else begin
       case (state_q)
@@ -391,13 +379,13 @@ module ff_vvc_luma_quant_recon_8x8 (
             sample_index_q <= 6'd0;
             ac_coeff_q <= 4'd1;
             ac_cell_q <= 4'd0;
-            vertical_index_q <= 5'd0;
             vertical_k_q <= 2'd0;
             recon_edge_q <= 4'd0;
             recon_k_q <= 2'd0;
             dc_pred_q <= (dc_ref_sum_w + 32'd8) >> 4;
             residual_sum_q <= 32'sd0;
             acc_q <= 32'sd0;
+            recon_horizontal_acc_q <= 32'sd0;
             abs_level <= 8'd0;
             negative <= 1'b0;
             ac_levels <= '0;
@@ -439,10 +427,12 @@ module ff_vvc_luma_quant_recon_8x8 (
             coeff_level_q[ac_coeff_q] <= {{8{ac_level_w[7]}}, ac_level_w};
             ac_levels[((15 - ac_coeff_q) * 4) +: 4] <= ac_level_w[3:0];
             if (ac_coeff_q == 4'd15) begin
-              state_q <= ST_VERTICAL;
-              vertical_index_q <= 5'd0;
+              state_q <= ST_RECON;
+              recon_edge_q <= 4'd0;
+              recon_k_q <= 2'd0;
               vertical_k_q <= 2'd0;
               acc_q <= 32'sd0;
+              recon_horizontal_acc_q <= 32'sd0;
             end else begin
               ac_coeff_q <= ac_coeff_q + 4'd1;
               ac_cell_q <= 4'd0;
@@ -453,44 +443,33 @@ module ff_vvc_luma_quant_recon_8x8 (
           end
         end
 
-        ST_VERTICAL: begin
-          acc_q <= vertical_acc_next_w;
+        ST_RECON: begin
+          acc_q <= recon_vertical_acc_next_w;
           if (vertical_k_q == 2'd3) begin
-            vertical_q[vertical_index_q] <= vertical_value_w;
+            recon_horizontal_acc_q <= recon_horizontal_acc_next_w;
             acc_q <= 32'sd0;
             vertical_k_q <= 2'd0;
-            if (vertical_index_q == 5'd31) begin
-              state_q <= ST_RECON;
-              recon_edge_q <= 4'd0;
+            if (recon_k_q == 2'd3) begin
+              recon_horizontal_acc_q <= 32'sd0;
               recon_k_q <= 2'd0;
+              if (recon_edge_q < 4'd8) begin
+                bottom_ref[recon_x_w * 8 +: 8] <= recon_clipped_w;
+                if (recon_x_w == 3'd7) begin
+                  right_ref[3'd7 * 8 +: 8] <= recon_clipped_w;
+                end
+              end else begin
+                right_ref[recon_y_w * 8 +: 8] <= recon_clipped_w;
+              end
+              if (recon_edge_q == 4'd14) begin
+                state_q <= ST_DONE;
+              end else begin
+                recon_edge_q <= recon_edge_q + 4'd1;
+              end
             end else begin
-              vertical_index_q <= vertical_index_q + 5'd1;
+              recon_k_q <= recon_k_q + 2'd1;
             end
           end else begin
             vertical_k_q <= vertical_k_q + 2'd1;
-          end
-        end
-
-        ST_RECON: begin
-          acc_q <= recon_acc_next_w;
-          if (recon_k_q == 2'd3) begin
-            if (recon_edge_q < 4'd8) begin
-              bottom_ref[recon_x_w * 8 +: 8] <= recon_clipped_w;
-              if (recon_x_w == 3'd7) begin
-                right_ref[3'd7 * 8 +: 8] <= recon_clipped_w;
-              end
-            end else begin
-              right_ref[recon_y_w * 8 +: 8] <= recon_clipped_w;
-            end
-            acc_q <= 32'sd0;
-            recon_k_q <= 2'd0;
-            if (recon_edge_q == 4'd14) begin
-              state_q <= ST_DONE;
-            end else begin
-              recon_edge_q <= recon_edge_q + 4'd1;
-            end
-          end else begin
-            recon_k_q <= recon_k_q + 2'd1;
           end
         end
 

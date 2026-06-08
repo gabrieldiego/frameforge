@@ -565,6 +565,50 @@ Result:
 - The standalone `ff_vvc_luma_quant_recon_8x8` module restat reported 10,326
   cells and 4,129 estimated LCs with the edge-only reconstruction output.
 
+## Top Encoder Streamed Luma Edge Reconstruction
+
+Measured on June 8, 2026 after removing the 32-entry intermediate vertical
+inverse-transform bank from `ff_vvc_luma_quant_recon_8x8`. The luma
+quant/reconstruction block now streams the vertical and horizontal inverse
+transform phases per reconstructed edge sample, preserving the same rounded
+vertical intermediate result while keeping only the live accumulators needed for
+the current bottom-row or right-column sample.
+
+This trades additional luma-TU reconstruction cycles for lower register and mux
+pressure. The current encoder accepts that latency because the optimization pass
+is targeting area and timing before throughput tuning.
+
+Validation:
+
+```sh
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=1
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=3
+```
+
+Both top smoke checks passed all three cocotb encoder checks. The 4:2:0 smoke
+simulation time increased from about 857 us to about 924 us because luma edge
+reconstruction is now streamed instead of using the precomputed vertical bank.
+
+Synthesis:
+
+```sh
+make synth SYNTH_DUT=vvc-encoder
+```
+
+Result:
+
+- Top `ff_vvc_encoder` synthesis completed in 246.6 seconds with 1564.70 MiB
+  peak child RSS observed by the synthesis runner.
+- Critical-path reporting completed in 49.0 seconds.
+- Longest topological path remained 40. The reported path still runs through
+  CTU-visible-height/chroma-TU geometry into `s_axis_ready`.
+- Post-synth netlist restat reported 91,178 total cells and 33,666 estimated
+  LCs. Compared with the luma edge-output baseline, total cells decreased by
+  663 and estimated LCs decreased by 108.
+- The standalone `ff_vvc_luma_quant_recon_8x8` module restat reported 7,715
+  cells and 3,411 estimated LCs, down from 10,326 cells and 4,129 estimated
+  LCs with the previous intermediate vertical bank.
+
 ## Optional Vivado Synthesis
 
 FrameForge keeps a tracked Vivado install template at
