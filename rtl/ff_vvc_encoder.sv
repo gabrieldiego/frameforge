@@ -883,7 +883,9 @@ module ff_vvc_encoder #(
   );
 
   ff_vvc_annexb_header #(
-    .CTU_SIZE(CTU_SIZE)
+    .CTU_SIZE(CTU_SIZE),
+    .MAX_VISIBLE_WIDTH(MAX_VISIBLE_WIDTH),
+    .MAX_VISIBLE_HEIGHT(MAX_VISIBLE_HEIGHT)
   ) annexb_header (
     .clk(clk),
     .rst_n(rst_n),

@@ -1,7 +1,9 @@
 `timescale 1ns/1ps
 
 module ff_vvc_annexb_header #(
-  parameter int CTU_SIZE = 64
+  parameter int CTU_SIZE = 64,
+  parameter int MAX_VISIBLE_WIDTH = 1024,
+  parameter int MAX_VISIBLE_HEIGHT = 1024
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -43,6 +45,13 @@ module ff_vvc_annexb_header #(
   localparam logic [3:0] ST_TRAILING_WAIT = 4'd6;
   localparam logic [3:0] ST_TRAILING_FLUSH = 4'd7;
   localparam logic [3:0] ST_DRAIN_RBSP = 4'd8;
+  localparam int MAX_CTU_COLS = (MAX_VISIBLE_WIDTH + CTU_SIZE - 1) / CTU_SIZE;
+  localparam int MAX_CTU_ROWS = (MAX_VISIBLE_HEIGHT + CTU_SIZE - 1) / CTU_SIZE;
+  localparam int MAX_SLICE_COUNT = MAX_CTU_COLS * MAX_CTU_ROWS;
+  localparam int CTU_COL_BITS = (MAX_CTU_COLS <= 16) ? 5 : $clog2(MAX_CTU_COLS + 1);
+  localparam int CTU_ROW_BITS = (MAX_CTU_ROWS <= 16) ? 5 : $clog2(MAX_CTU_ROWS + 1);
+  localparam int SLICE_COUNT_BITS = (MAX_SLICE_COUNT <= 1) ? 1 : $clog2(MAX_SLICE_COUNT + 1);
+  localparam int SLICE_COUNT_MINUS1_BITS = (MAX_SLICE_COUNT <= 1) ? 1 : $clog2(MAX_SLICE_COUNT);
 
   logic [3:0] state_q;
   logic       nal_is_pps_q;
@@ -55,12 +64,18 @@ module ff_vvc_annexb_header #(
   logic [15:0] coded_height;
   logic [15:0] crop_right_offset;
   logic [15:0] crop_bottom_offset;
-  logic [15:0] ctu_cols;
-  logic [15:0] ctu_rows;
-  logic [15:0] slice_count;
+  logic [CTU_COL_BITS - 1:0] ctu_cols;
+  logic [CTU_ROW_BITS - 1:0] ctu_rows;
+  logic [SLICE_COUNT_BITS - 1:0] ctu_cols_for_slice_count;
+  logic [SLICE_COUNT_BITS - 1:0] slice_count;
+  logic [SLICE_COUNT_MINUS1_BITS - 1:0] slice_count_minus1;
+  logic [SLICE_COUNT_MINUS1_BITS:0] ue_slice_count_minus1_code_num;
+  logic [5:0]  ue_slice_count_minus1_code_num_bits;
   logic        has_multiple_ctus;
   logic        sps_dual_tree_intra_flag;
   logic [6:0]  general_profile_idc;
+  logic [15:0] ctu_cols_16;
+  logic [15:0] ctu_rows_16;
   logic [31:0] ue_width_value;
   logic [31:0] ue_height_value;
   logic [31:0] ue_crop_right_value;
@@ -104,34 +119,41 @@ module ff_vvc_annexb_header #(
   logic        direct_valid;
   logic [7:0]  direct_data;
   logic        rbsp_output_active;
+  integer      ue_slice_count_bit_index;
 
   assign coded_width = (visible_width + CODED_GRANULARITY - 16'd1) & ~(CODED_GRANULARITY - 16'd1);
   assign coded_height = (visible_height + CODED_GRANULARITY - 16'd1) & ~(CODED_GRANULARITY - 16'd1);
   assign ctu_cols = (visible_width + 16'd63) >> 6;
   assign ctu_rows = (visible_height + 16'd63) >> 6;
+  assign ctu_cols_for_slice_count = ctu_cols;
+  assign ctu_cols_16 = ctu_cols;
+  assign ctu_rows_16 = ctu_rows;
   always @* begin
     case (ctu_rows[4:0])
-      5'd0: slice_count = 16'd0;
-      5'd1: slice_count = ctu_cols;
-      5'd2: slice_count = ctu_cols << 1;
-      5'd3: slice_count = (ctu_cols << 1) + ctu_cols;
-      5'd4: slice_count = ctu_cols << 2;
-      5'd5: slice_count = (ctu_cols << 2) + ctu_cols;
-      5'd6: slice_count = (ctu_cols << 2) + (ctu_cols << 1);
-      5'd7: slice_count = (ctu_cols << 3) - ctu_cols;
-      5'd8: slice_count = ctu_cols << 3;
-      5'd9: slice_count = (ctu_cols << 3) + ctu_cols;
-      5'd10: slice_count = (ctu_cols << 3) + (ctu_cols << 1);
-      5'd11: slice_count = (ctu_cols << 3) + (ctu_cols << 1) + ctu_cols;
-      5'd12: slice_count = (ctu_cols << 3) + (ctu_cols << 2);
-      5'd13: slice_count = (ctu_cols << 3) + (ctu_cols << 2) + ctu_cols;
-      5'd14: slice_count = (ctu_cols << 4) - (ctu_cols << 1);
-      5'd15: slice_count = (ctu_cols << 4) - ctu_cols;
-      5'd16: slice_count = ctu_cols << 4;
-      default: slice_count = 16'd0;
+      5'd0: slice_count = '0;
+      5'd1: slice_count = ctu_cols_for_slice_count;
+      5'd2: slice_count = ctu_cols_for_slice_count << 1;
+      5'd3: slice_count = (ctu_cols_for_slice_count << 1) + ctu_cols_for_slice_count;
+      5'd4: slice_count = ctu_cols_for_slice_count << 2;
+      5'd5: slice_count = (ctu_cols_for_slice_count << 2) + ctu_cols_for_slice_count;
+      5'd6: slice_count = (ctu_cols_for_slice_count << 2) + (ctu_cols_for_slice_count << 1);
+      5'd7: slice_count = (ctu_cols_for_slice_count << 3) - ctu_cols_for_slice_count;
+      5'd8: slice_count = ctu_cols_for_slice_count << 3;
+      5'd9: slice_count = (ctu_cols_for_slice_count << 3) + ctu_cols_for_slice_count;
+      5'd10: slice_count = (ctu_cols_for_slice_count << 3) + (ctu_cols_for_slice_count << 1);
+      5'd11: slice_count = (ctu_cols_for_slice_count << 3) + (ctu_cols_for_slice_count << 1) +
+                             ctu_cols_for_slice_count;
+      5'd12: slice_count = (ctu_cols_for_slice_count << 3) + (ctu_cols_for_slice_count << 2);
+      5'd13: slice_count = (ctu_cols_for_slice_count << 3) + (ctu_cols_for_slice_count << 2) +
+                             ctu_cols_for_slice_count;
+      5'd14: slice_count = (ctu_cols_for_slice_count << 4) - (ctu_cols_for_slice_count << 1);
+      5'd15: slice_count = (ctu_cols_for_slice_count << 4) - ctu_cols_for_slice_count;
+      5'd16: slice_count = ctu_cols_for_slice_count << 4;
+      default: slice_count = '0;
     endcase
   end
-  assign has_multiple_ctus = slice_count > 16'd1;
+  assign slice_count_minus1 = (slice_count == '0) ? '0 : (slice_count - 1'b1);
+  assign has_multiple_ctus = slice_count > 1;
   assign crop_right_offset =
     ((chroma_format_idc == 2'd1) || (chroma_format_idc == 2'd2)) ?
     ((coded_width - visible_width) >> 1) : (coded_width - visible_width);
@@ -153,8 +175,7 @@ module ff_vvc_annexb_header #(
   // width in each CTU row and ue(0) for every non-final tile-row height.
   // This is equivalent to the previous CTU scan, but avoids synthesizing
   // a modulo/divide search tree over the configured maximum CTU count.
-  assign pps_slice_geometry_field_count =
-    (slice_count == 16'd0) ? 16'd0 : (slice_count - 16'd1);
+  assign pps_slice_geometry_field_count = slice_count_minus1;
   // Multi-CTU PPS fields:
   // 13 fields through pps_num_exp_tile_rows_minus1,
   // one ue(0) per tile column and row,
@@ -198,22 +219,30 @@ module ff_vvc_annexb_header #(
   );
 
   ff_vvc_ue_code ue_ctu_cols_minus1 (
-    .value(ctu_cols - 16'd1),
+    .value(ctu_cols_16 - 16'd1),
     .code_value(ue_ctu_cols_minus1_value),
     .bit_count(ue_ctu_cols_minus1_bits)
   );
 
   ff_vvc_ue_code ue_ctu_rows_minus1 (
-    .value(ctu_rows - 16'd1),
+    .value(ctu_rows_16 - 16'd1),
     .code_value(ue_ctu_rows_minus1_value),
     .bit_count(ue_ctu_rows_minus1_bits)
   );
 
-  ff_vvc_ue_code ue_slice_count_minus1 (
-    .value(slice_count - 16'd1),
-    .code_value(ue_slice_count_minus1_value),
-    .bit_count(ue_slice_count_minus1_bits)
-  );
+  always @* begin
+    ue_slice_count_minus1_code_num = {1'b0, slice_count_minus1} + 1'b1;
+    ue_slice_count_minus1_code_num_bits = 6'd1;
+    for (ue_slice_count_bit_index = 0;
+         ue_slice_count_bit_index < (SLICE_COUNT_MINUS1_BITS + 1);
+         ue_slice_count_bit_index = ue_slice_count_bit_index + 1) begin
+      if (ue_slice_count_minus1_code_num[ue_slice_count_bit_index]) begin
+        ue_slice_count_minus1_code_num_bits = ue_slice_count_bit_index[5:0] + 6'd1;
+      end
+    end
+    ue_slice_count_minus1_value = ue_slice_count_minus1_code_num;
+    ue_slice_count_minus1_bits = (ue_slice_count_minus1_code_num_bits << 1) - 6'd1;
+  end
 
   ff_vvc_cabac_bit_writer rbsp_bit_writer (
     .clk(clk),

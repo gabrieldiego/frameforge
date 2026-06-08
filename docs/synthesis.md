@@ -449,6 +449,44 @@ Result:
 - The standalone `ff_vvc_annexb_header` module restat reported 1,438 cells and
   725 estimated LCs, down from 1,537 cells and 747 estimated LCs.
 
+## Top Encoder Bounded Annex B Slice Count
+
+Measured on June 8, 2026 after threading the encoder's configured
+`MAX_VISIBLE_WIDTH` and `MAX_VISIBLE_HEIGHT` parameters into the Annex B header.
+For the current 1024x1024 synthesis target, the PPS rectangular-slice count is
+bounded to 16 CTU columns by 16 CTU rows, so the slice-count UE path uses a
+bounded 8-bit `slice_count_minus1` value instead of a generic 16-bit UE helper.
+
+Validation:
+
+```sh
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=1
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=128 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=128 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=1
+```
+
+The 64x64 single-CTU smoke and 128x64 two-CTU smoke both passed all three
+cocotb encoder checks, including the luma AC and chroma AC pattern cases.
+
+Synthesis:
+
+```sh
+make synth SYNTH_DUT=vvc-encoder
+```
+
+Result:
+
+- Top `ff_vvc_encoder` synthesis completed in 271.0 seconds with 1693.26 MiB
+  peak child RSS observed by the synthesis runner.
+- Critical-path reporting completed in 55.1 seconds.
+- Longest topological path improved from 45 to 40. The Annex B slice-count UE
+  path is no longer the longest path; the reported path now runs through the
+  4:4:4 palette CU symbolizer's index lookup/update path.
+- Post-synth netlist restat reported 97,535 total cells and 36,570 estimated
+  LCs. Compared with the previous June 8 pass, total cells decreased by 179 and
+  estimated LCs decreased by 32.
+- The standalone `ff_vvc_annexb_header` module restat reported 1,176 cells and
+  559 estimated LCs, down from 1,438 cells and 725 estimated LCs.
+
 ## Optional Vivado Synthesis
 
 FrameForge keeps a tracked Vivado install template at
