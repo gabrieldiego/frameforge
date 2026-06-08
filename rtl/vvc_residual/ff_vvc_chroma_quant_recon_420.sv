@@ -38,16 +38,16 @@ module ff_vvc_chroma_quant_recon_420 (
   logic [(8 * CHROMA_TU_SIZE) - 1:0] top_ref_q;
   logic [(8 * CHROMA_TU_SIZE) - 1:0] left_ref_q;
   logic [7:0] dc_pred_q;
-  logic signed [31:0] residual_sum_q;
+  logic signed [12:0] residual_sum_q;
   logic signed [31:0] ac_acc_10_q;
   logic signed [31:0] ac_acc_01_q;
   logic signed [31:0] ac_acc_11_q;
-  logic signed [31:0] dequant_dc_q;
-  logic signed [31:0] dequant_10_q;
-  logic signed [31:0] dequant_01_q;
-  logic signed [31:0] dequant_11_q;
-  logic signed [31:0] vertical_0_q;
-  logic signed [31:0] vertical_1_q;
+  logic signed [17:0] dequant_dc_q;
+  logic signed [17:0] dequant_10_q;
+  logic signed [17:0] dequant_01_q;
+  logic signed [17:0] dequant_11_q;
+  logic signed [17:0] vertical_0_q;
+  logic signed [17:0] vertical_1_q;
 
   logic [31:0] dc_ref_sum_w;
   logic [1:0] sample_x_w;
@@ -95,6 +95,12 @@ module ff_vvc_chroma_quant_recon_420 (
   logic [1:0] recon_x_w;
   logic [1:0] recon_y_w;
   logic [7:0] recon_predicted_w;
+  logic signed [31:0] dequant_dc_q_wide;
+  logic signed [31:0] dequant_10_q_wide;
+  logic signed [31:0] dequant_01_q_wide;
+  logic signed [31:0] dequant_11_q_wide;
+  logic signed [31:0] vertical_0_q_wide;
+  logic signed [31:0] vertical_1_q_wide;
   logic signed [31:0] recon_basis_y_w;
   logic signed [31:0] recon_basis_xy_w;
   logic signed [31:0] vertical_0_w;
@@ -226,6 +232,12 @@ module ff_vvc_chroma_quant_recon_420 (
   end
 
   assign recon_bottom_edge_w = (recon_edge_q < 3'd4);
+  assign dequant_dc_q_wide = dequant_dc_q;
+  assign dequant_10_q_wide = dequant_10_q;
+  assign dequant_01_q_wide = dequant_01_q;
+  assign dequant_11_q_wide = dequant_11_q;
+  assign vertical_0_q_wide = vertical_0_q;
+  assign vertical_1_q_wide = vertical_1_q;
 
   always @* begin
     if (recon_bottom_edge_w) begin
@@ -240,33 +252,33 @@ module ff_vvc_chroma_quant_recon_420 (
 
     case (recon_y_w)
       2'd0: begin
-        recon_basis_y_w = `FF_VVC_CHROMA_MUL83(dequant_01_q);
-        recon_basis_xy_w = `FF_VVC_CHROMA_MUL83(dequant_11_q);
+        recon_basis_y_w = `FF_VVC_CHROMA_MUL83(dequant_01_q_wide);
+        recon_basis_xy_w = `FF_VVC_CHROMA_MUL83(dequant_11_q_wide);
       end
       2'd1: begin
-        recon_basis_y_w = `FF_VVC_CHROMA_MUL36(dequant_01_q);
-        recon_basis_xy_w = `FF_VVC_CHROMA_MUL36(dequant_11_q);
+        recon_basis_y_w = `FF_VVC_CHROMA_MUL36(dequant_01_q_wide);
+        recon_basis_xy_w = `FF_VVC_CHROMA_MUL36(dequant_11_q_wide);
       end
       2'd2: begin
-        recon_basis_y_w = -`FF_VVC_CHROMA_MUL36(dequant_01_q);
-        recon_basis_xy_w = -`FF_VVC_CHROMA_MUL36(dequant_11_q);
+        recon_basis_y_w = -`FF_VVC_CHROMA_MUL36(dequant_01_q_wide);
+        recon_basis_xy_w = -`FF_VVC_CHROMA_MUL36(dequant_11_q_wide);
       end
       default: begin
-        recon_basis_y_w = -`FF_VVC_CHROMA_MUL83(dequant_01_q);
-        recon_basis_xy_w = -`FF_VVC_CHROMA_MUL83(dequant_11_q);
+        recon_basis_y_w = -`FF_VVC_CHROMA_MUL83(dequant_01_q_wide);
+        recon_basis_xy_w = -`FF_VVC_CHROMA_MUL83(dequant_11_q_wide);
       end
     endcase
-    vertical_0_w = (`FF_VVC_CHROMA_MUL64(dequant_dc_q) + recon_basis_y_w + 32'sd64) >>> 7;
+    vertical_0_w = (`FF_VVC_CHROMA_MUL64(dequant_dc_q_wide) + recon_basis_y_w + 32'sd64) >>> 7;
     vertical_1_w =
-      (`FF_VVC_CHROMA_MUL64(dequant_10_q) + $signed(recon_basis_xy_w[31:0]) + 32'sd64) >>> 7;
+      (`FF_VVC_CHROMA_MUL64(dequant_10_q_wide) + $signed(recon_basis_xy_w[31:0]) + 32'sd64) >>> 7;
 
     case (recon_x_w)
-      2'd0: recon_basis_x_w = `FF_VVC_CHROMA_MUL83(vertical_1_q);
-      2'd1: recon_basis_x_w = `FF_VVC_CHROMA_MUL36(vertical_1_q);
-      2'd2: recon_basis_x_w = -`FF_VVC_CHROMA_MUL36(vertical_1_q);
-      default: recon_basis_x_w = -`FF_VVC_CHROMA_MUL83(vertical_1_q);
+      2'd0: recon_basis_x_w = `FF_VVC_CHROMA_MUL83(vertical_1_q_wide);
+      2'd1: recon_basis_x_w = `FF_VVC_CHROMA_MUL36(vertical_1_q_wide);
+      2'd2: recon_basis_x_w = -`FF_VVC_CHROMA_MUL36(vertical_1_q_wide);
+      default: recon_basis_x_w = -`FF_VVC_CHROMA_MUL83(vertical_1_q_wide);
     endcase
-    recon_sum_w = $signed(`FF_VVC_CHROMA_MUL64(vertical_0_q)) + $signed(recon_basis_x_w);
+    recon_sum_w = $signed(`FF_VVC_CHROMA_MUL64(vertical_0_q_wide)) + $signed(recon_basis_x_w);
     recon_residual_w = (recon_sum_w + 32'sd2048) >>> 12;
     recon_sample_w = $signed({24'd0, recon_predicted_w}) + recon_residual_w;
     if (recon_sample_w < 32'sd0) begin
@@ -287,16 +299,16 @@ module ff_vvc_chroma_quant_recon_420 (
       top_ref_q <= '0;
       left_ref_q <= '0;
       dc_pred_q <= 8'd128;
-      residual_sum_q <= 32'sd0;
+      residual_sum_q <= 13'sd0;
       ac_acc_10_q <= 32'sd0;
       ac_acc_01_q <= 32'sd0;
       ac_acc_11_q <= 32'sd0;
-      dequant_dc_q <= 32'sd0;
-      dequant_10_q <= 32'sd0;
-      dequant_01_q <= 32'sd0;
-      dequant_11_q <= 32'sd0;
-      vertical_0_q <= 32'sd0;
-      vertical_1_q <= 32'sd0;
+      dequant_dc_q <= 18'sd0;
+      dequant_10_q <= 18'sd0;
+      dequant_01_q <= 18'sd0;
+      dequant_11_q <= 18'sd0;
+      vertical_0_q <= 18'sd0;
+      vertical_1_q <= 18'sd0;
       dc_level <= 9'sd0;
       ac_levels <= '0;
       bottom_ref <= '0;
@@ -309,16 +321,16 @@ module ff_vvc_chroma_quant_recon_420 (
       top_ref_q <= '0;
       left_ref_q <= '0;
       dc_pred_q <= 8'd128;
-      residual_sum_q <= 32'sd0;
+      residual_sum_q <= 13'sd0;
       ac_acc_10_q <= 32'sd0;
       ac_acc_01_q <= 32'sd0;
       ac_acc_11_q <= 32'sd0;
-      dequant_dc_q <= 32'sd0;
-      dequant_10_q <= 32'sd0;
-      dequant_01_q <= 32'sd0;
-      dequant_11_q <= 32'sd0;
-      vertical_0_q <= 32'sd0;
-      vertical_1_q <= 32'sd0;
+      dequant_dc_q <= 18'sd0;
+      dequant_10_q <= 18'sd0;
+      dequant_01_q <= 18'sd0;
+      dequant_11_q <= 18'sd0;
+      vertical_0_q <= 18'sd0;
+      vertical_1_q <= 18'sd0;
       dc_level <= 9'sd0;
       ac_levels <= '0;
       bottom_ref <= '0;
@@ -334,16 +346,16 @@ module ff_vvc_chroma_quant_recon_420 (
             top_ref_q <= top_ref;
             left_ref_q <= left_ref;
             dc_pred_q <= 8'd128;
-            residual_sum_q <= 32'sd0;
+            residual_sum_q <= 13'sd0;
             ac_acc_10_q <= 32'sd0;
             ac_acc_01_q <= 32'sd0;
             ac_acc_11_q <= 32'sd0;
-            dequant_dc_q <= 32'sd0;
-            dequant_10_q <= 32'sd0;
-            dequant_01_q <= 32'sd0;
-            dequant_11_q <= 32'sd0;
-            vertical_0_q <= 32'sd0;
-            vertical_1_q <= 32'sd0;
+            dequant_dc_q <= 18'sd0;
+            dequant_10_q <= 18'sd0;
+            dequant_01_q <= 18'sd0;
+            dequant_11_q <= 18'sd0;
+            vertical_0_q <= 18'sd0;
+            vertical_1_q <= 18'sd0;
             dc_level <= 9'sd0;
             ac_levels <= '0;
             bottom_ref <= '0;
@@ -354,7 +366,7 @@ module ff_vvc_chroma_quant_recon_420 (
         ST_LOAD: begin
           dc_pred_q <= (dc_ref_sum_w + 32'd4) >> 3;
           sample_index_q <= 4'd0;
-          residual_sum_q <= 32'sd0;
+          residual_sum_q <= 13'sd0;
           ac_acc_10_q <= 32'sd0;
           ac_acc_01_q <= 32'sd0;
           ac_acc_11_q <= 32'sd0;

@@ -683,6 +683,46 @@ Result:
 - The standalone `ff_vvc_chroma_quant_recon_420` module restat reported 4,505
   cells and 1,715 estimated LCs, down from 5,238 cells and 1,921 estimated LCs.
 
+## Top Encoder Narrow Chroma Reconstruction Banks
+
+Measured on June 8, 2026 after narrowing the 4:2:0 chroma residual-sum,
+dequantized-coefficient, and vertical reconstruction registers. The narrowed
+registers are sign-extended back to 32 bits before the shift-add transform
+macros so the arithmetic width at each multiply-equivalent operation remains
+unchanged.
+
+Validation:
+
+```sh
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=1
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=3
+```
+
+Both top smoke checks passed all three cocotb encoder checks. An intermediate
+version that fed narrowed registers directly into the shift-add macros failed
+the 4:2:0 smoke because the shifts occurred at the narrowed register width; the
+accepted version keeps explicit 32-bit sign-extension wires at those macro
+inputs.
+
+Synthesis:
+
+```sh
+make synth SYNTH_DUT=vvc-encoder
+```
+
+Result:
+
+- Top `ff_vvc_encoder` synthesis completed in 242.4 seconds with 1542.87 MiB
+  peak child RSS observed by the synthesis runner.
+- Critical-path reporting completed in 47.8 seconds.
+- Longest topological path remained 40. The reported path still runs through
+  CTU-visible-height/chroma-TU geometry into `s_axis_ready`.
+- Post-synth netlist restat reported 87,985 total cells and 32,892 estimated
+  LCs. Compared with the narrow chroma AC datapath baseline, total cells
+  decreased by 678 and estimated LCs decreased by 386.
+- The standalone `ff_vvc_chroma_quant_recon_420` module restat reported 4,129
+  cells and 1,620 estimated LCs, down from 4,505 cells and 1,715 estimated LCs.
+
 ## Optional Vivado Synthesis
 
 FrameForge keeps a tracked Vivado install template at
