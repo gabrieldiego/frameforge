@@ -35,7 +35,7 @@ VERILOG_SOURCES := $(RTL_DIR)/ff_vvc_coding_tree_scheduler.sv
 TOPLEVEL := ff_vvc_coding_tree_scheduler
 COCOTB_TEST_MODULES := test_vvc_coding_tree_scheduler
 else ifeq ($(DUT),vvc-palette-symbolizer)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_palette/ff_vvc_palette_cu_symbolizer.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_symbolizer.sv
+VERILOG_SOURCES := $(RTL_DIR)/vvc_residual/ff_vvc_chroma_tu_mapper_420.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_cu_symbolizer.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_symbolizer.sv
 TOPLEVEL := ff_vvc_palette_symbolizer
 COCOTB_TEST_MODULES := test_vvc_palette_symbolizer
 else ifeq ($(DUT),vvc-palette-cu-symbolizer)

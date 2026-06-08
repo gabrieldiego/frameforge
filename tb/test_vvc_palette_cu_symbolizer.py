@@ -1,6 +1,6 @@
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ReadOnly, RisingEdge
+from cocotb.triggers import NextTimeStep, ReadOnly, RisingEdge
 
 
 PKT_CU_START = 0x1
@@ -29,8 +29,12 @@ async def reset(dut):
 
 
 async def send_sample(dut, y, cb, cr, last=False):
-    while int(dut.s_axis_ready.value) != 1:
+    while True:
         await RisingEdge(dut.clk)
+        await ReadOnly()
+        if int(dut.s_axis_ready.value) == 1:
+            break
+    await NextTimeStep()
     dut.s_axis_y.value = y
     dut.s_axis_cb.value = cb
     dut.s_axis_cr.value = cr

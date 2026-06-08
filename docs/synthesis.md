@@ -487,6 +487,46 @@ Result:
 - The standalone `ff_vvc_annexb_header` module restat reported 1,176 cells and
   559 estimated LCs, down from 1,438 cells and 725 estimated LCs.
 
+## Top Encoder Palette Index Bank Narrowing
+
+Measured on June 8, 2026 after storing palette CU sample indices as 5-bit
+internal entries instead of byte-wide entries. The externally visible palette
+symbol packet format remains byte-aligned; the narrower bank only reduces the
+internal 8x8 CU index storage and muxing. The previous longest path through the
+palette CU lookup/update path moved out of the top critical path report.
+
+Validation:
+
+```sh
+make rtl-test DUT=vvc-palette-cu-symbolizer
+make rtl-test DUT=vvc-palette-symbolizer
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=3
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=1
+```
+
+All four smoke checks passed. The 4:4:4 top smoke covers the palette path, and
+the 4:2:0 top smoke covers the residual path.
+
+Synthesis:
+
+```sh
+make synth SYNTH_DUT=vvc-encoder
+```
+
+Result:
+
+- Top `ff_vvc_encoder` synthesis completed in 266.9 seconds with 1662.09 MiB
+  peak child RSS observed by the synthesis runner.
+- Critical-path reporting completed in 53.0 seconds.
+- Longest topological path remained 40. The reported path now runs through
+  CTU-visible-height/chroma-TU geometry into `s_axis_ready`, instead of through
+  the palette CU index lookup/update path.
+- Post-synth netlist restat reported 97,070 total cells and 35,319 estimated
+  LCs. Compared with the bounded Annex B baseline, total cells decreased by 465
+  and estimated LCs decreased by 1,251.
+- The standalone parameterized `ff_vvc_palette_cu_symbolizer` restat reported
+  5,259 cells and 2,407 estimated LCs with the narrowed 5-bit index bank.
+
 ## Optional Vivado Synthesis
 
 FrameForge keeps a tracked Vivado install template at
