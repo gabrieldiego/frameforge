@@ -141,10 +141,10 @@ Configuration:
 - clock metadata: 50 MHz
 - max visible size: 1024x1024
 - 4:4:4 palette support: enabled
-- synthesis timeout: 900 seconds for measurement; the Makefile default is 360
-  seconds so routine runs clear the observed 306.8 second synthesis time
-- synthesis memory cap: 6144 MiB for measurement; observed peak stayed below
-  2048 MiB, so the default Yosys memory cap remains 2048 MiB
+- synthesis timeout: 900 seconds for measurement; routine synthesis now uses a
+  300 second review threshold and a 600 second hard timeout
+- synthesis memory cap: 6144 MiB for measurement; routine synthesis now uses a
+  3072 MiB Yosys memory cap
 - Yosys quiet logging: disabled for the measurement so module pressure points
   are visible in the log
 - chroma residual subset: DC plus the 2x2 low-frequency AC group
@@ -152,8 +152,8 @@ Configuration:
 Result:
 
 - Top `ff_vvc_encoder` synthesis completed in 306.8 seconds with 1792.47 MB
-  peak memory. This exceeds the 60 second review threshold but is inside the
-  360 second default timeout.
+  peak memory. This exceeds the current 300 second review threshold but is
+  inside the 600 second default timeout.
 - Estimated area: 44,096 LCs and 107,946 total cells, including 16,348 `FDRE`,
   8,288 `FDCE`, 288 `FDPE`, 4 `FDSE`, 24,558 `LUT6`, 11,795 `LUT2`,
   9,299 `MUXF7`, 1,772 `MUXF8`, 3,776 `CARRY4`, 7 `DSP48E1`, and 3 `RAMB36E1`.
@@ -169,6 +169,49 @@ Result:
   `synth/out/arty-z7-10/ff_vvc_encoder/yosys.log`,
   `synth/out/arty-z7-10/ff_vvc_encoder/critical_path.log`,
   `synth/out/arty-z7-10/ff_vvc_encoder/ff_vvc_encoder.post_synth.v`.
+
+## Top Encoder Timing Optimization
+
+Measured on June 8, 2026 after replacing the top-level 64-bit luma visibility
+mask with per-TU visible column/row counts passed into
+`ff_vvc_luma_quant_recon_8x8`.
+
+Validation:
+
+```sh
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=1
+```
+
+The smoke test passed all three cocotb encoder checks, including the luma AC and
+chroma AC pattern cases.
+
+Synthesis:
+
+```sh
+make synth SYNTH_DUT=vvc-encoder
+```
+
+This run was made before the default memory cap was raised from 2048 to 3072
+MiB. The higher default leaves margin for the ongoing optimization work because
+the critical-path pass still approaches 2 GiB.
+
+Result:
+
+- Longest topological path improved from 155 to 146. The old path ran through
+  the generated `luma_quant_visible_mask_w` mux chain into
+  `luma_quant_recon.negative`; after this change the longest path moves into
+  the chroma quant/reconstruction reference update path.
+- Critical-path reporting completed in about 60 seconds with 1774.43 MB peak
+  memory.
+- Quiet top synthesis completed in roughly 291 seconds by artifact timestamps.
+  The runner now records elapsed time and observed child RSS explicitly so
+  future quiet runs leave a direct benchmark line in the log.
+- Post-synth netlist restat reported 107,602 total cells and 44,291 estimated
+  LCs. Compared with the June 7 baseline, total cells decreased by 344 while
+  estimated LCs increased by 195.
+- The luma quant/reconstruction module itself improved from 6,050 to 5,867
+  estimated LCs, matching the intended removal of the visibility-mask muxing
+  pressure.
 
 ## Optional Vivado Synthesis
 

@@ -14,7 +14,8 @@ module ff_vvc_luma_quant_recon_8x8 (
   input  logic clear,
   input  logic start,
   input  logic [(8 * 64) - 1:0] samples,
-  input  logic [63:0] visible_mask,
+  input  logic [3:0] visible_cols,
+  input  logic [3:0] visible_rows,
   input  logic [(8 * 8) - 1:0] top_ref,
   input  logic [(8 * 8) - 1:0] left_ref,
   output logic [7:0] abs_level,
@@ -56,6 +57,7 @@ module ff_vvc_luma_quant_recon_8x8 (
   logic [2:0] sample_y_w;
   logic [3:0] sample_cell_index_w;
   logic [5:0] sample_raster_w;
+  logic sample_visible_w;
   logic [7:0] sample_w;
   logic [31:0] dc_ref_sum_w;
   logic signed [31:0] left_diff_w;
@@ -110,7 +112,9 @@ module ff_vvc_luma_quant_recon_8x8 (
   assign sample_y_w = sample_index_q[5:3];
   assign sample_raster_w = sample_index_q;
   assign sample_cell_index_w = {sample_y_w[2:1], sample_x_w[2:1]};
-  assign sample_w = visible_mask[sample_raster_w] ? samples[sample_raster_w * 8 +: 8] : 8'd0;
+  assign sample_visible_w =
+    ({1'b0, sample_x_w} < visible_cols) && ({1'b0, sample_y_w} < visible_rows);
+  assign sample_w = sample_visible_w ? samples[sample_raster_w * 8 +: 8] : 8'd0;
 
   always @* begin
     dc_ref_sum_w = 32'd0;

@@ -275,15 +275,14 @@ module ff_vvc_encoder #(
   integer      chroma_quant_x_i;
   integer      chroma_quant_y_i;
   integer      chroma_quant_pack_i;
-  integer      luma_quant_x_i;
-  integer      luma_quant_y_i;
   integer      luma_ref_i;
-  logic [15:0] luma_quant_src_x_tmp;
-  logic [15:0] luma_quant_src_y_tmp;
   logic [15:0] luma_quant_ref_x_tmp;
   logic [15:0] luma_quant_ref_y_tmp;
   logic [(8 * VVC_RESIDUAL_LUMA_SAMPLES) - 1:0] luma_quant_samples_w;
-  logic [VVC_RESIDUAL_LUMA_SAMPLES - 1:0] luma_quant_visible_mask_w;
+  logic [15:0] luma_quant_tu_remaining_width_w;
+  logic [15:0] luma_quant_tu_remaining_height_w;
+  logic [3:0]  luma_quant_visible_cols_w;
+  logic [3:0]  luma_quant_visible_rows_w;
   logic [(8 * VVC_LUMA_TU_SIZE) - 1:0] luma_quant_top_ref_w;
   logic [(8 * VVC_LUMA_TU_SIZE) - 1:0] luma_quant_left_ref_w;
   logic [7:0] luma_quant_abs_level_w;
@@ -525,6 +524,20 @@ module ff_vvc_encoder #(
   assign luma_quant_tu_visible_w =
     (luma_quant_tu_origin_x_w < luma_quant_ctu_visible_width_w) &&
     (luma_quant_tu_origin_y_w < luma_quant_ctu_visible_height_w);
+  assign luma_quant_tu_remaining_width_w =
+    (luma_quant_ctu_visible_width_w > luma_quant_tu_origin_x_w) ?
+      (luma_quant_ctu_visible_width_w - luma_quant_tu_origin_x_w) : 16'd0;
+  assign luma_quant_tu_remaining_height_w =
+    (luma_quant_ctu_visible_height_w > luma_quant_tu_origin_y_w) ?
+      (luma_quant_ctu_visible_height_w - luma_quant_tu_origin_y_w) : 16'd0;
+  assign luma_quant_visible_cols_w =
+    !luma_quant_tu_visible_w ? 4'd0 :
+    ((luma_quant_tu_remaining_width_w > VVC_LUMA_TU_SIZE_L) ?
+      4'd8 : luma_quant_tu_remaining_width_w[3:0]);
+  assign luma_quant_visible_rows_w =
+    !luma_quant_tu_visible_w ? 4'd0 :
+    ((luma_quant_tu_remaining_height_w > VVC_LUMA_TU_SIZE_L) ?
+      4'd8 : luma_quant_tu_remaining_height_w[3:0]);
   assign luma_quant_sample_tu_w = luma_sample_tu_q;
 
   ff_vvc_luma_tu_node_8x8 #(
@@ -594,11 +607,8 @@ module ff_vvc_encoder #(
 
   always @* begin
     luma_quant_samples_w = '0;
-    luma_quant_visible_mask_w = '0;
     luma_quant_top_ref_w = {VVC_LUMA_TU_SIZE{8'd128}};
     luma_quant_left_ref_w = {VVC_LUMA_TU_SIZE{8'd128}};
-    luma_quant_src_x_tmp = 16'd0;
-    luma_quant_src_y_tmp = 16'd0;
     luma_quant_ref_x_tmp = 16'd0;
     luma_quant_ref_y_tmp = 16'd0;
 
@@ -633,18 +643,6 @@ module ff_vvc_encoder #(
                      (luma_quant_tu_origin_x_w < luma_quant_ctu_visible_width_w)) begin
           luma_quant_left_ref_w[luma_quant_pack_i * 8 +: 8] =
             luma_top_ref_row_q[luma_quant_tu_col_w][0 +: 8];
-        end
-      end
-
-      for (luma_quant_y_i = 0; luma_quant_y_i < VVC_LUMA_TU_SIZE; luma_quant_y_i = luma_quant_y_i + 1) begin
-        for (luma_quant_x_i = 0; luma_quant_x_i < VVC_LUMA_TU_SIZE; luma_quant_x_i = luma_quant_x_i + 1) begin
-          luma_quant_pack_i = (luma_quant_y_i * VVC_LUMA_TU_SIZE) + luma_quant_x_i;
-          luma_quant_src_x_tmp = luma_quant_tu_origin_x_w + luma_quant_x_i[15:0];
-          luma_quant_src_y_tmp = luma_quant_tu_origin_y_w + luma_quant_y_i[15:0];
-          if ((luma_quant_src_x_tmp < luma_quant_ctu_visible_width_w) &&
-              (luma_quant_src_y_tmp < luma_quant_ctu_visible_height_w)) begin
-            luma_quant_visible_mask_w[luma_quant_pack_i] = 1'b1;
-          end
         end
       end
     end
@@ -725,7 +723,8 @@ module ff_vvc_encoder #(
     .clear(frame_pipeline_clear_w),
     .start(luma_quant_start_q),
     .samples(luma_quant_samples_w),
-    .visible_mask(luma_quant_visible_mask_w),
+    .visible_cols(luma_quant_visible_cols_w),
+    .visible_rows(luma_quant_visible_rows_w),
     .top_ref(luma_quant_top_ref_w),
     .left_ref(luma_quant_left_ref_w),
     .abs_level(luma_quant_abs_level_w),

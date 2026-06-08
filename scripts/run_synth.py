@@ -24,7 +24,7 @@ LOCAL_VIVADO_COMPAT_LIB = Path(".tools/vivado-compat/lib")
 # --timeout-sec for normal project synthesis runs.
 DEFAULT_SYNTH_TIMEOUT_SEC = 120.0
 DEFAULT_SYNTH_WARN_AFTER_SEC = 60.0
-DEFAULT_YOSYS_MEMORY_LIMIT_MB = 2048.0
+DEFAULT_YOSYS_MEMORY_LIMIT_MB = 3072.0
 DEFAULT_YOSYS_QUIET = True
 DEFAULT_SYNTH_MAX_VISIBLE_WIDTH = 1024
 DEFAULT_SYNTH_MAX_VISIBLE_HEIGHT = 1024
@@ -255,6 +255,14 @@ def run_logged_command(
             log_file.write(f"\n{message}\n")
             return 124
         elapsed = time.monotonic() - started_at
+        peak_child_rss_mib = maxrss_to_mib(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)
+        message = (
+            f"INFO: {label} exited with code {completed.returncode} after "
+            f"{elapsed:.1f}s; peak child RSS observed by runner is "
+            f"{peak_child_rss_mib:.2f} MiB."
+        )
+        print(message)
+        log_file.write(f"\n{message}\n")
         if warn_after_sec is not None and elapsed > warn_after_sec:
             message = (
                 f"WARN: {label} took {elapsed:.1f}s, exceeding the "
@@ -279,6 +287,12 @@ def run_logged_command(
                 print(message)
                 log_file.write(f"\n{message}\n")
     return completed.returncode
+
+
+def maxrss_to_mib(maxrss: int) -> float:
+    if os.uname().sysname == "Darwin":
+        return maxrss / (1024.0 * 1024.0)
+    return maxrss / 1024.0
 
 
 def load_env_file(path: Path) -> dict[str, str]:

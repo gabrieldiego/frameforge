@@ -16,9 +16,9 @@ SYNTH_DUT ?= vvc-cabac-stream-writer
 SYNTH_FILELIST ?=
 SYNTH_TOP ?=
 SYNTH_CLOCK_MHZ ?= 50
-SYNTH_TIMEOUT_SEC ?= 360
-SYNTH_MEMORY_LIMIT_MB ?=
-SYNTH_WARN_AFTER_SEC ?= 60
+SYNTH_TIMEOUT_SEC ?= 600
+SYNTH_MEMORY_LIMIT_MB ?= 3072
+SYNTH_WARN_AFTER_SEC ?= 300
 SYNTH_YOSYS_QUIET ?= 1
 SYNTH_MAX_VISIBLE_WIDTH ?= 1024
 SYNTH_MAX_VISIBLE_HEIGHT ?= 1024
@@ -70,7 +70,7 @@ help:
 	@printf '%s\n' '  make reference-vvc BITSTREAM=out.vvc [INPUT=in.yuv WIDTH=<w> HEIGHT=<h> FRAMES=1 BIT_DEPTH=8|10|12|16 CHROMA_FORMAT=420|422|444] - create real VVC using VTM'
 	@printf '%s\n' '  make synth-env - install/detect optional local synthesis tools under .tools/'
 	@printf '%s\n' '  make synth-check - detect Yosys/Icarus/Vivado synthesis tools'
-	@printf '%s\n' '  make synth [yosys|vivado] [SYNTH_DUT=vvc-cabac-stream-writer SYNTH_BOARD=synth/boards/arty-z7-10.env SYNTH_TOP=<override> SYNTH_FILELIST=<override> SYNTH_CLOCK_MHZ=50 SYNTH_TIMEOUT_SEC=360 SYNTH_WARN_AFTER_SEC=60 SYNTH_YOSYS_QUIET=1 SYNTH_MEMORY_LIMIT_MB=2048|0 SYNTH_MAX_VISIBLE_WIDTH=1024 SYNTH_MAX_VISIBLE_HEIGHT=1024 SYNTH_SUPPORT_PALETTE_444=0|1] - run selected synthesis estimate plus critical-path report'
+	@printf '%s\n' '  make synth [yosys|vivado] [SYNTH_DUT=vvc-cabac-stream-writer SYNTH_BOARD=synth/boards/arty-z7-10.env SYNTH_TOP=<override> SYNTH_FILELIST=<override> SYNTH_CLOCK_MHZ=50 SYNTH_TIMEOUT_SEC=600 SYNTH_WARN_AFTER_SEC=300 SYNTH_YOSYS_QUIET=1 SYNTH_MEMORY_LIMIT_MB=3072|0 SYNTH_MAX_VISIBLE_WIDTH=1024 SYNTH_MAX_VISIBLE_HEIGHT=1024 SYNTH_SUPPORT_PALETTE_444=0|1] - run selected synthesis estimate plus critical-path report'
 	@printf '%s\n' '  make synth-postsim - run Yosys synthesis and a post-synthesis smoke sim when supported'
 	@printf '%s\n' '  make synth-vivado - run optional Vivado synthesis/timing if Vivado is installed'
 	@printf '%s\n' '  make synth-vivado-remote [VIVADO_REMOTE=user@host VIVADO_REMOTE_ROOT=/path/to/frameforge VIVADO_REMOTE_SSH="ssh -F /dev/null"] - run Vivado synthesis/timing over SSH'
