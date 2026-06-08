@@ -609,6 +609,42 @@ Result:
   cells and 3,411 estimated LCs, down from 10,326 cells and 4,129 estimated
   LCs with the previous intermediate vertical bank.
 
+## Top Encoder Narrow Luma Residual Banks
+
+Measured on June 8, 2026 after narrowing the luma quant/reconstruction
+`cell_sum_q` and `coeff_level_q` banks. In the current fixed 8x8 luma subset,
+each 2x2 residual cell sum is bounded by four 8-bit residuals, and the
+quantized coefficient range used by the model fits in a signed 9-bit level.
+The datapath keeps the same sign extension before inverse scaling.
+
+Validation:
+
+```sh
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=1
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=3
+```
+
+Both top smoke checks passed all three cocotb encoder checks.
+
+Synthesis:
+
+```sh
+make synth SYNTH_DUT=vvc-encoder
+```
+
+Result:
+
+- Top `ff_vvc_encoder` synthesis completed in 245.5 seconds with 1540.01 MiB
+  peak child RSS observed by the synthesis runner.
+- Critical-path reporting completed in 48.4 seconds.
+- Longest topological path remained 40. The reported path still runs through
+  CTU-visible-height/chroma-TU geometry into `s_axis_ready`.
+- Post-synth netlist restat reported 90,749 total cells and 33,563 estimated
+  LCs. Compared with the streamed luma edge baseline, total cells decreased by
+  429 and estimated LCs decreased by 103.
+- The standalone `ff_vvc_luma_quant_recon_8x8` module restat reported 7,421
+  cells and 3,338 estimated LCs, down from 7,715 cells and 3,411 estimated LCs.
+
 ## Optional Vivado Synthesis
 
 FrameForge keeps a tracked Vivado install template at

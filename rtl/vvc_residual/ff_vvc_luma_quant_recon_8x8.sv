@@ -49,8 +49,8 @@ module ff_vvc_luma_quant_recon_8x8 (
   logic signed [31:0] residual_sum_q;
   logic signed [31:0] acc_q;
   logic signed [31:0] recon_horizontal_acc_q;
-  logic signed [17:0] cell_sum_q [0:LUMA_COEFF_COUNT - 1];
-  logic signed [15:0] coeff_level_q [0:LUMA_COEFF_COUNT - 1];
+  logic signed [11:0] cell_sum_q [0:LUMA_COEFF_COUNT - 1];
+  logic signed [8:0] coeff_level_q [0:LUMA_COEFF_COUNT - 1];
 
   logic [2:0] sample_x_w;
   logic [2:0] sample_y_w;
@@ -209,13 +209,13 @@ module ff_vvc_luma_quant_recon_8x8 (
 
   always @* begin
     dequant_w =
-      ($signed({{16{coeff_level_q[recon_coeff_index_w][15]}},
+      ($signed({{23{coeff_level_q[recon_coeff_index_w][8]}},
                 coeff_level_q[recon_coeff_index_w]}) <<< 8) +
-      ($signed({{16{coeff_level_q[recon_coeff_index_w][15]}},
+      ($signed({{23{coeff_level_q[recon_coeff_index_w][8]}},
                 coeff_level_q[recon_coeff_index_w]}) <<< 7) +
-      ($signed({{16{coeff_level_q[recon_coeff_index_w][15]}},
+      ($signed({{23{coeff_level_q[recon_coeff_index_w][8]}},
                 coeff_level_q[recon_coeff_index_w]}) <<< 4) +
-      ($signed({{16{coeff_level_q[recon_coeff_index_w][15]}},
+      ($signed({{23{coeff_level_q[recon_coeff_index_w][8]}},
                 coeff_level_q[recon_coeff_index_w]}) <<< 3);
     recon_vertical_term_w = 32'sd0;
     case (vertical_k_q)
@@ -347,8 +347,8 @@ module ff_vvc_luma_quant_recon_8x8 (
       bottom_ref <= '0;
       right_ref <= '0;
       for (init_i = 0; init_i < LUMA_COEFF_COUNT; init_i = init_i + 1) begin
-        cell_sum_q[init_i] <= 18'sd0;
-        coeff_level_q[init_i] <= 16'sd0;
+        cell_sum_q[init_i] <= 12'sd0;
+        coeff_level_q[init_i] <= 9'sd0;
       end
     end else if (clear) begin
       state_q <= ST_IDLE;
@@ -368,8 +368,8 @@ module ff_vvc_luma_quant_recon_8x8 (
       bottom_ref <= '0;
       right_ref <= '0;
       for (init_i = 0; init_i < LUMA_COEFF_COUNT; init_i = init_i + 1) begin
-        cell_sum_q[init_i] <= 18'sd0;
-        coeff_level_q[init_i] <= 16'sd0;
+        cell_sum_q[init_i] <= 12'sd0;
+        coeff_level_q[init_i] <= 9'sd0;
       end
     end else begin
       case (state_q)
@@ -392,8 +392,8 @@ module ff_vvc_luma_quant_recon_8x8 (
             bottom_ref <= '0;
             right_ref <= '0;
             for (init_i = 0; init_i < LUMA_COEFF_COUNT; init_i = init_i + 1) begin
-              cell_sum_q[init_i] <= 18'sd0;
-              coeff_level_q[init_i] <= 16'sd0;
+              cell_sum_q[init_i] <= 12'sd0;
+              coeff_level_q[init_i] <= 9'sd0;
             end
           end
         end
@@ -401,7 +401,7 @@ module ff_vvc_luma_quant_recon_8x8 (
         ST_SAMPLES: begin
           residual_sum_q <= residual_sum_next_w;
           cell_sum_q[sample_cell_index_w] <=
-            cell_sum_q[sample_cell_index_w] + $signed(residual_w[17:0]);
+            cell_sum_q[sample_cell_index_w] + $signed(residual_w[11:0]);
           if (sample_y_w == 3'd7) begin
             bottom_ref[sample_x_w * 8 +: 8] <= predicted_w;
           end
@@ -409,7 +409,7 @@ module ff_vvc_luma_quant_recon_8x8 (
             right_ref[sample_y_w * 8 +: 8] <= predicted_w;
           end
           if (sample_index_q == 6'd63) begin
-            coeff_level_q[0] <= dc_level_w[15:0];
+            coeff_level_q[0] <= dc_level_w[8:0];
             abs_level <= (abs_dc_level_w > 32'd255) ? 8'hff : abs_dc_level_w[7:0];
             negative <= (abs_dc_level_w != 32'd0) && (dc_level_w < 32'sd0);
             state_q <= ST_AC;
@@ -424,7 +424,7 @@ module ff_vvc_luma_quant_recon_8x8 (
         ST_AC: begin
           acc_q <= ac_acc_next_w;
           if (ac_cell_q == 4'd15) begin
-            coeff_level_q[ac_coeff_q] <= {{8{ac_level_w[7]}}, ac_level_w};
+            coeff_level_q[ac_coeff_q] <= {ac_level_w[7], ac_level_w};
             ac_levels[((15 - ac_coeff_q) * 4) +: 4] <= ac_level_w[3:0];
             if (ac_coeff_q == 4'd15) begin
               state_q <= ST_RECON;
