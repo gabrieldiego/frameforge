@@ -56,7 +56,7 @@ Defaults:
 - board: `synth/boards/arty-z7-10.env`
 - DUT source selection: `vvc-cabac-stream-writer`, derived from `tb/Makefile`
 - top: derived from the selected `SYNTH_DUT`
-- clock metadata: `50 MHz`
+- clock metadata: `25 MHz`
 
 Override these from the command line:
 
@@ -722,6 +722,40 @@ Result:
   decreased by 678 and estimated LCs decreased by 386.
 - The standalone `ff_vvc_chroma_quant_recon_420` module restat reported 4,129
   cells and 1,620 estimated LCs, down from 4,505 cells and 1,715 estimated LCs.
+
+## Top Encoder Vivado Z7-10 Timing Snapshot
+
+Measured on June 9, 2026 with Vivado 2025.2 after the narrow chroma
+reconstruction-bank baseline. This is a post-synthesis-only vendor snapshot for
+the Arty Z7-10 target, not a placed/routed implementation result.
+
+Configuration:
+
+- target: Arty Z7-10 (`xc7z010clg400-1`)
+- top: `ff_vvc_encoder`
+- clock constraint: 50 MHz, 20.000 ns period
+- max visible size: 1024x1024
+- 4:4:4 palette support: enabled
+
+Result:
+
+- Vivado `synth_design` completed in 15:49 elapsed time.
+- Reported Vivado memory: 2815 MB peak for the main process; the Vivado log
+  also reported 5450 MB peak overall PSS across forked synthesis workers.
+- Utilization on Z7-10: 23,022 LUTs out of 17,600, or 130.81%; 22,616
+  registers out of 35,200, or 64.25%; 3 BRAM tiles out of 60; 5 DSPs out of
+  80. The current design therefore does not fit the Z7-10 by LUT count.
+- The 50 MHz timing constraint failed with WNS -15.797 ns and TNS
+  -22,186.822 ns across 2,021 failing setup endpoints. Hold timing was clean
+  with WHS 0.137 ns.
+- The worst setup path ran from `current_ctu_y_q_reg[0]/C` to
+  `cb_chroma_quant_recon/left_ref_q_reg[31]/D`. Vivado reported 35.646 ns data
+  path delay, with 13.697 ns logic and 21.949 ns estimated routing.
+- The failing 50 MHz constraint implies a post-synthesis minimum period of
+  roughly 35.8 ns, or about 27.9 MHz, before placement/routing. Until the
+  geometry-to-chroma reconstruction path is pipelined and the design fits the
+  selected device, treat 25 MHz as the realistic near-term clock target for
+  board-level planning.
 
 ## Optional Vivado Synthesis
 

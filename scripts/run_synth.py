@@ -90,7 +90,7 @@ def main() -> int:
     top = args.top or tb_toplevel(args.dut)
     out_dir = args.out_dir / board.get("BOARD_NAME", "board") / top
     out_dir.mkdir(parents=True, exist_ok=True)
-    clock_mhz = args.clock_mhz or float(board.get("DEFAULT_CLOCK_MHZ", "50"))
+    clock_mhz = args.clock_mhz or float(board.get("DEFAULT_CLOCK_MHZ", "25"))
     timeout_sec = args.timeout_sec if args.timeout_sec and args.timeout_sec > 0 else None
     memory_limit_mb = resolve_memory_limit_mb(args.tool, args.memory_limit_mb)
     warn_after_sec = args.warn_after_sec if args.warn_after_sec and args.warn_after_sec > 0 else None
