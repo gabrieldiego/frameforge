@@ -8,6 +8,11 @@ import csv
 from dataclasses import dataclass
 from pathlib import Path
 
+try:
+    from PIL import Image
+except ImportError:  # pragma: no cover - exercised only by PNG-backed local manifests.
+    Image = None
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_DIR = Path("verification/generated/test_vectors")
@@ -230,12 +235,18 @@ def generate_source_crop(vector: TestVector, sources: dict[str, TestVectorSource
         raise ValueError("source_crop vectors currently use the first frame only")
 
     source = sources[vector.source]
-    if source.fmt != "yuv420p8" or vector.fmt != "yuv420p8":
-        raise ValueError("source_crop currently supports yuv420p8 sources and outputs only")
     if not source.path.exists():
-        raise ValueError(f"source YUV is missing for '{source.id}': {source.path}")
+        raise ValueError(f"source file is missing for '{source.id}': {source.path}")
     if vector.crop_x + vector.width > source.width or vector.crop_y + vector.height > source.height:
         raise ValueError(f"{vector.filename} crop exceeds source dimensions")
+
+    if source.fmt in {"png_rgb8", "png_rgba8"} and vector.fmt == "yuv444p8":
+        return generate_png_yuv444_crop(vector, source)
+
+    if source.fmt != "yuv420p8" or vector.fmt != "yuv420p8":
+        raise ValueError(
+            "source_crop supports yuv420p8->yuv420p8 and PNG RGB/RGBA->yuv444p8"
+        )
 
     frame_size = source.width * source.height * 3 // 2
     source_frame = source.path.read_bytes()[:frame_size]
@@ -263,6 +274,34 @@ def generate_source_crop(vector: TestVector, sources: dict[str, TestVectorSource
             start = (crop_chroma_y + row) * source_chroma_width + crop_chroma_x
             out.extend(plane[start : start + chroma_width])
     return bytes(out)
+
+
+def generate_png_yuv444_crop(vector: TestVector, source: TestVectorSource) -> bytes:
+    if Image is None:
+        raise ValueError(
+            "PNG-backed source_crop vectors require Pillow; install requirements-dev.txt"
+        )
+
+    with Image.open(source.path) as image:
+        if image.size != (source.width, source.height):
+            raise ValueError(
+                f"{source.id} declares {source.width}x{source.height}, "
+                f"but PNG is {image.size[0]}x{image.size[1]}"
+            )
+        # Preserve screen-capture RGB exactly by carrying it as planar GBR
+        # through the current yuv444p8 component path. The .yuv extension is
+        # just a raw-video container convention; use ffplay -pixel_format gbrp
+        # when visualizing these local screenshot crops.
+        crop = image.convert("RGB").crop(
+            (
+                vector.crop_x,
+                vector.crop_y,
+                vector.crop_x + vector.width,
+                vector.crop_y + vector.height,
+            )
+        )
+        red_plane, green_plane, blue_plane = crop.split()
+        return green_plane.tobytes() + blue_plane.tobytes() + red_plane.tobytes()
 
 
 def generate_yuv420p8(vector: TestVector) -> bytes:

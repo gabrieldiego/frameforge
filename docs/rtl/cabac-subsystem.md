@@ -6,12 +6,13 @@ This diagram documents the current RTL CABAC subsystem boundaries. It shows the 
 flowchart LR
     subgraph Upstream[Upstream syntax producers]
         CTU[ff_vvc_ctu_symbolizer\nCTU/CU syntax symbols]
+        IBC[ff_vvc_ibc_hash_matcher\n4:4:4 exact-match CU decisions]
         PALSYM[ff_vvc_palette_symbolizer\n4:4:4 palette symbols]
     end
 
     subgraph TOP[ff_vvc_cabac]
         subgraph STREAM[ff_vvc_cabac_pipeline]
-            FE[ff_vvc_cabac_syntax_frontend\nresidual pass-through + palette packet expansion\nfuture CTU descriptor expansion]
+            FE[ff_vvc_cabac_syntax_frontend\nresidual pass-through + palette/IBC packet expansion\nfuture CTU descriptor expansion]
             BIN[ff_vvc_cabac_symbol_binarizer\nsymbol kind/data -> CABAC bin records]
             WR[ff_vvc_cabac_stream_writer\nCABAC arithmetic state + byte emission]
             CTX[ff_vvc_cabac_context_model\ncontext init/query/update]
@@ -28,6 +29,7 @@ flowchart LR
     end
 
     CTU -- residual/CU symbols --> FE
+    IBC -- IBC CU packets --> FE
     PALSYM -- palette packets --> FE
     FE -- syntax symbols --> BIN
     BIN -- bin kind, ctx id, bin value, EP pattern --> WR
@@ -47,16 +49,17 @@ The CABAC top-level contract is intentionally a streamer interface:
 
 - Input: `s_axis_valid`, `s_axis_ready`, `s_axis_kind`, `s_axis_data`, `s_axis_last`.
 - Output: `m_axis_valid`, `m_axis_ready`, `m_axis_data`, `m_axis_last`, `stream_last_byte_bits`.
-- `s_axis_kind` carries either normalized CABAC symbols or palette packet kinds. Palette packet kinds use the `8'h8*` namespace and are expanded by `ff_vvc_cabac_syntax_frontend`.
+- `s_axis_kind` carries either normalized CABAC symbols or compact packet kinds. Palette packet kinds use the `8'h8*` namespace, and the current IBC CU packet uses `8'h89`; both are expanded by `ff_vvc_cabac_syntax_frontend`.
 - Context-coded symbols carry a 10-bit context ID in `s_axis_data[17:8]`; this is intentionally wider than the current subset so the stream ABI can cover the full VVC context namespace later.
 
 ## Current Responsibilities
 
-- `ff_vvc_ctu_symbolizer` generates VVC CTU/CU syntax symbols for the current residual path, including split flags, intra mode symbols, CBFs, residual DC symbols, and termination. Its interface carries `chroma_format_idc`; the current chroma residual subtree remains the audited 4:2:0 implementation until 4:2:2/4:4:4 residual syntax is added.
-- `ff_vvc_cabac_syntax_frontend` passes normalized residual symbols through and expands current palette packets into common CABAC symbols, including palette index-map subsets and raw escape values. Its CTU descriptor inputs are present so more syntax expansion can move inside the CABAC subsystem later.
+- `ff_vvc_ctu_symbolizer` generates VVC CTU/CU syntax symbols for the current residual path and 4:4:4 partition markers, including split flags, intra mode symbols, CBFs, residual DC symbols, and termination. Its interface carries `chroma_format_idc`; the current chroma residual subtree remains the audited 4:2:0 implementation until 4:2:2/4:4:4 residual syntax is added.
+- `ff_vvc_ibc_hash_matcher` observes the 4:4:4 8x8 TU input stream and marks CUs that exactly match a previously coded 8x8 CU inside the current CTU. The top-level mux converts those marks into compact IBC CU packets.
+- `ff_vvc_cabac_syntax_frontend` passes normalized residual symbols through and expands current palette and IBC packets into common CABAC symbols, including palette index-map subsets, raw escape values, and IBC skip/pred-mode/merge/MVD/coded-flag syntax. Its CTU descriptor inputs are present so more syntax expansion can move inside the CABAC subsystem later.
 - `ff_vvc_cabac_symbol_binarizer` translates the raw symbol encoding into normalized CABAC bin records.
 - `ff_vvc_cabac_stream_writer` owns the arithmetic encoder state and emits bytes as they become available.
-- `ff_vvc_cabac_context_model` stores and updates the VVC context states. The current top selects the normal QP32 initialization for residual slices and the QP4 initialization used by lossless 8-bit palette escape slices.
+- `ff_vvc_cabac_context_model` stores and updates the VVC context states. The current top selects the normal QP32 initialization for residual slices and the QP4 initialization used by lossless 8-bit palette/IBC screen-content slices.
 - `ff_vvc_cabac_bin_engine` performs the combinational low/range update for one bin.
 - `ff_vvc_cabac_bit_writer` serializes emitted bit groups into output bytes.
 - Keep moving palette syntax from compact palette packets toward spec-complete `cu_palette_info()` symbol generation in the common frontend/binarizer path.
@@ -65,4 +68,5 @@ The CABAC top-level contract is intentionally a streamer interface:
 
 - Move CTU syntax expansion from `ff_vvc_ctu_symbolizer`/raw symbol streams into a proper CABAC syntax frontend where appropriate.
 - Keep palette index-map and escape expansion in the common syntax frontend/binarizer path; the separate palette CABAC writer has been removed.
+- Keep IBC packet expansion in the common syntax frontend, but consider splitting the MVD EG1 helper into a smaller sequential datapath if it remains on the top critical path.
 - Keep all paths using streaming handshakes; avoid reintroducing whole-payload buffers or geometry-specific payload tables.

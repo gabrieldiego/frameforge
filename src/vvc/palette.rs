@@ -1,6 +1,7 @@
 use crate::picture::{ChromaSampling, PixelFormat};
 
 use super::{
+    ibc::{VvcIbcCuDecision, VvcIbcHashSearch},
     sample_vvc_yuv_frame, vvc_picture_ctu_count, vvc_poc_lsb_for_frame_idx, vvc_slice_address_bits,
     VvcCabacContext, VvcCabacContexts, VvcCabacEncoder, VvcCtuCabacOp, VvcCtuPartitionShape,
     VvcEncodeParams, VvcNalUnit, VvcPictureKind, VvcSampledColor, VvcSampledFrame,
@@ -129,9 +130,33 @@ pub(super) fn vvc_palette_444_reconstruction_yuv(frame: &VvcSampledFrame) -> Vec
     let mut luma = vec![0; samples];
     let mut cb = vec![0; samples];
     let mut cr = vec![0; samples];
+    let mut ibc_search = VvcIbcHashSearch::new();
+    let partition_shape = VvcCtuPartitionShape {
+        root_width: VVC_CTU_SIZE as u16,
+        root_height: VVC_CTU_SIZE as u16,
+        visible_width: frame.geometry.coded_width() as u16,
+        visible_height: frame.geometry.coded_height() as u16,
+        chroma_sampling: frame.format.chroma_sampling,
+    };
 
-    for origin_y in (0..frame.geometry.height).step_by(VVC_PALETTE_CU_SIZE as usize) {
-        for origin_x in (0..frame.geometry.width).step_by(VVC_PALETTE_CU_SIZE as usize) {
+    for op in VvcCtuCabacOp::intra_ctu_partition(partition_shape, VVC_PALETTE_CU_SIZE) {
+        if let VvcCtuCabacOp::LumaLeafWithSplitCtx { node, .. } = op {
+            let origin_x = node.x as usize;
+            let origin_y = node.y as usize;
+            if !vvc_palette_cu_origin_is_visible(frame.geometry, node.x, node.y) {
+                continue;
+            }
+            if let Some(decision) = ibc_search.decide_8x8(frame, origin_x, origin_y) {
+                copy_vvc_ibc_444_8x8_reconstruction(
+                    &mut luma,
+                    &mut cb,
+                    &mut cr,
+                    frame.geometry.width,
+                    decision,
+                );
+                ibc_search.record_ibc_8x8(frame, decision);
+                continue;
+            }
             let syntax = vvc_palette_444_cu_syntax(frame, origin_x, origin_y);
             let width = syntax.cb_width;
             let height = syntax.cb_height;
@@ -153,10 +178,27 @@ pub(super) fn vvc_palette_444_reconstruction_yuv(frame: &VvcSampledFrame) -> Vec
                     cr[dst] = color.v;
                 }
             }
+            ibc_search.record_palette_8x8(frame, origin_x, origin_y);
         }
     }
 
     [luma, cb, cr].concat()
+}
+
+fn copy_vvc_ibc_444_8x8_reconstruction(
+    luma: &mut [u8],
+    cb: &mut [u8],
+    cr: &mut [u8],
+    stride: usize,
+    decision: VvcIbcCuDecision,
+) {
+    for y_off in 0..8 {
+        let dst = (decision.origin_y + y_off) * stride + decision.origin_x;
+        let src = (decision.ref_origin_y + y_off) * stride + decision.ref_origin_x;
+        luma.copy_within(src..src + 8, dst);
+        cb.copy_within(src..src + 8, dst);
+        cr.copy_within(src..src + 8, dst);
+    }
 }
 
 pub(super) fn vvc_palette_444_ctu_slice_unit(
@@ -253,6 +295,7 @@ fn vvc_palette_444_cabac_encoder(frame: &VvcSampledFrame) -> VvcCabacEncoder {
     let mut cabac = VvcCabacEncoder::new();
     let mut ctx = VvcCabacContexts::with_slice_qp(VVC_PALETTE_LOSSLESS_SLICE_QP);
     let mut predictor_mode = VvcPalettePredictorMode::SignalNewEntry;
+    let mut ibc_search = VvcIbcHashSearch::new();
     cabac.start();
     let partition_shape = VvcCtuPartitionShape {
         root_width: VVC_CTU_SIZE as u16,
@@ -262,10 +305,26 @@ fn vvc_palette_444_cabac_encoder(frame: &VvcSampledFrame) -> VvcCabacEncoder {
         chroma_sampling: frame.format.chroma_sampling,
     };
     for op in VvcCtuCabacOp::intra_ctu_partition(partition_shape, VVC_PALETTE_CU_SIZE) {
-        append_vvc_palette_444_partition_op(&mut cabac, &mut ctx, frame, &mut predictor_mode, op);
+        append_vvc_palette_444_partition_op(
+            &mut cabac,
+            &mut ctx,
+            frame,
+            &mut predictor_mode,
+            &mut ibc_search,
+            op,
+        );
     }
     cabac.encode_bin_trm(true);
     cabac
+}
+
+#[cfg(test)]
+pub(super) fn vvc_palette_444_cabac_context_bins(frame: &VvcSampledFrame) -> Vec<(u16, bool)> {
+    vvc_palette_444_cabac_encoder(frame)
+        .context_events
+        .into_iter()
+        .map(|event| (event.ctx_id, event.bin))
+        .collect()
 }
 
 fn append_vvc_palette_444_partition_op(
@@ -273,6 +332,7 @@ fn append_vvc_palette_444_partition_op(
     ctx: &mut VvcCabacContexts,
     frame: &VvcSampledFrame,
     predictor_mode: &mut VvcPalettePredictorMode,
+    ibc_search: &mut VvcIbcHashSearch,
     op: VvcCtuCabacOp,
 ) {
     match op {
@@ -340,6 +400,7 @@ fn append_vvc_palette_444_partition_op(
                 cabac,
                 ctx,
                 frame,
+                ibc_search,
                 VvcPaletteCuEmitRequest {
                     origin_x: node.x,
                     origin_y: node.y,
@@ -376,6 +437,7 @@ fn append_vvc_palette_444_8x8_cu_with_events(
     cabac: &mut VvcCabacEncoder,
     ctx: &mut VvcCabacContexts,
     frame: &VvcSampledFrame,
+    ibc_search: &mut VvcIbcHashSearch,
     request: VvcPaletteCuEmitRequest,
 ) -> bool {
     if !vvc_palette_cu_origin_is_visible(frame.geometry, request.origin_x, request.origin_y) {
@@ -384,6 +446,29 @@ fn append_vvc_palette_444_8x8_cu_with_events(
     if request.write_split_flag {
         ctx.encode(cabac, VvcCabacContext::SplitFlag(request.split_ctx), false);
     }
+    // H.266 7.3.11.4/7.4.12.4: with sps_ibc_enabled_flag set for this
+    // 4:4:4 screen-content subset, cu_skip_flag and pred_mode_ibc_flag are
+    // present before either IBC payload or pred_mode_plt_flag. The first IBC
+    // subset never uses skip/merge because the encoder-side hash table can
+    // choose candidates outside the decoder's merge list.
+    ctx.encode(cabac, VvcCabacContext::CuSkipFlag(0), false);
+    let origin_x = request.origin_x as usize;
+    let origin_y = request.origin_y as usize;
+    if let Some(decision) = ibc_search.decide_8x8(frame, origin_x, origin_y) {
+        ctx.encode(
+            cabac,
+            VvcCabacContext::PredModeIbcFlag(decision.pred_mode_ibc_ctx),
+            true,
+        );
+        append_vvc_ibc_444_8x8_cu(cabac, ctx, decision);
+        ibc_search.record_ibc_8x8(frame, decision);
+        return false;
+    }
+    ctx.encode(
+        cabac,
+        VvcCabacContext::PredModeIbcFlag(ibc_search.pred_mode_ibc_ctx(origin_x, origin_y)),
+        false,
+    );
     ctx.encode(cabac, VvcCabacContext::PredModePltFlag, true);
     let syntax =
         vvc_palette_444_cu_syntax(frame, request.origin_x as usize, request.origin_y as usize);
@@ -402,7 +487,58 @@ fn append_vvc_palette_444_8x8_cu_with_events(
         &palette_index_map,
         &palette_escape_values,
     );
+    ibc_search.record_palette_8x8(frame, origin_x, origin_y);
     true
+}
+
+fn append_vvc_ibc_444_8x8_cu(
+    cabac: &mut VvcCabacEncoder,
+    ctx: &mut VvcCabacContexts,
+    decision: VvcIbcCuDecision,
+) {
+    // H.266 7.3.11.4: MODE_IBC with cu_skip_flag=0 signals
+    // general_merge_flag. Keep it 0 so the explicit BVD from our 32-bit
+    // hash-search decision is coded instead of selecting from merge_idx.
+    ctx.encode(cabac, VvcCabacContext::GeneralMergeFlag(0), false);
+    append_vvc_ibc_mvd_coding(cabac, ctx, decision.mvd_x, decision.mvd_y);
+    // MaxNumIbcMergeCand is fixed to one in the SPS, so mvp_l0_flag is
+    // inferred. sps_amvr_enabled_flag is also false, so amvr_precision_idx is
+    // absent; H.266 Table 16 then scales the coded integer-sample IBC MVD into
+    // the 1/16 luma-sample BVD consumed by H.266 8.6.2.1.
+    //
+    // H.266 7.3.11.4/7.4.12.4: cu_coded_flag=0 means no transform_tree()
+    // follows; the exact-match IBC CU reconstructs entirely from prediction.
+    ctx.encode(cabac, VvcCabacContext::CuCodedFlag(0), false);
+}
+
+fn append_vvc_ibc_mvd_coding(
+    cabac: &mut VvcCabacEncoder,
+    ctx: &mut VvcCabacContexts,
+    mvd_x: i16,
+    mvd_y: i16,
+) {
+    let abs_x = i32::from(mvd_x).unsigned_abs();
+    let abs_y = i32::from(mvd_y).unsigned_abs();
+    ctx.encode(cabac, VvcCabacContext::AbsMvdGreater0Flag(0), abs_x > 0);
+    ctx.encode(cabac, VvcCabacContext::AbsMvdGreater0Flag(0), abs_y > 0);
+    if abs_x > 0 {
+        ctx.encode(cabac, VvcCabacContext::AbsMvdGreater1Flag(0), abs_x > 1);
+    }
+    if abs_y > 0 {
+        ctx.encode(cabac, VvcCabacContext::AbsMvdGreater1Flag(0), abs_y > 1);
+    }
+    if abs_x > 0 {
+        if abs_x > 1 {
+            encode_exp_golomb_ep(cabac, abs_x - 2, 1);
+        }
+        cabac.encode_bin_ep(mvd_x < 0);
+    }
+    if abs_y > 0 {
+        if abs_y > 1 {
+            encode_exp_golomb_ep(cabac, abs_y - 2, 1);
+        }
+        cabac.encode_bin_ep(mvd_y < 0);
+    }
 }
 
 fn append_vvc_palette_444_index_map(

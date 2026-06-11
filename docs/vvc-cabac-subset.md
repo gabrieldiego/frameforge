@@ -136,6 +136,13 @@ From Table 127:
 | `tu_y_coded_flag` | FL | `cMax = 1` |
 | `tu_cb_coded_flag` | FL | `cMax = 1` |
 | `tu_cr_coded_flag` | FL | `cMax = 1` |
+| `cu_skip_flag` | FL | `cMax = 1` |
+| `pred_mode_ibc_flag` | FL | `cMax = 1` |
+| `general_merge_flag` | FL | `cMax = 1` |
+| `abs_mvd_greater0_flag` | FL | `cMax = 1` |
+| `abs_mvd_greater1_flag` | FL | `cMax = 1` |
+| `abs_mvd_minus2` | EG1 | bypass-coded suffix/prefix |
+| `mvd_sign_flag` | FL | bypass-coded sign when MVD component is non-zero |
 
 From Table 132:
 
@@ -150,6 +157,11 @@ From Table 132:
 | `tu_y_coded_flag` | `0..3`, clause 9.3.4.2.5 | `na` | `na` | `na` |
 | `tu_cb_coded_flag` | `intra_bdpcm_chroma_flag ? 1 : 0` | `na` | `na` | `na` |
 | `tu_cr_coded_flag` | `intra_bdpcm_chroma_flag ? 2 : tu_cb_coded_flag` | `na` | `na` | `na` |
+| `cu_skip_flag` | `0..8`, neighbour-derived | `na` | `na` | `na` |
+| `pred_mode_ibc_flag` | `0..8`, neighbour-derived | `na` | `na` | `na` |
+| `general_merge_flag` | `0..2` | `na` | `na` | `na` |
+| `abs_mvd_greater0_flag` | `0..2` | `na` | `na` | `na` |
+| `abs_mvd_greater1_flag` | `0..2` | `na` | `na` | `na` |
 
 For the current subset, `intra_bdpcm_chroma_flag` is not enabled, so
 `tu_cb_coded_flag` uses ctxInc `0`, and `tu_cr_coded_flag` uses ctxInc equal to
@@ -172,6 +184,56 @@ For I slices, Table 51 maps `mts_idx` to ctxIdx `0..3`.
 | shiftIdx | 8 | 0 | 9 | 0 |
 
 Table 132 maps `mts_idx` binIdx `0..3` to ctxInc `0..3`.
+
+### IBC and MVD contexts
+
+For I slices, Table 51 maps these IBC-related context families into the
+following ctxIdx ranges. The current IBC subset uses `cu_skip_flag[0]`,
+`pred_mode_ibc_flag[0..2]`, `general_merge_flag[0]`, MVD ctx `0`, and
+`cu_coded_flag[0]`, but the software and RTL banks allocate the full small
+ranges below so later IBC expansion does not require another stream ABI change.
+
+`cu_skip_flag`:
+
+| ctxIdx | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| initValue | 0 | 26 | 28 | 57 | 59 | 45 | 57 | 60 | 46 |
+| shiftIdx | 5 | 4 | 8 | 5 | 4 | 8 | 5 | 4 | 8 |
+
+`pred_mode_ibc_flag`:
+
+| ctxIdx | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| initValue | 17 | 42 | 36 | 0 | 57 | 44 | 0 | 43 | 45 |
+| shiftIdx | 1 | 5 | 8 | 1 | 5 | 8 | 1 | 5 | 8 |
+
+`general_merge_flag`:
+
+| ctxIdx | 0 | 1 | 2 |
+| --- | ---: | ---: | ---: |
+| initValue | 26 | 21 | 6 |
+| shiftIdx | 4 | 4 | 4 |
+
+`cu_coded_flag`:
+
+| ctxIdx | 0 | 1 | 2 |
+| --- | ---: | ---: | ---: |
+| initValue | 6 | 5 | 12 |
+| shiftIdx | 4 | 4 | 4 |
+
+`abs_mvd_greater0_flag`:
+
+| ctxIdx | 0 | 1 | 2 |
+| --- | ---: | ---: | ---: |
+| initValue | 14 | 44 | 51 |
+| shiftIdx | 9 | 9 | 9 |
+
+`abs_mvd_greater1_flag`:
+
+| ctxIdx | 0 | 1 | 2 |
+| --- | ---: | ---: | ---: |
+| initValue | 45 | 43 | 36 |
+| shiftIdx | 5 | 5 | 5 |
 
 ### Table 118: `transform_skip_flag`
 
@@ -338,9 +400,15 @@ add a row here before being enabled in a stream.
 | 4:4:4 palette | `palette_transpose_flag` | `0` for I-slice initType 0 | Tables 51, 100, 132 | init table corrected |
 | 4:4:4 palette | `copy_above_palette_indices_flag` | `0` for I-slice initType 0 | Tables 51, 99, 132 | init table corrected; current encoder emits index runs only |
 | 4:4:4 palette | `run_copy_flag` | `0..7` for I-slice initType 0 | Tables 51, 101, 132, 134 | init table and ctxInc derivation implemented for index and copy-above previous run types |
+| 4:4:4 IBC | `cu_skip_flag` | `0..8`, currently ctx `0` | Tables 51, 64, 132 | init table implemented; current subset emits non-skip IBC CUs |
+| 4:4:4 IBC | `pred_mode_ibc_flag` | `0..8`, currently neighbour-derived ctx `0..2` | Tables 51, 65, 132 | init table and left/above ctx derivation implemented |
+| 4:4:4 IBC | `general_merge_flag` | `0..2`, currently ctx `0` | Tables 51, 82, 132 | init table implemented; current subset emits explicit BVD, not merge |
+| 4:4:4 IBC | `abs_mvd_greater0_flag` | `0..2`, currently ctx `0` | Tables 51, 110, 132 | init table implemented for `mvd_coding()` |
+| 4:4:4 IBC | `abs_mvd_greater1_flag` | `0..2`, currently ctx `0` | Tables 51, 111, 132 | init table implemented for `mvd_coding()` |
+| 4:4:4 IBC | `cu_coded_flag` | `0..2`, currently ctx `0` | Tables 51, 92, 132 | init table implemented; current exact-match IBC emits no residual |
 
 Tool enablement is centralized in `VvcSyntaxToolFlags`. SPS fields and CABAC
-syntax decisions read the same `VvcSliceSyntaxConfig`, so palette, transform
+syntax decisions read the same `VvcSliceSyntaxConfig`, so palette, IBC, transform
 skip, MTS, LFNST, dependent quantization, sign-data hiding, MRL, and CCLM can be
 audited from a single configuration object. Residual AC coding is not a separate
 tool gate: the residual path always accepts a coefficient vector, and the current
@@ -350,7 +418,7 @@ quantization is implemented.
 The RTL CABAC stream ABI reserves 10 bits for context IDs in
 `SYMBOL_BIN_CTX` records (`s_axis_data[17:8]`). The currently instantiated RTL
 context bank only contains the audited subset used by residual DC/early AC and
-palette mode, but the packet format will not need to change when more VVC
+palette/IBC mode, but the packet format will not need to change when more VVC
 context sets are added.
 
 ## Palette And Transform Syntax Surface
@@ -387,3 +455,9 @@ model; rows marked restricted are legal only for the stated current subset.
 | Palette | `copy_above_palette_indices_flag` | Run type can switch to copy-above | Context-coded flag | Context implemented; copy-above runs TODO |
 | Palette | `palette_idx_idc` | New index-run symbol | Bypass truncated binary with index redundancy removal | Implemented for current index runs |
 | Palette | `palette_escape_val` | Escape index selected | Bypass EG5 | Implemented as raw lossless 8-bit values under the current palette slice QP4 setup |
+| IBC | `sps_ibc_enabled_flag` / `sps_six_minus_max_num_ibc_merge_cand` | 4:4:4 screen-content subset | Enabled with max merge candidates set to 1 | Implemented |
+| IBC | `cu_skip_flag` | IBC CU decision | Context-coded zero | Implemented for non-skip IBC CUs |
+| IBC | `pred_mode_ibc_flag` | CU selected for IBC mode | Context-coded one, ctx from left/above IBC neighbours | Implemented for CTU-local 8x8 leaves |
+| IBC | `general_merge_flag` | Merge-vs-explicit-BVD decision | Context-coded zero | Implemented; merge list search TODO |
+| IBC | `mvd_coding()` | Explicit block-vector difference | Context-coded `abs_mvd_greater*`, bypass EG1 suffix, bypass signs | Implemented for integer-sample BVD |
+| IBC | `cu_coded_flag` | Residual presence after IBC prediction | Context-coded zero | Implemented for exact-match, no-residual IBC CUs |

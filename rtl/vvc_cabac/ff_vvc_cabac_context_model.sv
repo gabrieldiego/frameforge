@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 module ff_vvc_cabac_context_model #(
-  parameter int VVC_CTX_COUNT = 265,
+  parameter int VVC_CTX_COUNT = 295,
   parameter int VVC_CTX_QP = 32,
   parameter int VVC_CABAC_CTX_ID_BITS = 10
 ) (
@@ -31,6 +31,36 @@ module ff_vvc_cabac_context_model #(
   // par_level, and abs_level_gtx ranges initialized even before every RTL
   // producer emits each context.
   localparam logic [(VVC_CTX_COUNT * 8) - 1:0] INIT_VALUE_LUT = {
+    8'd12, // 294: CuCodedFlag(2)
+    8'd5, // 293: CuCodedFlag(1)
+    8'd6, // 292: CuCodedFlag(0)
+    8'd36, // 291: AbsMvdGreater1Flag(2)
+    8'd43, // 290: AbsMvdGreater1Flag(1)
+    8'd45, // 289: AbsMvdGreater1Flag(0)
+    8'd51, // 288: AbsMvdGreater0Flag(2)
+    8'd44, // 287: AbsMvdGreater0Flag(1)
+    8'd14, // 286: AbsMvdGreater0Flag(0)
+    8'd6, // 285: GeneralMergeFlag(2)
+    8'd21, // 284: GeneralMergeFlag(1)
+    8'd26, // 283: GeneralMergeFlag(0)
+    8'd45, // 282: PredModeIbcFlag(8)
+    8'd43, // 281: PredModeIbcFlag(7)
+    8'd0, // 280: PredModeIbcFlag(6)
+    8'd44, // 279: PredModeIbcFlag(5)
+    8'd57, // 278: PredModeIbcFlag(4)
+    8'd0, // 277: PredModeIbcFlag(3)
+    8'd36, // 276: PredModeIbcFlag(2)
+    8'd42, // 275: PredModeIbcFlag(1)
+    8'd17, // 274: PredModeIbcFlag(0)
+    8'd46, // 273: CuSkipFlag(8)
+    8'd60, // 272: CuSkipFlag(7)
+    8'd57, // 271: CuSkipFlag(6)
+    8'd45, // 270: CuSkipFlag(5)
+    8'd59, // 269: CuSkipFlag(4)
+    8'd57, // 268: CuSkipFlag(3)
+    8'd28, // 267: CuSkipFlag(2)
+    8'd26, // 266: CuSkipFlag(1)
+    8'd0, // 265: CuSkipFlag(0)
     8'd3, // 264: AbsLevelGtxFlag(71)
     8'd3, // 263: AbsLevelGtxFlag(70)
     8'd3, // 262: AbsLevelGtxFlag(69)
@@ -298,6 +328,36 @@ module ff_vvc_cabac_context_model #(
     8'd19  //  0: SplitFlag(0)
   };
   localparam logic [(VVC_CTX_COUNT * 4) - 1:0] LOG2_WINDOW_LUT = {
+    4'd4,  // 294: CuCodedFlag(2)
+    4'd4,  // 293: CuCodedFlag(1)
+    4'd4,  // 292: CuCodedFlag(0)
+    4'd5,  // 291: AbsMvdGreater1Flag(2)
+    4'd5,  // 290: AbsMvdGreater1Flag(1)
+    4'd5,  // 289: AbsMvdGreater1Flag(0)
+    4'd9,  // 288: AbsMvdGreater0Flag(2)
+    4'd9,  // 287: AbsMvdGreater0Flag(1)
+    4'd9,  // 286: AbsMvdGreater0Flag(0)
+    4'd4,  // 285: GeneralMergeFlag(2)
+    4'd4,  // 284: GeneralMergeFlag(1)
+    4'd4,  // 283: GeneralMergeFlag(0)
+    4'd8,  // 282: PredModeIbcFlag(8)
+    4'd5,  // 281: PredModeIbcFlag(7)
+    4'd1,  // 280: PredModeIbcFlag(6)
+    4'd8,  // 279: PredModeIbcFlag(5)
+    4'd5,  // 278: PredModeIbcFlag(4)
+    4'd1,  // 277: PredModeIbcFlag(3)
+    4'd8,  // 276: PredModeIbcFlag(2)
+    4'd5,  // 275: PredModeIbcFlag(1)
+    4'd1,  // 274: PredModeIbcFlag(0)
+    4'd8,  // 273: CuSkipFlag(8)
+    4'd4,  // 272: CuSkipFlag(7)
+    4'd5,  // 271: CuSkipFlag(6)
+    4'd8,  // 270: CuSkipFlag(5)
+    4'd4,  // 269: CuSkipFlag(4)
+    4'd5,  // 268: CuSkipFlag(3)
+    4'd8,  // 267: CuSkipFlag(2)
+    4'd4,  // 266: CuSkipFlag(1)
+    4'd5,  // 265: CuSkipFlag(0)
     4'd1,  // 264: AbsLevelGtxFlag(71)
     4'd1,  // 263: AbsLevelGtxFlag(70)
     4'd1,  // 262: AbsLevelGtxFlag(69)

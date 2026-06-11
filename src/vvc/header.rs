@@ -363,7 +363,14 @@ pub(in crate::vvc) fn vvc_sps_rbsp(
     if palette_enabled {
         writer.write_ue("sps_internal_bit_depth_minus_input_bit_depth", 0);
     }
-    writer.write_flag("sps_ibc_enabled_flag", false);
+    writer.write_flag("sps_ibc_enabled_flag", tool_flags.ibc_enabled);
+    if tool_flags.ibc_enabled {
+        // H.266 7.3.2.3: sps_six_minus_max_num_ibc_merge_cand sets
+        // MaxNumIbcMergeCand. Keep it at one candidate for the first
+        // CTU-local hash-search subset so mvp_l0_flag is inferred and the
+        // explicit BVD remains the only candidate-selection signal.
+        writer.write_ue("sps_six_minus_max_num_ibc_merge_cand", 5);
+    }
     writer.write_flag("sps_ladf_enabled_flag", false);
     writer.write_flag("sps_explicit_scaling_list_enabled_flag", false);
     writer.write_flag(

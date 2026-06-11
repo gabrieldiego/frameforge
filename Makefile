@@ -61,7 +61,7 @@ help:
 	@printf '%s\n' '  make test-vectors [TEST_VECTOR_SET=smoke TEST_VECTOR_SET_DIR=verification/test_vector_sets TEST_VECTOR_DIR=verification/generated/test_vectors] - generate deterministic YUV test streams from a manifest'
 	@printf '%s\n' '  make validate-set [VALIDATION_SET=smoke VALIDATION_SET_DIR=verification/test_vector_sets VALIDATION_LIMIT=<n> VALIDATION_WITH_SYNTH=0|1 VALIDATION_STOP_ON_FAIL=0|1] - generate and run a named validation set'
 	@printf '%s\n' '  make validate-smoke | validate-random-short | validate-sweep-420 | validate-sweep-444 | validate-motion-short | validate-all-short | validate-all-sweeps - direct validation set entry points'
-	@printf '%s\n' '  make validate INPUT=input_64x64_300f_30fps_yuv420p8.yuv [WIDTH=<w> HEIGHT=<h> FRAMES=<n> FORMAT=<fmt> RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 VALIDATE_SW_ONLY=1 VALIDATE_SYNTH=1|0] - infer metadata from filename unless overridden'
+	@printf '%s\n' '  make validate INPUT=input_64x64_300f_30fps_yuv420p8.yuv [WIDTH=<w> HEIGHT=<h> FRAMES=<n> FORMAT=<fmt> INPUT_FORMAT=auto|png|raw-yuv RECON_FORMAT=codec|png|rgb24 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 VALIDATE_SW_ONLY=1 VALIDATE_SYNTH=1|0] - infer metadata from filename unless overridden; PNG implies 4:4:4'
 	@printf '%s\n' '  make validate-decode BITSTREAM=out.vvc [DECODED=out.yuv]'
 	@printf '%s\n' '  make rtl-test  - run cocotb RTL tests'
 	@printf '%s\n' '  make rtl-test DUT=vvc-coding-tree-scheduler - run local coding-tree geometry/path selection test'
@@ -154,8 +154,8 @@ validate-all-sweeps:
 	$(MAKE) validate-set VALIDATION_SET=all-sweeps
 
 validate:
-	@test -n "$(INPUT)" || { echo 'usage: make validate INPUT=path/to/input_64x64_1f_yuv420p8.yuv [WIDTH=<w> HEIGHT=<h> FRAMES=<n> FORMAT=<fmt> RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64]'; exit 2; }
-	python3 scripts/validate.py "$(INPUT)" $(if $(WIDTH),--width "$(WIDTH)") $(if $(HEIGHT),--height "$(HEIGHT)") --max-width "$(RTL_MAX_VISIBLE_WIDTH)" --max-height "$(RTL_MAX_VISIBLE_HEIGHT)" $(if $(FRAMES),--frames "$(FRAMES)") $(if $(FORMAT),--format "$(FORMAT)") --synth-dut "$(VALIDATE_SYNTH_DUT)" $(if $(filter 0,$(VALIDATE_SYNTH)),--skip-synth) $(if $(filter 1,$(VALIDATE_SW_ONLY)),--sw-only)
+	@test -n "$(INPUT)" || { echo 'usage: make validate INPUT=path/to/input_64x64_1f_yuv420p8.yuv [WIDTH=<w> HEIGHT=<h> FRAMES=<n> FORMAT=<fmt> INPUT_FORMAT=auto|png|raw-yuv RECON_FORMAT=codec|png|rgb24 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64]'; exit 2; }
+	python3 scripts/validate.py "$(INPUT)" $(if $(WIDTH),--width "$(WIDTH)") $(if $(HEIGHT),--height "$(HEIGHT)") --max-width "$(RTL_MAX_VISIBLE_WIDTH)" --max-height "$(RTL_MAX_VISIBLE_HEIGHT)" $(if $(FRAMES),--frames "$(FRAMES)") $(if $(FORMAT),--format "$(FORMAT)") $(if $(INPUT_FORMAT),--input-format "$(INPUT_FORMAT)") $(if $(RECON_FORMAT),--recon-format "$(RECON_FORMAT)") --synth-dut "$(VALIDATE_SYNTH_DUT)" $(if $(filter 0,$(VALIDATE_SYNTH)),--skip-synth) $(if $(filter 1,$(VALIDATE_SW_ONLY)),--sw-only)
 
 validate-decode:
 	@test -n "$(BITSTREAM)" || { echo 'usage: make validate-decode BITSTREAM=path/to/stream.vvc [DECODED=decoded.yuv]'; exit 2; }

@@ -12,8 +12,8 @@ Local source-crop manifests belong under:
 verification/test_vector_sets/local/
 ```
 
-That directory is ignored by git. Use it for vectors cropped from local YUV
-sequences on your machine.
+That directory is ignored by git. Use it for vectors cropped from local raw YUV
+sequences or local PNG screenshots on your machine.
 
 Manifest format:
 
@@ -26,6 +26,13 @@ stick_walk,64,64,3,yuv420p8,stick_walk,30,,,
 clip_crop,64,64,1,yuv420p8,source_crop,,clip,128,64
 ```
 
+PNG screenshot crops use the same `source_crop` shape:
+
+```text
+# source=id=screen,path=screenshot_640x360.png,width=640,height=360,format=png_rgba8
+screen_crop,64,64,1,yuv444p8,source_crop,,screen,288,144
+```
+
 Supported procedural patterns are:
 
 - `black`
@@ -33,5 +40,17 @@ Supported procedural patterns are:
 - `moving_blocks`
 - `stick_walk`
 
-The `source_crop` pattern currently supports cropping the first frame from a
-planar 8-bit 4:2:0 YUV source.
+The `source_crop` pattern supports:
+
+- first-frame crops from planar 8-bit 4:2:0 YUV sources into `yuv420p8`
+- lossless crops from PNG RGB/RGBA screenshots into `yuv444p8`
+
+PNG sources always imply 4:4:4 encoding in this project. RGB samples are
+preserved byte-for-byte as planar GBR components carried through the current
+`yuv444p8` encoder path. The `.yuv` suffix is still used because the generated
+file is raw planar video. To inspect a generated PNG crop, use:
+
+```bash
+ffplay -f rawvideo -pixel_format gbrp -video_size 64x64 \
+  verification/generated/test_vectors/screen_crop_64x64_1f_yuv444p8.yuv
+```

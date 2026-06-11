@@ -13,11 +13,20 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+try:
+    from PIL import Image
+except ImportError:  # pragma: no cover - exercised only when validating PNG inputs.
+    Image = None
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_DIR = Path("verification/generated/checksums")
 RTL_SUPPORTED_FORMAT = "yuv420p8"
 VTM_CRASH_SKIP_EXIT = 77
+RAW_INPUT_FORMATS = {"auto", "raw", "raw-yuv", "yuv"}
+LOSSLESS_IMAGE_INPUT_FORMATS = {"png"}
+SUPPORTED_INPUT_FORMATS = RAW_INPUT_FORMATS | LOSSLESS_IMAGE_INPUT_FORMATS
+SUPPORTED_RECON_FORMATS = {"codec", "raw", "rgb24", "png"}
 
 SUPPORTED_FORMATS = {
     "i420": "yuv420p8",
@@ -66,7 +75,7 @@ class InputInfo:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input", help="input YUV file")
+    parser.add_argument("input", help="input raw YUV file, or a lossless PNG still image")
     parser.add_argument("--width", type=int)
     parser.add_argument("--height", type=int)
     parser.add_argument(
@@ -83,6 +92,18 @@ def main() -> int:
     )
     parser.add_argument("--frames", type=int)
     parser.add_argument("--format", default=None)
+    parser.add_argument(
+        "--input-format",
+        default="auto",
+        choices=sorted(SUPPORTED_INPUT_FORMATS),
+        help="input container/pixel source; auto treats .png as PNG and everything else as raw YUV",
+    )
+    parser.add_argument(
+        "--recon-format",
+        default="codec",
+        choices=sorted(SUPPORTED_RECON_FORMATS),
+        help="optional inspection copy for reconstructions; PNG/RGB24 interprets yuv444p8 components as planar GBR",
+    )
     parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
     parser.add_argument(
         "--synth-dut",
@@ -103,16 +124,18 @@ def main() -> int:
 
     input_path = Path(args.input).resolve()
     if not input_path.exists():
-        print(f"FAIL: input YUV file does not exist: {input_path}", file=sys.stderr)
+        print(f"FAIL: input file does not exist: {input_path}", file=sys.stderr)
         return 2
 
     try:
-        info = resolve_input_info(input_path, args)
+        input_format = resolve_input_format(input_path, args.input_format)
+        info = resolve_input_info(input_path, args, input_format)
         validate_supported_input(
             input_path,
             info,
             args.max_width,
             args.max_height,
+            input_format,
             args.sw_only,
             allow_trailing=args.frames is not None,
         )
@@ -129,7 +152,7 @@ def main() -> int:
     sw_internal_recon = out_dir / f"{stem}_software_internal_rec.yuv"
     rtl_internal_recon = out_dir / f"{stem}_rtl_internal_rec.yuv"
     vtm_recon = out_dir / f"{stem}_vtm_from_decodable_bitstream.yuv"
-    validation_input_path = materialized_validation_input(input_path, info, out_dir, stem)
+    validation_input_path = materialized_validation_input(input_path, info, out_dir, stem, input_format)
     rtl_input_path = normalized_rtl_input(validation_input_path, info, out_dir, stem)
 
     print(
@@ -203,9 +226,21 @@ def main() -> int:
                 print(f"SKIP  {name}")
             else:
                 print(f"{digest}  {name}")
+        print_bitrate_report("software_bitstream", sw_bitstream, info)
         print_psnr_report("software_internal_recon", validation_input_path, sw_internal_recon)
         if has_vtm_recon:
             print_psnr_report("vtm_recon_from_software_bitstream", validation_input_path, vtm_recon)
+        write_recon_views(
+            args.recon_format,
+            info,
+            out_dir,
+            stem,
+            {
+                "input": validation_input_path,
+                "software_internal_recon": sw_internal_recon,
+                "vtm_recon_from_software_bitstream": vtm_recon if has_vtm_recon else None,
+            },
+        )
 
         if has_vtm_recon and digests["software_internal_recon"] != digests["vtm_recon_from_software_bitstream"]:
             print(
@@ -301,10 +336,24 @@ def main() -> int:
             print(f"SKIP  {name}")
         else:
             print(f"{digest}  {name}")
+    print_bitrate_report("software_bitstream", sw_bitstream, info)
+    print_bitrate_report("rtl_bitstream", rtl_bitstream, info)
     print_psnr_report("software_internal_recon", validation_input_path, sw_internal_recon)
     print_psnr_report("rtl_internal_recon", validation_input_path, rtl_internal_recon)
     if has_vtm_recon:
         print_psnr_report("vtm_recon_from_decodable_bitstream", validation_input_path, vtm_recon)
+    write_recon_views(
+        args.recon_format,
+        info,
+        out_dir,
+        stem,
+        {
+            "input": validation_input_path,
+            "software_internal_recon": sw_internal_recon,
+            "rtl_internal_recon": rtl_internal_recon,
+            "vtm_recon_from_decodable_bitstream": vtm_recon if has_vtm_recon else None,
+        },
+    )
 
     if not rtl_bitstream.read_bytes():
         print("FAIL: RTL encoder produced an empty byte stream", file=sys.stderr)
@@ -342,12 +391,30 @@ def main() -> int:
     return 0
 
 
-def resolve_input_info(input_path: Path, args: argparse.Namespace) -> InputInfo:
+def resolve_input_format(input_path: Path, requested: str) -> str:
+    value = requested.lower()
+    if value not in SUPPORTED_INPUT_FORMATS:
+        raise ValueError(f"unsupported input format {requested}")
+    if value != "auto":
+        return "raw-yuv" if value in RAW_INPUT_FORMATS else value
+    if input_path.suffix.lower() == ".png":
+        return "png"
+    return "raw-yuv"
+
+
+def resolve_input_info(input_path: Path, args: argparse.Namespace, input_format: str) -> InputInfo:
     inferred = infer_from_filename(input_path.name)
     width = args.width if args.width is not None else inferred.width
     height = args.height if args.height is not None else inferred.height
     frames = args.frames if args.frames is not None else inferred.frames
     fmt = args.format if args.format is not None else inferred.fmt
+
+    if input_format == "png":
+        png_width, png_height = png_dimensions(input_path)
+        width = args.width if args.width is not None else png_width
+        height = args.height if args.height is not None else png_height
+        frames = args.frames if args.frames is not None else 1
+        fmt = args.format if args.format is not None else "yuv444p8"
 
     missing = []
     if not width:
@@ -393,6 +460,7 @@ def validate_supported_input(
     info: InputInfo,
     max_width: int,
     max_height: int,
+    input_format: str,
     sw_only: bool = False,
     allow_trailing: bool = False,
 ) -> None:
@@ -401,7 +469,7 @@ def validate_supported_input(
             f"unsupported format {info.fmt}; supported VVC formats are "
             "yuv420p/yuv422p/yuv444p at 8, 10, 12, or 16 bits"
         )
-    if info.width > max_width or info.height > max_height:
+    if not sw_only and (info.width > max_width or info.height > max_height):
         raise ValueError(
             f"VVC validation supports at most {max_width}x{max_height} input at this entry point; got {info.width}x{info.height}"
         )
@@ -414,6 +482,19 @@ def validate_supported_input(
         raise ValueError("yuv422p formats require even width")
     if info.frames < 1:
         raise ValueError("VVC validation expects at least one frame")
+
+    if input_format == "png":
+        if normalize_format(info.fmt) != "yuv444p8":
+            raise ValueError("PNG validation is currently lossless RGB carried as yuv444p8/GBR only")
+        if info.frames != 1:
+            raise ValueError("PNG validation currently supports one still-image frame")
+        png_width, png_height = png_dimensions(input_path)
+        if (info.width, info.height) != (png_width, png_height):
+            raise ValueError(
+                f"PNG input dimensions are {png_width}x{png_height}; crop with a manifest "
+                "or pass matching --width/--height"
+            )
+        return
 
     expected_len = frame_len(info) * info.frames
     actual_len = input_path.stat().st_size
@@ -458,6 +539,19 @@ def print_psnr_report(label: str, reference_path: Path, reconstructed_path: Path
         print(f"inf  {label}_psnr_vs_input_db")
     else:
         print(f"{value:.2f}  {label}_psnr_vs_input_db")
+
+
+def print_bitrate_report(label: str, bitstream_path: Path, info: InputInfo) -> None:
+    encoded_bytes = bitstream_path.stat().st_size
+    encoded_bits = encoded_bytes * 8
+    luma_pixels = info.width * info.height * info.frames
+    source_bytes = frame_len(info) * info.frames
+    bpp = encoded_bits / luma_pixels if luma_pixels else float("nan")
+    source_ratio = encoded_bytes / source_bytes if source_bytes else float("nan")
+    print(f"{encoded_bytes}  {label}_bytes")
+    print(f"{encoded_bits}  {label}_bits")
+    print(f"{bpp:.4f}  {label}_bits_per_luma_pixel")
+    print(f"{source_ratio:.4f}  {label}_encoded_to_source_bytes")
 
 
 def psnr_bytes(reference_path: Path, reconstructed_path: Path) -> float | None:
@@ -508,7 +602,18 @@ def normalized_rtl_input(input_path: Path, info: InputInfo, out_dir: Path, stem:
     return out
 
 
-def materialized_validation_input(input_path: Path, info: InputInfo, out_dir: Path, stem: str) -> Path:
+def materialized_validation_input(
+    input_path: Path,
+    info: InputInfo,
+    out_dir: Path,
+    stem: str,
+    input_format: str,
+) -> Path:
+    if input_format == "png":
+        out = out_dir / f"{stem}_input_gbrp_as_yuv444p8.yuv"
+        out.write_bytes(png_to_gbr_yuv444p8(input_path, info))
+        return out
+
     expected_len = frame_len(info) * info.frames
     if input_path.stat().st_size == expected_len:
         return input_path
@@ -525,6 +630,80 @@ def materialized_validation_input(input_path: Path, info: InputInfo, out_dir: Pa
             dst.write(chunk)
             remaining -= len(chunk)
     return out
+
+
+def require_pillow() -> None:
+    if Image is None:
+        raise ValueError("PNG validation requires Pillow; install requirements-dev.txt")
+
+
+def png_dimensions(input_path: Path) -> tuple[int, int]:
+    require_pillow()
+    with Image.open(input_path) as image:
+        return image.size
+
+
+def png_to_gbr_yuv444p8(input_path: Path, info: InputInfo) -> bytes:
+    require_pillow()
+    with Image.open(input_path) as image:
+        if image.size != (info.width, info.height):
+            raise ValueError(
+                f"PNG input dimensions are {image.size[0]}x{image.size[1]}; expected {info.width}x{info.height}"
+            )
+        rgb = image.convert("RGB")
+        red_plane, green_plane, blue_plane = rgb.split()
+        return green_plane.tobytes() + blue_plane.tobytes() + red_plane.tobytes()
+
+
+def write_recon_views(
+    recon_format: str,
+    info: InputInfo,
+    out_dir: Path,
+    stem: str,
+    paths: dict[str, Path | None],
+) -> None:
+    if recon_format in {"codec", "raw"}:
+        return
+    if info.fmt != "yuv444p8" or info.frames != 1:
+        print(f"SKIP  recon_{recon_format}_views")
+        return
+
+    if recon_format == "png":
+        require_pillow()
+
+    print(f"FrameForge validate: write {recon_format} inspection views")
+    for label, path in paths.items():
+        if path is None or not path.exists():
+            continue
+        rgb24 = gbr_yuv444p8_to_rgb24(path.read_bytes(), info)
+        if recon_format == "rgb24":
+            out = out_dir / f"{stem}_{label}.rgb"
+            out.write_bytes(rgb24)
+        elif recon_format == "png":
+            out = out_dir / f"{stem}_{label}.png"
+            image = Image.frombytes("RGB", (info.width, info.height), rgb24)
+            image.save(out)
+        else:
+            raise ValueError(f"unsupported reconstruction format {recon_format}")
+        print(f"{sha256(out)}  {label}_{recon_format}={out}")
+
+
+def gbr_yuv444p8_to_rgb24(data: bytes, info: InputInfo) -> bytes:
+    expected_len = frame_len(info)
+    if len(data) < expected_len:
+        raise ValueError(
+            f"reconstruction view source is too short: got {len(data)} bytes, expected at least {expected_len}"
+        )
+    plane_len = info.width * info.height
+    green = data[:plane_len]
+    blue = data[plane_len : plane_len * 2]
+    red = data[plane_len * 2 : plane_len * 3]
+    out = bytearray(plane_len * 3)
+    for idx in range(plane_len):
+        out[idx * 3] = red[idx]
+        out[(idx * 3) + 1] = green[idx]
+        out[(idx * 3) + 2] = blue[idx]
+    return bytes(out)
 
 
 def normalized_input_to_yuv8(input_path: Path, info: InputInfo) -> bytes:

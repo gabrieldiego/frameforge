@@ -12,6 +12,7 @@ use crate::picture::{ChromaSampling, Picture, PixelFormat, SampleBitDepth};
 
 mod cabac;
 mod header;
+mod ibc;
 mod nal;
 mod palette;
 mod residual;
@@ -40,8 +41,9 @@ pub use nal::{
 pub use palette::vvc_palette_444_cabac_dump_json;
 #[cfg(test)]
 use palette::{
-    vvc_palette_444_binarized_syntax_bits, vvc_palette_444_context_audit_rows,
-    vvc_palette_444_cu_syntax, vvc_palette_444_decode_reconstruction,
+    vvc_palette_444_binarized_syntax_bits, vvc_palette_444_cabac_context_bins,
+    vvc_palette_444_context_audit_rows, vvc_palette_444_cu_syntax,
+    vvc_palette_444_decode_reconstruction, vvc_palette_444_reconstruction_yuv,
     vvc_palette_444_single_entry_syntax, vvc_palette_444_syntax_tokens,
     vvc_palette_run_copy_context_id_for_audit, VvcPalettePredictorMode, VvcPaletteTreeType,
 };
@@ -287,6 +289,7 @@ impl VvcCodingTreeConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct VvcSyntaxToolFlags {
+    ibc_enabled: bool,
     palette_enabled: bool,
     transform_skip_enabled: bool,
     mts_enabled: bool,
@@ -310,6 +313,7 @@ pub(super) struct VvcSliceSyntaxConfig {
 impl VvcSyntaxToolFlags {
     const fn yuv420_residual() -> Self {
         Self {
+            ibc_enabled: false,
             palette_enabled: false,
             transform_skip_enabled: false,
             mts_enabled: false,
@@ -325,6 +329,7 @@ impl VvcSyntaxToolFlags {
 
     const fn palette_444() -> Self {
         Self {
+            ibc_enabled: true,
             palette_enabled: true,
             transform_skip_enabled: false,
             mts_enabled: false,

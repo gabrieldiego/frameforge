@@ -1847,6 +1847,72 @@ fn vvc_palette_444_cu_syntax_uses_escape_values_after_31_entries() {
 }
 
 #[test]
+fn vvc_palette_444_uses_ibc_for_repeated_8x8_block() {
+    let geometry = VvcVideoGeometry {
+        width: 16,
+        height: 8,
+    };
+    let mut luma = vec![0; geometry.luma_samples()];
+    let mut cb = vec![0; geometry.luma_samples()];
+    let mut cr = vec![0; geometry.luma_samples()];
+    for y in 0..8 {
+        for x in 0..8 {
+            let base = y * 8 + x;
+            let color_y = (base * 3 + 11) as u8;
+            let color_cb = (base * 5 + 17) as u8;
+            let color_cr = (base * 7 + 23) as u8;
+            for block_x in [0, 8] {
+                let dst = y * geometry.width + block_x + x;
+                luma[dst] = color_y;
+                cb[dst] = color_cb;
+                cr[dst] = color_cr;
+            }
+        }
+    }
+    let frame = VvcSampledFrame {
+        geometry,
+        format: VvcPictureFormat {
+            chroma_sampling: ChromaSampling::Cs444,
+            bit_depth: SampleBitDepth::Eight,
+        },
+        luma: luma.clone(),
+        cb: cb.clone(),
+        cr: cr.clone(),
+        chroma_len: geometry.luma_samples(),
+    };
+
+    let recon = vvc_palette_444_reconstruction_yuv(&frame);
+    assert_eq!(recon, [luma, cb, cr].concat());
+
+    let ctx_bins = vvc_palette_444_cabac_context_bins(&frame);
+    assert!(
+        ctx_bins.contains(&(
+            VvcCabacContext::PredModeIbcFlag(0)
+                .rtl_context_id()
+                .unwrap(),
+            true
+        )),
+        "repeated block should select MODE_IBC"
+    );
+    assert!(
+        ctx_bins.contains(&(
+            VvcCabacContext::GeneralMergeFlag(0)
+                .rtl_context_id()
+                .unwrap(),
+            false
+        )),
+        "hash-selected IBC should use explicit BVD, not merge"
+    );
+    assert!(
+        ctx_bins.contains(&(
+            VvcCabacContext::CuCodedFlag(0).rtl_context_id().unwrap(),
+            false
+        )),
+        "exact-match IBC should skip transform_tree"
+    );
+}
+
+#[test]
 fn vvc_input_path_changes_bitstream_from_sampled_color() {
     let mut input = solid_yuv420p8(65, 128, 192, 2);
     input[1] = 0;

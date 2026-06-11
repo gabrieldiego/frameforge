@@ -17,3 +17,6 @@ Useful variables:
 - `FRAMEFORGE_VTM_REF`: optional VTM branch or tag.
 - `FRAMEFORGE_VTM_BUILD_DIR`: CMake build directory.
 - `FRAMEFORGE_GENERATED_DIR`: local generated input directory for helper scripts.
+
+Quality and bitrate validation baselines are recorded in
+`docs/quality-bitrate.md`. Synthesis baselines remain in `docs/synthesis.md`.

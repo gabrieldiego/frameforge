@@ -780,6 +780,64 @@ Result:
 - Runtime stayed under the 300 second review threshold, memory stayed well below
   the 3072 MiB Yosys cap, and the topological path length did not regress.
 
+## Top Encoder CTU-Local IBC Hash Matcher
+
+Measured on June 11, 2026 after adding the first 4:4:4 IBC path. The feature
+uses an exact 32-bit hash match over previously coded 8x8 CUs inside the current
+64x64 CTU-local slice, then falls back to lossless palette coding for unmatched
+CUs. The initial combinational implementation searched all 64 hash entries in
+one cycle and was rejected before baselining: Yosys completed in 402.8 seconds
+with 1836.38 MiB peak child RSS, but the longest topological path was 266 and
+ran through the IBC hash table compare fabric.
+
+The committed baseline scans one candidate per cycle. A 4:4:4 CU takes 192
+input sample cycles, so the 64-entry CTU-local search completes before the next
+CU can require its final IBC/palette decision.
+
+Validation:
+
+```sh
+make validate-set VALIDATION_SET=screenshot-smoke-444 VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+make validate-set VALIDATION_SET=screenshot-multictu-444 RTL_MAX_VISIBLE_WIDTH=192 RTL_MAX_VISIBLE_HEIGHT=192 VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+make validate-set VALIDATION_SET=racehorses-sweep-420 VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+make validate INPUT=verification/generated/test_vectors/RaceHorses_136x80_1f_yuv420p8.yuv RTL_MAX_VISIBLE_WIDTH=136 RTL_MAX_VISIBLE_HEIGHT=80 VALIDATE_SYNTH=0
+```
+
+The screenshot smoke and multi-CTU 4:4:4 sets passed losslessly against VTM. The
+RaceHorses 4:2:0 sweep and the scaled 136x80 RaceHorses guard also passed,
+preserving the existing lossy residual path.
+
+Synthesis:
+
+```sh
+make synth SYNTH_DUT=vvc-encoder
+```
+
+Result:
+
+- Top `ff_vvc_encoder` synthesis completed in 416.9 seconds with 1824.41 MiB
+  peak child RSS observed by the synthesis runner.
+- Critical-path reporting completed in 79.6 seconds with the same observed peak
+  child RSS.
+- Longest topological path increased from 40 to 55. The new reported path runs
+  through `ff_vvc_cabac_syntax_frontend` IBC MVD absolute-value and EG1 prefix
+  generation before `m_axis_data`.
+- Post-synth netlist restat reported 125,999 total cells and 46,273 estimated
+  LCs. Compared with the lossless palette escape baseline, total cells increased
+  by 27,415 and estimated LCs increased by 10,206.
+- The largest new local block is `ff_vvc_ibc_hash_matcher`, at 23,485 primitive
+  cells in the post-synth JSON. Its area is dominated by CTU-local hash/BV/MVD
+  register tables and search-control logic.
+- `ff_vvc_cabac_syntax_frontend` grew from 8,798 cells and 2,735 estimated LCs
+  to 11,987 cells and 4,283 estimated LCs because it now expands IBC CU packets
+  into skip, pred-mode, merge, MVD, and coded-flag syntax.
+- `ff_vvc_palette_cu_symbolizer` stayed roughly flat at 9,191 cells and 3,072
+  estimated LCs.
+- Runtime exceeds the 300 second review threshold but remains inside the 600
+  second hard timeout and the 3072 MiB Yosys memory cap. Treat future increases
+  from this point as a synthesis-efficiency regression unless they come with a
+  deliberate new coding tool.
+
 ## Top Encoder Vivado Z7-10 Timing Snapshot
 
 Measured on June 9, 2026 with Vivado 2025.2 after the narrow chroma

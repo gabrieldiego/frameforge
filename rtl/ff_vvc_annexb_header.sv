@@ -13,6 +13,7 @@ module ff_vvc_annexb_header #(
   input  logic [15:0] visible_height,
   input  logic [1:0]  chroma_format_idc,
   input  logic        sps_palette_enabled_flag,
+  input  logic        sps_ibc_enabled_flag,
   input  logic        sps_ref_pic_resampling_enabled_flag,
   input  logic        sps_entry_point_offsets_present_flag,
   input  logic        sps_transform_skip_enabled_flag,
@@ -34,7 +35,7 @@ module ff_vvc_annexb_header #(
   localparam logic [4:0] NAL_UNIT_TYPE_PPS = 5'd16;
   localparam logic [5:0] NAL_LAYER_ID = 6'd0;
   localparam logic [2:0] NAL_TEMPORAL_ID_PLUS1 = 3'd1;
-  localparam logic [6:0] SPS_FIELD_COUNT = 7'd106;
+  localparam logic [6:0] SPS_FIELD_COUNT = 7'd107;
   localparam logic [6:0] PPS_FIELD_COUNT = 7'd27;
   localparam logic [3:0] ST_IDLE = 4'd0;
   localparam logic [3:0] ST_START_CODE = 4'd1;
@@ -388,10 +389,11 @@ module ff_vvc_annexb_header #(
         7'd99: begin syntax_value = 32'd0; syntax_bits = (chroma_format_idc == 2'd1) ? 6'd1 : 6'd0; end // chroma vertical collocated
         7'd100: begin syntax_value = {31'd0, sps_palette_enabled_flag}; syntax_bits = 6'd1; end // palette enabled
         7'd101: begin syntax_value = 32'd1; syntax_bits = sps_palette_enabled_flag ? 6'd1 : 6'd0; end // sps_internal_bit_depth_minus_input_bit_depth ue(0)
-        7'd102: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // ibc
-        7'd103: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // ladf
-        7'd104: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // scaling list
-        7'd105: begin syntax_value = {25'd0, sps_dep_quant_enabled_flag, sps_sign_data_hiding_enabled_flag, 5'b00000}; syntax_bits = 6'd7; end // dep/sign through extension flags
+        7'd102: begin syntax_value = {31'd0, sps_ibc_enabled_flag}; syntax_bits = 6'd1; end // ibc
+        7'd103: begin syntax_value = 32'd6; syntax_bits = sps_ibc_enabled_flag ? 6'd5 : 6'd0; end // sps_six_minus_max_num_ibc_merge_cand ue(5)
+        7'd104: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // ladf
+        7'd105: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // scaling list
+        7'd106: begin syntax_value = {25'd0, sps_dep_quant_enabled_flag, sps_sign_data_hiding_enabled_flag, 5'b00000}; syntax_bits = 6'd7; end // dep/sign through extension flags
         default: begin syntax_value = 32'd0; syntax_bits = 6'd0; end
       endcase
     end else begin

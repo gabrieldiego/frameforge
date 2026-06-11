@@ -54,6 +54,12 @@ pub(in crate::vvc) enum VvcCabacContext {
     QtCbfCr(u8),
     TransformSkipFlag(u8),
     MtsIdx(u8),
+    CuSkipFlag(u8),
+    PredModeIbcFlag(u8),
+    GeneralMergeFlag(u8),
+    AbsMvdGreater0Flag(u8),
+    AbsMvdGreater1Flag(u8),
+    CuCodedFlag(u8),
     LastSigCoeffXPrefix(u8),
     LastSigCoeffYPrefix(u8),
     SbCodedFlag(u8),
@@ -230,6 +236,12 @@ impl VvcCabacContext {
                 ];
                 missing_rtl_context_ordinal(ctx, 71, EXPLICIT).map(|ordinal| 247 + ordinal)
             }
+            VvcCabacContext::CuSkipFlag(ctx @ 0..=8) => Some(265 + u16::from(ctx)),
+            VvcCabacContext::PredModeIbcFlag(ctx @ 0..=8) => Some(274 + u16::from(ctx)),
+            VvcCabacContext::GeneralMergeFlag(ctx @ 0..=2) => Some(283 + u16::from(ctx)),
+            VvcCabacContext::AbsMvdGreater0Flag(ctx @ 0..=2) => Some(286 + u16::from(ctx)),
+            VvcCabacContext::AbsMvdGreater1Flag(ctx @ 0..=2) => Some(289 + u16::from(ctx)),
+            VvcCabacContext::CuCodedFlag(ctx @ 0..=2) => Some(292 + u16::from(ctx)),
             _ => None,
         }
     }
@@ -288,6 +300,36 @@ impl VvcCabacContext {
             }
             VvcCabacContext::MtsIdx(ctx) => {
                 const I_SLICE_INIT: [u8; 4] = [29, 0, 28, 0];
+                I_SLICE_INIT[ctx as usize]
+            }
+            VvcCabacContext::CuSkipFlag(ctx) => {
+                // H.266 Table 64, initType 0 / I-slice.
+                const I_SLICE_INIT: [u8; 9] = [0, 26, 28, 57, 59, 45, 57, 60, 46];
+                I_SLICE_INIT[ctx as usize]
+            }
+            VvcCabacContext::PredModeIbcFlag(ctx) => {
+                // H.266 Table 65, initType 0 / I-slice.
+                const I_SLICE_INIT: [u8; 9] = [17, 42, 36, 0, 57, 44, 0, 43, 45];
+                I_SLICE_INIT[ctx as usize]
+            }
+            VvcCabacContext::GeneralMergeFlag(ctx) => {
+                // H.266 Table 82, initType 0 / I-slice.
+                const I_SLICE_INIT: [u8; 3] = [26, 21, 6];
+                I_SLICE_INIT[ctx as usize]
+            }
+            VvcCabacContext::CuCodedFlag(ctx) => {
+                // H.266 Table 92, initType 0 / I-slice.
+                const I_SLICE_INIT: [u8; 3] = [6, 5, 12];
+                I_SLICE_INIT[ctx as usize]
+            }
+            VvcCabacContext::AbsMvdGreater0Flag(ctx) => {
+                // H.266 Table 110.
+                const I_SLICE_INIT: [u8; 3] = [14, 44, 51];
+                I_SLICE_INIT[ctx as usize]
+            }
+            VvcCabacContext::AbsMvdGreater1Flag(ctx) => {
+                // H.266 Table 111.
+                const I_SLICE_INIT: [u8; 3] = [45, 43, 36];
                 I_SLICE_INIT[ctx as usize]
             }
             VvcCabacContext::LastSigCoeffXPrefix(ctx) => {
@@ -398,6 +440,30 @@ impl VvcCabacContext {
                 const LOG2_WINDOW: [u8; 4] = [8, 0, 9, 0];
                 LOG2_WINDOW[ctx as usize]
             }
+            VvcCabacContext::CuSkipFlag(ctx) => {
+                const LOG2_WINDOW: [u8; 9] = [5, 4, 8, 5, 4, 8, 5, 4, 8];
+                LOG2_WINDOW[ctx as usize]
+            }
+            VvcCabacContext::PredModeIbcFlag(ctx) => {
+                const LOG2_WINDOW: [u8; 9] = [1, 5, 8, 1, 5, 8, 1, 5, 8];
+                LOG2_WINDOW[ctx as usize]
+            }
+            VvcCabacContext::GeneralMergeFlag(ctx) => {
+                const LOG2_WINDOW: [u8; 3] = [4, 4, 4];
+                LOG2_WINDOW[ctx as usize]
+            }
+            VvcCabacContext::CuCodedFlag(ctx) => {
+                const LOG2_WINDOW: [u8; 3] = [4, 4, 4];
+                LOG2_WINDOW[ctx as usize]
+            }
+            VvcCabacContext::AbsMvdGreater0Flag(ctx) => {
+                const LOG2_WINDOW: [u8; 3] = [9, 9, 9];
+                LOG2_WINDOW[ctx as usize]
+            }
+            VvcCabacContext::AbsMvdGreater1Flag(ctx) => {
+                const LOG2_WINDOW: [u8; 3] = [5, 5, 5];
+                LOG2_WINDOW[ctx as usize]
+            }
             VvcCabacContext::LastSigCoeffXPrefix(ctx) => {
                 const LOG2_WINDOW: [u8; 23] = [
                     8, 5, 4, 5, 4, 4, 5, 4, 1, 0, 4, 1, 0, 0, 0, 0, 1, 0, 0, 0, 5, 4, 4,
@@ -469,6 +535,12 @@ pub(in crate::vvc) struct VvcCabacContexts {
     pub(in crate::vvc) qt_cbf_cr: [VvcCabacProbModel; 3],
     pub(in crate::vvc) transform_skip_flag: [VvcCabacProbModel; 2],
     pub(in crate::vvc) mts_idx: [VvcCabacProbModel; 4],
+    pub(in crate::vvc) cu_skip_flag: [VvcCabacProbModel; 9],
+    pub(in crate::vvc) pred_mode_ibc_flag: [VvcCabacProbModel; 9],
+    pub(in crate::vvc) general_merge_flag: [VvcCabacProbModel; 3],
+    pub(in crate::vvc) abs_mvd_greater0_flag: [VvcCabacProbModel; 3],
+    pub(in crate::vvc) abs_mvd_greater1_flag: [VvcCabacProbModel; 3],
+    pub(in crate::vvc) cu_coded_flag: [VvcCabacProbModel; 3],
     pub(in crate::vvc) last_sig_coeff_x_prefix: [VvcCabacProbModel; 23],
     pub(in crate::vvc) last_sig_coeff_y_prefix: [VvcCabacProbModel; 23],
     pub(in crate::vvc) sb_coded_flag: [VvcCabacProbModel; 7],
@@ -585,6 +657,48 @@ impl VvcCabacContexts {
                     VvcCabacContext::MtsIdx(idx as u8).log2_window_size(),
                 )
             }),
+            cu_skip_flag: std::array::from_fn(|idx| {
+                VvcCabacProbModel::from_init_value(
+                    VvcCabacContext::CuSkipFlag(idx as u8).init_value(),
+                    slice_qp,
+                    VvcCabacContext::CuSkipFlag(idx as u8).log2_window_size(),
+                )
+            }),
+            pred_mode_ibc_flag: std::array::from_fn(|idx| {
+                VvcCabacProbModel::from_init_value(
+                    VvcCabacContext::PredModeIbcFlag(idx as u8).init_value(),
+                    slice_qp,
+                    VvcCabacContext::PredModeIbcFlag(idx as u8).log2_window_size(),
+                )
+            }),
+            general_merge_flag: std::array::from_fn(|idx| {
+                VvcCabacProbModel::from_init_value(
+                    VvcCabacContext::GeneralMergeFlag(idx as u8).init_value(),
+                    slice_qp,
+                    VvcCabacContext::GeneralMergeFlag(idx as u8).log2_window_size(),
+                )
+            }),
+            abs_mvd_greater0_flag: std::array::from_fn(|idx| {
+                VvcCabacProbModel::from_init_value(
+                    VvcCabacContext::AbsMvdGreater0Flag(idx as u8).init_value(),
+                    slice_qp,
+                    VvcCabacContext::AbsMvdGreater0Flag(idx as u8).log2_window_size(),
+                )
+            }),
+            abs_mvd_greater1_flag: std::array::from_fn(|idx| {
+                VvcCabacProbModel::from_init_value(
+                    VvcCabacContext::AbsMvdGreater1Flag(idx as u8).init_value(),
+                    slice_qp,
+                    VvcCabacContext::AbsMvdGreater1Flag(idx as u8).log2_window_size(),
+                )
+            }),
+            cu_coded_flag: std::array::from_fn(|idx| {
+                VvcCabacProbModel::from_init_value(
+                    VvcCabacContext::CuCodedFlag(idx as u8).init_value(),
+                    slice_qp,
+                    VvcCabacContext::CuCodedFlag(idx as u8).log2_window_size(),
+                )
+            }),
             last_sig_coeff_x_prefix: std::array::from_fn(|idx| {
                 VvcCabacProbModel::from_init_value(
                     VvcCabacContext::LastSigCoeffXPrefix(idx as u8).init_value(),
@@ -685,6 +799,12 @@ impl VvcCabacContexts {
             VvcCabacContext::QtCbfCr(idx) => &self.qt_cbf_cr[idx as usize],
             VvcCabacContext::TransformSkipFlag(idx) => &self.transform_skip_flag[idx as usize],
             VvcCabacContext::MtsIdx(idx) => &self.mts_idx[idx as usize],
+            VvcCabacContext::CuSkipFlag(idx) => &self.cu_skip_flag[idx as usize],
+            VvcCabacContext::PredModeIbcFlag(idx) => &self.pred_mode_ibc_flag[idx as usize],
+            VvcCabacContext::GeneralMergeFlag(idx) => &self.general_merge_flag[idx as usize],
+            VvcCabacContext::AbsMvdGreater0Flag(idx) => &self.abs_mvd_greater0_flag[idx as usize],
+            VvcCabacContext::AbsMvdGreater1Flag(idx) => &self.abs_mvd_greater1_flag[idx as usize],
+            VvcCabacContext::CuCodedFlag(idx) => &self.cu_coded_flag[idx as usize],
             VvcCabacContext::LastSigCoeffXPrefix(idx) => {
                 &self.last_sig_coeff_x_prefix[idx as usize]
             }
@@ -752,6 +872,22 @@ impl VvcCabacContexts {
                 self.transform_skip_flag[idx as usize].encode(cabac, bin)
             }
             VvcCabacContext::MtsIdx(idx) => self.mts_idx[idx as usize].encode(cabac, bin),
+            VvcCabacContext::CuSkipFlag(idx) => self.cu_skip_flag[idx as usize].encode(cabac, bin),
+            VvcCabacContext::PredModeIbcFlag(idx) => {
+                self.pred_mode_ibc_flag[idx as usize].encode(cabac, bin)
+            }
+            VvcCabacContext::GeneralMergeFlag(idx) => {
+                self.general_merge_flag[idx as usize].encode(cabac, bin)
+            }
+            VvcCabacContext::AbsMvdGreater0Flag(idx) => {
+                self.abs_mvd_greater0_flag[idx as usize].encode(cabac, bin)
+            }
+            VvcCabacContext::AbsMvdGreater1Flag(idx) => {
+                self.abs_mvd_greater1_flag[idx as usize].encode(cabac, bin)
+            }
+            VvcCabacContext::CuCodedFlag(idx) => {
+                self.cu_coded_flag[idx as usize].encode(cabac, bin)
+            }
             VvcCabacContext::LastSigCoeffXPrefix(idx) => {
                 self.last_sig_coeff_x_prefix[idx as usize].encode(cabac, bin)
             }

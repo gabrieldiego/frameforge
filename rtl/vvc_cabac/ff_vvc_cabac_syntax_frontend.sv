@@ -43,11 +43,14 @@ module ff_vvc_cabac_syntax_frontend #(
   localparam logic [7:0] PALETTE_PKT_ESCAPE_Y  = 8'h86;
   localparam logic [7:0] PALETTE_PKT_ESCAPE_CB = 8'h87;
   localparam logic [7:0] PALETTE_PKT_ESCAPE_CR = 8'h88;
+  localparam logic [7:0] IBC_PKT_CU            = 8'h89;
 
   `include "ff_vvc_cabac_context_ids.svh"
 
-  typedef enum logic [3:0] {
+  typedef enum logic [4:0] {
     ST_IDLE,
+    ST_PAL_CU_SKIP,
+    ST_PAL_PRED_MODE_IBC,
     ST_PAL_PRED_MODE,
     ST_PAL_PREDICTOR_RUN,
     ST_PAL_PREDICTOR_RUN_SUFFIX,
@@ -60,6 +63,20 @@ module ff_vvc_cabac_syntax_frontend #(
     ST_PAL_INDEX_LEVEL,
     ST_PAL_ESCAPE_PREFIX,
     ST_PAL_ESCAPE_SUFFIX,
+    ST_IBC_CU_SKIP,
+    ST_IBC_PRED_MODE,
+    ST_IBC_GENERAL_MERGE,
+    ST_IBC_MVD_GT0_X,
+    ST_IBC_MVD_GT0_Y,
+    ST_IBC_MVD_GT1_X,
+    ST_IBC_MVD_GT1_Y,
+    ST_IBC_MVD_MINUS2_X_PREFIX,
+    ST_IBC_MVD_MINUS2_X_SUFFIX,
+    ST_IBC_MVD_SIGN_X,
+    ST_IBC_MVD_MINUS2_Y_PREFIX,
+    ST_IBC_MVD_MINUS2_Y_SUFFIX,
+    ST_IBC_MVD_SIGN_Y,
+    ST_IBC_CU_CODED,
     ST_PAL_TERMINATE
   } state_t;
 
@@ -101,6 +118,19 @@ module ff_vvc_cabac_syntax_frontend #(
   logic [31:0] eg5_symbol_work;
   logic [5:0] eg5_order_work;
   logic [3:0] eg5_i;
+  logic [31:0] eg1_prefix_pattern;
+  logic [5:0] eg1_prefix_count;
+  logic [31:0] eg1_suffix_pattern;
+  logic [5:0] eg1_suffix_count;
+  logic [31:0] eg1_symbol_work;
+  logic [5:0] eg1_order_work;
+  logic [3:0] eg1_i;
+  logic signed [15:0] ibc_mvd_x_q;
+  logic signed [15:0] ibc_mvd_y_q;
+  logic [15:0] ibc_abs_mvd_x;
+  logic [15:0] ibc_abs_mvd_y;
+  logic [15:0] ibc_abs_mvd_cur;
+  logic [2:0] ibc_pred_mode_ctx_q;
   logic [7:0] index_cur_value;
   logic [7:0] index_prev_scan_value;
   logic [5:0] index_prev_scan_addr;
@@ -177,6 +207,35 @@ module ff_vvc_cabac_syntax_frontend #(
     eg5_prefix_count = eg5_prefix_count + 6'd1;
     eg5_suffix_pattern = eg5_symbol_work;
     eg5_suffix_count = eg5_order_work;
+  end
+
+  always @* begin
+    eg1_prefix_pattern = 32'd0;
+    eg1_prefix_count = 6'd0;
+    eg1_suffix_pattern = 32'd0;
+    eg1_suffix_count = 6'd0;
+    eg1_symbol_work = {16'd0, ibc_abs_mvd_cur - 16'd2};
+    eg1_order_work = 6'd1;
+    for (eg1_i = 4'd0; eg1_i < 4'd15; eg1_i = eg1_i + 4'd1) begin
+      if (eg1_symbol_work >= (32'd1 << eg1_order_work)) begin
+        eg1_prefix_pattern = (eg1_prefix_pattern << 1) | 32'd1;
+        eg1_prefix_count = eg1_prefix_count + 6'd1;
+        eg1_symbol_work = eg1_symbol_work - (32'd1 << eg1_order_work);
+        eg1_order_work = eg1_order_work + 6'd1;
+      end
+    end
+    eg1_prefix_pattern = eg1_prefix_pattern << 1;
+    eg1_prefix_count = eg1_prefix_count + 6'd1;
+    eg1_suffix_pattern = eg1_symbol_work;
+    eg1_suffix_count = eg1_order_work;
+  end
+
+  always @* begin
+    ibc_abs_mvd_x = ibc_mvd_x_q[15] ? (~ibc_mvd_x_q + 16'sd1) : ibc_mvd_x_q;
+    ibc_abs_mvd_y = ibc_mvd_y_q[15] ? (~ibc_mvd_y_q + 16'sd1) : ibc_mvd_y_q;
+    ibc_abs_mvd_cur =
+      ((state_q == ST_IBC_MVD_MINUS2_X_PREFIX) ||
+       (state_q == ST_IBC_MVD_MINUS2_X_SUFFIX)) ? ibc_abs_mvd_x : ibc_abs_mvd_y;
   end
 
   assign index_cur_value = palette_indices_q[index_cur_pos_q[5:0]];
@@ -257,6 +316,9 @@ module ff_vvc_cabac_syntax_frontend #(
       index_prev_index_q <= 8'd0;
       escape_pos_q <= 8'd0;
       escape_component_q <= 2'd0;
+      ibc_mvd_x_q <= 16'sd0;
+      ibc_mvd_y_q <= 16'sd0;
+      ibc_pred_mode_ctx_q <= 3'd0;
       m_axis_valid <= 1'b0;
       m_axis_kind <= SYMBOL_BIN_EP;
       m_axis_data <= 32'd0;
@@ -289,6 +351,9 @@ module ff_vvc_cabac_syntax_frontend #(
       index_prev_index_q <= 8'd0;
       escape_pos_q <= 8'd0;
       escape_component_q <= 2'd0;
+      ibc_mvd_x_q <= 16'sd0;
+      ibc_mvd_y_q <= 16'sd0;
+      ibc_pred_mode_ctx_q <= 3'd0;
       m_axis_valid <= 1'b0;
       m_axis_kind <= SYMBOL_BIN_EP;
       m_axis_data <= 32'd0;
@@ -311,6 +376,22 @@ module ff_vvc_cabac_syntax_frontend #(
           m_axis_data <= 32'd1 | ({22'd0, CTX_PRED_MODE_PLT_FLAG} << 8);
           m_axis_last <= 1'b0;
           state_q <= palette_predictor_run_present_q ? ST_PAL_PREDICTOR_RUN : ST_PAL_ENTRY_COUNT;
+        end
+
+        ST_PAL_CU_SKIP: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BIN_CTX;
+          m_axis_data <= ({22'd0, CTX_CU_SKIP_FLAG_0} << 8);
+          m_axis_last <= 1'b0;
+          state_q <= ST_PAL_PRED_MODE_IBC;
+        end
+
+        ST_PAL_PRED_MODE_IBC: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BIN_CTX;
+          m_axis_data <= ({22'd0, CTX_PRED_MODE_IBC_FLAG_0 + ibc_pred_mode_ctx_q} << 8);
+          m_axis_last <= 1'b0;
+          state_q <= ST_PAL_PRED_MODE;
         end
 
         ST_PAL_PREDICTOR_RUN: begin
@@ -492,6 +573,139 @@ module ff_vvc_cabac_syntax_frontend #(
           state_q <= ST_PAL_ESCAPE_PREFIX;
         end
 
+        ST_IBC_CU_SKIP: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BIN_CTX;
+          m_axis_data <= ({22'd0, CTX_CU_SKIP_FLAG_0} << 8);
+          m_axis_last <= 1'b0;
+          state_q <= ST_IBC_PRED_MODE;
+        end
+
+        ST_IBC_PRED_MODE: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BIN_CTX;
+          m_axis_data <= 32'd1 | ({22'd0, CTX_PRED_MODE_IBC_FLAG_0 + ibc_pred_mode_ctx_q} << 8);
+          m_axis_last <= 1'b0;
+          state_q <= ST_IBC_GENERAL_MERGE;
+        end
+
+        ST_IBC_GENERAL_MERGE: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BIN_CTX;
+          m_axis_data <= ({22'd0, CTX_GENERAL_MERGE_FLAG_0} << 8);
+          m_axis_last <= 1'b0;
+          state_q <= ST_IBC_MVD_GT0_X;
+        end
+
+        ST_IBC_MVD_GT0_X: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BIN_CTX;
+          m_axis_data <= ({22'd0, CTX_ABS_MVD_GREATER0_FLAG_0} << 8) |
+                         {31'd0, (ibc_abs_mvd_x != 16'd0)};
+          m_axis_last <= 1'b0;
+          state_q <= ST_IBC_MVD_GT0_Y;
+        end
+
+        ST_IBC_MVD_GT0_Y: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BIN_CTX;
+          m_axis_data <= ({22'd0, CTX_ABS_MVD_GREATER0_FLAG_0} << 8) |
+                         {31'd0, (ibc_abs_mvd_y != 16'd0)};
+          m_axis_last <= 1'b0;
+          state_q <= (ibc_abs_mvd_x != 16'd0) ? ST_IBC_MVD_GT1_X :
+                     ((ibc_abs_mvd_y != 16'd0) ? ST_IBC_MVD_GT1_Y : ST_IBC_CU_CODED);
+        end
+
+        ST_IBC_MVD_GT1_X: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BIN_CTX;
+          m_axis_data <= ({22'd0, CTX_ABS_MVD_GREATER1_FLAG_0} << 8) |
+                         {31'd0, (ibc_abs_mvd_x > 16'd1)};
+          m_axis_last <= 1'b0;
+          state_q <= (ibc_abs_mvd_y != 16'd0) ? ST_IBC_MVD_GT1_Y :
+                     ((ibc_abs_mvd_x > 16'd1) ? ST_IBC_MVD_MINUS2_X_PREFIX :
+                      ST_IBC_MVD_SIGN_X);
+        end
+
+        ST_IBC_MVD_GT1_Y: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BIN_CTX;
+          m_axis_data <= ({22'd0, CTX_ABS_MVD_GREATER1_FLAG_0} << 8) |
+                         {31'd0, (ibc_abs_mvd_y > 16'd1)};
+          m_axis_last <= 1'b0;
+          if ((ibc_abs_mvd_x != 16'd0) && (ibc_abs_mvd_x > 16'd1)) begin
+            state_q <= ST_IBC_MVD_MINUS2_X_PREFIX;
+          end else if (ibc_abs_mvd_x != 16'd0) begin
+            state_q <= ST_IBC_MVD_SIGN_X;
+          end else if (ibc_abs_mvd_y > 16'd1) begin
+            state_q <= ST_IBC_MVD_MINUS2_Y_PREFIX;
+          end else begin
+            state_q <= ST_IBC_MVD_SIGN_Y;
+          end
+        end
+
+        ST_IBC_MVD_MINUS2_X_PREFIX: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BINS_EP;
+          m_axis_data <= (eg1_prefix_pattern << 6) | {26'd0, eg1_prefix_count};
+          m_axis_last <= 1'b0;
+          state_q <= ST_IBC_MVD_MINUS2_X_SUFFIX;
+        end
+
+        ST_IBC_MVD_MINUS2_X_SUFFIX: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BINS_EP;
+          m_axis_data <= (eg1_suffix_pattern << 6) | {26'd0, eg1_suffix_count};
+          m_axis_last <= 1'b0;
+          state_q <= ST_IBC_MVD_SIGN_X;
+        end
+
+        ST_IBC_MVD_SIGN_X: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BIN_EP;
+          m_axis_data <= {31'd0, ibc_mvd_x_q[15]};
+          m_axis_last <= 1'b0;
+          if (ibc_abs_mvd_y > 16'd1) begin
+            state_q <= ST_IBC_MVD_MINUS2_Y_PREFIX;
+          end else if (ibc_abs_mvd_y != 16'd0) begin
+            state_q <= ST_IBC_MVD_SIGN_Y;
+          end else begin
+            state_q <= ST_IBC_CU_CODED;
+          end
+        end
+
+        ST_IBC_MVD_MINUS2_Y_PREFIX: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BINS_EP;
+          m_axis_data <= (eg1_prefix_pattern << 6) | {26'd0, eg1_prefix_count};
+          m_axis_last <= 1'b0;
+          state_q <= ST_IBC_MVD_MINUS2_Y_SUFFIX;
+        end
+
+        ST_IBC_MVD_MINUS2_Y_SUFFIX: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BINS_EP;
+          m_axis_data <= (eg1_suffix_pattern << 6) | {26'd0, eg1_suffix_count};
+          m_axis_last <= 1'b0;
+          state_q <= ST_IBC_MVD_SIGN_Y;
+        end
+
+        ST_IBC_MVD_SIGN_Y: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BIN_EP;
+          m_axis_data <= {31'd0, ibc_mvd_y_q[15]};
+          m_axis_last <= 1'b0;
+          state_q <= ST_IBC_CU_CODED;
+        end
+
+        ST_IBC_CU_CODED: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BIN_CTX;
+          m_axis_data <= ({22'd0, CTX_CU_CODED_FLAG_0} << 8);
+          m_axis_last <= 1'b0;
+          state_q <= pending_raw_last_q ? ST_PAL_TERMINATE : ST_IDLE;
+        end
+
         ST_PAL_TERMINATE: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_TRM;
@@ -515,10 +729,13 @@ module ff_vvc_cabac_syntax_frontend #(
                 if (raw_symbol_data[24]) begin
                   palette_predictor_run_present_q <= palette_have_previous_cu_q;
                   palette_have_previous_cu_q <= 1'b1;
+                  ibc_pred_mode_ctx_q <= raw_symbol_data[2:0];
                   // CTU split and leaf no-split decisions are supplied by the
                   // shared partition engine before each palette CU payload.
-                  // PALETTE_PKT_CU_START therefore begins at pred_mode_plt_flag.
-                  state_q <= ST_PAL_PRED_MODE;
+                  // With IBC enabled in the 4:4:4 SPS, this packet begins at
+                  // cu_skip_flag=0, then pred_mode_ibc_flag=0, then
+                  // pred_mode_plt_flag=1.
+                  state_q <= ST_PAL_CU_SKIP;
                 end else if (raw_symbol_last) begin
                   state_q <= ST_PAL_TERMINATE;
                 end
@@ -578,6 +795,13 @@ module ff_vvc_cabac_syntax_frontend #(
               PALETTE_PKT_ESCAPE_CR: begin
                 palette_escape_cr_q[raw_symbol_data[13:8]] <= raw_symbol_data[7:0];
                 state_q <= raw_symbol_last ? ST_PAL_TERMINATE : ST_IDLE;
+              end
+
+              IBC_PKT_CU: begin
+                ibc_mvd_x_q <= {{3{raw_symbol_data[12]}}, raw_symbol_data[12:0]};
+                ibc_mvd_y_q <= {{3{raw_symbol_data[25]}}, raw_symbol_data[25:13]};
+                ibc_pred_mode_ctx_q <= raw_symbol_data[28:26];
+                state_q <= ST_IBC_CU_SKIP;
               end
 
               default: begin
