@@ -662,6 +662,7 @@ async def collect_stream(
     source=None,
     expected_frame_prefixes=None,
     expected_slice_prefixes=None,
+    expected_reference_len=None,
 ):
     source = source if source is not None else stream_source(frames)
     data_path = source["path"]
@@ -794,7 +795,13 @@ async def collect_stream(
         rtl_visible_height(),
         software_format(),
     )
-    max_cycles = 50000 + (rtl_stream_frame_samples() * frames * 16) + (frames * 20000)
+    reference_cycle_budget = 0 if expected_reference_len is None else expected_reference_len * 64
+    max_cycles = (
+        50000
+        + (rtl_stream_frame_samples() * frames * 16)
+        + (frames * 20000)
+        + reference_cycle_budget
+    )
     try:
         for cycle in range(max_cycles):
             await RisingEdge(dut.clk)
@@ -1204,6 +1211,7 @@ async def vvc_encoder_matches_software_stream(dut):
         source=source,
         expected_frame_prefixes=expected_frame_prefixes,
         expected_slice_prefixes=expected_slice_prefixes,
+        expected_reference_len=len(reference),
     )
     await quant_dump_task
     if path := recon_path:

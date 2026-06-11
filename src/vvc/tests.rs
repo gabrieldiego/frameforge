@@ -1800,6 +1800,53 @@ fn vvc_palette_444_cu_syntax_carries_palette_indices_for_lossless_8x8() {
 }
 
 #[test]
+fn vvc_palette_444_cu_syntax_uses_escape_values_after_31_entries() {
+    let geometry = VvcVideoGeometry {
+        width: 8,
+        height: 8,
+    };
+    let mut luma = Vec::with_capacity(64);
+    let mut cb = Vec::with_capacity(64);
+    let mut cr = Vec::with_capacity(64);
+    for idx in 0..64 {
+        luma.push((idx * 3 + 1) as u8);
+        cb.push((idx * 5 + 7) as u8);
+        cr.push((idx * 11 + 13) as u8);
+    }
+    let frame = VvcSampledFrame {
+        geometry,
+        format: VvcPictureFormat {
+            chroma_sampling: ChromaSampling::Cs444,
+            bit_depth: SampleBitDepth::Eight,
+        },
+        luma: luma.clone(),
+        cb: cb.clone(),
+        cr: cr.clone(),
+        chroma_len: 64,
+    };
+
+    let syntax = vvc_palette_444_cu_syntax(&frame, 0, 0);
+    assert_eq!(syntax.num_signalled_palette_entries, 31);
+    assert_eq!(syntax.current_palette_size, 31);
+    assert!(syntax.palette_escape_val_present_flag);
+    assert_eq!(syntax.max_palette_index, 31);
+    assert_eq!(syntax.palette_indices.len(), 64);
+    assert_eq!(syntax.palette_indices[30], 30);
+    assert_eq!(syntax.palette_indices[31], 31);
+    let raw_escape_31 = VvcSampledColor {
+        y: luma[31],
+        u: cb[31],
+        v: cr[31],
+    };
+    assert_eq!(syntax.palette_escape_values[31], Some(raw_escape_31));
+
+    let decoded = vvc_palette_444_decode_reconstruction(geometry, syntax);
+    assert_eq!(decoded.luma, luma);
+    assert_eq!(decoded.cb, cb);
+    assert_eq!(decoded.cr, cr);
+}
+
+#[test]
 fn vvc_input_path_changes_bitstream_from_sampled_color() {
     let mut input = solid_yuv420p8(65, 128, 192, 2);
     input[1] = 0;

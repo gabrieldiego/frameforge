@@ -324,6 +324,8 @@ def sample_yuv(vector: TestVector, x: int, y: int, frame: int) -> tuple[int, int
         return 0, 0, 0
     if vector.pattern == "screen_blocks":
         return palette_tile_sample(x, y, frame)
+    if vector.pattern == "palette_escape_prng":
+        return palette_escape_prng_sample(vector, x, y, frame)
     if vector.pattern == "moving_blocks":
         return moving_blocks_sample(vector, x, y, frame)
     if vector.pattern == "stick_walk":
@@ -336,6 +338,26 @@ def palette_tile_sample(x: int, y: int, frame: int) -> tuple[int, int, int]:
     tile_y = y // 8
     color_idx = (tile_x + (tile_y * 3) + frame) % len(PALETTE_COLORS_YUV)
     return PALETTE_COLORS_YUV[color_idx]
+
+
+def palette_escape_prng_sample(vector: TestVector, x: int, y: int, frame: int) -> tuple[int, int, int]:
+    abs_x = x + (vector.crop_x or 0)
+    abs_y = y + (vector.crop_y or 0)
+    mix = (
+        (abs_x * 0x45D9F3B)
+        ^ (abs_y * 0x119DE1F3)
+        ^ ((abs_x + 17) * (abs_y + 29) * 0x1B873593)
+        ^ (frame * 0x85EBCA6B)
+    ) & 0xFFFFFFFF
+    mix ^= (mix >> 16)
+    mix = (mix * 0x7FEB352D) & 0xFFFFFFFF
+    mix ^= (mix >> 15)
+    mix = (mix * 0x846CA68B) & 0xFFFFFFFF
+    mix ^= (mix >> 16)
+    y_sample = mix & 0xFF
+    cb_sample = ((mix >> 8) ^ (abs_x * 37) ^ (frame * 19)) & 0xFF
+    cr_sample = ((mix >> 16) ^ (abs_y * 53) ^ (frame * 23)) & 0xFF
+    return y_sample, cb_sample, cr_sample
 
 
 def moving_blocks_sample(vector: TestVector, x: int, y: int, frame: int) -> tuple[int, int, int]:

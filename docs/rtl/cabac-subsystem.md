@@ -53,10 +53,10 @@ The CABAC top-level contract is intentionally a streamer interface:
 ## Current Responsibilities
 
 - `ff_vvc_ctu_symbolizer` generates VVC CTU/CU syntax symbols for the current residual path, including split flags, intra mode symbols, CBFs, residual DC symbols, and termination. Its interface carries `chroma_format_idc`; the current chroma residual subtree remains the audited 4:2:0 implementation until 4:2:2/4:4:4 residual syntax is added.
-- `ff_vvc_cabac_syntax_frontend` passes normalized residual symbols through and expands current palette packets into common CABAC symbols. Its CTU descriptor inputs are present so more syntax expansion can move inside the CABAC subsystem later.
+- `ff_vvc_cabac_syntax_frontend` passes normalized residual symbols through and expands current palette packets into common CABAC symbols, including palette index-map subsets and raw escape values. Its CTU descriptor inputs are present so more syntax expansion can move inside the CABAC subsystem later.
 - `ff_vvc_cabac_symbol_binarizer` translates the raw symbol encoding into normalized CABAC bin records.
 - `ff_vvc_cabac_stream_writer` owns the arithmetic encoder state and emits bytes as they become available.
-- `ff_vvc_cabac_context_model` stores and updates the VVC context states.
+- `ff_vvc_cabac_context_model` stores and updates the VVC context states. The current top selects the normal QP32 initialization for residual slices and the QP4 initialization used by lossless 8-bit palette escape slices.
 - `ff_vvc_cabac_bin_engine` performs the combinational low/range update for one bin.
 - `ff_vvc_cabac_bit_writer` serializes emitted bit groups into output bytes.
 - Keep moving palette syntax from compact palette packets toward spec-complete `cu_palette_info()` symbol generation in the common frontend/binarizer path.
@@ -64,5 +64,5 @@ The CABAC top-level contract is intentionally a streamer interface:
 ## Near-Term Cleanup Targets
 
 - Move CTU syntax expansion from `ff_vvc_ctu_symbolizer`/raw symbol streams into a proper CABAC syntax frontend where appropriate.
-- Complete palette index-map expansion in the common syntax frontend/binarizer path; the separate palette CABAC writer has been removed.
+- Keep palette index-map and escape expansion in the common syntax frontend/binarizer path; the separate palette CABAC writer has been removed.
 - Keep all paths using streaming handshakes; avoid reintroducing whole-payload buffers or geometry-specific payload tables.

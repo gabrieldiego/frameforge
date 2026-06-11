@@ -4,7 +4,7 @@ FrameForge is an open-source hardware video-compression project with SystemVeril
 
 FrameForge is starting with a minimal VVC/H.266 encoder foundation, but the project is not limited to VVC, H.266, screen-content coding, FPGA work, or encoding only. The long-term goal is a practical research workspace for codec block experiments, software golden models, bitstream generation, RTL acceleration, FPGA-oriented blocks, encoder and decoder research, and hardware/software co-verification.
 
-Current status: experimental, not production-ready. The current VVC software and RTL encoders generate Annex-B VVC streams from planar 8-bit YUV 4:2:0 or 4:4:4 input. Larger pictures are emitted as 64x64 CTU-local slices, with one slice per CTU. RTL validation remains bounded by the instantiated maximum geometry parameters. The 4:2:0 path uses fixed 8x8 luma transform blocks and 4x4 chroma transform blocks with local reconstruction, fixed quantization, luma DC plus the first 4x4 low-frequency AC group, and chroma DC plus the 2x2 low-frequency AC group. The 4:4:4 path uses an experimental 8x8 palette mode with no escape coding; it is lossless only when each 8x8 CU uses at most 31 unique YCbCr colors. Software, RTL, and VTM-backed validation are wired for the current subset, and unsupported syntax must remain explicit instead of being hidden in sideband payloads.
+Current status: experimental, not production-ready. The current VVC software and RTL encoders generate Annex-B VVC streams from planar 8-bit YUV 4:2:0 or 4:4:4 input. Larger pictures are emitted as 64x64 CTU-local slices, with one slice per CTU. RTL validation remains bounded by the instantiated maximum geometry parameters. The 4:2:0 path uses fixed 8x8 luma transform blocks and 4x4 chroma transform blocks with local reconstruction, fixed quantization, luma DC plus the first 4x4 low-frequency AC group, and chroma DC plus the 2x2 low-frequency AC group. The 4:4:4 path uses an experimental lossless 8x8 palette mode: each CU signals up to 31 direct palette entries, then uses raw 8-bit escape values for additional YCbCr colors. Software, RTL, and VTM-backed validation are wired for the current subset, and unsupported syntax must remain explicit instead of being hidden in sideband payloads.
 
 ## Current Status
 
@@ -304,6 +304,14 @@ make validate-sweep-444 VALIDATION_STOP_ON_FAIL=1
 
 `validate-sweep-420` runs generated 4:2:0 vectors from 8x8 through 64x64. `validate-sweep-444` runs generated 4:4:4 screen-content vectors from 8x8 through 64x64. Add `VALIDATION_LIMIT=<n>` for a short prefix of any named set, or `VALIDATION_WITH_SYNTH=1` only when intentionally running synthesis inside each validation case.
 
+The high-color 4:4:4 palette escape sweep is generated from a deterministic
+procedural pattern:
+
+```sh
+make test-vectors TEST_VECTOR_SET=palette-escape-444
+make validate-set VALIDATION_SET=palette-escape-444 VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+```
+
 For routine cleanup or RTL feature work, use two levels of regression:
 
 ```sh
@@ -328,7 +336,7 @@ The current VVC subset is deliberately narrow:
 | Input | Current behavior |
 |---|---|
 | `yuv420p8` / `i420` | 4:2:0 residual path, lossy, validated in software/RTL/VTM |
-| `yuv444p8` / `i444` | 4:4:4 palette path, lossless only for CUs with at most 31 colors |
+| `yuv444p8` / `i444` | 4:4:4 palette path, lossless for the current 8x8 CU subset, including raw 8-bit escape values beyond the first 31 colors |
 | 10/12/16-bit YUV | Accepted by some software paths and normalized for validation, but the main RTL milestone is 8-bit |
 | 4:2:2 | Parsed as a format but not the main validated milestone path |
 
@@ -419,7 +427,7 @@ make rtl-test SIM=icarus TOPLEVEL_LANG=verilog
 
 ## External Decoder Validation
 
-External decoder validation is wired for the current small VVC subset. The `vvc-eos` command emits only a VVC EOS NAL unit. The `vvc-encode` command assembles VTM-decodable streams for the current subset, using internally generated sequence and picture NALs plus CABAC-coded slice entropy. Larger software pictures are emitted as one CTU-local slice per 64x64 CTU. Non-4:4:4 inputs use the current 4:2:0 residual path; 4:4:4 inputs use the current palette path. This is still not a conformance claim: the syntax subset is narrow, residual AC coding is intentionally limited to low-frequency coefficients, palette escape coding is missing, and broader profile/tool combinations are intentionally unsupported.
+External decoder validation is wired for the current small VVC subset. The `vvc-eos` command emits only a VVC EOS NAL unit. The `vvc-encode` command assembles VTM-decodable streams for the current subset, using internally generated sequence and picture NALs plus CABAC-coded slice entropy. Larger software pictures are emitted as one CTU-local slice per 64x64 CTU. Non-4:4:4 inputs use the current 4:2:0 residual path; 4:4:4 inputs use the current lossless palette path with raw escape values. This is still not a conformance claim: the syntax subset is narrow, residual AC coding is intentionally limited to low-frequency coefficients, palette heuristics are intentionally simple, and broader profile/tool combinations are intentionally unsupported.
 
 FrameForge looks for decoder resources in this order:
 
@@ -471,7 +479,7 @@ This path uses VTM as an external reference encoder and does not mean FrameForge
 - No conformance claims.
 - No VTM or VVdeC source import.
 - No inter prediction, B-frames, rate control, real RDO, or compression optimization.
-- Screen-content coding is still early: an experimental 4:4:4 palette subset exists, but palette escape coding, intra block copy, BDPCM, transform skip, and related tools are not implemented yet.
+- Screen-content coding is still early: an experimental 4:4:4 palette subset exists, but intra block copy, BDPCM, transform skip, and related tools are not implemented yet.
 
 ## Contributing
 

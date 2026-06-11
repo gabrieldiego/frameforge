@@ -8,6 +8,9 @@ PKT_ENTRY_Y = 0x2
 PKT_INDEX = 0x3
 PKT_ENTRY_CB = 0x4
 PKT_ENTRY_CR = 0x5
+PKT_ESCAPE_Y = 0x6
+PKT_ESCAPE_CB = 0x7
+PKT_ESCAPE_CR = 0x8
 
 
 async def reset(dut):
@@ -59,6 +62,15 @@ def kind(packet):
     return (packet >> 28) & 0xF
 
 
+def scan_order_indices():
+    indices = []
+    for y in range(8):
+        x_iter = range(8) if y % 2 == 0 else range(7, -1, -1)
+        for x in x_iter:
+            indices.append(y * 8 + x)
+    return indices
+
+
 @cocotb.test()
 async def palette_cu_symbolizer_streams_solid_cu(dut):
     await reset(dut)
@@ -91,6 +103,48 @@ async def palette_cu_symbolizer_streams_index_payload(dut):
         0x500000DC,
     ]
     assert [kind(packet) for packet in packets[7:]] == [PKT_INDEX] * 64
+
+
+@cocotb.test()
+async def palette_cu_symbolizer_streams_escape_values_after_31_entries(dut):
+    await reset(dut)
+    monitor = cocotb.start_soon(collect(dut, 257))
+    for index in range(64):
+        await send_sample(
+            dut,
+            (index * 3 + 1) & 0xFF,
+            (index * 5 + 7) & 0xFF,
+            (index * 11 + 13) & 0xFF,
+            last=index == 63,
+        )
+    packets = await monitor
+
+    assert packets[0] == 0x131F0000
+    assert [kind(packet) for packet in packets[1:32]] == [PKT_ENTRY_Y] * 31
+    assert [kind(packet) for packet in packets[32:63]] == [PKT_ENTRY_CB] * 31
+    assert [kind(packet) for packet in packets[63:94]] == [PKT_ENTRY_CR] * 31
+    assert [kind(packet) for packet in packets[94:127]] == [PKT_ESCAPE_Y] * 33
+    assert [kind(packet) for packet in packets[127:160]] == [PKT_ESCAPE_CB] * 33
+    assert [kind(packet) for packet in packets[160:193]] == [PKT_ESCAPE_CR] * 33
+    assert [kind(packet) for packet in packets[193:]] == [PKT_INDEX] * 64
+
+    scan = scan_order_indices()
+    escaped_scan_positions = [pos for pos, raster in enumerate(scan) if raster >= 31]
+    assert [(packet >> 8) & 0x3F for packet in packets[94:127]] == escaped_scan_positions
+    assert [(packet >> 8) & 0x3F for packet in packets[127:160]] == escaped_scan_positions
+    assert [(packet >> 8) & 0x3F for packet in packets[160:193]] == escaped_scan_positions
+    assert [packet & 0xFF for packet in packets[94:127]] == [
+        (scan[pos] * 3 + 1) & 0xFF for pos in escaped_scan_positions
+    ]
+    assert [packet & 0xFF for packet in packets[127:160]] == [
+        (scan[pos] * 5 + 7) & 0xFF for pos in escaped_scan_positions
+    ]
+    assert [packet & 0xFF for packet in packets[160:193]] == [
+        (scan[pos] * 11 + 13) & 0xFF for pos in escaped_scan_positions
+    ]
+    assert [packet & 0x1F for packet in packets[193:]] == [
+        raster if raster < 31 else 31 for raster in scan
+    ]
 
 
 @cocotb.test()

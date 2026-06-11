@@ -57,6 +57,10 @@ Defaults:
 - DUT source selection: `vvc-cabac-stream-writer`, derived from `tb/Makefile`
 - top: derived from the selected `SYNTH_DUT`
 - clock metadata: `25 MHz`
+- timeout: 600 seconds, with a 300 second review warning
+- Yosys memory cap: 3072 MiB
+- encoder max visible size: 1024x1024
+- encoder 4:4:4 palette support: enabled
 
 Override these from the command line:
 
@@ -722,6 +726,59 @@ Result:
   decreased by 678 and estimated LCs decreased by 386.
 - The standalone `ff_vvc_chroma_quant_recon_420` module restat reported 4,129
   cells and 1,620 estimated LCs, down from 4,505 cells and 1,715 estimated LCs.
+
+## Top Encoder Lossless Palette Escape Coding
+
+Measured on June 11, 2026 after adding raw 8-bit palette escape coding to the
+current 4:4:4 palette path. Palette slices use the QP4 initialization path so
+`palette_escape_val` reconstructs losslessly for the current 8-bit subset, and
+the context model selects that QP4 initialization only for lossless palette
+slices.
+
+Validation:
+
+```sh
+cargo test vvc_palette_444
+make rtl-test DUT=vvc-palette-cu-symbolizer
+make rtl-test DUT=vvc-cabac-context-model
+make rtl-test DUT=vvc-cabac-stream-writer
+make rtl-test DUT=vvc-cabac-pipeline
+make rtl-test DUT=vvc-cabac
+make test-vectors TEST_VECTOR_SET=palette-escape-444
+make validate INPUT=verification/generated/test_vectors/palette_escape_64x64_1f_yuv444p8.yuv VALIDATE_SYNTH=0
+make validate-set VALIDATION_SET=palette-escape-444 VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+make validate INPUT=verification/generated/test_vectors/racehorses_crop_64x64_1f_yuv420p8.yuv VALIDATE_SYNTH=0
+```
+
+The 64x64 palette-escape smoke and all 64 generated palette-escape geometry
+vectors passed with lossless reconstruction (`inf` PSNR). The 4:2:0 RaceHorses
+crop guard passed on the existing lossy residual path with software, RTL, and
+VTM reconstruction checksums matching; its PSNR was 22.55 dB.
+
+Synthesis:
+
+```sh
+make synth SYNTH_DUT=vvc-encoder
+```
+
+Result:
+
+- Top `ff_vvc_encoder` synthesis completed in 273.4 seconds with 1594.46 MiB
+  peak child RSS observed by the synthesis runner.
+- Critical-path reporting completed in 56.2 seconds with the same observed peak
+  child RSS.
+- Longest topological path remained 40. The reported path still starts at
+  `current_ctu_y_q` and runs through visible CTU/chroma-TU geometry into
+  `s_axis_ready`.
+- Post-synth netlist restat reported 98,584 total cells and 36,067 estimated
+  LCs. Compared with the narrow chroma reconstruction-bank baseline, total
+  cells increased by 10,599 and estimated LCs increased by 3,175.
+- The local area growth is concentrated in the new raw palette escape storage
+  and common CABAC palette syntax expansion. Restat reported
+  `ff_vvc_palette_cu_symbolizer` at 9,208 cells and 3,174 estimated LCs, and
+  `ff_vvc_cabac_syntax_frontend` at 8,798 cells and 2,735 estimated LCs.
+- Runtime stayed under the 300 second review threshold, memory stayed well below
+  the 3072 MiB Yosys cap, and the topological path length did not regress.
 
 ## Top Encoder Vivado Z7-10 Timing Snapshot
 

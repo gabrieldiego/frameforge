@@ -7,6 +7,7 @@ module ff_vvc_cabac_stream_writer #(
   input  logic        rst_n,
   input  logic        start,
   input  logic        clear,
+  input  logic        lossless_slice_qp,
 
   input  logic        s_axis_valid,
   output logic        s_axis_ready,
@@ -150,6 +151,7 @@ module ff_vvc_cabac_stream_writer #(
     .clk(clk),
     .rst_n(rst_n),
     .reset_contexts(clear || start),
+    .lossless_slice_qp(lossless_slice_qp),
     .query_ctx_id(s_axis_ctx_id),
     .query_range(range_q),
     .query_bank_id(engine_ctx_bank_id),

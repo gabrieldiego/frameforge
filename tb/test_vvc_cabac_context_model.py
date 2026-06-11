@@ -13,6 +13,7 @@ async def reset(dut):
     cocotb.start_soon(Clock(dut.clk, 1, unit="ns").start())
     dut.rst_n.value = 0
     dut.reset_contexts.value = 0
+    dut.lossless_slice_qp.value = 0
     dut.query_ctx_id.value = 0
     dut.query_range.value = 510
     dut.update_valid.value = 0
@@ -149,6 +150,27 @@ async def context_model_includes_audited_palette_contexts(dut):
         dut.query_range.value = 510
         await ReadOnly()
         expected_lps, expected_mps = expected_lps_mps(init_value, log2_window)
+        assert int(dut.query_bank_id.value) == ctx_id
+        assert int(dut.query_lps.value) == expected_lps, (ctx_id, expected_lps, int(dut.query_lps.value))
+        assert int(dut.query_mps.value) == expected_mps, (ctx_id, expected_mps, int(dut.query_mps.value))
+        await Timer(1, unit="ps")
+
+
+@cocotb.test()
+async def context_model_selects_lossless_palette_qp(dut):
+    await reset(dut)
+    dut.lossless_slice_qp.value = 1
+    cases = [
+        (42, 25, 1),
+        (43, 42, 5),
+        (45, 50, 9),
+        (118, 25, 12),
+    ]
+    for ctx_id, init_value, log2_window in cases:
+        dut.query_ctx_id.value = ctx_id
+        dut.query_range.value = 510
+        await ReadOnly()
+        expected_lps, expected_mps = expected_lps_mps(init_value, log2_window, qp=4)
         assert int(dut.query_bank_id.value) == ctx_id
         assert int(dut.query_lps.value) == expected_lps, (ctx_id, expected_lps, int(dut.query_lps.value))
         assert int(dut.query_mps.value) == expected_mps, (ctx_id, expected_mps, int(dut.query_mps.value))

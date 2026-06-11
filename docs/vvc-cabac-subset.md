@@ -381,9 +381,9 @@ model; rows marked restricted are legal only for the stated current subset.
 | Palette | `palette_predictor_run` | Non-empty previous palette predictor | Bypass EG0 | Implemented for current no-reuse signalling |
 | Palette | `num_signalled_palette_entries` | Predictor has room for new entries | Bypass EG0 | Implemented |
 | Palette | `new_palette_entries` | Signalled palette entries | Bypass fixed-length samples at bit depth | Implemented for 8-bit 4:4:4 entries |
-| Palette | `palette_escape_val_present_flag` | Palette has at least one entry | Bypass flag | Implemented as false; escape values TODO |
+| Palette | `palette_escape_val_present_flag` | At least one index-map sample uses the escape index | Bypass flag | Implemented for current 8-bit 4:4:4 palette path |
 | Palette | `palette_transpose_flag` | More than one index symbol | Context-coded rotation/transpose flag | Implemented as horizontal scan |
 | Palette | `run_copy_flag` | Palette index-map run identity | Context-coded with Table 134 ctxInc | Implemented for index runs |
 | Palette | `copy_above_palette_indices_flag` | Run type can switch to copy-above | Context-coded flag | Context implemented; copy-above runs TODO |
 | Palette | `palette_idx_idc` | New index-run symbol | Bypass truncated binary with index redundancy removal | Implemented for current index runs |
-| Palette | `palette_escape_val` | Escape index selected | Bypass EG5 | TODO before escape coding is enabled |
+| Palette | `palette_escape_val` | Escape index selected | Bypass EG5 | Implemented as raw lossless 8-bit values under the current palette slice QP4 setup |

@@ -14,6 +14,7 @@ module ff_vvc_annexb_slice_stream (
   input  logic       sps_joint_cbcr_enabled_flag,
   input  logic       sh_dep_quant_used_flag,
   input  logic       sh_sign_data_hiding_used_flag,
+  input  logic       palette_lossless_qp,
 
   output logic       s_axis_ready,
   input  logic       s_axis_valid,
@@ -68,8 +69,16 @@ module ff_vvc_annexb_slice_stream (
   logic [7:0]  prefix_byte_data;
   logic        prefix_writer_idle;
   logic        is_cra_nal;
+  logic [31:0] sh_qp_delta_syntax_value;
+  logic [5:0]  sh_qp_delta_syntax_bits;
 
   assign is_cra_nal = nal_unit_type == NAL_UNIT_TYPE_CRA;
+  // H.266 8.4.5.3 palette escape reconstruction is lossless for 8-bit
+  // PaletteEscapeVal samples when SliceQpY is 4. With the current PPS base
+  // QP 32, palette slices therefore signal sh_qp_delta se(-28), encoded as
+  // ue(56) = 00000_111001. Residual slices keep se(0).
+  assign sh_qp_delta_syntax_value = palette_lossless_qp ? 32'd57 : 32'd1;
+  assign sh_qp_delta_syntax_bits = palette_lossless_qp ? 6'd11 : 6'd1;
   assign prefix_field_count = include_picture_header ?
     (is_cra_nal ? SLICE_PREFIX_FIELD_COUNT_CRA : SLICE_PREFIX_FIELD_COUNT_IDR) :
     SLICE_PREFIX_FIELD_COUNT_NO_PH;
@@ -96,7 +105,7 @@ module ff_vvc_annexb_slice_stream (
         5'd7:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // ph_partition_constraints_override_flag
         5'd8:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = sps_joint_cbcr_enabled_flag ? 6'd1 : 6'd0; end // ph_joint_cbcr_sign_flag
         5'd9:  begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // sh_no_output_of_prior_pics_flag
-        5'd10: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // sh_qp_delta se(0)
+        5'd10: begin prefix_syntax_value = sh_qp_delta_syntax_value; prefix_syntax_bits = sh_qp_delta_syntax_bits; end // sh_qp_delta
         5'd11: begin prefix_syntax_value = {31'd0, sh_dep_quant_used_flag}; prefix_syntax_bits = sh_dep_quant_used_flag ? 6'd1 : 6'd0; end // sh_dep_quant_used_flag
         5'd12: begin prefix_syntax_value = {31'd0, sh_sign_data_hiding_used_flag}; prefix_syntax_bits = (sh_sign_data_hiding_used_flag && !sh_dep_quant_used_flag) ? 6'd1 : 6'd0; end // sh_sign_data_hiding_used_flag
         5'd13: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // cabac_alignment_one_bit
@@ -108,7 +117,7 @@ module ff_vvc_annexb_slice_stream (
         5'd0: begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // sh_picture_header_in_slice_header_flag
         5'd1: begin prefix_syntax_value = {16'd0, slice_address}; prefix_syntax_bits = multi_slice_picture ? slice_address_bits : 6'd0; end
         5'd2: begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd1; end // sh_no_output_of_prior_pics_flag
-        5'd3: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // sh_qp_delta se(0)
+        5'd3: begin prefix_syntax_value = sh_qp_delta_syntax_value; prefix_syntax_bits = sh_qp_delta_syntax_bits; end // sh_qp_delta
         5'd4: begin prefix_syntax_value = {31'd0, sh_dep_quant_used_flag}; prefix_syntax_bits = sh_dep_quant_used_flag ? 6'd1 : 6'd0; end
         5'd5: begin prefix_syntax_value = {31'd0, sh_sign_data_hiding_used_flag}; prefix_syntax_bits = (sh_sign_data_hiding_used_flag && !sh_dep_quant_used_flag) ? 6'd1 : 6'd0; end
         5'd6: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // cabac_alignment_one_bit before CABAC payload

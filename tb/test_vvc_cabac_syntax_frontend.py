@@ -145,8 +145,8 @@ async def syntax_frontend_emits_palette_predictor_run_after_first_cu(dut):
 
     await send_raw_symbol(dut, 0x81, (1 << 24) | (1 << 16), 0)
     observed = await collect_output_symbols(dut, 2)
-    assert observed[0] == (2, 1 | (42 << 8), 0)
-    assert observed[1] == (4, (4 << 6) | 3, 0)
+    assert observed[0] == (2, 1 | (42 << 8), 0), observed
+    assert observed[1] == (4, (2 << 6) | 2, 0), observed
     await send_raw_symbol(dut, 0x82, 0x12, 0)
     await send_raw_symbol(dut, 0x84, 0x34, 0)
     await send_raw_symbol(dut, 0x85, 0x56, 0)
@@ -154,6 +154,6 @@ async def syntax_frontend_emits_palette_predictor_run_after_first_cu(dut):
 
     await send_raw_symbol(dut, 0x81, (1 << 24) | (1 << 16), 0)
     observed = await collect_output_symbols(dut, 3)
-    assert observed[0] == (2, 1 | (42 << 8), 0)
-    assert observed[1] == (4, (4 << 6) | 3, 0)
-    assert observed[2] == (4, (4 << 6) | 3, 0)
+    assert observed[0] == (2, 1 | (42 << 8), 0), observed
+    assert observed[1] == (4, (2 << 6) | 2, 0), observed
+    assert observed[2] == (4, 1, 0), observed

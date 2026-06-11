@@ -25,16 +25,22 @@ module ff_vvc_palette_cu_symbolizer #(
   localparam logic [3:0] PALETTE_PKT_INDEX    = 4'h3;
   localparam logic [3:0] PALETTE_PKT_ENTRY_CB = 4'h4;
   localparam logic [3:0] PALETTE_PKT_ENTRY_CR = 4'h5;
+  localparam logic [3:0] PALETTE_PKT_ESCAPE_Y  = 4'h6;
+  localparam logic [3:0] PALETTE_PKT_ESCAPE_CB = 4'h7;
+  localparam logic [3:0] PALETTE_PKT_ESCAPE_CR = 4'h8;
   localparam int MAX_CU_SAMPLES = CU_SIZE * CU_SIZE;
   localparam int PALETTE_ENTRY_BANK_BITS = 8 * MAX_PALETTE_ENTRIES;
   localparam logic [4:0] MAX_PALETTE_ENTRIES_L = MAX_PALETTE_ENTRIES;
 
-  typedef enum logic [2:0] {
+  typedef enum logic [3:0] {
     ST_BUILD,
     ST_DRAIN_START,
     ST_DRAIN_ENTRY_Y,
     ST_DRAIN_ENTRY_CB,
     ST_DRAIN_ENTRY_CR,
+    ST_DRAIN_ESCAPE_Y,
+    ST_DRAIN_ESCAPE_CB,
+    ST_DRAIN_ESCAPE_CR,
     ST_DRAIN_INDEX
   } state_t;
 
@@ -47,6 +53,13 @@ module ff_vvc_palette_cu_symbolizer #(
   logic [PALETTE_ENTRY_BANK_BITS - 1:0] entry_cb_q;
   logic [PALETTE_ENTRY_BANK_BITS - 1:0] entry_cr_q;
   logic [4:0] indices_q [0:MAX_CU_SAMPLES - 1];
+  // TODO(area): these full-CU escape banks are temporary. The palette path
+  // should eventually stream escape samples toward CABAC in subset order
+  // instead of storing 3x64 bytes here and draining them after entries.
+  logic [7:0] escape_y_q [0:MAX_CU_SAMPLES - 1];
+  logic [7:0] escape_cb_q [0:MAX_CU_SAMPLES - 1];
+  logic [7:0] escape_cr_q [0:MAX_CU_SAMPLES - 1];
+  logic escape_present_q;
   logic found;
   logic [4:0] found_index;
   logic [2:0] scan_x;
@@ -60,7 +73,6 @@ module ff_vvc_palette_cu_symbolizer #(
                   drain_sample_q[2:0] :
                   (3'd7 - drain_sample_q[2:0]);
   assign scan_index = {drain_sample_q[5:3], scan_x};
-
   always @* begin
     found = 1'b0;
     found_index = 5'd0;
@@ -88,8 +100,12 @@ module ff_vvc_palette_cu_symbolizer #(
       entry_y_q <= '0;
       entry_cb_q <= '0;
       entry_cr_q <= '0;
+      escape_present_q <= 1'b0;
       for (index_clear_i = 0; index_clear_i < MAX_CU_SAMPLES; index_clear_i = index_clear_i + 1) begin
         indices_q[index_clear_i] <= 5'd0;
+        escape_y_q[index_clear_i] <= 8'd0;
+        escape_cb_q[index_clear_i] <= 8'd0;
+        escape_cr_q[index_clear_i] <= 8'd0;
       end
     end else if (clear || !enable) begin
       state_q <= ST_BUILD;
@@ -103,8 +119,12 @@ module ff_vvc_palette_cu_symbolizer #(
       entry_y_q <= '0;
       entry_cb_q <= '0;
       entry_cr_q <= '0;
+      escape_present_q <= 1'b0;
       for (index_clear_i = 0; index_clear_i < MAX_CU_SAMPLES; index_clear_i = index_clear_i + 1) begin
         indices_q[index_clear_i] <= 5'd0;
+        escape_y_q[index_clear_i] <= 8'd0;
+        escape_cb_q[index_clear_i] <= 8'd0;
+        escape_cr_q[index_clear_i] <= 8'd0;
       end
     end else begin
       if (m_axis_valid && m_axis_ready) begin
@@ -125,8 +145,17 @@ module ff_vvc_palette_cu_symbolizer #(
               indices_q[sample_count_q[5:0]] <= palette_size_q;
               palette_size_q <= palette_size_q + 5'd1;
             end else begin
-              // TODO: add escape-coded sample support for more than 31 colors per CU.
-              indices_q[sample_count_q[5:0]] <= 5'd30;
+              // H.266 7.3.11.6 / 7.4.12.6: once the simple first-come
+              // palette reaches 31 entries, non-matching samples use
+              // MaxPaletteIndex as an escape index and carry raw component
+              // values through palette_escape_val. The slice header selects
+              // SliceQpY 4 so H.266 8.4.5.3 reconstructs these 8-bit escape
+              // samples exactly.
+              indices_q[sample_count_q[5:0]] <= MAX_PALETTE_ENTRIES_L;
+              escape_y_q[sample_count_q[5:0]] <= s_axis_y;
+              escape_cb_q[sample_count_q[5:0]] <= s_axis_cb;
+              escape_cr_q[sample_count_q[5:0]] <= s_axis_cr;
+              escape_present_q <= 1'b1;
             end
             sample_count_q <= sample_count_q + 7'd1;
           end
@@ -140,7 +169,8 @@ module ff_vvc_palette_cu_symbolizer #(
             m_axis_valid <= 1'b1;
             m_axis_data <= {
               PALETTE_PKT_CU_START,
-              3'd0,
+              2'd0,
+              escape_present_q,
               cu_selected,
               {3'd0, palette_size_q},
               16'd0
@@ -189,10 +219,13 @@ module ff_vvc_palette_cu_symbolizer #(
           if (!m_axis_valid || m_axis_ready) begin
             m_axis_valid <= 1'b1;
             m_axis_data <= {PALETTE_PKT_ENTRY_CR, 20'd0, entry_cr_q[drain_entry_q * 8 +: 8]};
-            m_axis_last <= (palette_size_q <= 5'd1) &&
+            m_axis_last <= (palette_size_q <= 5'd1) && !escape_present_q &&
                            ((drain_entry_q + 5'd1) >= palette_size_q);
             if ((drain_entry_q + 5'd1) >= palette_size_q) begin
-              if (palette_size_q <= 5'd1) begin
+              if (escape_present_q) begin
+                state_q <= ST_DRAIN_ESCAPE_Y;
+                drain_sample_q <= 7'd0;
+              end else if (palette_size_q <= 5'd1) begin
                 state_q <= ST_BUILD;
                 palette_size_q <= 5'd0;
                 sample_count_q <= 7'd0;
@@ -206,6 +239,63 @@ module ff_vvc_palette_cu_symbolizer #(
           end
         end
 
+        ST_DRAIN_ESCAPE_Y: begin
+          // TODO(area): this drains the temporary full-CU escape banks. A
+          // later streamer should emit escape packets as index subsets become
+          // available, removing the escape_y/cb/cr_q arrays above.
+          if (drain_sample_q >= sample_count_q) begin
+            if (!m_axis_valid || m_axis_ready) begin
+              state_q <= ST_DRAIN_ESCAPE_CB;
+              drain_sample_q <= 7'd0;
+            end
+          end else if (indices_q[scan_index] == MAX_PALETTE_ENTRIES_L) begin
+            if (!m_axis_valid || m_axis_ready) begin
+              m_axis_valid <= 1'b1;
+              m_axis_data <= {PALETTE_PKT_ESCAPE_Y, 14'd0, drain_sample_q[5:0], escape_y_q[scan_index]};
+              m_axis_last <= 1'b0;
+              drain_sample_q <= drain_sample_q + 7'd1;
+            end
+          end else begin
+            drain_sample_q <= drain_sample_q + 7'd1;
+          end
+        end
+
+        ST_DRAIN_ESCAPE_CB: begin
+          if (drain_sample_q >= sample_count_q) begin
+            if (!m_axis_valid || m_axis_ready) begin
+              state_q <= ST_DRAIN_ESCAPE_CR;
+              drain_sample_q <= 7'd0;
+            end
+          end else if (indices_q[scan_index] == MAX_PALETTE_ENTRIES_L) begin
+            if (!m_axis_valid || m_axis_ready) begin
+              m_axis_valid <= 1'b1;
+              m_axis_data <= {PALETTE_PKT_ESCAPE_CB, 14'd0, drain_sample_q[5:0], escape_cb_q[scan_index]};
+              m_axis_last <= 1'b0;
+              drain_sample_q <= drain_sample_q + 7'd1;
+            end
+          end else begin
+            drain_sample_q <= drain_sample_q + 7'd1;
+          end
+        end
+
+        ST_DRAIN_ESCAPE_CR: begin
+          if (drain_sample_q >= sample_count_q) begin
+            if (!m_axis_valid || m_axis_ready) begin
+              state_q <= ST_DRAIN_INDEX;
+              drain_sample_q <= 7'd0;
+            end
+          end else if (indices_q[scan_index] == MAX_PALETTE_ENTRIES_L) begin
+            if (!m_axis_valid || m_axis_ready) begin
+              m_axis_valid <= 1'b1;
+              m_axis_data <= {PALETTE_PKT_ESCAPE_CR, 14'd0, drain_sample_q[5:0], escape_cr_q[scan_index]};
+              m_axis_last <= 1'b0;
+              drain_sample_q <= drain_sample_q + 7'd1;
+            end
+          end else begin
+            drain_sample_q <= drain_sample_q + 7'd1;
+          end
+        end
+
         ST_DRAIN_INDEX: begin
           if (!m_axis_valid || m_axis_ready) begin
             m_axis_valid <= 1'b1;
@@ -216,6 +306,7 @@ module ff_vvc_palette_cu_symbolizer #(
               palette_size_q <= 5'd0;
               sample_count_q <= 7'd0;
               drain_sample_q <= 7'd0;
+              escape_present_q <= 1'b0;
             end else begin
               drain_sample_q <= drain_sample_q + 7'd1;
             end

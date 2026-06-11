@@ -7,6 +7,7 @@ module ff_vvc_cabac_pipeline #(
   input  logic        rst_n,
   input  logic        start,
   input  logic        clear,
+  input  logic        lossless_slice_qp,
 
   input  logic        s_axis_valid,
   output logic        s_axis_ready,
@@ -97,6 +98,7 @@ module ff_vvc_cabac_pipeline #(
     .rst_n(rst_n),
     .start(start),
     .clear(clear),
+    .lossless_slice_qp(lossless_slice_qp),
     .s_axis_valid(bin_valid),
     .s_axis_ready(bin_ready),
     .s_axis_kind(bin_kind),

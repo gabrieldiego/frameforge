@@ -8,6 +8,8 @@ use super::{
 };
 
 const VVC_PALETTE_CU_SIZE: u16 = 8;
+const VVC_PALETTE_LOSSLESS_SLICE_QP: i32 = 4;
+const VVC_PALETTE_LOSSLESS_SH_QP_DELTA: i32 = -28;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum VvcPaletteTreeType {
@@ -29,6 +31,14 @@ pub(super) struct VvcPalette444Syntax {
     pub(super) palette_escape_val_present_flag: bool,
     pub(super) max_palette_index: u8,
     pub(super) palette_indices: Vec<u8>,
+    /// Raw PaletteEscapeVal samples from H.266 7.4.12.6. Palette slices use
+    /// SliceQpY 4 so H.266 8.4.5.3 reconstructs these 8-bit values exactly.
+    ///
+    /// TODO(area): the RTL currently mirrors this as full-CU escape banks.
+    /// Keep this semantic model simple, but use it as the reference for a
+    /// later subset-streamed RTL path that feeds escape values directly to
+    /// CABAC without storing every escaped component twice.
+    pub(super) palette_escape_values: Vec<Option<VvcSampledColor>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,12 +138,15 @@ pub(super) fn vvc_palette_444_reconstruction_yuv(frame: &VvcSampledFrame) -> Vec
             for y_off in 0..height {
                 for x_off in 0..width {
                     let local = y_off * width + x_off;
-                    let palette_index = if syntax.max_palette_index == 0 {
-                        0
+                    let palette_index = syntax.palette_indices.get(local).copied().unwrap_or(0);
+                    let color = if syntax.palette_escape_val_present_flag
+                        && palette_index == syntax.max_palette_index
+                    {
+                        syntax.palette_escape_values[local]
+                            .expect("escape-coded palette sample must carry raw component values")
                     } else {
-                        syntax.palette_indices[local] as usize
+                        syntax.new_palette_entries[palette_index as usize]
                     };
-                    let color = syntax.new_palette_entries[palette_index];
                     let dst = (origin_y + y_off) * frame.geometry.width + origin_x + x_off;
                     luma[dst] = color.y;
                     cb[dst] = color.u;
@@ -204,7 +217,10 @@ fn vvc_palette_444_slice_payload(
         );
     }
     writer.write_flag("sh_no_output_of_prior_pics_flag", false);
-    writer.write_se("sh_qp_delta", 0);
+    // H.266 8.4.5.3 reconstructs palette_escape_val with levelScale[QP % 6].
+    // The current PPS base QP is 32, so sh_qp_delta -28 gives SliceQpY 4 and
+    // levelScale[4] == 64, making 8-bit escape samples reconstruct exactly.
+    writer.write_se("sh_qp_delta", VVC_PALETTE_LOSSLESS_SH_QP_DELTA);
     if tool_flags.dependent_quantization_enabled {
         writer.write_flag("sh_dep_quant_used_flag", true);
     }
@@ -235,7 +251,7 @@ fn vvc_palette_444_cabac_bits(frame: &VvcSampledFrame) -> Vec<bool> {
 
 fn vvc_palette_444_cabac_encoder(frame: &VvcSampledFrame) -> VvcCabacEncoder {
     let mut cabac = VvcCabacEncoder::new();
-    let mut ctx = VvcCabacContexts::new();
+    let mut ctx = VvcCabacContexts::with_slice_qp(VVC_PALETTE_LOSSLESS_SLICE_QP);
     let mut predictor_mode = VvcPalettePredictorMode::SignalNewEntry;
     cabac.start();
     let partition_shape = VvcCtuPartitionShape {
@@ -372,21 +388,32 @@ fn append_vvc_palette_444_8x8_cu_with_events(
     let syntax =
         vvc_palette_444_cu_syntax(frame, request.origin_x as usize, request.origin_y as usize);
     let palette_index_map = syntax.palette_indices.clone();
-    let current_palette_size = syntax.current_palette_size;
+    let palette_escape_values = syntax.palette_escape_values.clone();
+    let max_palette_index = syntax.max_palette_index;
+    let palette_escape_val_present_flag = syntax.palette_escape_val_present_flag;
     for token in vvc_palette_444_syntax_tokens(syntax, request.predictor_mode) {
         append_palette_syntax_token_cabac(cabac, token);
     }
-    append_vvc_palette_444_index_map(cabac, ctx, current_palette_size, &palette_index_map);
+    append_vvc_palette_444_index_map(
+        cabac,
+        ctx,
+        max_palette_index,
+        palette_escape_val_present_flag,
+        &palette_index_map,
+        &palette_escape_values,
+    );
     true
 }
 
 fn append_vvc_palette_444_index_map(
     cabac: &mut VvcCabacEncoder,
     ctx: &mut VvcCabacContexts,
-    current_palette_size: u8,
+    max_palette_index: u8,
+    palette_escape_val_present_flag: bool,
     palette_indices: &[u8],
+    palette_escape_values: &[Option<VvcSampledColor>],
 ) {
-    if current_palette_size <= 1 {
+    if max_palette_index == 0 {
         return;
     }
 
@@ -436,7 +463,7 @@ fn append_vvc_palette_444_index_map(
                 continue;
             }
             let index = scan_indices[cur_pos];
-            let max_symbol = current_palette_size as u32 - u32::from(cur_pos > 0);
+            let max_symbol = max_palette_index as u32 + 1 - u32::from(cur_pos > 0);
             if max_symbol <= 1 {
                 continue;
             }
@@ -449,6 +476,30 @@ fn append_vvc_palette_444_index_map(
                 }
             }
             encode_trunc_bin_code_ep(cabac, level, max_symbol);
+        }
+
+        if palette_escape_val_present_flag {
+            for component in 0..3 {
+                for cur_pos in min_sub_pos..max_sub_pos {
+                    if scan_indices[cur_pos] != max_palette_index {
+                        continue;
+                    }
+                    let (x, y) = scan_positions[cur_pos];
+                    let sample = palette_escape_values[y * 8 + x]
+                        .expect("escape-coded palette index must carry raw component values");
+                    let value = match component {
+                        0 => sample.y,
+                        1 => sample.u,
+                        _ => sample.v,
+                    };
+                    // H.266 7.3.11.6 writes palette_escape_val after each
+                    // 16-sample palette-index subset for samples whose
+                    // PaletteIndexMap equals MaxPaletteIndex. Per Table 130,
+                    // palette_escape_val is bypass-coded; H.266 9.3.3 uses
+                    // EG5 binarization for this syntax element.
+                    encode_exp_golomb_ep(cabac, value as u32, 5);
+                }
+            }
         }
     }
 }
@@ -552,6 +603,7 @@ pub(super) fn vvc_palette_444_single_entry_syntax(
         palette_escape_val_present_flag: false,
         max_palette_index: 0,
         palette_indices: Vec::new(),
+        palette_escape_values: Vec::new(),
     }
 }
 
@@ -562,27 +614,45 @@ pub(super) fn vvc_palette_444_cu_syntax(
 ) -> VvcPalette444Syntax {
     let mut entries = Vec::new();
     let mut indices = Vec::new();
+    let mut escape_values = Vec::new();
     let width = 8.min(frame.geometry.width.saturating_sub(origin_x));
     let height = 8.min(frame.geometry.height.saturating_sub(origin_y));
+    let mut has_escape = false;
 
     for y_off in 0..height {
         for x_off in 0..width {
             let color = vvc_palette_444_sample_at(frame, origin_x + x_off, origin_y + y_off);
-            let index = if let Some(index) = entries.iter().position(|entry| *entry == color) {
-                index
-            } else if entries.len() < 31 {
-                entries.push(color);
-                entries.len() - 1
-            } else {
-                // TODO: add palette escape coding for CUs with more than 31 colors.
-                30
-            };
-            indices.push(index as u8);
+            let (index, escape_value) =
+                if let Some(index) = entries.iter().position(|entry| *entry == color) {
+                    (index as u8, None)
+                } else if entries.len() < 31 {
+                    entries.push(color);
+                    ((entries.len() - 1) as u8, None)
+                } else {
+                    // H.266 7.3.11.6 and 7.4.12.6 define
+                    // MaxPaletteIndex as CurrentPaletteSize - 1 plus
+                    // palette_escape_val_present_flag. PaletteEscapeVal itself
+                    // is reconstructed through H.266 8.4.5.3. Palette slices
+                    // deliberately use SliceQpY 4 so the levelScale equation
+                    // is identity for 8-bit samples, preserving lossless
+                    // 4:4:4 coding while keeping the simple first-31-colours
+                    // palette heuristic.
+                    has_escape = true;
+                    (31, Some(color))
+                };
+            indices.push(index);
+            escape_values.push(escape_value);
         }
     }
 
-    let current_palette_size = entries.len().max(1) as u8;
-    let max_palette_index = current_palette_size.saturating_sub(1);
+    if entries.is_empty() {
+        entries.push(vvc_palette_444_sample_at(frame, origin_x, origin_y));
+        indices.push(0);
+        escape_values.push(None);
+    }
+
+    let current_palette_size = entries.len() as u8;
+    let max_palette_index = current_palette_size.saturating_sub(1) + u8::from(has_escape);
     VvcPalette444Syntax {
         tree_type: VvcPaletteTreeType::SingleTree,
         cb_width: width,
@@ -594,12 +664,17 @@ pub(super) fn vvc_palette_444_cu_syntax(
         num_signalled_palette_entries: current_palette_size,
         new_palette_entries: entries,
         current_palette_size,
-        palette_escape_val_present_flag: false,
+        palette_escape_val_present_flag: has_escape,
         max_palette_index,
         palette_indices: if max_palette_index == 0 {
             Vec::new()
         } else {
             indices
+        },
+        palette_escape_values: if has_escape {
+            escape_values
+        } else {
+            Vec::new()
         },
     }
 }
@@ -668,17 +743,16 @@ pub(super) fn vvc_palette_444_decode_reconstruction(
     syntax: VvcPalette444Syntax,
 ) -> VvcPalette444DecodedPicture {
     // H.266 8.4.5.3, restricted to the current SINGLE_TREE 4:4:4 subset:
-    // CurrentPaletteEntries is derived from the single signalled entry. Since
-    // MaxPaletteIndex is 0, palette_idx_idc is not present and each
-    // PaletteIndexMap sample is inferred to 0. The picture reconstruction
-    // process receives zero residual samples, so predSamples become recSamples.
+    // PaletteIndexMap either selects CurrentPaletteEntries or, when equal to
+    // MaxPaletteIndex with palette_escape_val_present_flag set, reconstructs
+    // PaletteEscapeVal through equations (441)..(443). The encoder signals
+    // SliceQpY 4 for palette slices, so raw 8-bit escape samples are lossless.
     debug_assert_eq!(syntax.tree_type, VvcPaletteTreeType::SingleTree);
     debug_assert_eq!(syntax.start_comp, 0);
     debug_assert_eq!(syntax.num_comps, 3);
-    debug_assert!(!syntax.palette_escape_val_present_flag);
 
     let samples = geometry.luma_samples();
-    if syntax.max_palette_index == 0 {
+    if syntax.max_palette_index == 0 && !syntax.palette_escape_val_present_flag {
         let entry = syntax.new_palette_entries[0];
         return VvcPalette444DecodedPicture {
             luma: vec![entry.y; samples],
@@ -690,11 +764,17 @@ pub(super) fn vvc_palette_444_decode_reconstruction(
     let mut luma = Vec::with_capacity(samples);
     let mut cb = Vec::with_capacity(samples);
     let mut cr = Vec::with_capacity(samples);
-    for index in syntax.palette_indices {
-        let entry = syntax.new_palette_entries[index as usize];
-        luma.push(entry.y);
-        cb.push(entry.u);
-        cr.push(entry.v);
+    for (sample_idx, index) in syntax.palette_indices.iter().enumerate() {
+        let color = if syntax.palette_escape_val_present_flag && *index == syntax.max_palette_index
+        {
+            syntax.palette_escape_values[sample_idx]
+                .expect("escape-coded palette sample must carry raw component values")
+        } else {
+            syntax.new_palette_entries[*index as usize]
+        };
+        luma.push(color.y);
+        cb.push(color.u);
+        cr.push(color.v);
     }
     VvcPalette444DecodedPicture { luma, cb, cr }
 }

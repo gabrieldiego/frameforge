@@ -26,6 +26,7 @@ async def reset_dut(dut):
     dut.rst_n.value = 0
     dut.start.value = 0
     dut.clear.value = 0
+    dut.lossless_slice_qp.value = 0
     dut.s_axis_valid.value = 0
     dut.s_axis_kind.value = SYMBOL_BIN_EP
     dut.s_axis_data.value = 0

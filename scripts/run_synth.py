@@ -20,10 +20,10 @@ LOCAL_LICENSE = Path(".tools/Xilinx.lic")
 LOCAL_VIVADO_ROOT = Path(".tools/Xilinx/Vivado")
 LOCAL_XILINX_ROOT = Path(".tools/Xilinx")
 LOCAL_VIVADO_COMPAT_LIB = Path(".tools/vivado-compat/lib")
-# Direct script fallback only; the Makefile passes SYNTH_TIMEOUT_SEC through
-# --timeout-sec for normal project synthesis runs.
-DEFAULT_SYNTH_TIMEOUT_SEC = 120.0
-DEFAULT_SYNTH_WARN_AFTER_SEC = 60.0
+# Direct script fallback. These match the Makefile defaults so direct
+# invocations keep the same routine synthesis guardrails.
+DEFAULT_SYNTH_TIMEOUT_SEC = 600.0
+DEFAULT_SYNTH_WARN_AFTER_SEC = 300.0
 DEFAULT_YOSYS_MEMORY_LIMIT_MB = 3072.0
 DEFAULT_YOSYS_QUIET = True
 DEFAULT_SYNTH_MAX_VISIBLE_WIDTH = 1024
@@ -756,6 +756,7 @@ module post_synth_smoke_tb;
 
   ff_vvc_cabac_stream_writer dut (
     .clk(clk), .rst_n(rst_n), .start(start), .clear(clear),
+    .lossless_slice_qp(1'b0),
     .s_axis_valid(s_axis_valid), .s_axis_ready(s_axis_ready),
     .s_axis_kind(s_axis_kind), .s_axis_bin(s_axis_bin),
     .s_axis_bins_pattern({31'd0, s_axis_bin}), .s_axis_bins_count(6'd1),

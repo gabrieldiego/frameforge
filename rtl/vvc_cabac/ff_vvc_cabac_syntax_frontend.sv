@@ -40,6 +40,9 @@ module ff_vvc_cabac_syntax_frontend #(
   localparam logic [7:0] PALETTE_PKT_INDEX    = 8'h83;
   localparam logic [7:0] PALETTE_PKT_ENTRY_CB = 8'h84;
   localparam logic [7:0] PALETTE_PKT_ENTRY_CR = 8'h85;
+  localparam logic [7:0] PALETTE_PKT_ESCAPE_Y  = 8'h86;
+  localparam logic [7:0] PALETTE_PKT_ESCAPE_CB = 8'h87;
+  localparam logic [7:0] PALETTE_PKT_ESCAPE_CR = 8'h88;
 
   `include "ff_vvc_cabac_context_ids.svh"
 
@@ -55,6 +58,8 @@ module ff_vvc_cabac_syntax_frontend #(
     ST_PAL_INDEX_RUN_FLAG,
     ST_PAL_INDEX_COPY_ABOVE,
     ST_PAL_INDEX_LEVEL,
+    ST_PAL_ESCAPE_PREFIX,
+    ST_PAL_ESCAPE_SUFFIX,
     ST_PAL_TERMINATE
   } state_t;
 
@@ -63,9 +68,17 @@ module ff_vvc_cabac_syntax_frontend #(
   logic [7:0] palette_entry_count_q;
   logic [7:0] palette_entry_cr_count_q;
   logic [7:0] palette_index_count_q;
+  logic [7:0] palette_max_index_q;
+  logic       palette_escape_present_q;
   logic       palette_have_previous_cu_q;
   logic       palette_predictor_run_present_q;
   logic [7:0] palette_indices_q [0:63];
+  // TODO(area): these escape banks mirror the upstream CU symbolizer storage.
+  // Replace them with a subset-level escape stream so palette_escape_val can
+  // be coded as packets arrive instead of buffering 3x64 bytes per palette CU.
+  logic [7:0] palette_escape_y_q [0:63];
+  logic [7:0] palette_escape_cb_q [0:63];
+  logic [7:0] palette_escape_cr_q [0:63];
   logic       palette_run_copy_flags_q [0:15];
   logic [7:0] index_cur_pos_q;
   logic [7:0] index_min_sub_pos_q;
@@ -81,6 +94,13 @@ module ff_vvc_cabac_syntax_frontend #(
   logic [31:0] eg0_symbol_work;
   logic [5:0] eg0_order_work;
   logic [3:0] eg0_i;
+  logic [31:0] eg5_prefix_pattern;
+  logic [5:0] eg5_prefix_count;
+  logic [31:0] eg5_suffix_pattern;
+  logic [5:0] eg5_suffix_count;
+  logic [31:0] eg5_symbol_work;
+  logic [5:0] eg5_order_work;
+  logic [3:0] eg5_i;
   logic [7:0] index_cur_value;
   logic [7:0] index_prev_scan_value;
   logic [5:0] index_prev_scan_addr;
@@ -96,6 +116,9 @@ module ff_vvc_cabac_syntax_frontend #(
   logic [5:0] trunc_thresh;
   logic [7:0] trunc_val;
   logic [7:0] trunc_b;
+  logic [7:0] escape_pos_q;
+  logic [1:0] escape_component_q;
+  logic [7:0] escape_cur_value;
   logic palette_raw_cu_last;
   logic output_slot_ready;
 
@@ -125,6 +148,35 @@ module ff_vvc_cabac_syntax_frontend #(
     eg0_prefix_count = eg0_prefix_count + 6'd1;
     eg0_suffix_pattern = eg0_symbol_work;
     eg0_suffix_count = eg0_order_work;
+  end
+
+  always @* begin
+    case (escape_component_q)
+      2'd0: escape_cur_value = palette_escape_y_q[escape_pos_q[5:0]];
+      2'd1: escape_cur_value = palette_escape_cb_q[escape_pos_q[5:0]];
+      default: escape_cur_value = palette_escape_cr_q[escape_pos_q[5:0]];
+    endcase
+  end
+
+  always @* begin
+    eg5_prefix_pattern = 32'd0;
+    eg5_prefix_count = 6'd0;
+    eg5_suffix_pattern = 32'd0;
+    eg5_suffix_count = 6'd0;
+    eg5_symbol_work = {24'd0, escape_cur_value};
+    eg5_order_work = 6'd5;
+    for (eg5_i = 4'd0; eg5_i < 4'd4; eg5_i = eg5_i + 4'd1) begin
+      if (eg5_symbol_work >= (32'd1 << eg5_order_work)) begin
+        eg5_prefix_pattern = (eg5_prefix_pattern << 1) | 32'd1;
+        eg5_prefix_count = eg5_prefix_count + 6'd1;
+        eg5_symbol_work = eg5_symbol_work - (32'd1 << eg5_order_work);
+        eg5_order_work = eg5_order_work + 6'd1;
+      end
+    end
+    eg5_prefix_pattern = eg5_prefix_pattern << 1;
+    eg5_prefix_count = eg5_prefix_count + 6'd1;
+    eg5_suffix_pattern = eg5_symbol_work;
+    eg5_suffix_count = eg5_order_work;
   end
 
   assign index_cur_value = palette_indices_q[index_cur_pos_q[5:0]];
@@ -161,7 +213,7 @@ module ff_vvc_cabac_syntax_frontend #(
 
   always @* begin
     trunc_level = palette_indices_q[index_level_pos_q[5:0]];
-    trunc_num_symbols = palette_entry_count_q - {7'd0, (index_level_pos_q > 8'd0)};
+    trunc_num_symbols = palette_max_index_q + 8'd1 - {7'd0, (index_level_pos_q > 8'd0)};
     if (index_level_pos_q > 8'd0) begin
       if (trunc_level > index_prev_scan_value) begin
         trunc_level = trunc_level - 8'd1;
@@ -192,6 +244,8 @@ module ff_vvc_cabac_syntax_frontend #(
       palette_entry_count_q <= 8'd0;
       palette_entry_cr_count_q <= 8'd0;
       palette_index_count_q <= 8'd0;
+      palette_max_index_q <= 8'd0;
+      palette_escape_present_q <= 1'b0;
       palette_have_previous_cu_q <= 1'b0;
       palette_predictor_run_present_q <= 1'b0;
       index_cur_pos_q <= 8'd0;
@@ -201,12 +255,17 @@ module ff_vvc_cabac_syntax_frontend #(
       index_prev_run_pos_q <= 8'd0;
       index_previous_run_type_copy_above_q <= 1'b0;
       index_prev_index_q <= 8'd0;
+      escape_pos_q <= 8'd0;
+      escape_component_q <= 2'd0;
       m_axis_valid <= 1'b0;
       m_axis_kind <= SYMBOL_BIN_EP;
       m_axis_data <= 32'd0;
       m_axis_last <= 1'b0;
       for (int i = 0; i < 64; i = i + 1) begin
         palette_indices_q[i] <= 8'd0;
+        palette_escape_y_q[i] <= 8'd0;
+        palette_escape_cb_q[i] <= 8'd0;
+        palette_escape_cr_q[i] <= 8'd0;
       end
       for (int i = 0; i < 16; i = i + 1) begin
         palette_run_copy_flags_q[i] <= 1'b0;
@@ -217,6 +276,8 @@ module ff_vvc_cabac_syntax_frontend #(
       palette_entry_count_q <= 8'd0;
       palette_entry_cr_count_q <= 8'd0;
       palette_index_count_q <= 8'd0;
+      palette_max_index_q <= 8'd0;
+      palette_escape_present_q <= 1'b0;
       palette_have_previous_cu_q <= 1'b0;
       palette_predictor_run_present_q <= 1'b0;
       index_cur_pos_q <= 8'd0;
@@ -226,6 +287,8 @@ module ff_vvc_cabac_syntax_frontend #(
       index_prev_run_pos_q <= 8'd0;
       index_previous_run_type_copy_above_q <= 1'b0;
       index_prev_index_q <= 8'd0;
+      escape_pos_q <= 8'd0;
+      escape_component_q <= 2'd0;
       m_axis_valid <= 1'b0;
       m_axis_kind <= SYMBOL_BIN_EP;
       m_axis_data <= 32'd0;
@@ -291,9 +354,9 @@ module ff_vvc_cabac_syntax_frontend #(
           m_axis_valid <= 1'b1;
           // H.266 cu_palette_info() carries palette_escape_val_present_flag
           // as a fixed-length bypass syntax element, which the software model
-          // emits through encode_bins_ep(value=0, bit_count=1).
+          // emits through encode_bins_ep(value=flag, bit_count=1).
           m_axis_kind <= SYMBOL_BINS_EP;
-          m_axis_data <= 32'd1;
+          m_axis_data <= ({31'd0, palette_escape_present_q} << 6) | 32'd1;
           m_axis_last <= 1'b0;
           state_q <= pending_raw_last_q ? ST_PAL_TERMINATE : ST_IDLE;
         end
@@ -357,7 +420,11 @@ module ff_vvc_cabac_syntax_frontend #(
 
         ST_PAL_INDEX_LEVEL: begin
           if (index_level_pos_q >= index_max_sub_pos_q) begin
-            if (index_max_sub_pos_q >= palette_index_count_q) begin
+            if (palette_escape_present_q) begin
+              escape_pos_q <= index_min_sub_pos_q;
+              escape_component_q <= 2'd0;
+              state_q <= ST_PAL_ESCAPE_PREFIX;
+            end else if (index_max_sub_pos_q >= palette_index_count_q) begin
               state_q <= pending_raw_last_q ? ST_PAL_TERMINATE : ST_IDLE;
             end else begin
               index_min_sub_pos_q <= index_max_sub_pos_q;
@@ -381,6 +448,50 @@ module ff_vvc_cabac_syntax_frontend #(
           end
         end
 
+        ST_PAL_ESCAPE_PREFIX: begin
+          if (escape_pos_q >= index_max_sub_pos_q) begin
+            if (escape_component_q < 2'd2) begin
+              escape_component_q <= escape_component_q + 2'd1;
+              escape_pos_q <= index_min_sub_pos_q;
+            end else if (index_max_sub_pos_q >= palette_index_count_q) begin
+              state_q <= pending_raw_last_q ? ST_PAL_TERMINATE : ST_IDLE;
+            end else begin
+              index_min_sub_pos_q <= index_max_sub_pos_q;
+              index_max_sub_pos_q <= ((palette_index_count_q - index_max_sub_pos_q) < 8'd16) ?
+                                     palette_index_count_q : (index_max_sub_pos_q + 8'd16);
+              index_cur_pos_q <= index_max_sub_pos_q;
+              for (int i = 0; i < 16; i = i + 1) begin
+                palette_run_copy_flags_q[i] <= 1'b0;
+              end
+              state_q <= ST_PAL_INDEX_RUN_FLAG;
+            end
+          end else if (palette_indices_q[escape_pos_q[5:0]] == palette_max_index_q) begin
+            m_axis_valid <= 1'b1;
+            m_axis_kind <= SYMBOL_BINS_EP;
+            // H.266 7.3.11.6 places palette_escape_val after each 16-sample
+            // index subset. Table 130 marks it as bypass-coded and 9.3.3 uses
+            // EG5 binarization, split here into prefix and suffix groups to
+            // mirror the Rust CABAC writer.
+            // TODO(area): once escape values are streamed by subset, consume
+            // the live escape packet here instead of indexing the full-CU
+            // palette_escape_*_q banks.
+            m_axis_data <= (eg5_prefix_pattern << 6) | {26'd0, eg5_prefix_count};
+            m_axis_last <= 1'b0;
+            state_q <= ST_PAL_ESCAPE_SUFFIX;
+          end else begin
+            escape_pos_q <= escape_pos_q + 8'd1;
+          end
+        end
+
+        ST_PAL_ESCAPE_SUFFIX: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BINS_EP;
+          m_axis_data <= (eg5_suffix_pattern << 6) | {26'd0, eg5_suffix_count};
+          m_axis_last <= 1'b0;
+          escape_pos_q <= escape_pos_q + 8'd1;
+          state_q <= ST_PAL_ESCAPE_PREFIX;
+        end
+
         ST_PAL_TERMINATE: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_TRM;
@@ -396,6 +507,9 @@ module ff_vvc_cabac_syntax_frontend #(
             case (raw_symbol_kind)
               PALETTE_PKT_CU_START: begin
                 palette_entry_count_q <= raw_symbol_data[23:16];
+                palette_escape_present_q <= raw_symbol_data[25];
+                palette_max_index_q <= (raw_symbol_data[23:16] == 8'd0) ? 8'd0 :
+                  (raw_symbol_data[23:16] - 8'd1 + {7'd0, raw_symbol_data[25]});
                 palette_entry_cr_count_q <= 8'd0;
                 palette_index_count_q <= 8'd0;
                 if (raw_symbol_data[24]) begin
@@ -435,7 +549,7 @@ module ff_vvc_cabac_syntax_frontend #(
               PALETTE_PKT_INDEX: begin
                 palette_indices_q[palette_index_count_q[5:0]] <= raw_symbol_data[7:0];
                 palette_index_count_q <= palette_index_count_q + 8'd1;
-                if (palette_entry_count_q > 8'd1) begin
+                if (palette_max_index_q > 8'd0) begin
                   // H.266 7.3.11.6/9.3.4.2.11: palette index maps are coded
                   // as a transpose flag, run-copy flags, optional copy-above
                   // flags, and truncated index bins. End-of-CU and end-of-CABAC
@@ -449,6 +563,21 @@ module ff_vvc_cabac_syntax_frontend #(
                   m_axis_last <= 1'b1;
                   state_q <= ST_IDLE;
                 end
+              end
+
+              PALETTE_PKT_ESCAPE_Y: begin
+                palette_escape_y_q[raw_symbol_data[13:8]] <= raw_symbol_data[7:0];
+                state_q <= raw_symbol_last ? ST_PAL_TERMINATE : ST_IDLE;
+              end
+
+              PALETTE_PKT_ESCAPE_CB: begin
+                palette_escape_cb_q[raw_symbol_data[13:8]] <= raw_symbol_data[7:0];
+                state_q <= raw_symbol_last ? ST_PAL_TERMINATE : ST_IDLE;
+              end
+
+              PALETTE_PKT_ESCAPE_CR: begin
+                palette_escape_cr_q[raw_symbol_data[13:8]] <= raw_symbol_data[7:0];
+                state_q <= raw_symbol_last ? ST_PAL_TERMINATE : ST_IDLE;
               end
 
               default: begin

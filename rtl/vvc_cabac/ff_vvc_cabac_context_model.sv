@@ -8,6 +8,7 @@ module ff_vvc_cabac_context_model #(
   input  logic        clk,
   input  logic        rst_n,
   input  logic        reset_contexts,
+  input  logic        lossless_slice_qp,
 
   input  logic [VVC_CABAC_CTX_ID_BITS - 1:0] query_ctx_id,
   input  logic [15:0] query_range,
@@ -599,20 +600,28 @@ module ff_vvc_cabac_context_model #(
     for (init_i = 0; init_i < VVC_CTX_COUNT; init_i = init_i + 1) begin : gen_ctx_init
       localparam int INIT_VALUE = INIT_VALUE_LUT[init_i * 8 +: 8];
       localparam int LOG2_WINDOW = LOG2_WINDOW_LUT[init_i * 4 +: 4];
-      localparam int INIT_SLOPE = (INIT_VALUE >> 3) - 4;
-      localparam int INIT_OFFSET = ((INIT_VALUE & 8'd7) * 18) + 1;
-      localparam int INIT_STATE_RAW = ((INIT_SLOPE * (VVC_CTX_QP - 16)) >>> 1) + INIT_OFFSET;
-      localparam int INIT_STATE =
-        (INIT_STATE_RAW < 1) ? 1 :
-        ((INIT_STATE_RAW > 127) ? 127 : INIT_STATE_RAW);
+      localparam int signed INIT_SLOPE = (INIT_VALUE >> 3) - 4;
+      localparam int signed INIT_OFFSET = ((INIT_VALUE & 8'd7) * 18) + 1;
+      localparam int signed INIT_STATE_RAW_DEFAULT =
+        ((INIT_SLOPE * (VVC_CTX_QP - 16)) >>> 1) + INIT_OFFSET;
+      localparam int signed INIT_STATE_RAW_QP4 =
+        ((INIT_SLOPE * (4 - 16)) >>> 1) + INIT_OFFSET;
+      localparam int INIT_STATE_DEFAULT =
+        (INIT_STATE_RAW_DEFAULT < 1) ? 1 :
+        ((INIT_STATE_RAW_DEFAULT > 127) ? 127 : INIT_STATE_RAW_DEFAULT);
+      localparam int INIT_STATE_QP4 =
+        (INIT_STATE_RAW_QP4 < 1) ? 1 :
+        ((INIT_STATE_RAW_QP4 > 127) ? 127 : INIT_STATE_RAW_QP4);
       localparam int INIT_RATE0 = 2 + ((LOG2_WINDOW >> 2) & 3);
       localparam int INIT_RATE1 = 3 + INIT_RATE0 + (LOG2_WINDOW & 3);
       localparam logic [7:0] INIT_RATE_BYTE =
         (((INIT_RATE0 & 8'h0f) << 4) | (INIT_RATE1 & 8'h0f));
-      localparam logic [15:0] INIT_STATE0 = (INIT_STATE << 8) & 16'h7fe0;
-      localparam logic [15:0] INIT_STATE1 = (INIT_STATE << 8) & 16'h7ffe;
-      assign ctx_init_state0[init_i] = INIT_STATE0;
-      assign ctx_init_state1[init_i] = INIT_STATE1;
+      localparam logic [15:0] INIT_STATE0_DEFAULT = (INIT_STATE_DEFAULT << 8) & 16'h7fe0;
+      localparam logic [15:0] INIT_STATE1_DEFAULT = (INIT_STATE_DEFAULT << 8) & 16'h7ffe;
+      localparam logic [15:0] INIT_STATE0_QP4 = (INIT_STATE_QP4 << 8) & 16'h7fe0;
+      localparam logic [15:0] INIT_STATE1_QP4 = (INIT_STATE_QP4 << 8) & 16'h7ffe;
+      assign ctx_init_state0[init_i] = lossless_slice_qp ? INIT_STATE0_QP4 : INIT_STATE0_DEFAULT;
+      assign ctx_init_state1[init_i] = lossless_slice_qp ? INIT_STATE1_QP4 : INIT_STATE1_DEFAULT;
       assign ctx_rate[init_i] = INIT_RATE_BYTE;
     end
   endgenerate

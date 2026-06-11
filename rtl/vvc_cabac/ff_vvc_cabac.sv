@@ -7,6 +7,7 @@ module ff_vvc_cabac #(
   input  logic        rst_n,
   input  logic        start,
   input  logic        enable,
+  input  logic        lossless_slice_qp,
 
   // Symbol stream input. Upstream syntax producers are responsible for selecting
   // residual or palette packets before this common CABAC pipeline.
@@ -42,6 +43,7 @@ module ff_vvc_cabac #(
     .rst_n(rst_n),
     .start(start && enable),
     .clear(1'b0),
+    .lossless_slice_qp(lossless_slice_qp),
     .s_axis_valid(s_axis_valid),
     .s_axis_ready(streamed_s_axis_ready),
     .s_axis_kind(s_axis_kind),
