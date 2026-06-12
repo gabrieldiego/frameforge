@@ -35,6 +35,7 @@ Prerequisites:
 
 - Rust stable toolchain with `cargo` and `rustfmt`.
 - Python 3.12 or 3.13 for helper scripts and cocotb tests.
+- AV2 reference builds need an assembler, either `yasm` or `nasm`.
 - Optional RTL verification tools: cocotb and Icarus Verilog. cocotb can be installed from `requirements-dev.txt`.
 - Optional viewing tool: FFmpeg/`ffplay` for inspecting raw YUV reconstructions.
 
@@ -464,9 +465,18 @@ For AV2, the same helper can prepare AVM:
 - `FRAMEFORGE_AV2_ENCODER` / `FRAMEFORGE_AVM_ENCODER`: direct path to `avmenc` or `aomenc`.
 - `FRAMEFORGE_AV2_REPO` / `FRAMEFORGE_AVM_REPO`: AVM git repository URL.
 - `FRAMEFORGE_AV2_REF` / `FRAMEFORGE_AVM_REF`: optional branch or tag.
+- `FRAMEFORGE_AV2_CMAKE_ARGS` / `FRAMEFORGE_AVM_CMAKE_ARGS`: extra CMake
+  arguments for AVM. Install `yasm` or `nasm` for optimized AVM builds; the
+  setup helper can fall back to `-DAVM_TARGET_CPU=generic` when neither
+  assembler is available.
 - `FRAMEFORGE_AV2_ENCODER_CMD` / `FRAMEFORGE_AVM_ENCODER_CMD`: full encoder command template for local AVM command-line differences.
 
-AV2 validation is reference-only for now: `make validate CODEC=av2 ...` runs the AVM reference encode/decode path and then returns failure because FrameForge AV2 software/RTL bitstream generation is not implemented yet. See [docs/av2/progress.md](docs/av2/progress.md) for the current AV2 checkpoint list.
+AV2 validation currently supports only a temporary bring-up path: one black
+64x64 `yuv444p8` frame. The Rust AV2 command and AV2 RTL both emit the same
+raw black-frame payload, while the validation script also runs AVM as the reference
+software and checks the reference reconstruction. The RTL shortcut is
+simulation-only and marked for removal once real AV2 syntax exists. See
+[docs/av2/progress.md](docs/av2/progress.md) for the current AV2 checkpoint list.
 
 Prepare a decoder:
 

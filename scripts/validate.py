@@ -158,7 +158,7 @@ def main() -> int:
     vtm_recon = out_dir / f"{stem}_vtm_from_decodable_bitstream.yuv"
     validation_input_path = materialized_validation_input(input_path, info, out_dir, stem, input_format)
     if codec.name == "av2":
-        return validate_av2_reference_only(
+        return validate_av2_temporary_black_payload(
             codec,
             args,
             validation_input_path,
@@ -416,7 +416,7 @@ def main() -> int:
     return 0
 
 
-def validate_av2_reference_only(
+def validate_av2_temporary_black_payload(
     codec,
     args: argparse.Namespace,
     validation_input_path: Path,
@@ -424,11 +424,63 @@ def validate_av2_reference_only(
     out_dir: Path,
     stem: str,
 ) -> int:
-    reference_bitstream = out_dir / f"{stem}_reference.{codec.bitstream_extension}"
-    reference_recon = out_dir / f"{stem}_reference_recon.yuv"
+    reference_bitstream = out_dir / f"{stem}_ref.{codec.bitstream_extension}"
+    reference_recon = out_dir / f"{stem}_ref_recon.yuv"
+    sw_bitstream = out_dir / f"{stem}_software.{codec.bitstream_extension}"
+    sw_internal_recon = out_dir / f"{stem}_software_internal_rec.yuv"
+    rtl_bitstream = out_dir / f"{stem}_rtl.{codec.bitstream_extension}"
+    rtl_internal_recon = out_dir / f"{stem}_rtl_internal_rec.yuv"
+    expected_payload = av2_temporary_black_444_payload(info)
+    if expected_payload is None:
+        print(
+            "FAIL: temporary AV2 RTL validation only supports one 64x64 "
+            "yuv444p8 black-frame payload",
+            file=sys.stderr,
+        )
+        return 2
+    if validation_input_path.read_bytes() != expected_payload:
+        print(
+            "FAIL: temporary AV2 RTL validation expects a black 64x64 yuv444p8 input",
+            file=sys.stderr,
+        )
+        return 1
 
     print(
-        f"FrameForge validate: AV2 reference encode {info.frames} frame(s), "
+        f"FrameForge validate: AV2 software temporary encode {info.frames} frame(s), "
+        f"{info.width}x{info.height} {info.fmt}",
+        flush=True,
+    )
+    sw = subprocess.run(
+        [
+            "cargo",
+            "run",
+            "--quiet",
+            "--",
+            codec.rust_encode_command,
+            "--input",
+            str(validation_input_path),
+            "--frames",
+            str(info.frames),
+            "--width",
+            str(info.width),
+            "--height",
+            str(info.height),
+            "--format",
+            info.fmt,
+            "--output",
+            str(sw_bitstream),
+            "--recon",
+            str(sw_internal_recon),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+    )
+    if sw.returncode != 0:
+        print("FAIL: AV2 software temporary encode failed", file=sys.stderr)
+        return sw.returncode
+
+    print(
+        f"FrameForge validate: AV2 REF encode {info.frames} frame(s), "
         f"{info.width}x{info.height} {info.fmt}",
         flush=True,
     )
@@ -457,24 +509,62 @@ def validate_av2_reference_only(
         check=False,
     )
     if completed.returncode != 0:
-        print("FAIL: AV2 reference encode/decode failed", file=sys.stderr)
+        print("FAIL: AV2 REF encode/decode failed", file=sys.stderr)
         return completed.returncode
+
+    if not args.skip_synth:
+        print("SKIP: AV2 temporary RTL payload is simulation-only; synthesis is not run")
+
+    print("FrameForge validate: AV2 RTL temporary black-frame payload", flush=True)
+    env = os.environ.copy()
+    env["RTL_CHROMA_FORMAT_IDC"] = "3"
+    env["FRAMEFORGE_RTL_AV2_ENCODER_OUT_1F"] = str(rtl_bitstream)
+    env["FRAMEFORGE_RTL_AV2_ENCODER_RECON_OUT_1F"] = str(rtl_internal_recon)
+    env["COCOTB_TEST_FILTER"] = (
+        "^test_av2_encoder\\.av2_encoder_emits_temporary_black_64x64_444_payload$"
+    )
+    rtl = subprocess.run(
+        [
+            "make",
+            "-B",
+            "rtl-test",
+            f"CODEC={codec.name}",
+            "DUT=av2-encoder",
+            "RTL_VISIBLE_WIDTH=64",
+            "RTL_VISIBLE_HEIGHT=64",
+            "RTL_CHROMA_FORMAT_IDC=3",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+    )
+    if rtl.returncode != 0:
+        print("FAIL: AV2 RTL temporary payload simulation failed", file=sys.stderr)
+        return rtl.returncode
 
     digests = {
         "input_yuv": sha256(validation_input_path),
-        "av2_reference_bitstream": sha256(reference_bitstream),
-        "av2_reference_recon": sha256(reference_recon),
+        "software_temporary_payload": sha256(sw_bitstream),
+        "software_temporary_recon": sha256(sw_internal_recon),
+        "ref_bitstream": sha256(reference_bitstream),
+        "ref_recon": sha256(reference_recon),
+        "rtl_temporary_payload": sha256(rtl_bitstream),
+        "rtl_temporary_recon": sha256(rtl_internal_recon),
     }
 
-    print("FrameForge AV2 reference validation checksums")
+    print("FrameForge AV2 validation checksums")
     print(
         f"input={validation_input_path} width={info.width} height={info.height} "
         f"frames={info.frames} format={info.fmt}"
     )
     for name, digest in digests.items():
         print(f"{digest}  {name}")
-    print_bitrate_report("av2_reference_bitstream", reference_bitstream, info)
-    print_psnr_report("av2_reference_recon", validation_input_path, reference_recon)
+    print_bitrate_report("software_temporary_payload", sw_bitstream, info)
+    print_bitrate_report("ref_bitstream", reference_bitstream, info)
+    print_bitrate_report("rtl_temporary_payload", rtl_bitstream, info)
+    print_psnr_report("software_temporary_recon", validation_input_path, sw_internal_recon)
+    print_psnr_report("ref_recon", validation_input_path, reference_recon)
+    print_psnr_report("rtl_temporary_recon", validation_input_path, rtl_internal_recon)
     write_recon_views(
         args.recon_format,
         info,
@@ -482,16 +572,40 @@ def validate_av2_reference_only(
         stem,
         {
             "input": validation_input_path,
-            "av2_reference_recon": reference_recon,
+            "software_temporary_recon": sw_internal_recon,
+            "ref_recon": reference_recon,
+            "rtl_temporary_recon": rtl_internal_recon,
         },
     )
-    sys.stdout.flush()
-    print(
-        "FAIL: AV2 reference path ran, but FrameForge AV2 software/RTL "
-        "bitstream and reconstruction comparison is not implemented yet",
-        file=sys.stderr,
-    )
-    return 1
+    if digests["software_temporary_payload"] != digests["input_yuv"]:
+        print("FAIL: AV2 software temporary payload differs from black input", file=sys.stderr)
+        return 1
+    if digests["software_temporary_recon"] != digests["input_yuv"]:
+        print("FAIL: AV2 software temporary reconstruction differs from black input", file=sys.stderr)
+        return 1
+    if digests["ref_recon"] != digests["input_yuv"]:
+        print("FAIL: AV2 REF reconstruction differs from black input", file=sys.stderr)
+        return 1
+    if digests["rtl_temporary_payload"] != digests["input_yuv"]:
+        print("FAIL: AV2 RTL temporary payload differs from black input", file=sys.stderr)
+        return 1
+    if digests["rtl_temporary_recon"] != digests["input_yuv"]:
+        print("FAIL: AV2 RTL temporary reconstruction differs from black input", file=sys.stderr)
+        return 1
+    print("OK: AV2 software temporary payload matches black 64x64 yuv444p8 input")
+    print("OK: AV2 software temporary reconstruction matches black 64x64 yuv444p8 input")
+    print("OK: AV2 REF reconstruction matches black input")
+    print("OK: AV2 RTL temporary payload matches black 64x64 yuv444p8 input")
+    print("OK: AV2 RTL temporary reconstruction matches black 64x64 yuv444p8 input")
+    return 0
+
+
+def av2_temporary_black_444_payload(info: InputInfo) -> bytes | None:
+    if info.width != 64 or info.height != 64 or info.frames != 1:
+        return None
+    if normalize_format(info.fmt) != "yuv444p8":
+        return None
+    return bytes(frame_len(info))
 
 
 def resolve_input_format(input_path: Path, requested: str) -> str:

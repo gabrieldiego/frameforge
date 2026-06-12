@@ -9,11 +9,16 @@ reporting, synthesis wrappers, and cocotb/Yosys entry points.
 ## Current State
 
 - `CODEC=av2` is accepted by the shared script codec registry.
-- `cargo run -- av2-encode ...` has a stable CLI slot and validates the basic
-  request shape, but bitstream generation is not implemented yet.
+- `cargo run -- av2-encode ...` currently implements a temporary fixed path for
+  one black 64x64 `yuv444p8` frame. It writes the same raw black-frame payload
+  to the `.av2` output and optional reconstruction so the verification pipeline
+  can compare software and RTL byte-for-byte before real AV2 syntax exists.
 - `rtl/av2/ff_av2_encoder.sv` is the initial hardware entry point. It provides a
-  synthesis-ready streaming shell with `start`, `busy`, `input_error`, and
-  byte-stream handshakes.
+  streaming shell with `start`, `busy`, `input_error`, and byte-stream
+  handshakes.
+- `rtl/av2/ff_av2_encoder.sv` also contains a TODO-marked temporary
+  simulation-only fixed payload for one black 64x64 4:4:4 frame. It deliberately
+  ignores input samples and is not intended to synthesize.
 - The AV2 top-level interface intentionally mirrors `ff_vvc_encoder` for common
   integration signals. The shared `CTU_SIZE` parameter name is temporary until
   the AV2 block/superblock naming is settled.
@@ -25,10 +30,11 @@ reporting, synthesis wrappers, and cocotb/Yosys entry points.
 - `scripts/reference_encode_av2.py` adapts raw planar YUV to Y4M, invokes the
   AVM encoder, decodes the resulting reference bitstream, and writes a raw
   reconstruction for checksum, bitrate, and PSNR reporting.
-- Functional validation with `make validate CODEC=av2 ...` now runs the AVM
-  reference encode/decode path first, then intentionally fails at the
-  FrameForge AV2 software/RTL comparison boundary until those encoders emit
-  real AV2 streams.
+- Functional validation with `make validate CODEC=av2 ...` now supports the
+  temporary black-frame vector. It runs FrameForge software, AVM reference
+  encode/decode, and RTL simulation, then checks that software payload,
+  software reconstruction, reference reconstruction, RTL payload, and RTL
+  reconstruction all match the black 64x64 `yuv444p8` input.
 
 ## Reference Tool Setup
 
@@ -48,6 +54,9 @@ with local paths when experimenting with a specific build:
   directory.
 - `FRAMEFORGE_AV2_BUILD_TYPE` or `FRAMEFORGE_AVM_BUILD_TYPE`: CMake build
   type, default `Release`.
+- `FRAMEFORGE_AV2_CMAKE_ARGS` or `FRAMEFORGE_AVM_CMAKE_ARGS`: extra CMake
+  arguments for AVM. If neither `yasm` nor `nasm` is installed, the helper
+  automatically configures AVM with `-DAVM_TARGET_CPU=generic`.
 - `FRAMEFORGE_AV2_ENCODER_CMD` or `FRAMEFORGE_AVM_ENCODER_CMD`: full encoder
   command template when the local AVM command line differs from the default.
   Placeholders include `{encoder}`, `{input}`, `{output}`, `{frames}`,
@@ -60,34 +69,36 @@ Manual reference run:
 
 ```sh
 make decoder-setup CODEC=av2
+make test-vectors TEST_VECTOR_SET=av2-smoke
 make reference-av2 \
-  INPUT=verification/generated/test_vectors/smoke_8x8_1f_yuv444p8.yuv \
-  BITSTREAM=verification/generated/av2_reference/smoke_8x8.av2 \
-  RECON=verification/generated/av2_reference/smoke_8x8_recon.yuv \
-  WIDTH=8 HEIGHT=8 FRAMES=1 FORMAT=yuv444p8
+  INPUT=verification/generated/test_vectors/black_64x64_1f_yuv444p8.yuv \
+  BITSTREAM=verification/generated/av2_reference/black_64x64.av2 \
+  RECON=verification/generated/av2_reference/black_64x64_recon.yuv \
+  WIDTH=64 HEIGHT=64 FRAMES=1 FORMAT=yuv444p8
 ```
 
-Reference-only validation run:
+Temporary software/reference/RTL validation run:
 
 ```sh
+make test-vectors TEST_VECTOR_SET=av2-smoke
 make validate CODEC=av2 \
-  INPUT=verification/generated/test_vectors/smoke_8x8_1f_yuv444p8.yuv \
-  WIDTH=8 HEIGHT=8 FRAMES=1 FORMAT=yuv444p8 \
+  INPUT=verification/generated/test_vectors/black_64x64_1f_yuv444p8.yuv \
+  WIDTH=64 HEIGHT=64 FRAMES=1 FORMAT=yuv444p8 \
   VALIDATE_SYNTH=0
 ```
 
-This command should return failure after the AVM reference artifacts are written,
-because FrameForge AV2 software and RTL bitstream comparison is not implemented
-yet.
+This command should pass only for the temporary black 64x64 `yuv444p8` vector.
+Other AV2 inputs fail clearly until real AV2 syntax emission exists.
 
 ## Current Checks
 
 Last checked on 2026-06-12:
 
 - `cargo test`: passed, including AV2 request-shape and CLI parsing tests.
-- `make rtl-test CODEC=av2`: passed 3 cocotb tests for the AV2 top-level
-  interface.
-- `make synth CODEC=av2 SYNTH_TIMEOUT_SEC=120 SYNTH_WARN_AFTER_SEC=60`: passed
+- `make rtl-test CODEC=av2`: passed cocotb tests for the AV2 top-level
+  interface and temporary black-frame payload.
+- Historical pre-temporary-path synthesis:
+  `make synth CODEC=av2 SYNTH_TIMEOUT_SEC=120 SYNTH_WARN_AFTER_SEC=60` passed
   Yosys synthesis for `ff_av2_encoder` in 4.2 seconds with 127.36 MiB peak RSS.
 - `python3 -m py_compile scripts/*.py tb/av2/*.py tb/vvc/*.py`: passed after
   adding the AV2 reference setup and reference encode wrapper.
@@ -97,14 +108,13 @@ Last checked on 2026-06-12:
 
 ## Next Implementation Checkpoints
 
-- Define the first AV2 elementary bitstream/container boundary used by
-  FrameForge outputs.
+- Replace the temporary raw black-frame payload with the first real AV2
+  elementary bitstream/container boundary used by FrameForge outputs.
 - Add the first sequence/header writer in `src/av2/`.
 - Add software reconstruction plumbing for the first intra-only picture path.
 - Replace the initial RTL byte path with header emission and a first real block
   pipeline.
-- Promote the AV2 validation branch from reference-only failure to
-  software/reference comparison once `cargo run -- av2-encode ...` produces a
-  real stream and reconstruction.
-- Add RTL/reference comparison once the AV2 hardware path has a concrete
-  bit-exact contract.
+- Replace temporary SW/RTL raw-payload comparison with real AV2 software/RTL
+  bitstream comparison.
+- Add full RTL/reference comparison once the AV2 hardware path emits a
+  decodable AV2 stream.

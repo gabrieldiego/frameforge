@@ -8,6 +8,7 @@ reference tree when needed.
 
 import argparse
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -42,7 +43,7 @@ def main() -> int:
     parser.add_argument(
         "--no-build",
         action="store_true",
-        help="find an existing decoder but do not clone or build VTM",
+        help="find an existing decoder but do not clone or build reference tools",
     )
     parser.add_argument(
         "--print-command",
@@ -217,6 +218,7 @@ def build_reference(codec_name: str, root: Path) -> None:
         str(build_dir),
         f"-DCMAKE_BUILD_TYPE={build_type}",
     ]
+    configure.extend(configured_cmake_args(codec_name))
     build = ["cmake", "--build", str(build_dir), "--config", build_type]
     if jobs:
         build.extend(["--parallel", jobs])
@@ -253,6 +255,25 @@ def configured_build_type(codec_name: str) -> str:
         if value := os.environ.get(env_name):
             return value
     return "Release"
+
+
+def configured_cmake_args(codec_name: str) -> list[str]:
+    if codec_name == "vvc":
+        if value := os.environ.get("FRAMEFORGE_VTM_CMAKE_ARGS"):
+            return shlex.split(value)
+        return []
+    if codec_name == "av2":
+        for env_name in ("FRAMEFORGE_AV2_CMAKE_ARGS", "FRAMEFORGE_AVM_CMAKE_ARGS"):
+            if value := os.environ.get(env_name):
+                return shlex.split(value)
+        if not shutil.which("yasm") and not shutil.which("nasm"):
+            print(
+                "AVM assembler not found; configuring with -DAVM_TARGET_CPU=generic",
+                file=sys.stderr,
+            )
+            return ["-DAVM_TARGET_CPU=generic"]
+        return []
+    raise ValueError(f"unsupported codec '{codec_name}'")
 
 
 def find_decoder(root: Path, names: tuple[str, ...]) -> str | None:

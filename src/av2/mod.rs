@@ -1,7 +1,11 @@
-use crate::picture::PixelFormat;
+use std::io::{Read, Write};
+
+use crate::picture::{Picture, PixelFormat};
 
 pub const AV2_CODEC_NAME: &str = "av2";
 pub const AV2_BITSTREAM_EXTENSION: &str = "av2";
+pub const AV2_TEMP_BLACK_444_WIDTH: usize = 64;
+pub const AV2_TEMP_BLACK_444_HEIGHT: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Av2VideoGeometry {
@@ -39,13 +43,59 @@ impl Av2EncodeRequest {
     }
 }
 
-pub fn av2_encode_not_implemented(request: Av2EncodeRequest) -> Result<(), String> {
+pub fn av2_encode_temporary_black_444(
+    input: &mut dyn Read,
+    output: &mut dyn Write,
+    recon: Option<&mut dyn Write>,
+    request: Av2EncodeRequest,
+) -> Result<(), String> {
     request.validate()?;
-    // TODO(av2): replace this with sequence/header and first-picture bitstream emission.
-    Err(
-        "AV2 encoder infrastructure is present, but bitstream generation is not implemented yet"
-            .to_string(),
-    )
+    validate_temporary_black_444_request(request)?;
+
+    let payload = av2_temporary_black_444_payload();
+    let mut frame = vec![0; payload.len()];
+    input
+        .read_exact(&mut frame)
+        .map_err(|err| format!("failed to read AV2 temporary black-frame input: {err}"))?;
+    if frame != payload {
+        return Err("temporary AV2 encoder expects a black 64x64 yuv444p8 input frame".to_string());
+    }
+
+    // TODO(av2): remove this fixed raw-payload shortcut once the first real
+    // AV2 sequence/header and picture writer is implemented.
+    output
+        .write_all(&payload)
+        .map_err(|err| format!("failed to write AV2 temporary payload: {err}"))?;
+    if let Some(recon) = recon {
+        recon
+            .write_all(&payload)
+            .map_err(|err| format!("failed to write AV2 temporary reconstruction: {err}"))?;
+    }
+    Ok(())
+}
+
+pub fn av2_temporary_black_444_payload() -> Vec<u8> {
+    vec![
+        0;
+        Picture::expected_len(
+            AV2_TEMP_BLACK_444_WIDTH,
+            AV2_TEMP_BLACK_444_HEIGHT,
+            PixelFormat::Yuv444p8,
+        )
+    ]
+}
+
+fn validate_temporary_black_444_request(request: Av2EncodeRequest) -> Result<(), String> {
+    if request.geometry.width != AV2_TEMP_BLACK_444_WIDTH
+        || request.geometry.height != AV2_TEMP_BLACK_444_HEIGHT
+        || request.params.frames != 1
+        || request.format != PixelFormat::Yuv444p8
+    {
+        return Err(
+            "temporary AV2 encoder only supports one 64x64 yuv444p8 black frame".to_string(),
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -64,6 +114,48 @@ mod tests {
         };
 
         assert!(request.validate().is_ok());
+    }
+
+    #[test]
+    fn av2_temporary_black_444_emits_payload_and_recon() {
+        let request = Av2EncodeRequest {
+            params: Av2EncodeParams { frames: 1 },
+            geometry: Av2VideoGeometry {
+                width: AV2_TEMP_BLACK_444_WIDTH,
+                height: AV2_TEMP_BLACK_444_HEIGHT,
+            },
+            format: PixelFormat::Yuv444p8,
+        };
+        let input = av2_temporary_black_444_payload();
+        let mut source = input.as_slice();
+        let mut output = Vec::new();
+        let mut recon = Vec::new();
+
+        av2_encode_temporary_black_444(&mut source, &mut output, Some(&mut recon), request)
+            .expect("temporary AV2 black-frame encode should succeed");
+
+        assert_eq!(output, input);
+        assert_eq!(recon, input);
+    }
+
+    #[test]
+    fn av2_temporary_black_444_rejects_non_black_input() {
+        let request = Av2EncodeRequest {
+            params: Av2EncodeParams { frames: 1 },
+            geometry: Av2VideoGeometry {
+                width: AV2_TEMP_BLACK_444_WIDTH,
+                height: AV2_TEMP_BLACK_444_HEIGHT,
+            },
+            format: PixelFormat::Yuv444p8,
+        };
+        let mut input = av2_temporary_black_444_payload();
+        input[0] = 1;
+        let mut source = input.as_slice();
+        let mut output = Vec::new();
+
+        let result = av2_encode_temporary_black_444(&mut source, &mut output, None, request);
+
+        assert!(result.is_err());
     }
 
     #[test]

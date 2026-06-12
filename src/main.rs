@@ -104,8 +104,25 @@ fn run_av2_encode(cli: Av2EncodeCli) -> Result<(), String> {
         },
         format: cli.format,
     };
-    let _paths = (&cli.input, &cli.output, &cli.recon);
-    frameforge::av2::av2_encode_not_implemented(request)
+    let input_file = File::open(&cli.input)
+        .map_err(|err| format!("failed to open input '{}': {err}", cli.input.display()))?;
+    let output_file = File::create(&cli.output)
+        .map_err(|err| format!("failed to create output '{}': {err}", cli.output.display()))?;
+    let mut input = BufReader::new(input_file);
+    let mut output = BufWriter::new(output_file);
+    let mut recon_output = if let Some(recon) = cli.recon.as_ref() {
+        let file = File::create(recon).map_err(|err| {
+            format!(
+                "failed to create reconstruction '{}': {err}",
+                recon.display()
+            )
+        })?;
+        Some(BufWriter::new(file))
+    } else {
+        None
+    };
+    let recon_sink = recon_output.as_mut().map(|writer| writer as &mut dyn Write);
+    frameforge::av2::av2_encode_temporary_black_444(&mut input, &mut output, recon_sink, request)
 }
 
 fn run_vvc_eos(cli: VvcEosCli) -> Result<(), String> {

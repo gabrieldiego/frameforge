@@ -23,6 +23,18 @@ class Tool:
     alternate_paths: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class ToolAlternative:
+    name: str
+    commands: tuple[str, ...]
+    required_for: str
+    ubuntu: str
+    required: bool = True
+
+
+CheckableTool = Tool | ToolAlternative
+
+
 TOOLS = (
     Tool(
         name="Git",
@@ -66,6 +78,12 @@ TOOLS = (
         command="c++",
         required_for="building the external VTM reference decoder",
         ubuntu="sudo apt update && sudo apt install -y build-essential",
+    ),
+    ToolAlternative(
+        name="AVM assembler",
+        commands=("yasm", "nasm"),
+        required_for="building the external AV2/AVM reference tools with optimized CPU targets",
+        ubuntu="sudo apt update && sudo apt install -y yasm nasm",
     ),
     Tool(
         name="Icarus Verilog",
@@ -139,15 +157,15 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    missing_required: list[Tool] = []
-    missing_optional: list[Tool] = []
+    missing_required: list[CheckableTool] = []
+    missing_optional: list[CheckableTool] = []
 
     print("FrameForge development environment check\n")
 
     for tool in TOOLS:
         path = find_tool(tool)
         if path:
-            version = read_version(path, tool.version_args)
+            version = read_version(path, tool.version_args) if isinstance(tool, Tool) else ""
             print(f"[ok]      {tool.name}: {path}{version}")
             continue
 
@@ -182,7 +200,14 @@ def read_version(command: str, args: tuple[str, ...]) -> str:
     return f" ({text[0]})" if text else ""
 
 
-def find_tool(tool: Tool) -> str | None:
+def find_tool(tool: CheckableTool) -> str | None:
+    if isinstance(tool, ToolAlternative):
+        for command in tool.commands:
+            path = shutil.which(command)
+            if path:
+                return path
+        return None
+
     path = shutil.which(tool.command)
     if path:
         return path
@@ -197,7 +222,7 @@ def find_tool(tool: Tool) -> str | None:
     return None
 
 
-def print_install_help(title: str, tools: list[Tool]) -> None:
+def print_install_help(title: str, tools: list[CheckableTool]) -> None:
     if not tools:
         return
 
@@ -211,8 +236,8 @@ def print_install_help(title: str, tools: list[Tool]) -> None:
             print(f"  {line}")
 
 
-def print_cocotb_python_note(missing_optional: list[Tool]) -> None:
-    if not any(tool.command == "cocotb-config" for tool in missing_optional):
+def print_cocotb_python_note(missing_optional: list[CheckableTool]) -> None:
+    if not any(isinstance(tool, Tool) and tool.command == "cocotb-config" for tool in missing_optional):
         return
 
     if sys.version_info < (3, 14):

@@ -24,3 +24,10 @@ Result:
 This measurement covers only the initial AV2 streaming entry point. It is useful
 as a routing and synthesis-wrapper baseline, not as an estimate of a real AV2
 encoder implementation.
+
+## Temporary Black-Frame Payload Note
+
+After this baseline, the AV2 RTL top gained a TODO-marked simulation-only fixed
+payload for one black 64x64 `yuv444p8` frame. That path is intentionally not a
+synthesis target and should be removed when real AV2 syntax emission starts.
+Do not record it as an area/timing baseline.
