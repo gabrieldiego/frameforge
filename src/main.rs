@@ -122,7 +122,7 @@ fn run_av2_encode(cli: Av2EncodeCli) -> Result<(), String> {
         None
     };
     let recon_sink = recon_output.as_mut().map(|writer| writer as &mut dyn Write);
-    frameforge::av2::av2_encode_temporary_black_444(&mut input, &mut output, recon_sink, request)
+    frameforge::av2::av2_encode_fixed_black_444(&mut input, &mut output, recon_sink, request)
 }
 
 fn run_vvc_eos(cli: VvcEosCli) -> Result<(), String> {

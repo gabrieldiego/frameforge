@@ -471,12 +471,13 @@ For AV2, the same helper can prepare AVM:
   assembler is available.
 - `FRAMEFORGE_AV2_ENCODER_CMD` / `FRAMEFORGE_AVM_ENCODER_CMD`: full encoder command template for local AVM command-line differences.
 
-AV2 validation currently supports only a temporary bring-up path: one black
-64x64 `yuv444p8` frame. The Rust AV2 command and AV2 RTL both emit the same
-raw black-frame payload, while the validation script also runs AVM as the reference
-software and checks the reference reconstruction. The RTL shortcut is
-simulation-only and marked for removal once real AV2 syntax exists. See
-[docs/av2/progress.md](docs/av2/progress.md) for the current AV2 checkpoint list.
+AV2 validation currently supports one fixed black 64x64 `yuv444p8` software
+path. The Rust AV2 command emits an unmuxed AV2 OBU stream and writes the raw
+internal reconstruction. AVM decodes the software stream and also supplies the
+reference encode/decode comparison. The AV2 RTL still emits the previous
+temporary raw payload and is expected to fail full AV2 validation until it is
+updated to the same OBU stream. See [docs/av2/progress.md](docs/av2/progress.md)
+for the current AV2 checkpoint list.
 
 Prepare a decoder:
 

@@ -9,10 +9,12 @@ reporting, synthesis wrappers, and cocotb/Yosys entry points.
 ## Current State
 
 - `CODEC=av2` is accepted by the shared script codec registry.
-- `cargo run -- av2-encode ...` currently implements a temporary fixed path for
-  one black 64x64 `yuv444p8` frame. It writes the same raw black-frame payload
-  to the `.av2` output and optional reconstruction so the verification pipeline
-  can compare software and RTL byte-for-byte before real AV2 syntax exists.
+- `cargo run -- av2-encode ...` currently implements a fixed reference path for
+  one black 64x64 `yuv444p8` frame. It emits an unmuxed AV2 OBU stream with
+  spec-framed temporal-delimiter, sequence-header, and closed-loop-key OBUs.
+  The OBU payload bytes are still fixed and clearly labeled in `src/av2/`
+  until the structured sequence-header, frame-header, and tile writers are
+  expanded.
 - `rtl/av2/ff_av2_encoder.sv` is the initial hardware entry point. It provides a
   streaming shell with `start`, `busy`, `input_error`, and byte-stream
   handshakes.
@@ -31,10 +33,11 @@ reporting, synthesis wrappers, and cocotb/Yosys entry points.
   AVM encoder, decodes the resulting reference bitstream, and writes a raw
   reconstruction for checksum, bitrate, and PSNR reporting.
 - Functional validation with `make validate CODEC=av2 ...` now supports the
-  temporary black-frame vector. It runs FrameForge software, AVM reference
-  encode/decode, and RTL simulation, then checks that software payload,
-  software reconstruction, reference reconstruction, RTL payload, and RTL
-  reconstruction all match the black 64x64 `yuv444p8` input.
+  fixed black-frame vector. In `VALIDATION_SW_ONLY=1` mode it runs FrameForge
+  software, decodes that unmuxed OBU stream with AVM, runs AVM reference
+  encode/decode, and checks both reconstructions against the black 64x64
+  `yuv444p8` input. The full SW/RTL/REF path intentionally fails until
+  `rtl/av2/ff_av2_encoder.sv` is updated to emit the same OBU stream.
 
 ## Reference Tool Setup
 
@@ -77,24 +80,35 @@ make reference-av2 \
   WIDTH=64 HEIGHT=64 FRAMES=1 FORMAT=yuv444p8
 ```
 
-Temporary software/reference/RTL validation run:
+Software/reference validation run:
 
 ```sh
 make test-vectors TEST_VECTOR_SET=av2-smoke
-make validate CODEC=av2 \
-  INPUT=verification/generated/test_vectors/black_64x64_1f_yuv444p8.yuv \
-  WIDTH=64 HEIGHT=64 FRAMES=1 FORMAT=yuv444p8 \
-  VALIDATE_SYNTH=0
+make validate-set \
+  CODEC=av2 \
+  VALIDATION_SET=av2-smoke \
+  VALIDATION_STOP_ON_FAIL=1 \
+  VALIDATION_WITH_SYNTH=0 \
+  VALIDATION_SW_ONLY=1
 ```
 
-This command should pass only for the temporary black 64x64 `yuv444p8` vector.
-Other AV2 inputs fail clearly until real AV2 syntax emission exists.
+This command should pass only for the fixed black 64x64 `yuv444p8` vector.
+Running without `VALIDATION_SW_ONLY=1` currently fails at the expected RTL
+catch-up point because the RTL still emits the previous temporary raw payload.
+Other AV2 inputs fail clearly until parameterized AV2 syntax emission exists.
 
 ## Current Checks
 
 Last checked on 2026-06-12:
 
-- `cargo test`: passed, including AV2 request-shape and CLI parsing tests.
+- `cargo test av2`: passed, including AV2 fixed OBU-byte and CLI parsing tests.
+- `make validate-set CODEC=av2 VALIDATION_SET=av2-smoke
+  VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0 VALIDATION_SW_ONLY=1`:
+  passed SW/REF checks using unmuxed OBU output.
+- `make validate-set CODEC=av2 VALIDATION_SET=av2-smoke
+  VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0`: fails as expected
+  because the RTL still emits the temporary raw payload rather than the fixed
+  OBU bitstream.
 - `make rtl-test CODEC=av2`: passed cocotb tests for the AV2 top-level
   interface and temporary black-frame payload.
 - Historical pre-temporary-path synthesis:
@@ -108,13 +122,12 @@ Last checked on 2026-06-12:
 
 ## Next Implementation Checkpoints
 
-- Replace the temporary raw black-frame payload with the first real AV2
-  elementary bitstream/container boundary used by FrameForge outputs.
-- Add the first sequence/header writer in `src/av2/`.
+- Replace the fixed 64x64 OBU payload byte tables with structured AV2 syntax
+  writers in `src/av2/`.
 - Add software reconstruction plumbing for the first intra-only picture path.
-- Replace the initial RTL byte path with header emission and a first real block
-  pipeline.
-- Replace temporary SW/RTL raw-payload comparison with real AV2 software/RTL
-  bitstream comparison.
+- Replace the initial RTL raw-payload path with the same fixed unmuxed OBU
+  stream emitted by software.
+- Replace fixed SW/RTL black-frame comparison with parameterized AV2
+  software/RTL bitstream comparison.
 - Add full RTL/reference comparison once the AV2 hardware path emits a
   decodable AV2 stream.

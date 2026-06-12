@@ -252,18 +252,19 @@ def default_encoder_commands(
     ]
     output = ["-o", str(output_path), str(y4m_path)]
     return [
-        [str(encoder), "--codec=av2", *common, *quality, *output],
-        [str(encoder), *common, *quality, *output],
+        [str(encoder), "--codec=av2", *common, *quality, "--obu", *output],
+        [str(encoder), *common, *quality, "--obu", *output],
         [
             str(encoder),
             "--codec=av2",
             *common,
             "--end-usage=q",
             f"--cq-level={args.cq_level}",
+            "--obu",
             *output,
         ],
-        [str(encoder), *common, "--end-usage=q", f"--cq-level={args.cq_level}", *output],
-        [str(encoder), f"--limit={info.frames}", "-o", str(output_path), str(y4m_path)],
+        [str(encoder), *common, "--end-usage=q", f"--cq-level={args.cq_level}", "--obu", *output],
+        [str(encoder), f"--limit={info.frames}", "--obu", "-o", str(output_path), str(y4m_path)],
     ]
 
 
