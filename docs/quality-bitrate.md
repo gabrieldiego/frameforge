@@ -202,3 +202,77 @@ software_bitstream_encoded_to_source_bytes: 0.0880
 software_internal_recon_psnr_vs_input_db: 22.17
 vtm_recon_from_software_bitstream_psnr_vs_input_db: 22.17
 ```
+
+## 2026-06-11 4:4:4 Transform-Skip Residual Baselines
+
+The first transform-skip residual subset keeps 4:4:4 reconstruction lossless
+while allowing a runtime left-neighbour IBC CU to code a small residual instead
+of falling back to palette for the whole 8x8 CU. Exact-hash IBC is disabled in
+the default encoder/synthesis path until its candidate search is updated to use
+the final runtime BVP/HMVP state.
+
+Main validation commands:
+
+```bash
+make validate-set VALIDATION_SET=transform-skip-444 \
+  VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+
+make validate-set VALIDATION_SET=screenshot-multictu-444 \
+  RTL_MAX_VISIBLE_WIDTH=192 RTL_MAX_VISIBLE_HEIGHT=192 \
+  VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+
+make validate-set VALIDATION_SET=racehorses-sweep-420 \
+  VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+```
+
+Measured result for the 64x64 transform-skip 4:4:4 vector:
+
+```text
+software_bitstream_bytes: 568
+software_bitstream_bits: 4544
+software_bitstream_bits_per_luma_pixel: 1.1094
+software_bitstream_encoded_to_source_bytes: 0.0462
+software_internal_recon_psnr_vs_input_db: inf
+rtl_internal_recon_psnr_vs_input_db: inf
+vtm_recon_from_decodable_bitstream_psnr_vs_input_db: inf
+```
+
+Measured result for the horizontal 192x64 screenshot multi-CTU guard:
+
+```text
+software_bitstream_bytes: 4681
+software_bitstream_bits: 37448
+software_bitstream_bits_per_luma_pixel: 3.0475
+software_bitstream_encoded_to_source_bytes: 0.1270
+software_internal_recon_psnr_vs_input_db: inf
+rtl_internal_recon_psnr_vs_input_db: inf
+vtm_recon_from_decodable_bitstream_psnr_vs_input_db: inf
+```
+
+Measured result for the vertical 64x192 screenshot multi-CTU guard:
+
+```text
+software_bitstream_bytes: 6593
+software_bitstream_bits: 52744
+software_bitstream_bits_per_luma_pixel: 4.2923
+software_bitstream_encoded_to_source_bytes: 0.1788
+software_internal_recon_psnr_vs_input_db: inf
+rtl_internal_recon_psnr_vs_input_db: inf
+vtm_recon_from_decodable_bitstream_psnr_vs_input_db: inf
+```
+
+The full 640x360 screenshot software/VTM validation remains lossless with the
+default exact-hash IBC gate disabled:
+
+```text
+input_raw_gbr_bytes: 691200
+software_bitstream_bytes: 127179
+software_bitstream_bits: 1017432
+software_bitstream_bits_per_luma_pixel: 4.4159
+software_bitstream_encoded_to_source_bytes: 0.1840
+software_internal_recon_psnr_vs_input_db: inf
+vtm_recon_from_software_bitstream_psnr_vs_input_db: inf
+```
+
+The 4:2:0 RaceHorses 64x64 crop guard remained unchanged from the previous
+residual baseline at 540 bytes, 1.0547 bits per luma pixel, and 22.55 dB PSNR.

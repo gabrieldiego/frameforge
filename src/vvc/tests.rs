@@ -460,7 +460,7 @@ fn vvc_sps_tool_flags_can_enable_gated_tools_from_one_config() {
     assert_vvc_flag(&rbsp, "sps_transform_skip_enabled_flag", true);
     assert_eq!(
         vvc_ue_value(&rbsp, "sps_log2_transform_skip_max_size_minus2"),
-        0
+        1
     );
     assert_vvc_flag(&rbsp, "sps_bdpcm_enabled_flag", false);
     assert_vvc_flag(&rbsp, "sps_mts_enabled_flag", true);
@@ -1884,31 +1884,87 @@ fn vvc_palette_444_uses_ibc_for_repeated_8x8_block() {
     let recon = vvc_palette_444_reconstruction_yuv(&frame);
     assert_eq!(recon, [luma, cb, cr].concat());
 
+    let mut ibc_search = super::ibc::VvcIbcHashSearch::new();
+    ibc_search.record_palette_8x8(&frame, 0, 0);
+    let decision = ibc_search
+        .decide_8x8(&frame, 8, 0)
+        .expect("hash search should still find the repeated 8x8 block");
+    assert_eq!(decision.ref_origin_x, 0);
+    assert_eq!(decision.ref_origin_y, 0);
+    assert_eq!(decision.mvd_x, -8);
+    assert_eq!(decision.mvd_y, 0);
+
     let ctx_bins = vvc_palette_444_cabac_context_bins(&frame);
     assert!(
-        ctx_bins.contains(&(
+        !ctx_bins.contains(&(
             VvcCabacContext::PredModeIbcFlag(0)
                 .rtl_context_id()
                 .unwrap(),
             true
         )),
-        "repeated block should select MODE_IBC"
+        "exact-hash MODE_IBC is disabled while runtime TS-residual IBC updates BVP/HMVP"
     );
-    assert!(
-        ctx_bins.contains(&(
-            VvcCabacContext::GeneralMergeFlag(0)
-                .rtl_context_id()
-                .unwrap(),
-            false
-        )),
-        "hash-selected IBC should use explicit BVD, not merge"
+}
+
+#[test]
+fn vvc_palette_444_uses_transform_skip_residual_for_left_ibc_delta() {
+    let geometry = VvcVideoGeometry {
+        width: 16,
+        height: 8,
+    };
+    let mut luma = vec![80; geometry.luma_samples()];
+    let mut cb = vec![90; geometry.luma_samples()];
+    let mut cr = vec![100; geometry.luma_samples()];
+    for y in 0..4 {
+        for x in 0..4 {
+            let dst = y * geometry.width + 8 + x;
+            luma[dst] = 83;
+            cb[dst] = 94;
+            cr[dst] = 105;
+        }
+    }
+    let frame = VvcSampledFrame {
+        geometry,
+        format: VvcPictureFormat {
+            chroma_sampling: ChromaSampling::Cs444,
+            bit_depth: SampleBitDepth::Eight,
+        },
+        luma: luma.clone(),
+        cb: cb.clone(),
+        cr: cr.clone(),
+        chroma_len: geometry.luma_samples(),
+    };
+
+    assert_eq!(
+        vvc_palette_444_reconstruction_yuv(&frame),
+        [luma, cb, cr].concat()
     );
+
+    let ctx_bins = vvc_palette_444_cabac_context_bins(&frame);
     assert!(
         ctx_bins.contains(&(
             VvcCabacContext::CuCodedFlag(0).rtl_context_id().unwrap(),
-            false
+            true
         )),
-        "exact-match IBC should skip transform_tree"
+        "IBC residual CU should signal transform_tree"
+    );
+    assert!(
+        ctx_bins.contains(&(
+            VvcCabacContext::TransformSkipFlag(0)
+                .rtl_context_id()
+                .unwrap(),
+            true
+        )),
+        "luma residual should use transform_skip_flag=1"
+    );
+    assert!(
+        ctx_bins.contains(&(
+            VvcCabacContext::TransformSkipFlag(1)
+                .rtl_context_id()
+                .unwrap(),
+            true
+        )),
+        "chroma residual should use transform_skip_flag=1"
     );
 }
 

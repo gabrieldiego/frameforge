@@ -284,7 +284,7 @@ pub(in crate::vvc) fn vvc_sps_rbsp(
         tool_flags.transform_skip_enabled,
     );
     if tool_flags.transform_skip_enabled {
-        writer.write_ue("sps_log2_transform_skip_max_size_minus2", 0);
+        writer.write_ue("sps_log2_transform_skip_max_size_minus2", 1);
         writer.write_flag("sps_bdpcm_enabled_flag", false);
     }
     let mts_enabled = tool_flags.mts_enabled();

@@ -1,6 +1,8 @@
 `timescale 1ns/1ps
 
-module ff_vvc_residual_symbol_emitter_4x4 (
+module ff_vvc_residual_symbol_emitter_4x4 #(
+  parameter int RAW_COEFF_MODE = 0
+) (
   input  logic        clk,
   input  logic        rst_n,
   input  logic        clear,
@@ -13,6 +15,7 @@ module ff_vvc_residual_symbol_emitter_4x4 (
   input  logic [(4 * 15) - 1:0] luma_ac_levels,
   input  logic signed [8:0] chroma_dc_level,
   input  logic [(4 * 3) - 1:0] chroma_ac_levels,
+  input  logic [(9 * 16) - 1:0] raw_coeff_levels,
 
   output logic        m_axis_valid,
   input  logic        m_axis_ready,
@@ -32,6 +35,7 @@ module ff_vvc_residual_symbol_emitter_4x4 (
   localparam logic [2:0] ST_SCAN = 3'd3;
   localparam logic [2:0] ST_SECOND = 3'd4;
   localparam logic [2:0] ST_SIGN = 3'd5;
+  localparam logic [2:0] ST_REM = 3'd6;
 
   localparam logic [2:0] SUB_SIG = 3'd0;
   localparam logic [2:0] SUB_GT1 = 3'd1;
@@ -101,7 +105,8 @@ module ff_vvc_residual_symbol_emitter_4x4 (
   logic scan_regular_active_w;
   logic second_active_w;
   logic sig_needed_w;
-  logic rem_needed_w;
+  logic regular_rem_scan_active_w;
+  logic regular_rem_needed_w;
   logic [9:0] sig_ctx_w;
   logic [9:0] level_ctx_inc_w;
   logic [9:0] gt1_ctx_w;
@@ -147,7 +152,9 @@ module ff_vvc_residual_symbol_emitter_4x4 (
     load_level_tmp = 9'sd0;
     load_abs_tmp = 9'd0;
     for (load_i = 0; load_i < 16; load_i = load_i + 1) begin
-      if (chroma_mode) begin
+      if (RAW_COEFF_MODE != 0) begin
+        load_level_tmp = raw_coeff_levels[(load_i * 9) +: 9];
+      end else if (chroma_mode) begin
         if (load_i == 0) begin
           load_level_tmp = chroma_dc_level;
         end else if (load_i == 1) begin
@@ -409,10 +416,12 @@ module ff_vvc_residual_symbol_emitter_4x4 (
     endcase
   end
 
-  assign last_x_cmax_w = (tb_width_q <= 16'd4) ? 3'd3 :
-    ((tb_width_q <= 16'd8) ? 3'd5 : 3'd7);
-  assign last_y_cmax_w = (tb_height_q <= 16'd4) ? 3'd3 :
-    ((tb_height_q <= 16'd8) ? 3'd5 : 3'd7);
+  assign last_x_cmax_w = (RAW_COEFF_MODE != 0) ? 3'd5 :
+    ((tb_width_q <= 16'd4) ? 3'd3 :
+     ((tb_width_q <= 16'd8) ? 3'd5 : 3'd7));
+  assign last_y_cmax_w = (RAW_COEFF_MODE != 0) ? 3'd5 :
+    ((tb_height_q <= 16'd4) ? 3'd3 :
+     ((tb_height_q <= 16'd8) ? 3'd5 : 3'd7));
   assign last_x_emit_max_w =
     (mode_q && ({1'b0, last_x_w} >= last_x_cmax_w)) ? (last_x_w - 2'd1) : last_x_w;
   assign last_y_emit_max_w =
@@ -422,8 +431,10 @@ module ff_vvc_residual_symbol_emitter_4x4 (
   assign second_active_w = mode_q && ($signed({1'b0, scan_pos_q}) <= min_pos_2nd_pass_q);
   assign sig_needed_w =
     scan_regular_active_q && ((num_nonzero_q != 6'd0) || (scan_pos_q != last_scan_pos_w));
-  assign rem_needed_w = mode_q ? (coeff_abs_w > 9'd3) :
-    ((scan_raster_w == 5'd0) && (coeff_abs_w > 9'd3));
+  assign regular_rem_scan_active_w =
+    (scan_pos_q <= last_scan_pos_w) &&
+    ($signed({1'b0, scan_pos_q}) > min_pos_2nd_pass_q);
+  assign regular_rem_needed_w = regular_rem_scan_active_w && (coeff_abs_w > 9'd3);
 
   always @* begin
     sum_bucket_w = (loc_sum_abs_w[7:0] + 8'd1) >> 1;
@@ -620,32 +631,48 @@ module ff_vvc_residual_symbol_emitter_4x4 (
       rem_abs_value_w = 9'd0;
     end else begin
       rem_abs_value_w = (coeff_abs_w - 9'd4) >> 1;
-      rem_code_value_w = rem_abs_value_w - 9'd5;
+      // H.266 7.3.11.11/9.3.3: abs_remainder uses
+      // cRiceParam = g(riceTemplateAbsSum - 5 * baseLevel) with baseLevel=4
+      // for the regular pass. This is still required when transform-skip
+      // residuals are routed through residual_coding() by
+      // sh_ts_residual_coding_disabled_flag=1.
+      sum_abs_for_rice_w =
+        (rice_sum_abs_w > 9'd20) ? (rice_sum_abs_w - 9'd20) : 9'd0;
+      if (sum_abs_for_rice_w <= 9'd6) begin
+        rice_param_w = 3'd0;
+      end else if (sum_abs_for_rice_w <= 9'd13) begin
+        rice_param_w = 3'd1;
+      end else if (sum_abs_for_rice_w <= 9'd27) begin
+        rice_param_w = 3'd2;
+      end else begin
+        rice_param_w = 3'd3;
+      end
+      rem_threshold_w = 9'd5 << rice_param_w;
       rem_prefix_extra_len_w = 3'd0;
-      if (mode_q) begin
+      if (rem_abs_value_w < rem_threshold_w) begin
+        rem_prefix_value_w = rem_abs_value_w >> rice_param_w;
+        rem_prefix_count_w = {1'b0, rem_prefix_value_w[4:0]} + 6'd1;
+        rem_prefix_pattern_w = (32'd1 << rem_prefix_count_w) - 32'd2;
+        rem_suffix_count_w = {3'd0, rice_param_w};
+        rem_suffix_pattern_w = rem_abs_value_w & ((32'd1 << rice_param_w) - 32'd1);
+      end else begin
+        rem_code_value_w = (rem_abs_value_w >> rice_param_w) - 9'd5;
+        // Same unbounded prefix search as encode_rem_abs_ep(); large
+        // transform-skip deltas routinely exceed the old small-coefficient
+        // shortcut.
         for (prefix_len_i = 0; prefix_len_i < 7; prefix_len_i = prefix_len_i + 1) begin
           if (rem_code_value_w > ((9'd2 << prefix_len_i) - 9'd2)) begin
             rem_prefix_extra_len_w = prefix_len_i[2:0] + 3'd1;
           end
         end
-      end else begin
-        rem_prefix_extra_len_w =
-          (rem_code_value_w <= 9'd0) ? 3'd0 :
-          ((rem_code_value_w <= 9'd2) ? 3'd1 :
-          ((rem_code_value_w <= 9'd6) ? 3'd2 : 3'd3));
+        rem_prefix_count_w = {3'd0, rem_prefix_extra_len_w} + 6'd5;
+        rem_prefix_pattern_w = (32'd1 << rem_prefix_count_w) - 32'd1;
+        rem_suffix_count_w =
+          {3'd0, rem_prefix_extra_len_w} + {3'd0, rice_param_w} + 6'd1;
+        rem_suffix_pattern_w =
+          ((rem_code_value_w - ((32'd1 << rem_prefix_extra_len_w) - 32'd1)) << rice_param_w) |
+          (rem_abs_value_w & ((32'd1 << rice_param_w) - 32'd1));
       end
-      rem_prefix_count_w =
-        (rem_abs_value_w < 9'd5) ? {1'b0, rem_abs_value_w[4:0] + 5'd1} :
-        {3'd0, rem_prefix_extra_len_w} + 6'd5;
-      rem_prefix_pattern_w =
-        (rem_abs_value_w < 9'd5) ?
-        ((32'd1 << rem_prefix_count_w) - 32'd2) :
-        ((32'd1 << rem_prefix_count_w) - 32'd1);
-      rem_suffix_count_w =
-        (rem_abs_value_w < 9'd5) ? 6'd0 : {3'd0, rem_prefix_extra_len_w} + 6'd1;
-      rem_suffix_pattern_w =
-        (rem_abs_value_w < 9'd5) ? 32'd0 :
-        (rem_code_value_w - ((32'd1 << rem_prefix_extra_len_w) - 32'd1));
     end
   end
 
@@ -745,6 +772,19 @@ module ff_vvc_residual_symbol_emitter_4x4 (
           end
         endcase
       end
+      ST_REM: begin
+        if (regular_rem_needed_w) begin
+          if (subphase_q == SUB_REM_PREFIX) begin
+            m_axis_valid = 1'b1;
+            m_axis_kind = SYMBOL_BINS_EP;
+            m_axis_data = (rem_prefix_pattern_q << 6) | {26'd0, rem_prefix_count_q};
+          end else if (subphase_q == SUB_REM_SUFFIX) begin
+            m_axis_valid = 1'b1;
+            m_axis_kind = SYMBOL_BINS_EP;
+            m_axis_data = (rem_suffix_pattern_q << 6) | {26'd0, rem_suffix_count_q};
+          end
+        end
+      end
       ST_SECOND: begin
         if (second_active_w) begin
           if (subphase_q == SUB_REM_PREFIX) begin
@@ -828,9 +868,10 @@ module ff_vvc_residual_symbol_emitter_4x4 (
           sign_bits_q <= 32'd0;
           sign_count_q <= 6'd0;
           num_nonzero_q <= 6'd0;
-          regular_bins_left_q <= chroma_mode ?
-            (({16'd0, tb_width} * {16'd0, tb_height} * 32'd28) >> 4) :
-            10'd112;
+          regular_bins_left_q <= (RAW_COEFF_MODE != 0) ? 10'd112 :
+            (chroma_mode ?
+             (({16'd0, tb_width} * {16'd0, tb_height} * 32'd28) >> 4) :
+             10'd112);
           scan_regular_active_q <= 1'b0;
           min_pos_2nd_pass_q <= -6'sd1;
           rem_prefix_count_q <= 6'd0;
@@ -874,13 +915,16 @@ module ff_vvc_residual_symbol_emitter_4x4 (
                 scan_pos_q <= 5'd15;
                 subphase_q <= SUB_REM_PREP;
                 scan_regular_active_q <= 1'b0;
-                state_q <= (mode_q && (min_pos_2nd_pass_q >= 0)) ? ST_SECOND : ST_SIGN;
+                // H.266 7.3.11.11 residual_coding_subblock(): abs_remainder
+                // bins are coded after the regular pass for the subblock, not
+                // interleaved with sig/gt/par bins for each coefficient.
+                state_q <= ST_REM;
               end else if (mode_q && (regular_bins_left_q < 10'd4) &&
                            (scan_pos_q <= last_scan_pos_w)) begin
                 scan_pos_q <= 5'd15;
                 subphase_q <= SUB_REM_PREP;
                 scan_regular_active_q <= 1'b0;
-                state_q <= (min_pos_2nd_pass_q >= 0) ? ST_SECOND : ST_SIGN;
+                state_q <= ST_REM;
               end else begin
                 scan_pos_q <= scan_pos_q - 5'd1;
                 subphase_q <= SUB_SIG;
@@ -915,12 +959,7 @@ module ff_vvc_residual_symbol_emitter_4x4 (
                   if ((coeff_abs_w > 9'd1) && (regular_bins_left_q != 10'd0)) begin
                     regular_bins_left_q <= regular_bins_left_q - 10'd1;
                   end
-                  rem_emit_needed_q <= rem_needed_w;
-                  rem_prefix_count_q <= rem_prefix_count_w;
-                  rem_prefix_pattern_q <= rem_prefix_pattern_w;
-                  rem_suffix_count_q <= rem_suffix_count_w;
-                  rem_suffix_pattern_q <= rem_suffix_pattern_w;
-                  subphase_q <= rem_needed_w ? SUB_REM_PREFIX : SUB_SIGN_ACCUM;
+                  subphase_q <= SUB_SIGN_ACCUM;
                 end
                 SUB_REM_PREFIX: begin
                   subphase_q <= SUB_REM_SUFFIX;
@@ -942,7 +981,7 @@ module ff_vvc_residual_symbol_emitter_4x4 (
                     scan_pos_q <= 5'd15;
                     subphase_q <= SUB_REM_PREP;
                     scan_regular_active_q <= 1'b0;
-                    state_q <= (mode_q && (min_pos_2nd_pass_q >= 0)) ? ST_SECOND : ST_SIGN;
+                    state_q <= ST_REM;
                   end else begin
                     scan_pos_q <= scan_pos_q - 5'd1;
                     subphase_q <= SUB_SIG;
@@ -952,6 +991,37 @@ module ff_vvc_residual_symbol_emitter_4x4 (
                   end
                 end
               endcase
+            end
+          end
+
+          ST_REM: begin
+            if (!regular_rem_needed_w) begin
+              if (scan_pos_q == 5'd0) begin
+                scan_pos_q <= 5'd15;
+                subphase_q <= SUB_REM_PREP;
+                state_q <= (mode_q && (min_pos_2nd_pass_q >= 0)) ? ST_SECOND : ST_SIGN;
+              end else begin
+                scan_pos_q <= scan_pos_q - 5'd1;
+                subphase_q <= SUB_REM_PREP;
+              end
+            end else if (subphase_q == SUB_REM_PREP) begin
+              rem_emit_needed_q <= 1'b1;
+              rem_prefix_count_q <= rem_prefix_count_w;
+              rem_prefix_pattern_q <= rem_prefix_pattern_w;
+              rem_suffix_count_q <= rem_suffix_count_w;
+              rem_suffix_pattern_q <= rem_suffix_pattern_w;
+              subphase_q <= SUB_REM_PREFIX;
+            end else if (subphase_q == SUB_REM_PREFIX) begin
+              subphase_q <= SUB_REM_SUFFIX;
+            end else begin
+              if (scan_pos_q == 5'd0) begin
+                scan_pos_q <= 5'd15;
+                subphase_q <= SUB_REM_PREP;
+                state_q <= (mode_q && (min_pos_2nd_pass_q >= 0)) ? ST_SECOND : ST_SIGN;
+              end else begin
+                scan_pos_q <= scan_pos_q - 5'd1;
+                subphase_q <= SUB_REM_PREP;
+              end
             end
           end
 

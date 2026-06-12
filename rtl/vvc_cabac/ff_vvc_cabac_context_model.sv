@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 module ff_vvc_cabac_context_model #(
-  parameter int VVC_CTX_COUNT = 295,
+  parameter int VVC_CTX_COUNT = 297,
   parameter int VVC_CTX_QP = 32,
   parameter int VVC_CABAC_CTX_ID_BITS = 10
 ) (
@@ -31,6 +31,8 @@ module ff_vvc_cabac_context_model #(
   // par_level, and abs_level_gtx ranges initialized even before every RTL
   // producer emits each context.
   localparam logic [(VVC_CTX_COUNT * 8) - 1:0] INIT_VALUE_LUT = {
+    8'd9, // 296: TransformSkipFlag(1)
+    8'd25, // 295: TransformSkipFlag(0)
     8'd12, // 294: CuCodedFlag(2)
     8'd5, // 293: CuCodedFlag(1)
     8'd6, // 292: CuCodedFlag(0)
@@ -328,6 +330,8 @@ module ff_vvc_cabac_context_model #(
     8'd19  //  0: SplitFlag(0)
   };
   localparam logic [(VVC_CTX_COUNT * 4) - 1:0] LOG2_WINDOW_LUT = {
+    4'd1,  // 296: TransformSkipFlag(1)
+    4'd1,  // 295: TransformSkipFlag(0)
     4'd4,  // 294: CuCodedFlag(2)
     4'd4,  // 293: CuCodedFlag(1)
     4'd4,  // 292: CuCodedFlag(0)

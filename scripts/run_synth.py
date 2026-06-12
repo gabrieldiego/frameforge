@@ -29,6 +29,7 @@ DEFAULT_YOSYS_QUIET = True
 DEFAULT_SYNTH_MAX_VISIBLE_WIDTH = 1024
 DEFAULT_SYNTH_MAX_VISIBLE_HEIGHT = 1024
 DEFAULT_SYNTH_SUPPORT_PALETTE_444 = True
+DEFAULT_SYNTH_SUPPORT_EXACT_HASH_IBC_444 = False
 
 
 def main() -> int:
@@ -57,6 +58,12 @@ def main() -> int:
         type=parse_bool_int,
         default=default_synth_support_palette_444(),
         help="ff_vvc_encoder SUPPORT_PALETTE_444 synthesis parameter (0 or 1)",
+    )
+    parser.add_argument(
+        "--support-exact-hash-ibc-444",
+        type=parse_bool_int,
+        default=default_synth_support_exact_hash_ibc_444(),
+        help="ff_vvc_encoder SUPPORT_EXACT_HASH_IBC_444 synthesis parameter (0 or 1)",
     )
     parser.add_argument(
         "--timeout-sec",
@@ -108,6 +115,7 @@ def main() -> int:
             args.max_visible_width,
             args.max_visible_height,
             args.support_palette_444,
+            args.support_exact_hash_ibc_444,
         )
 
     rc = run_yosys(
@@ -122,6 +130,7 @@ def main() -> int:
         args.max_visible_width,
         args.max_visible_height,
         args.support_palette_444,
+        args.support_exact_hash_ibc_444,
         args.yosys_quiet,
     )
     if rc != 0 or not args.post_synth_smoke:
@@ -170,6 +179,18 @@ def default_synth_support_palette_444() -> bool:
         return parse_bool_int(value)
     except argparse.ArgumentTypeError as err:
         raise SystemExit(f"SYNTH_SUPPORT_PALETTE_444 must be 0 or 1, got {value!r}") from err
+
+
+def default_synth_support_exact_hash_ibc_444() -> bool:
+    value = os.environ.get("SYNTH_SUPPORT_EXACT_HASH_IBC_444")
+    if value is None or value == "":
+        return DEFAULT_SYNTH_SUPPORT_EXACT_HASH_IBC_444
+    try:
+        return parse_bool_int(value)
+    except argparse.ArgumentTypeError as err:
+        raise SystemExit(
+            f"SYNTH_SUPPORT_EXACT_HASH_IBC_444 must be 0 or 1, got {value!r}"
+        ) from err
 
 
 def default_synth_memory_limit_mb() -> float | None:
@@ -360,7 +381,11 @@ def find_tool(name: str) -> str:
 
 
 def encoder_chparam_commands(
-    top: str, max_visible_width: int, max_visible_height: int, support_palette_444: bool
+    top: str,
+    max_visible_width: int,
+    max_visible_height: int,
+    support_palette_444: bool,
+    support_exact_hash_ibc_444: bool,
 ) -> list[str]:
     if top != "ff_vvc_encoder":
         return []
@@ -368,13 +393,18 @@ def encoder_chparam_commands(
         (
             f"chparam -set MAX_VISIBLE_WIDTH {max_visible_width} "
             f"-set MAX_VISIBLE_HEIGHT {max_visible_height} "
-            f"-set SUPPORT_PALETTE_444 {int(support_palette_444)} {top}"
+            f"-set SUPPORT_PALETTE_444 {int(support_palette_444)} "
+            f"-set SUPPORT_EXACT_HASH_IBC_444 {int(support_exact_hash_ibc_444)} {top}"
         ),
     ]
 
 
 def encoder_vivado_generic_args(
-    top: str, max_visible_width: int, max_visible_height: int, support_palette_444: bool
+    top: str,
+    max_visible_width: int,
+    max_visible_height: int,
+    support_palette_444: bool,
+    support_exact_hash_ibc_444: bool,
 ) -> str:
     if top != "ff_vvc_encoder":
         return ""
@@ -382,6 +412,7 @@ def encoder_vivado_generic_args(
         f" -generic MAX_VISIBLE_WIDTH={max_visible_width}"
         f" -generic MAX_VISIBLE_HEIGHT={max_visible_height}"
         f" -generic SUPPORT_PALETTE_444={int(support_palette_444)}"
+        f" -generic SUPPORT_EXACT_HASH_IBC_444={int(support_exact_hash_ibc_444)}"
     )
 
 
@@ -480,6 +511,7 @@ def run_yosys(
     max_visible_width: int,
     max_visible_height: int,
     support_palette_444: bool,
+    support_exact_hash_ibc_444: bool,
     yosys_quiet: bool,
 ) -> int:
     yosys = os.environ.get("SYNTH_YOSYS") or find_tool("yosys")
@@ -491,7 +523,11 @@ def run_yosys(
     cabac_include_dir = Path("rtl/vvc_cabac").resolve()
 
     encoder_param_cmds = encoder_chparam_commands(
-        top, max_visible_width, max_visible_height, support_palette_444
+        top,
+        max_visible_width,
+        max_visible_height,
+        support_palette_444,
+        support_exact_hash_ibc_444,
     )
     script.write_text(
         "\n".join(
@@ -523,6 +559,10 @@ def run_yosys(
     if top == "ff_vvc_encoder":
         print(f"Encoder synthesis max visible size: {max_visible_width}x{max_visible_height}")
         print(f"Encoder synthesis 4:4:4 palette support: {int(support_palette_444)}")
+        print(
+            "Encoder synthesis exact-hash IBC 4:4:4 support: "
+            f"{int(support_exact_hash_ibc_444)}"
+        )
     print(f"Yosys script: {script}")
     if timeout_sec is not None:
         print(f"Synthesis timeout: {timeout_sec:g} seconds")
@@ -558,6 +598,7 @@ def run_yosys(
         max_visible_width,
         max_visible_height,
         support_palette_444,
+        support_exact_hash_ibc_444,
     )
 
 
@@ -572,11 +613,16 @@ def run_yosys_critical_path_report(
     max_visible_width: int,
     max_visible_height: int,
     support_palette_444: bool,
+    support_exact_hash_ibc_444: bool,
 ) -> int:
     script = out_dir / "critical_path.ys"
     log = out_dir / "critical_path.log"
     encoder_param_cmds = encoder_chparam_commands(
-        top, max_visible_width, max_visible_height, support_palette_444
+        top,
+        max_visible_width,
+        max_visible_height,
+        support_palette_444,
+        support_exact_hash_ibc_444,
     )
     cabac_include_dir = Path("rtl/vvc_cabac").resolve()
 
@@ -642,6 +688,7 @@ def run_vivado(
     max_visible_width: int,
     max_visible_height: int,
     support_palette_444: bool,
+    support_exact_hash_ibc_444: bool,
 ) -> int:
     vivado_cmd = find_vivado_command()
 
@@ -649,7 +696,11 @@ def run_vivado(
     period_ns = 1000.0 / clock_mhz
     part = board.get("FPGA_PART", "xc7z010clg400-1")
     generic_args = encoder_vivado_generic_args(
-        top, max_visible_width, max_visible_height, support_palette_444
+        top,
+        max_visible_width,
+        max_visible_height,
+        support_palette_444,
+        support_exact_hash_ibc_444,
     )
     cabac_include_dir = Path("rtl/vvc_cabac").resolve()
     tcl.write_text(
@@ -679,6 +730,10 @@ def run_vivado(
     if top == "ff_vvc_encoder":
         print(f"Encoder synthesis max visible size: {max_visible_width}x{max_visible_height}")
         print(f"Encoder synthesis 4:4:4 palette support: {int(support_palette_444)}")
+        print(
+            "Encoder synthesis exact-hash IBC 4:4:4 support: "
+            f"{int(support_exact_hash_ibc_444)}"
+        )
     if "XILINXD_LICENSE_FILE" not in os.environ and LOCAL_LICENSE.exists():
         print(f"Using project-local Vivado license: {LOCAL_LICENSE}")
     settings = find_project_vivado_settings()

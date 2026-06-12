@@ -35,7 +35,7 @@ module ff_vvc_annexb_header #(
   localparam logic [4:0] NAL_UNIT_TYPE_PPS = 5'd16;
   localparam logic [5:0] NAL_LAYER_ID = 6'd0;
   localparam logic [2:0] NAL_TEMPORAL_ID_PLUS1 = 3'd1;
-  localparam logic [6:0] SPS_FIELD_COUNT = 7'd107;
+  localparam logic [6:0] SPS_FIELD_COUNT = 7'd109;
   localparam logic [6:0] PPS_FIELD_COUNT = 7'd27;
   localparam logic [3:0] ST_IDLE = 4'd0;
   localparam logic [3:0] ST_START_CODE = 4'd1;
@@ -348,52 +348,54 @@ module ff_vvc_annexb_header #(
         7'd49: begin syntax_value = 32'd4; syntax_bits = 6'd5; end // inter ue(3)
         7'd50: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // sps_max_luma_transform_size_64_flag
         7'd51: begin syntax_value = {31'd0, sps_transform_skip_enabled_flag}; syntax_bits = 6'd1; end // sps_transform_skip_enabled_flag
-        7'd52: begin syntax_value = {31'd0, sps_mts_enabled_flag}; syntax_bits = 6'd1; end // sps_mts_enabled_flag
-        7'd53: begin syntax_value = {31'd0, sps_lfnst_enabled_flag}; syntax_bits = 6'd1; end // sps_lfnst_enabled_flag
-        7'd54: begin syntax_value = {31'd0, sps_joint_cbcr_enabled_flag}; syntax_bits = 6'd1; end // sps_joint_cbcr_enabled_flag
-        7'd55: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // same qp table
-        7'd56: begin syntax_value = 32'd19; syntax_bits = 6'd9; end // se(-9)
-        7'd57: begin syntax_value = 32'd3; syntax_bits = 6'd3; end // ue(2)
-        7'd58: begin syntax_value = 32'd10; syntax_bits = 6'd7; end // ue(9)
-        7'd59: begin syntax_value = 32'd6; syntax_bits = 6'd5; end // ue(5)
-        7'd60: begin syntax_value = 32'd5; syntax_bits = 6'd5; end // ue(4)
-        7'd61: begin syntax_value = 32'd2; syntax_bits = 6'd3; end // ue(1)
-        7'd62: begin syntax_value = 32'd12; syntax_bits = 6'd7; end // ue(11)
-        7'd63: begin syntax_value = 32'd13; syntax_bits = 6'd7; end // ue(12)
-        7'd64, 7'd65, 7'd66, 7'd67, 7'd68, 7'd69, 7'd70: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
-        7'd71: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // sps_rpl1_same_as_rpl0_flag
-        7'd72: begin syntax_value = 32'd2; syntax_bits = 6'd3; end // sps_num_ref_pic_lists[0] ue(1)
-        7'd73: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // num_ref_entries ue(0)
-        7'd74: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // ref wraparound
-        7'd75: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_temporal_mvp_enabled_flag
-        7'd76: begin syntax_value = 32'd0; syntax_bits = 6'd0; end // sps_sbtmvp_enabled_flag gated off
-        7'd77: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_amvr_enabled_flag
-        7'd78: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // bdof
-        7'd79: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // smvd
-        7'd80: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // dmvr
-        7'd81: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_mmvd_enabled_flag
-        7'd82: begin syntax_value = 32'd0; syntax_bits = 6'd0; end // sps_mmvd_fullpel_only_flag gated off
-        7'd83: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // six_minus_max_num_merge_cand ue(0)
-        7'd84: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_sbt_enabled_flag
-        7'd85: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_affine_enabled_flag
-        7'd86: begin syntax_value = 32'd0; syntax_bits = 6'd0; end // sps_five_minus_max_num_subblock_merge_cand gated off
-        7'd87: begin syntax_value = 32'd0; syntax_bits = 6'd0; end // sps_affine_type_flag gated off
-        7'd88, 7'd89: begin syntax_value = 32'd0; syntax_bits = 6'd0; end // gated affine subfields
-        7'd90, 7'd91, 7'd92: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // bcw, ciip, gpm
-        7'd93: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // log2_parallel_merge_level_minus2 ue(0)
-        7'd94: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // isp
-        7'd95: begin syntax_value = {31'd0, sps_mrl_enabled_flag}; syntax_bits = 6'd1; end // sps_mrl_enabled_flag
-        7'd96: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // mip
-        7'd97: begin syntax_value = {31'd0, sps_cclm_enabled_flag}; syntax_bits = (chroma_format_idc != 2'd0) ? 6'd1 : 6'd0; end // sps_cclm_enabled_flag
-        7'd98: begin syntax_value = 32'd1; syntax_bits = (chroma_format_idc == 2'd1) ? 6'd1 : 6'd0; end // chroma horizontal collocated
-        7'd99: begin syntax_value = 32'd0; syntax_bits = (chroma_format_idc == 2'd1) ? 6'd1 : 6'd0; end // chroma vertical collocated
-        7'd100: begin syntax_value = {31'd0, sps_palette_enabled_flag}; syntax_bits = 6'd1; end // palette enabled
-        7'd101: begin syntax_value = 32'd1; syntax_bits = sps_palette_enabled_flag ? 6'd1 : 6'd0; end // sps_internal_bit_depth_minus_input_bit_depth ue(0)
-        7'd102: begin syntax_value = {31'd0, sps_ibc_enabled_flag}; syntax_bits = 6'd1; end // ibc
-        7'd103: begin syntax_value = 32'd6; syntax_bits = sps_ibc_enabled_flag ? 6'd5 : 6'd0; end // sps_six_minus_max_num_ibc_merge_cand ue(5)
-        7'd104: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // ladf
-        7'd105: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // scaling list
-        7'd106: begin syntax_value = {25'd0, sps_dep_quant_enabled_flag, sps_sign_data_hiding_enabled_flag, 5'b00000}; syntax_bits = 6'd7; end // dep/sign through extension flags
+        7'd52: begin syntax_value = 32'd2; syntax_bits = sps_transform_skip_enabled_flag ? 6'd3 : 6'd0; end // sps_log2_transform_skip_max_size_minus2 ue(1)
+        7'd53: begin syntax_value = 32'd0; syntax_bits = sps_transform_skip_enabled_flag ? 6'd1 : 6'd0; end // sps_bdpcm_enabled_flag
+        7'd54: begin syntax_value = {31'd0, sps_mts_enabled_flag}; syntax_bits = 6'd1; end // sps_mts_enabled_flag
+        7'd55: begin syntax_value = {31'd0, sps_lfnst_enabled_flag}; syntax_bits = 6'd1; end // sps_lfnst_enabled_flag
+        7'd56: begin syntax_value = {31'd0, sps_joint_cbcr_enabled_flag}; syntax_bits = 6'd1; end // sps_joint_cbcr_enabled_flag
+        7'd57: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // same qp table
+        7'd58: begin syntax_value = 32'd19; syntax_bits = 6'd9; end // se(-9)
+        7'd59: begin syntax_value = 32'd3; syntax_bits = 6'd3; end // ue(2)
+        7'd60: begin syntax_value = 32'd10; syntax_bits = 6'd7; end // ue(9)
+        7'd61: begin syntax_value = 32'd6; syntax_bits = 6'd5; end // ue(5)
+        7'd62: begin syntax_value = 32'd5; syntax_bits = 6'd5; end // ue(4)
+        7'd63: begin syntax_value = 32'd2; syntax_bits = 6'd3; end // ue(1)
+        7'd64: begin syntax_value = 32'd12; syntax_bits = 6'd7; end // ue(11)
+        7'd65: begin syntax_value = 32'd13; syntax_bits = 6'd7; end // ue(12)
+        7'd66, 7'd67, 7'd68, 7'd69, 7'd70, 7'd71, 7'd72: begin syntax_value = 32'd0; syntax_bits = 6'd1; end
+        7'd73: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // sps_rpl1_same_as_rpl0_flag
+        7'd74: begin syntax_value = 32'd2; syntax_bits = 6'd3; end // sps_num_ref_pic_lists[0] ue(1)
+        7'd75: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // num_ref_entries ue(0)
+        7'd76: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // ref wraparound
+        7'd77: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_temporal_mvp_enabled_flag
+        7'd78: begin syntax_value = 32'd0; syntax_bits = 6'd0; end // sps_sbtmvp_enabled_flag gated off
+        7'd79: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_amvr_enabled_flag
+        7'd80: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // bdof
+        7'd81: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // smvd
+        7'd82: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // dmvr
+        7'd83: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_mmvd_enabled_flag
+        7'd84: begin syntax_value = 32'd0; syntax_bits = 6'd0; end // sps_mmvd_fullpel_only_flag gated off
+        7'd85: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // six_minus_max_num_merge_cand ue(0)
+        7'd86: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_sbt_enabled_flag
+        7'd87: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // sps_affine_enabled_flag
+        7'd88: begin syntax_value = 32'd0; syntax_bits = 6'd0; end // sps_five_minus_max_num_subblock_merge_cand gated off
+        7'd89: begin syntax_value = 32'd0; syntax_bits = 6'd0; end // sps_affine_type_flag gated off
+        7'd90, 7'd91: begin syntax_value = 32'd0; syntax_bits = 6'd0; end // gated affine subfields
+        7'd92, 7'd93, 7'd94: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // bcw, ciip, gpm
+        7'd95: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // log2_parallel_merge_level_minus2 ue(0)
+        7'd96: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // isp
+        7'd97: begin syntax_value = {31'd0, sps_mrl_enabled_flag}; syntax_bits = 6'd1; end // sps_mrl_enabled_flag
+        7'd98: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // mip
+        7'd99: begin syntax_value = {31'd0, sps_cclm_enabled_flag}; syntax_bits = (chroma_format_idc != 2'd0) ? 6'd1 : 6'd0; end // sps_cclm_enabled_flag
+        7'd100: begin syntax_value = 32'd1; syntax_bits = (chroma_format_idc == 2'd1) ? 6'd1 : 6'd0; end // chroma horizontal collocated
+        7'd101: begin syntax_value = 32'd0; syntax_bits = (chroma_format_idc == 2'd1) ? 6'd1 : 6'd0; end // chroma vertical collocated
+        7'd102: begin syntax_value = {31'd0, sps_palette_enabled_flag}; syntax_bits = 6'd1; end // palette enabled
+        7'd103: begin syntax_value = 32'd1; syntax_bits = sps_palette_enabled_flag ? 6'd1 : 6'd0; end // sps_internal_bit_depth_minus_input_bit_depth ue(0)
+        7'd104: begin syntax_value = {31'd0, sps_ibc_enabled_flag}; syntax_bits = 6'd1; end // ibc
+        7'd105: begin syntax_value = 32'd6; syntax_bits = sps_ibc_enabled_flag ? 6'd5 : 6'd0; end // sps_six_minus_max_num_ibc_merge_cand ue(5)
+        7'd106: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // ladf
+        7'd107: begin syntax_value = 32'd0; syntax_bits = 6'd1; end // scaling list
+        7'd108: begin syntax_value = {25'd0, sps_dep_quant_enabled_flag, sps_sign_data_hiding_enabled_flag, 5'b00000}; syntax_bits = 6'd7; end // dep/sign through extension flags
         default: begin syntax_value = 32'd0; syntax_bits = 6'd0; end
       endcase
     end else begin

@@ -363,6 +363,8 @@ def sample_yuv(vector: TestVector, x: int, y: int, frame: int) -> tuple[int, int
         return 0, 0, 0
     if vector.pattern == "screen_blocks":
         return palette_tile_sample(x, y, frame)
+    if vector.pattern == "transform_skip_left_delta":
+        return transform_skip_left_delta_sample(x, y, frame)
     if vector.pattern == "palette_escape_prng":
         return palette_escape_prng_sample(vector, x, y, frame)
     if vector.pattern == "moving_blocks":
@@ -377,6 +379,22 @@ def palette_tile_sample(x: int, y: int, frame: int) -> tuple[int, int, int]:
     tile_y = y // 8
     color_idx = (tile_x + (tile_y * 3) + frame) % len(PALETTE_COLORS_YUV)
     return PALETTE_COLORS_YUV[color_idx]
+
+
+def transform_skip_left_delta_sample(x: int, y: int, frame: int) -> tuple[int, int, int]:
+    tile_x = x // 8
+    tile_y = y // 8
+    pair_x = tile_x & ~1
+    local_x = x & 7
+    local_y = y & 7
+    y_sample = (48 + (pair_x * 29) + (tile_y * 37) + (frame * 11)) & 0xFF
+    cb_sample = (80 + (pair_x * 17) + (tile_y * 23) + (frame * 13)) & 0xFF
+    cr_sample = (112 + (pair_x * 19) + (tile_y * 31) + (frame * 7)) & 0xFF
+    if (tile_x & 1) and local_x < 4 and local_y < 4:
+        y_sample = (y_sample + 3) & 0xFF
+        cb_sample = (cb_sample + 4) & 0xFF
+        cr_sample = (cr_sample + 5) & 0xFF
+    return y_sample, cb_sample, cr_sample
 
 
 def palette_escape_prng_sample(vector: TestVector, x: int, y: int, frame: int) -> tuple[int, int, int]:

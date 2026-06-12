@@ -1567,6 +1567,7 @@ module ff_vvc_ctu_symbolizer #(
     .luma_ac_levels(cur_luma_ac_levels),
     .chroma_dc_level(chroma_res_cr_q ? cur_cr_dc_level_q : cur_cb_dc_level_q),
     .chroma_ac_levels(chroma_res_cr_q ? cur_cr_ac_levels_q : cur_cb_ac_levels_q),
+    .raw_coeff_levels({(9 * 16){1'b0}}),
     .m_axis_valid(residual_axis_valid),
     .m_axis_ready(residual_axis_ready),
     .m_axis_kind(residual_axis_kind),

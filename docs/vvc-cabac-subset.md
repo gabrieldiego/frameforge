@@ -136,6 +136,7 @@ From Table 127:
 | `tu_y_coded_flag` | FL | `cMax = 1` |
 | `tu_cb_coded_flag` | FL | `cMax = 1` |
 | `tu_cr_coded_flag` | FL | `cMax = 1` |
+| `transform_skip_flag` | FL | `cMax = 1` |
 | `cu_skip_flag` | FL | `cMax = 1` |
 | `pred_mode_ibc_flag` | FL | `cMax = 1` |
 | `general_merge_flag` | FL | `cMax = 1` |

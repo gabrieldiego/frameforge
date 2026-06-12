@@ -331,7 +331,7 @@ impl VvcSyntaxToolFlags {
         Self {
             ibc_enabled: true,
             palette_enabled: true,
-            transform_skip_enabled: false,
+            transform_skip_enabled: true,
             mts_enabled: false,
             explicit_mts_intra_enabled: false,
             lfnst_enabled: false,

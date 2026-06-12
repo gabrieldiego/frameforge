@@ -242,6 +242,7 @@ impl VvcCabacContext {
             VvcCabacContext::AbsMvdGreater0Flag(ctx @ 0..=2) => Some(286 + u16::from(ctx)),
             VvcCabacContext::AbsMvdGreater1Flag(ctx @ 0..=2) => Some(289 + u16::from(ctx)),
             VvcCabacContext::CuCodedFlag(ctx @ 0..=2) => Some(292 + u16::from(ctx)),
+            VvcCabacContext::TransformSkipFlag(ctx @ 0..=1) => Some(295 + u16::from(ctx)),
             _ => None,
         }
     }

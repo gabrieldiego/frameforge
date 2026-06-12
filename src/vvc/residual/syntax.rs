@@ -204,7 +204,7 @@ impl<'a> VvcResidualCabacEncoder<'a> {
         cabac: &mut VvcCabacEncoder,
         state: &VvcResidualPass1State,
     ) {
-        self.emit_transform_skip_flag(cabac, state.config.component, false);
+        self.emit_transform_skip_flag(cabac, state.config.component, state.config.transform_skip);
         self.emit_mts_idx_zero(cabac);
         self.observe_future_chroma_defaults();
         self.observe_current_disabled_tool_defaults();
@@ -678,6 +678,20 @@ impl VvcResidualCabacSymbolStream {
         )
     }
 
+    pub(in crate::vvc) fn luma_transform_skip_coefficients(
+        log2_tb_width: u8,
+        log2_tb_height: u8,
+        coeff_levels: &[i16],
+    ) -> Self {
+        Self::coefficients_with_transform_skip(
+            VvcResidualComponent::Luma,
+            log2_tb_width,
+            log2_tb_height,
+            coeff_levels,
+            true,
+        )
+    }
+
     pub(in crate::vvc) fn chroma_coefficients(
         component: VvcResidualComponent,
         log2_tb_width: u8,
@@ -691,11 +705,46 @@ impl VvcResidualCabacSymbolStream {
         Self::coefficients(component, log2_tb_width, log2_tb_height, coeff_levels)
     }
 
+    pub(in crate::vvc) fn chroma_transform_skip_coefficients(
+        component: VvcResidualComponent,
+        log2_tb_width: u8,
+        log2_tb_height: u8,
+        coeff_levels: &[i16],
+    ) -> Self {
+        debug_assert!(matches!(
+            component,
+            VvcResidualComponent::ChromaCb | VvcResidualComponent::ChromaCr
+        ));
+        Self::coefficients_with_transform_skip(
+            component,
+            log2_tb_width,
+            log2_tb_height,
+            coeff_levels,
+            true,
+        )
+    }
+
     fn coefficients(
         component: VvcResidualComponent,
         log2_tb_width: u8,
         log2_tb_height: u8,
         coeff_levels: &[i16],
+    ) -> Self {
+        Self::coefficients_with_transform_skip(
+            component,
+            log2_tb_width,
+            log2_tb_height,
+            coeff_levels,
+            false,
+        )
+    }
+
+    fn coefficients_with_transform_skip(
+        component: VvcResidualComponent,
+        log2_tb_width: u8,
+        log2_tb_height: u8,
+        coeff_levels: &[i16],
+        transform_skip: bool,
     ) -> Self {
         // H.266 7.3.11.11 residual_coding() first codes the last significant
         // coefficient position and then walks earlier scan positions with
@@ -704,6 +753,13 @@ impl VvcResidualCabacSymbolStream {
         // is intentionally limited to coefficients in the first 4x4 subblock
         // while larger scan-position suffix and sb_coded_flag generation remain
         // labelled future work.
+        //
+        // H.266 7.3.11.11 still uses this residual_coding() syntax for
+        // transform-skipped TUs when sh_ts_residual_coding_disabled_flag is 1.
+        // The 4:4:4 screen-content residual subset relies on that normative
+        // switch so transform_skip_flag affects reconstruction without adding
+        // residual_codingTS()'s separate sign-context and neighbour-modulated
+        // level syntax yet.
         let width = 1usize << log2_tb_width;
         let height = 1usize << log2_tb_height;
         assert_eq!(coeff_levels.len(), width * height);
@@ -720,8 +776,10 @@ impl VvcResidualCabacSymbolStream {
             "AC subset currently supports first 4x4 subblock"
         );
 
-        let config =
+        let mut config =
             VvcResidualCtxConfig::subset(component, log2_tb_width, log2_tb_height, last_x, last_y);
+        config.transform_skip = transform_skip;
+        config.ts_residual_coding_disabled = true;
         let mut pass1_state = VvcResidualPass1State::new(config);
         for pos in scan.iter().take(last_scan_pos + 1) {
             let level = coeff_levels[pos.raster_index];

@@ -61,6 +61,7 @@ Defaults:
 - Yosys memory cap: 3072 MiB
 - encoder max visible size: 1024x1024
 - encoder 4:4:4 palette support: enabled
+- encoder exact-hash IBC for 4:4:4: disabled by default
 
 Override these from the command line:
 
@@ -68,7 +69,8 @@ Override these from the command line:
 make synth \
   SYNTH_BOARD=synth/boards/arty-z7-20.env \
   SYNTH_DUT=vvc-cabac-stream-writer \
-  SYNTH_CLOCK_MHZ=100
+  SYNTH_CLOCK_MHZ=100 \
+  SYNTH_SUPPORT_EXACT_HASH_IBC_444=0
 ```
 
 `SYNTH_TOP` and `SYNTH_FILELIST` remain available as explicit overrides, but the
@@ -837,6 +839,82 @@ Result:
   second hard timeout and the 3072 MiB Yosys memory cap. Treat future increases
   from this point as a synthesis-efficiency regression unless they come with a
   deliberate new coding tool.
+
+## Top Encoder 4:4:4 Transform-Skip Residual
+
+Measured on June 11, 2026 after adding the first 4:4:4 transform-skip residual
+path. The current runtime IBC subset only uses the spatial left 8x8 CU as the
+predictor and codes the changed top-left 4x4 residual coefficients with
+transform skip. The older exact-hash IBC matcher is left in the source tree as a
+future/debug block, but it is disabled in the default top synthesis because its
+precomputed BVDs do not yet account for runtime transform-skip IBC decisions in
+the H.266 8.6.2.2 BVP/HMVP state.
+
+Validation:
+
+```sh
+cargo test vvc_palette_444_uses
+make validate-set VALIDATION_SET=all-sweeps VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+make validate-set VALIDATION_SET=transform-skip-444 VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+make validate-set VALIDATION_SET=palette-escape-444 VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+make validate-set VALIDATION_SET=screenshot-smoke-444 VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+make validate-set VALIDATION_SET=screenshot-multictu-444 RTL_MAX_VISIBLE_WIDTH=192 RTL_MAX_VISIBLE_HEIGHT=192 VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+make validate-set VALIDATION_SET=racehorses-sweep-420 VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+make validate INPUT=verification/generated/test_vectors/RaceHorses_136x80_1f_yuv420p8.yuv RTL_MAX_VISIBLE_WIDTH=136 RTL_MAX_VISIBLE_HEIGHT=80 VALIDATE_SYNTH=0
+```
+
+Before commit, the final synthesis-area cleanup was guarded with top-level
+smoke tests instead of rerunning the full sweeps:
+
+```sh
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=3
+make rtl-test DUT=vvc-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=1
+```
+
+Both smokes passed all three cocotb encoder checks.
+
+Synthesis:
+
+```sh
+make synth SYNTH_DUT=vvc-encoder
+```
+
+Configuration:
+
+- target: Arty Z7-10 (`xc7z010clg400-1`)
+- clock metadata: 25 MHz
+- max visible size: 1024x1024
+- 4:4:4 palette support: enabled
+- exact-hash IBC for 4:4:4: disabled (`SYNTH_SUPPORT_EXACT_HASH_IBC_444=0`)
+- synthesis timeout: 600 seconds, with a 300 second review threshold
+- synthesis memory cap: 3072 MiB
+
+Result:
+
+- Top `ff_vvc_encoder` synthesis completed in 386.4 seconds with 1853.02 MiB
+  peak child RSS observed by the synthesis runner.
+- Critical-path reporting completed in 71.8 seconds with the same observed peak
+  child RSS.
+- Longest topological path stayed at 55. The reported path remains in
+  `ff_vvc_cabac_syntax_frontend` IBC MVD absolute-value and EG1 prefix
+  generation before `m_axis_data`.
+- Post-synth netlist restat reported 114,656 total cells and 44,106 estimated
+  LCs. Compared with the CTU-local IBC hash matcher baseline, total cells
+  decreased by 11,343 and estimated LCs decreased by 2,167 because the inactive
+  exact-hash matcher is no longer synthesized by default.
+- Compared with an intermediate ungated transform-skip run, the default gate
+  removed 24,945 cells and 8,695 estimated LCs, reduced Yosys synthesis time
+  from 470.8 to 386.4 seconds, and reduced peak child RSS from 2058.77 to
+  1853.02 MiB.
+- Compared with the lossless palette escape baseline, total cells are still up
+  by 16,072 and estimated LCs are up by 8,039. The growth comes from
+  transform-skip residual packet collection/emission and IBC syntax expansion in
+  the CABAC frontend, not from the disabled exact-hash matcher.
+- Restat reported the largest local blocks as the CABAC context model at
+  29,478 cells and 12,293 estimated LCs, the CABAC syntax frontend at 12,934
+  cells and 4,590 estimated LCs, the CTU residual symbolizer at 6,831 cells and
+  4,439 estimated LCs, and the palette CU symbolizer at 9,286 cells and 3,097
+  estimated LCs.
 
 ## Top Encoder Vivado Z7-10 Timing Snapshot
 

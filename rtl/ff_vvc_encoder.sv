@@ -6,7 +6,8 @@ module ff_vvc_encoder #(
   parameter int CTU_SIZE = 64,
   parameter int SAMPLE_BITS = 8,
   parameter int SOURCE_SAMPLE_BITS = SAMPLE_BITS,
-  parameter bit SUPPORT_PALETTE_444 = 1'b1
+  parameter bit SUPPORT_PALETTE_444 = 1'b1,
+  parameter bit SUPPORT_EXACT_HASH_IBC_444 = 1'b0
 ) (
   input  logic       clk,
   input  logic       rst_n,
@@ -83,6 +84,8 @@ module ff_vvc_encoder #(
   logic [7:0]  palette_symbol_count;
   logic [MAX_CTU_PALETTE_SYMBOLS - 1:0] ctu_cu_active_mask;
   logic [MAX_CTU_PALETTE_SYMBOLS - 1:0] ctu_cu_ibc_mask;
+  logic [MAX_CTU_PALETTE_SYMBOLS - 1:0] ctu_cu_runtime_ibc_mask_q;
+  logic [MAX_CTU_PALETTE_SYMBOLS - 1:0] ctu_cu_effective_ibc_mask_w;
   logic [MAX_CTU_PALETTE_SYMBOLS - 1:0] ctu_cu_palette_mask;
   logic [MAX_CTU_PALETTE_SYMBOLS - 1:0] ctu_cu_residual_mask;
   logic [(16 * MAX_CTU_PALETTE_SYMBOLS) - 1:0] ctu_cu_ibc_mvd_x;
@@ -91,6 +94,7 @@ module ff_vvc_encoder #(
   logic        ibc_sample_valid;
   logic        ibc_cu_full_visible_w;
   logic        ibc_cu_last_sample_w;
+  logic        exact_ibc_hash_enabled_w;
   logic        ibc_matcher_idle;
   logic        palette_sample_valid;
   logic [1:0]  palette_sample_plane;
@@ -99,6 +103,7 @@ module ff_vvc_encoder #(
   logic [31:0] palette_stream_data;
   logic        palette_stream_last;
   logic        palette_stream_cu_last;
+  logic        palette_stream_cu_ibc_mode;
   logic        palette_leaf_marker_valid;
   logic        palette_request_valid;
   logic        palette_request_ready;
@@ -132,6 +137,7 @@ module ff_vvc_encoder #(
   logic        cabac_input_last_q;
   logic [1:0]  palette_mux_state_q;
   logic [2:0]  palette_current_pred_ibc_ctx_q;
+  logic [5:0]  palette_current_leaf_index_q;
   logic        cabac_symbol_ready;
   logic        cabac_stream_valid;
   logic        cabac_stream_ready;
@@ -356,8 +362,9 @@ module ff_vvc_encoder #(
   logic [VVC_CHROMA_TU_SAMPLE_BITS - 1:0] chroma_quant_cr_sample_tu_w;
 
   // Current subset policy: 4:4:4 input selects the screen-content path. Each
-  // visible 8x8 CU is then either exact-match IBC or palette fallback. 4:2:0
-  // remains on the residual path.
+  // visible 8x8 CU enters the palette symbolizer, which may emit runtime
+  // left-neighbour transform-skip IBC or palette syntax. 4:2:0 remains on the
+  // residual path.
   assign ctu_screen_444_mode = SUPPORT_PALETTE_444 && (chroma_format_idc == 2'd3);
   assign ctu_cu_palette_mask =
     ctu_screen_444_mode ? (ctu_cu_active_mask & ~ctu_cu_ibc_mask) : '0;
@@ -370,7 +377,7 @@ module ff_vvc_encoder #(
   // Keep the active VVC syntax flags in one place and wire them into SPS,
   // slice-header, and CABAC-producing blocks. This mirrors the Rust
   // VvcSliceSyntaxConfig for the current residual/palette subset.
-  assign vvc_tool_transform_skip_enabled = 1'b0;
+  assign vvc_tool_transform_skip_enabled = ctu_screen_444_mode;
   assign vvc_tool_mts_enabled = 1'b0;
   assign vvc_tool_lfnst_enabled = 1'b0;
   assign vvc_tool_joint_cbcr_enabled = 1'b0;
@@ -859,14 +866,15 @@ module ff_vvc_encoder #(
     (generated_out_state_q == GENERATED_OUT_CABAC) && (!m_axis_valid || m_axis_ready);
   assign rbsp_protected_ready = 1'b0;
   assign rbsp_ep_input_ready = slice_stream_ready;
+  assign ctu_cu_effective_ibc_mask_w = ctu_cu_ibc_mask | ctu_cu_runtime_ibc_mask_q;
   assign palette_leaf_col_w = ctu_symbol_data[21:19];
   assign palette_leaf_row_w = ctu_symbol_data[5:3];
   assign palette_leaf_index_w = {palette_leaf_row_w, palette_leaf_col_w};
   assign palette_leaf_is_ibc_w = ctu_cu_ibc_mask[palette_leaf_index_w];
   assign palette_leaf_ibc_left_w =
-    (palette_leaf_col_w != 3'd0) && ctu_cu_ibc_mask[palette_leaf_index_w - 6'd1];
+    (palette_leaf_col_w != 3'd0) && ctu_cu_effective_ibc_mask_w[palette_leaf_index_w - 6'd1];
   assign palette_leaf_ibc_above_w =
-    (palette_leaf_row_w != 3'd0) && ctu_cu_ibc_mask[palette_leaf_index_w - 6'd8];
+    (palette_leaf_row_w != 3'd0) && ctu_cu_effective_ibc_mask_w[palette_leaf_index_w - 6'd8];
   assign palette_leaf_ibc_ctx_w =
     {2'd0, palette_leaf_ibc_left_w} + {2'd0, palette_leaf_ibc_above_w};
   assign palette_leaf_ibc_mvd_x_w =
@@ -925,40 +933,58 @@ module ff_vvc_encoder #(
     .cu_active_mask(ctu_cu_active_mask)
   );
 
-  assign ibc_sample_valid =
-    ctu_screen_444_mode && input_active_q && s_axis_valid && s_axis_ready &&
-    (input_count_q < frame_samples_w);
-  assign ibc_cu_full_visible_w =
-    input_luma_tu_valid_w &&
-    ((input_luma_tu_origin_x_w + 16'd8) <= ctu_visible_width_w) &&
-    ((input_luma_tu_origin_y_w + 16'd8) <= ctu_visible_height_w);
-  assign ibc_cu_last_sample_w =
-    ibc_sample_valid &&
-    (input_stream_component_q == 2'd2) &&
-    (input_stream_sample_q == 6'd63);
+  generate
+    if (SUPPORT_EXACT_HASH_IBC_444) begin : gen_exact_hash_ibc
+      // H.266 8.6.2.2 builds the IBC BVP list from already decoded
+      // neighbouring IBC CUs and HMVP entries. This legacy exact-hash matcher
+      // runs before the runtime transform-skip IBC decisions are final, so it
+      // is not part of the default conformance/synthesis configuration.
+      assign exact_ibc_hash_enabled_w = ctu_screen_444_mode;
+      assign ibc_sample_valid =
+        exact_ibc_hash_enabled_w && input_active_q && s_axis_valid && s_axis_ready &&
+        (input_count_q < frame_samples_w);
+      assign ibc_cu_full_visible_w =
+        input_luma_tu_valid_w &&
+        ((input_luma_tu_origin_x_w + 16'd8) <= ctu_visible_width_w) &&
+        ((input_luma_tu_origin_y_w + 16'd8) <= ctu_visible_height_w);
+      assign ibc_cu_last_sample_w =
+        ibc_sample_valid &&
+        (input_stream_component_q == 2'd2) &&
+        (input_stream_sample_q == 6'd63);
 
-  ff_vvc_ibc_hash_matcher #(
-    .CTU_SIZE(CTU_SIZE),
-    .CU_SIZE(PALETTE_CU_SIZE),
-    .CU_COUNT(MAX_CTU_PALETTE_SYMBOLS)
-  ) ibc_hash_matcher (
-    .clk(clk),
-    .rst_n(rst_n),
-    .clear(frame_pipeline_clear_w),
-    .enable(ctu_screen_444_mode),
-    .sample_valid(ibc_sample_valid),
-    .sample_data(input_sample_8bit_w),
-    .cu_index(input_luma_tu_index_w),
-    .cu_origin_x(input_luma_tu_origin_x_w),
-    .cu_origin_y(input_luma_tu_origin_y_w),
-    .cu_full_visible(ibc_cu_full_visible_w),
-    .cu_last_sample(ibc_cu_last_sample_w),
-    .idle(ibc_matcher_idle),
-    .ibc_cu_mask(ctu_cu_ibc_mask),
-    .ibc_ref_indices(),
-    .ibc_mvd_x(ctu_cu_ibc_mvd_x),
-    .ibc_mvd_y(ctu_cu_ibc_mvd_y)
-  );
+      ff_vvc_ibc_hash_matcher #(
+        .CTU_SIZE(CTU_SIZE),
+        .CU_SIZE(PALETTE_CU_SIZE),
+        .CU_COUNT(MAX_CTU_PALETTE_SYMBOLS)
+      ) ibc_hash_matcher (
+        .clk(clk),
+        .rst_n(rst_n),
+        .clear(frame_pipeline_clear_w),
+        .enable(exact_ibc_hash_enabled_w),
+        .sample_valid(ibc_sample_valid),
+        .sample_data(input_sample_8bit_w),
+        .cu_index(input_luma_tu_index_w),
+        .cu_origin_x(input_luma_tu_origin_x_w),
+        .cu_origin_y(input_luma_tu_origin_y_w),
+        .cu_full_visible(ibc_cu_full_visible_w),
+        .cu_last_sample(ibc_cu_last_sample_w),
+        .idle(ibc_matcher_idle),
+        .ibc_cu_mask(ctu_cu_ibc_mask),
+        .ibc_ref_indices(),
+        .ibc_mvd_x(ctu_cu_ibc_mvd_x),
+        .ibc_mvd_y(ctu_cu_ibc_mvd_y)
+      );
+    end else begin : gen_no_exact_hash_ibc
+      assign exact_ibc_hash_enabled_w = 1'b0;
+      assign ibc_sample_valid = 1'b0;
+      assign ibc_cu_full_visible_w = 1'b0;
+      assign ibc_cu_last_sample_w = 1'b0;
+      assign ibc_matcher_idle = 1'b1;
+      assign ctu_cu_ibc_mask = '0;
+      assign ctu_cu_ibc_mvd_x = '0;
+      assign ctu_cu_ibc_mvd_y = '0;
+    end
+  endgenerate
 
   ff_vvc_coding_tree_scheduler #(
     .CTU_SIZE(CTU_SIZE)
@@ -1046,7 +1072,10 @@ module ff_vvc_encoder #(
         .enable(ctu_has_palette_cu),
         .ctu_coded_width(coding_tree_coded_width),
         .ctu_coded_height(coding_tree_coded_height),
+        .ctu_visible_width(ctu_visible_width_w),
+        .ctu_visible_height(ctu_visible_height_w),
         .cu_select_mask(ctu_cu_palette_mask),
+        .cu_ibc_mask(ctu_cu_effective_ibc_mask_w),
         .cu_request_valid(palette_request_valid),
         .cu_request_ready(palette_request_ready),
         .cu_request_origin_x(palette_request_origin_x),
@@ -1062,6 +1091,7 @@ module ff_vvc_encoder #(
         .m_axis_data(palette_stream_data),
         .m_axis_last(palette_stream_last),
         .m_axis_cu_last(palette_stream_cu_last),
+        .m_axis_cu_ibc_mode(palette_stream_cu_ibc_mode),
         .symbol_count(palette_symbol_count)
       );
     end else begin : gen_no_palette_symbolizer
@@ -1070,6 +1100,7 @@ module ff_vvc_encoder #(
       assign palette_stream_data = 32'd0;
       assign palette_stream_last = 1'b0;
       assign palette_stream_cu_last = 1'b0;
+      assign palette_stream_cu_ibc_mode = 1'b0;
       assign palette_symbol_count = 8'd0;
     end
   endgenerate
@@ -1137,6 +1168,9 @@ module ff_vvc_encoder #(
     .sps_joint_cbcr_enabled_flag(vvc_tool_joint_cbcr_enabled),
     .sh_dep_quant_used_flag(vvc_tool_dep_quant_enabled),
     .sh_sign_data_hiding_used_flag(vvc_tool_sign_data_hiding_enabled),
+    .sh_ts_residual_coding_disabled_flag(vvc_tool_transform_skip_enabled &&
+                                         !vvc_tool_dep_quant_enabled &&
+                                         !vvc_tool_sign_data_hiding_enabled),
     .palette_lossless_qp(ctu_has_palette_cu),
     .s_axis_ready(slice_stream_ready),
     .s_axis_valid(rbsp_payload_valid),
@@ -1240,6 +1274,8 @@ module ff_vvc_encoder #(
       cabac_input_last_q <= 1'b0;
       palette_mux_state_q <= PALETTE_MUX_PARTITION;
       palette_current_pred_ibc_ctx_q <= 3'd0;
+      palette_current_leaf_index_q <= 6'd0;
+      ctu_cu_runtime_ibc_mask_q <= '0;
     end else begin
       cabac_start_q <= 1'b0;
       generated_header_start_q <= 1'b0;
@@ -1299,6 +1335,8 @@ module ff_vvc_encoder #(
         cabac_input_last_q <= 1'b0;
         palette_mux_state_q <= PALETTE_MUX_PARTITION;
         palette_current_pred_ibc_ctx_q <= 3'd0;
+        palette_current_leaf_index_q <= 6'd0;
+        ctu_cu_runtime_ibc_mask_q <= '0;
       end else if (resume_input_q) begin
         resume_input_q <= 1'b0;
         input_active_q <= 1'b1;
@@ -1332,6 +1370,8 @@ module ff_vvc_encoder #(
         cabac_input_last_q <= 1'b0;
         palette_mux_state_q <= PALETTE_MUX_PARTITION;
         palette_current_pred_ibc_ctx_q <= 3'd0;
+        palette_current_leaf_index_q <= 6'd0;
+        ctu_cu_runtime_ibc_mask_q <= '0;
       end else if (input_active_q && s_axis_valid && s_axis_ready) begin
         input_stream_leaf_q <= input_stream_leaf_next_w;
         input_stream_component_q <= input_stream_component_next_w;
@@ -1501,10 +1541,14 @@ module ff_vvc_encoder #(
             (ctu_symbol_kind == SYMBOL_PALETTE_LEAF) && !palette_leaf_is_ibc_w) begin
           palette_mux_state_q <= PALETTE_MUX_CU;
           palette_current_pred_ibc_ctx_q <= palette_leaf_ibc_ctx_w;
+          palette_current_leaf_index_q <= palette_leaf_index_w;
         end else if ((palette_mux_state_q == PALETTE_MUX_CU) &&
                      palette_stream_valid && palette_stream_ready &&
                      palette_stream_cu_last) begin
           palette_mux_state_q <= PALETTE_MUX_PARTITION;
+          if (palette_stream_cu_ibc_mode) begin
+            ctu_cu_runtime_ibc_mask_q[palette_current_leaf_index_q] <= 1'b1;
+          end
         end
       end
       if ((generated_out_state_q != GENERATED_OUT_IDLE) &&

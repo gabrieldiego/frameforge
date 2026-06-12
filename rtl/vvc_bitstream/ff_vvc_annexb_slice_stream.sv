@@ -14,6 +14,7 @@ module ff_vvc_annexb_slice_stream (
   input  logic       sps_joint_cbcr_enabled_flag,
   input  logic       sh_dep_quant_used_flag,
   input  logic       sh_sign_data_hiding_used_flag,
+  input  logic       sh_ts_residual_coding_disabled_flag,
   input  logic       palette_lossless_qp,
 
   output logic       s_axis_ready,
@@ -38,9 +39,9 @@ module ff_vvc_annexb_slice_stream (
   localparam logic [2:0] ST_PREFIX_DRAIN = 3'd6;
   localparam logic [2:0] ST_PAYLOAD_RBSP = 3'd7;
   localparam logic [4:0] NAL_UNIT_TYPE_CRA = 5'd9;
-  localparam logic [4:0] SLICE_PREFIX_FIELD_COUNT_IDR = 5'd14;
-  localparam logic [4:0] SLICE_PREFIX_FIELD_COUNT_CRA = 5'd15;
-  localparam logic [4:0] SLICE_PREFIX_FIELD_COUNT_NO_PH = 5'd8;
+  localparam logic [4:0] SLICE_PREFIX_FIELD_COUNT_IDR = 5'd15;
+  localparam logic [4:0] SLICE_PREFIX_FIELD_COUNT_CRA = 5'd16;
+  localparam logic [4:0] SLICE_PREFIX_FIELD_COUNT_NO_PH = 5'd9;
 
   logic [2:0] state_q;
   logic [2:0] byte_index_q;
@@ -108,8 +109,9 @@ module ff_vvc_annexb_slice_stream (
         5'd10: begin prefix_syntax_value = sh_qp_delta_syntax_value; prefix_syntax_bits = sh_qp_delta_syntax_bits; end // sh_qp_delta
         5'd11: begin prefix_syntax_value = {31'd0, sh_dep_quant_used_flag}; prefix_syntax_bits = sh_dep_quant_used_flag ? 6'd1 : 6'd0; end // sh_dep_quant_used_flag
         5'd12: begin prefix_syntax_value = {31'd0, sh_sign_data_hiding_used_flag}; prefix_syntax_bits = (sh_sign_data_hiding_used_flag && !sh_dep_quant_used_flag) ? 6'd1 : 6'd0; end // sh_sign_data_hiding_used_flag
-        5'd13: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // cabac_alignment_one_bit
-        5'd14: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // CRA alignment bit matching current SW subset
+        5'd13: begin prefix_syntax_value = {31'd0, sh_ts_residual_coding_disabled_flag}; prefix_syntax_bits = sh_ts_residual_coding_disabled_flag ? 6'd1 : 6'd0; end
+        5'd14: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // cabac_alignment_one_bit
+        5'd15: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // CRA alignment bit matching current SW subset
         default: begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd0; end
       endcase
     end else begin
@@ -120,8 +122,9 @@ module ff_vvc_annexb_slice_stream (
         5'd3: begin prefix_syntax_value = sh_qp_delta_syntax_value; prefix_syntax_bits = sh_qp_delta_syntax_bits; end // sh_qp_delta
         5'd4: begin prefix_syntax_value = {31'd0, sh_dep_quant_used_flag}; prefix_syntax_bits = sh_dep_quant_used_flag ? 6'd1 : 6'd0; end
         5'd5: begin prefix_syntax_value = {31'd0, sh_sign_data_hiding_used_flag}; prefix_syntax_bits = (sh_sign_data_hiding_used_flag && !sh_dep_quant_used_flag) ? 6'd1 : 6'd0; end
-        5'd6: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // cabac_alignment_one_bit before CABAC payload
-        5'd7: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = is_cra_nal ? 6'd1 : 6'd0; end // extra CRA cabac_alignment_one_bit
+        5'd6: begin prefix_syntax_value = {31'd0, sh_ts_residual_coding_disabled_flag}; prefix_syntax_bits = sh_ts_residual_coding_disabled_flag ? 6'd1 : 6'd0; end
+        5'd7: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = 6'd1; end // cabac_alignment_one_bit before CABAC payload
+        5'd8: begin prefix_syntax_value = 32'd1; prefix_syntax_bits = is_cra_nal ? 6'd1 : 6'd0; end // extra CRA cabac_alignment_one_bit
         default: begin prefix_syntax_value = 32'd0; prefix_syntax_bits = 6'd0; end
       endcase
     end

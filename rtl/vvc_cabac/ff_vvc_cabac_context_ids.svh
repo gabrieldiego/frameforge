@@ -119,3 +119,5 @@ localparam logic [9:0] CTX_ABS_MVD_GREATER1_FLAG_2 = 10'd291;
 localparam logic [9:0] CTX_CU_CODED_FLAG_0 = 10'd292;
 localparam logic [9:0] CTX_CU_CODED_FLAG_1 = 10'd293;
 localparam logic [9:0] CTX_CU_CODED_FLAG_2 = 10'd294;
+localparam logic [9:0] CTX_TRANSFORM_SKIP_FLAG_0 = 10'd295;
+localparam logic [9:0] CTX_TRANSFORM_SKIP_FLAG_1 = 10'd296;

@@ -106,6 +106,54 @@ impl VvcIbcHashSearch {
         })
     }
 
+    pub(super) fn decide_left_8x8(
+        &self,
+        frame: &VvcSampledFrame,
+        origin_x: usize,
+        origin_y: usize,
+    ) -> Option<VvcIbcCuDecision> {
+        if origin_x < VVC_IBC_CU_SIZE || !vvc_ibc_full_8x8_is_visible(frame, origin_x, origin_y) {
+            return None;
+        }
+
+        let ref_origin_x = origin_x - VVC_IBC_CU_SIZE;
+        let ref_origin_y = origin_y;
+        let predictor = self.bvp_for(origin_x, origin_y);
+        let bv = VvcIbcBv {
+            x: -((VVC_IBC_CU_SIZE as i16) << 4),
+            y: 0,
+        };
+        let bvd = VvcIbcBv {
+            x: bv.x - predictor.x,
+            y: bv.y - predictor.y,
+        };
+
+        if (bvd.x & 15) != 0 || (bvd.y & 15) != 0 {
+            return None;
+        }
+        let mvd = VvcIbcBv {
+            x: bvd.x >> 4,
+            y: bvd.y >> 4,
+        };
+
+        if !vvc_ibc_mvd_component_is_supported(mvd.x) || !vvc_ibc_mvd_component_is_supported(mvd.y)
+        {
+            return None;
+        }
+
+        Some(VvcIbcCuDecision {
+            origin_x,
+            origin_y,
+            ref_origin_x,
+            ref_origin_y,
+            bv_x: bv.x,
+            bv_y: bv.y,
+            mvd_x: mvd.x,
+            mvd_y: mvd.y,
+            pred_mode_ibc_ctx: self.pred_mode_ibc_ctx(origin_x, origin_y),
+        })
+    }
+
     pub(super) fn record_palette_8x8(
         &mut self,
         frame: &VvcSampledFrame,

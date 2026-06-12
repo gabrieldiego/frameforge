@@ -14,7 +14,10 @@ module ff_vvc_palette_symbolizer #(
   input  logic        enable,
   input  logic [15:0] ctu_coded_width,
   input  logic [15:0] ctu_coded_height,
+  input  logic [15:0] ctu_visible_width,
+  input  logic [15:0] ctu_visible_height,
   input  logic [MAX_PALETTE_SYMBOLS - 1:0] cu_select_mask,
+  input  logic [MAX_PALETTE_SYMBOLS - 1:0] cu_ibc_mask,
   input  logic        cu_request_valid,
   output logic        cu_request_ready,
   input  logic [15:0] cu_request_origin_x,
@@ -30,6 +33,7 @@ module ff_vvc_palette_symbolizer #(
   output logic [31:0] m_axis_data,
   output logic        m_axis_last,
   output logic        m_axis_cu_last,
+  output logic        m_axis_cu_ibc_mode,
   output logic [7:0]  symbol_count
 );
   localparam logic [1:0] PLANE_Y  = 2'd0;
@@ -40,6 +44,10 @@ module ff_vvc_palette_symbolizer #(
   localparam logic [3:0] PALETTE_PKT_INDEX    = 4'h3;
   localparam logic [3:0] PALETTE_PKT_ENTRY_CB = 4'h4;
   localparam logic [3:0] PALETTE_PKT_ENTRY_CR = 4'h5;
+  localparam logic [3:0] TS_PKT_CU_START  = 4'hA;
+  localparam logic [3:0] TS_PKT_COEFF_Y   = 4'hB;
+  localparam logic [3:0] TS_PKT_COEFF_CB  = 4'hC;
+  localparam logic [3:0] TS_PKT_COEFF_CR  = 4'hD;
   localparam int MAX_CU_SAMPLES = PALETTE_CU_SIZE * PALETTE_CU_SIZE;
   localparam int MAX_PLANE_SAMPLES = CTU_SIZE * CTU_SIZE;
   localparam int PLANE_COUNT_BITS = $clog2(MAX_PLANE_SAMPLES + 1);
@@ -50,7 +58,10 @@ module ff_vvc_palette_symbolizer #(
     ST_WAIT_CU,
     ST_FEED_READ,
     ST_FEED_CU,
-    ST_DRAIN_CU
+    ST_SELECT_CU,
+    ST_DRAIN_CU,
+    ST_DRAIN_TS_START,
+    ST_DRAIN_TS_COEFF
   } state_t;
 
   state_t state_q;
@@ -85,21 +96,55 @@ module ff_vvc_palette_symbolizer #(
   logic [2:0] drain_cu_row_w;
   logic       drain_cu_order_valid_w;
   logic [5:0] drain_cu_order_index_w;
+  logic [2:0] feed_left_cu_col_w;
+  logic       feed_left_order_valid_w;
+  logic [5:0] feed_left_order_index_w;
+  logic [PLANE_COUNT_BITS - 1:0] feed_left_order_index_ext_w;
   logic [7:0] feed_y_sample;
   logic [7:0] feed_cb_sample;
   logic [7:0] feed_cr_sample;
   logic [7:0] feed_y_sample_q;
   logic [7:0] feed_cb_sample_q;
   logic [7:0] feed_cr_sample_q;
+  logic [7:0] feed_left_y_sample_q;
+  logic [7:0] feed_left_cb_sample_q;
+  logic [7:0] feed_left_cr_sample_q;
   logic       feed_sample_last_q;
   logic       feed_sample_valid_q;
+  logic       ts_candidate_q;
+  logic       ts_cbf_y_q;
+  logic       ts_cbf_cb_q;
+  logic       ts_cbf_cr_q;
+  logic [(9 * 16) - 1:0] ts_y_coeff_q;
+  logic [(9 * 16) - 1:0] ts_cb_coeff_q;
+  logic [(9 * 16) - 1:0] ts_cr_coeff_q;
+  logic [3:0] ts_coeff_index_q;
+  logic [1:0] ts_coeff_component_q;
   logic cu_s_axis_valid;
   logic cu_s_axis_ready;
   logic cu_s_axis_last;
+  logic cu_symbolizer_clear_w;
   logic cu_m_axis_valid;
   logic cu_m_axis_ready;
   logic [31:0] cu_m_axis_data;
   logic cu_m_axis_last;
+  logic ts_residual_selected_w;
+  logic ts_residual_drain_w;
+  logic ts_coeff_last_w;
+  logic [3:0] ts_coeff_packet_kind_w;
+  logic signed [8:0] feed_y_diff_w;
+  logic signed [8:0] feed_cb_diff_w;
+  logic signed [8:0] feed_cr_diff_w;
+  logic [3:0] feed_coeff_lane_w;
+  logic feed_in_ts_subset_w;
+  logic prior_runtime_ibc_seen_q;
+  logic [2:0] request_cu_col_w;
+  logic [2:0] request_cu_row_w;
+  logic [5:0] request_cu_index_w;
+  logic request_cu_left_ibc_w;
+  logic request_cu_above_ibc_w;
+  logic [PLANE_COUNT_BITS - 1:0] feed_left_frame_index;
+  logic signed [8:0] ts_coeff_value_w;
 
   (* ram_style = "block" *) logic [7:0] frame_y [0:MAX_PLANE_SAMPLES - 1];
   (* ram_style = "block" *) logic [7:0] frame_cb [0:MAX_PLANE_SAMPLES - 1];
@@ -151,6 +196,8 @@ module ff_vvc_palette_symbolizer #(
   assign drain_cu_row_w = drain_origin_y_q[5:3];
   assign drain_cu_order_index_ext_w =
     {{(PLANE_COUNT_BITS - 6){1'b0}}, drain_cu_order_index_w};
+  assign feed_left_order_index_ext_w =
+    {{(PLANE_COUNT_BITS - 6){1'b0}}, feed_left_order_index_w};
   assign feed_sample_ext_w = {{(PLANE_COUNT_BITS - 8){1'b0}}, feed_sample_q};
   // H.266 7.3.11.4 coding_tree() leaf traversal requests the CU payload by
   // origin. The input stream is the compact fixed-8x8 TU order used by the
@@ -159,16 +206,67 @@ module ff_vvc_palette_symbolizer #(
   assign feed_frame_index =
     ((drain_cu_order_valid_w ? drain_cu_order_index_ext_w : '0) *
      MAX_CU_SAMPLES_L) + feed_sample_ext_w;
+  assign feed_left_cu_col_w = drain_cu_col_w - 3'd1;
+  // H.266 8.6.2.2 uses spatial A1 as the left IBC neighbour. The TU input
+  // stream is coding-tree ordered, so the left CU is not always the preceding
+  // entry in memory; map (x - 8, y) through the same order table before
+  // fetching predictor samples.
+  assign feed_left_frame_index =
+    (drain_cu_order_valid_w && (drain_cu_col_w != 3'd0) && feed_left_order_valid_w) ?
+    ((feed_left_order_index_ext_w * MAX_CU_SAMPLES_L) + feed_sample_ext_w) : '0;
   assign feed_y_sample = feed_y_sample_q;
   assign feed_cb_sample = feed_cb_sample_q;
   assign feed_cr_sample = feed_cr_sample_q;
   assign cu_s_axis_valid = (state_q == ST_FEED_CU) && feed_sample_valid_q;
   assign cu_s_axis_last = feed_sample_last_q;
-  assign cu_m_axis_ready = m_axis_ready;
-  assign m_axis_valid = cu_m_axis_valid;
-  assign m_axis_data = cu_m_axis_data;
-  assign m_axis_last = cu_m_axis_last && drain_cu_is_last_selected;
-  assign m_axis_cu_last = cu_m_axis_last;
+  assign ts_residual_selected_w =
+    ts_candidate_q && (ts_cbf_y_q || ts_cbf_cb_q || ts_cbf_cr_q) &&
+    (ts_cbf_cb_q || ts_cbf_cr_q);
+  assign ts_residual_drain_w =
+    (state_q == ST_DRAIN_TS_START) || (state_q == ST_DRAIN_TS_COEFF);
+  assign ts_coeff_last_w =
+    (state_q == ST_DRAIN_TS_COEFF) &&
+    (ts_coeff_component_q == 2'd2) && (ts_coeff_index_q == 4'd15);
+  assign ts_coeff_packet_kind_w =
+    (ts_coeff_component_q == 2'd0) ? TS_PKT_COEFF_Y :
+    ((ts_coeff_component_q == 2'd1) ? TS_PKT_COEFF_CB : TS_PKT_COEFF_CR);
+  always @* begin
+    case (ts_coeff_component_q)
+      2'd0: ts_coeff_value_w = ts_y_coeff_q[ts_coeff_index_q * 9 +: 9];
+      2'd1: ts_coeff_value_w = ts_cb_coeff_q[ts_coeff_index_q * 9 +: 9];
+      default: ts_coeff_value_w = ts_cr_coeff_q[ts_coeff_index_q * 9 +: 9];
+    endcase
+  end
+  assign cu_symbolizer_clear_w = clear || !enable || ts_residual_drain_w ||
+                                 ((state_q == ST_SELECT_CU) && ts_residual_selected_w);
+  assign cu_m_axis_ready = ts_residual_drain_w ? 1'b0 : m_axis_ready;
+  assign m_axis_valid = ts_residual_drain_w ? 1'b1 : cu_m_axis_valid;
+  assign m_axis_data =
+    (state_q == ST_DRAIN_TS_START) ?
+      {TS_PKT_CU_START, 25'd0, ts_cbf_cr_q, ts_cbf_cb_q, ts_cbf_y_q} :
+    (state_q == ST_DRAIN_TS_COEFF) ?
+      {ts_coeff_packet_kind_w, 15'd0, ts_coeff_index_q, ts_coeff_value_w} :
+      cu_m_axis_data;
+  assign m_axis_last = ts_residual_drain_w ?
+    (ts_coeff_last_w && drain_cu_is_last_selected) :
+    (cu_m_axis_last && drain_cu_is_last_selected);
+  assign m_axis_cu_last = ts_residual_drain_w ? ts_coeff_last_w : cu_m_axis_last;
+  assign m_axis_cu_ibc_mode = ts_residual_drain_w;
+  assign feed_y_diff_w = $signed({1'b0, feed_y_sample_q}) -
+                         $signed({1'b0, feed_left_y_sample_q});
+  assign feed_cb_diff_w = $signed({1'b0, feed_cb_sample_q}) -
+                          $signed({1'b0, feed_left_cb_sample_q});
+  assign feed_cr_diff_w = $signed({1'b0, feed_cr_sample_q}) -
+                          $signed({1'b0, feed_left_cr_sample_q});
+  assign feed_in_ts_subset_w = (feed_x < 16'd4) && (feed_y < 16'd4);
+  assign feed_coeff_lane_w = {feed_y[1:0], feed_x[1:0]};
+  assign request_cu_col_w = cu_request_origin_x[5:3];
+  assign request_cu_row_w = cu_request_origin_y[5:3];
+  assign request_cu_index_w = {request_cu_row_w, request_cu_col_w};
+  assign request_cu_left_ibc_w =
+    (request_cu_col_w != 3'd0) && cu_ibc_mask[request_cu_index_w - 6'd1];
+  assign request_cu_above_ibc_w =
+    (request_cu_row_w != 3'd0) && cu_ibc_mask[request_cu_index_w - 6'd8];
 
   ff_vvc_tu_order_8x8 palette_input_order (
     .visible_cols(visible_cu_cols_w),
@@ -183,12 +281,25 @@ module ff_vvc_palette_symbolizer #(
     .target_row()
   );
 
+  ff_vvc_tu_order_8x8 palette_left_order (
+    .visible_cols(visible_cu_cols_w),
+    .visible_rows(visible_cu_rows_w),
+    .sample_col(feed_left_cu_col_w),
+    .sample_row(drain_cu_row_w),
+    .target_index(6'd0),
+    .sample_valid(feed_left_order_valid_w),
+    .sample_index(feed_left_order_index_w),
+    .target_valid(),
+    .target_col(),
+    .target_row()
+  );
+
   ff_vvc_palette_cu_symbolizer #(
     .CU_SIZE(PALETTE_CU_SIZE)
   ) cu_symbolizer (
     .clk(clk),
     .rst_n(rst_n),
-    .clear(clear || !enable),
+    .clear(cu_symbolizer_clear_w),
     .enable(enable),
     .cu_selected(drain_cu_selected),
     .s_axis_valid(cu_s_axis_valid),
@@ -216,6 +327,16 @@ module ff_vvc_palette_symbolizer #(
       drain_cu_is_last_selected_q <= 1'b0;
       feed_sample_last_q <= 1'b0;
       feed_sample_valid_q <= 1'b0;
+      ts_candidate_q <= 1'b0;
+      ts_cbf_y_q <= 1'b0;
+      ts_cbf_cb_q <= 1'b0;
+      ts_cbf_cr_q <= 1'b0;
+      ts_y_coeff_q <= '0;
+      ts_cb_coeff_q <= '0;
+      ts_cr_coeff_q <= '0;
+      ts_coeff_index_q <= 4'd0;
+      ts_coeff_component_q <= 2'd0;
+      prior_runtime_ibc_seen_q <= 1'b0;
     end else if (clear || !enable) begin
       state_q <= ST_INPUT;
       y_write_count_q <= '0;
@@ -228,6 +349,16 @@ module ff_vvc_palette_symbolizer #(
       drain_cu_is_last_selected_q <= 1'b0;
       feed_sample_last_q <= 1'b0;
       feed_sample_valid_q <= 1'b0;
+      ts_candidate_q <= 1'b0;
+      ts_cbf_y_q <= 1'b0;
+      ts_cbf_cb_q <= 1'b0;
+      ts_cbf_cr_q <= 1'b0;
+      ts_y_coeff_q <= '0;
+      ts_cb_coeff_q <= '0;
+      ts_cr_coeff_q <= '0;
+      ts_coeff_index_q <= 4'd0;
+      ts_coeff_component_q <= 2'd0;
+      prior_runtime_ibc_seen_q <= 1'b0;
     end else begin
       if (input_valid) begin
         case (s_axis_plane)
@@ -245,6 +376,7 @@ module ff_vvc_palette_symbolizer #(
           state_q <= ST_WAIT_CU;
           drain_cu_index_q <= 8'd0;
           feed_sample_q <= 8'd0;
+          prior_runtime_ibc_seen_q <= 1'b0;
         end
       end
 
@@ -261,6 +393,26 @@ module ff_vvc_palette_symbolizer #(
               state_q <= ST_FEED_READ;
               feed_sample_q <= 8'd0;
               feed_sample_valid_q <= 1'b0;
+              ts_candidate_q <=
+                (cu_request_origin_x >= 16'd8) &&
+                ((cu_request_origin_x + 16'd8) <= ctu_visible_width) &&
+                ((cu_request_origin_y + 16'd8) <= ctu_visible_height) &&
+                // H.266 8.6.2.2 builds the IBC BVP list from A1/B1/HMVP/zero.
+                // This first TS-residual subset hardcodes MVD -8,0, so allow
+                // it only while the local BVP history is still zero. The
+                // symbolizer runs in coding-tree order, so this bit tracks
+                // whether a prior runtime TS-residual IBC CU has populated
+                // HMVP before the current request.
+                !request_cu_left_ibc_w && !request_cu_above_ibc_w &&
+                !prior_runtime_ibc_seen_q;
+              ts_cbf_y_q <= 1'b0;
+              ts_cbf_cb_q <= 1'b0;
+              ts_cbf_cr_q <= 1'b0;
+              ts_y_coeff_q <= '0;
+              ts_cb_coeff_q <= '0;
+              ts_cr_coeff_q <= '0;
+              ts_coeff_index_q <= 4'd0;
+              ts_coeff_component_q <= 2'd0;
             end
           end
 
@@ -272,8 +424,22 @@ module ff_vvc_palette_symbolizer #(
 
           ST_FEED_CU: begin
             if (cu_s_axis_ready && feed_sample_valid_q) begin
+              if (ts_candidate_q) begin
+                if (feed_in_ts_subset_w) begin
+                  ts_y_coeff_q[feed_coeff_lane_w * 9 +: 9] <= feed_y_diff_w;
+                  ts_cb_coeff_q[feed_coeff_lane_w * 9 +: 9] <= feed_cb_diff_w;
+                  ts_cr_coeff_q[feed_coeff_lane_w * 9 +: 9] <= feed_cr_diff_w;
+                  ts_cbf_y_q <= ts_cbf_y_q || (feed_y_diff_w != 9'sd0);
+                  ts_cbf_cb_q <= ts_cbf_cb_q || (feed_cb_diff_w != 9'sd0);
+                  ts_cbf_cr_q <= ts_cbf_cr_q || (feed_cr_diff_w != 9'sd0);
+                end else if ((feed_y_diff_w != 9'sd0) ||
+                             (feed_cb_diff_w != 9'sd0) ||
+                             (feed_cr_diff_w != 9'sd0)) begin
+                  ts_candidate_q <= 1'b0;
+                end
+              end
               if (cu_s_axis_last) begin
-                state_q <= ST_DRAIN_CU;
+                state_q <= ST_SELECT_CU;
                 feed_sample_q <= 8'd0;
                 feed_sample_valid_q <= 1'b0;
               end else begin
@@ -284,6 +450,12 @@ module ff_vvc_palette_symbolizer #(
             end
           end
 
+          ST_SELECT_CU: begin
+            state_q <= ts_residual_selected_w ? ST_DRAIN_TS_START : ST_DRAIN_CU;
+            ts_coeff_index_q <= 4'd0;
+            ts_coeff_component_q <= 2'd0;
+          end
+
           ST_DRAIN_CU: begin
             if (cu_m_axis_valid && cu_m_axis_ready && cu_m_axis_last) begin
               if (drain_cu_is_last_selected) begin
@@ -292,6 +464,34 @@ module ff_vvc_palette_symbolizer #(
               end else begin
                 state_q <= ST_WAIT_CU;
                 drain_cu_index_q <= drain_cu_index_q + 8'd1;
+              end
+            end
+          end
+
+          ST_DRAIN_TS_START: begin
+            if (m_axis_ready) begin
+              state_q <= ST_DRAIN_TS_COEFF;
+              ts_coeff_index_q <= 4'd0;
+              ts_coeff_component_q <= 2'd0;
+            end
+          end
+
+          ST_DRAIN_TS_COEFF: begin
+            if (m_axis_ready) begin
+              if (ts_coeff_last_w) begin
+                prior_runtime_ibc_seen_q <= 1'b1;
+                if (drain_cu_is_last_selected) begin
+                  state_q <= ST_INPUT;
+                  drain_cu_index_q <= 8'd0;
+                end else begin
+                  state_q <= ST_WAIT_CU;
+                  drain_cu_index_q <= drain_cu_index_q + 8'd1;
+                end
+              end else if (ts_coeff_index_q == 4'd15) begin
+                ts_coeff_index_q <= 4'd0;
+                ts_coeff_component_q <= ts_coeff_component_q + 2'd1;
+              end else begin
+                ts_coeff_index_q <= ts_coeff_index_q + 4'd1;
               end
             end
           end
@@ -323,6 +523,9 @@ module ff_vvc_palette_symbolizer #(
       feed_y_sample_q <= frame_y[feed_frame_index];
       feed_cb_sample_q <= frame_cb[feed_frame_index];
       feed_cr_sample_q <= frame_cr[feed_frame_index];
+      feed_left_y_sample_q <= frame_y[feed_left_frame_index];
+      feed_left_cb_sample_q <= frame_cb[feed_left_frame_index];
+      feed_left_cr_sample_q <= frame_cr[feed_left_frame_index];
     end
   end
 endmodule

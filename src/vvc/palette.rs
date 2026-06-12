@@ -2,6 +2,7 @@ use crate::picture::{ChromaSampling, PixelFormat};
 
 use super::{
     ibc::{VvcIbcCuDecision, VvcIbcHashSearch},
+    residual::{VvcResidualCabacEncoder, VvcResidualCabacSymbolStream, VvcResidualComponent},
     sample_vvc_yuv_frame, vvc_picture_ctu_count, vvc_poc_lsb_for_frame_idx, vvc_slice_address_bits,
     VvcCabacContext, VvcCabacContexts, VvcCabacEncoder, VvcCtuCabacOp, VvcCtuPartitionShape,
     VvcEncodeParams, VvcNalUnit, VvcPictureKind, VvcSampledColor, VvcSampledFrame,
@@ -146,15 +147,37 @@ pub(super) fn vvc_palette_444_reconstruction_yuv(frame: &VvcSampledFrame) -> Vec
             if !vvc_palette_cu_origin_is_visible(frame.geometry, node.x, node.y) {
                 continue;
             }
-            if let Some(decision) = ibc_search.decide_8x8(frame, origin_x, origin_y) {
+            if vvc_exact_hash_ibc_444_enabled(frame) {
+                if let Some(decision) = ibc_search.decide_8x8(frame, origin_x, origin_y) {
+                    copy_vvc_ibc_444_8x8_reconstruction(
+                        &mut luma,
+                        &mut cb,
+                        &mut cr,
+                        frame.geometry.width,
+                        decision,
+                    );
+                    ibc_search.record_ibc_8x8(frame, decision);
+                    continue;
+                }
+            }
+            if let Some(residual) =
+                vvc_transform_skip_residual_444_left_8x8(frame, &ibc_search, origin_x, origin_y)
+            {
                 copy_vvc_ibc_444_8x8_reconstruction(
                     &mut luma,
                     &mut cb,
                     &mut cr,
                     frame.geometry.width,
-                    decision,
+                    residual.decision,
                 );
-                ibc_search.record_ibc_8x8(frame, decision);
+                add_vvc_transform_skip_residual_444_8x8_reconstruction(
+                    &mut luma,
+                    &mut cb,
+                    &mut cr,
+                    frame.geometry.width,
+                    &residual,
+                );
+                ibc_search.record_ibc_8x8(frame, residual.decision);
                 continue;
             }
             let syntax = vvc_palette_444_cu_syntax(frame, origin_x, origin_y);
@@ -199,6 +222,97 @@ fn copy_vvc_ibc_444_8x8_reconstruction(
         cb.copy_within(src..src + 8, dst);
         cr.copy_within(src..src + 8, dst);
     }
+}
+
+fn add_vvc_transform_skip_residual_444_8x8_reconstruction(
+    luma: &mut [u8],
+    cb: &mut [u8],
+    cr: &mut [u8],
+    stride: usize,
+    residual: &VvcTransformSkipResidual444Cu,
+) {
+    let origin_x = residual.decision.origin_x;
+    let origin_y = residual.decision.origin_y;
+    for y_off in 0..4 {
+        for x_off in 0..4 {
+            let local = y_off * 8 + x_off;
+            let dst = (origin_y + y_off) * stride + origin_x + x_off;
+            luma[dst] = add_i16_to_u8(luma[dst], residual.y_coeffs[local]);
+            cb[dst] = add_i16_to_u8(cb[dst], residual.cb_coeffs[local]);
+            cr[dst] = add_i16_to_u8(cr[dst], residual.cr_coeffs[local]);
+        }
+    }
+}
+
+fn vvc_transform_skip_residual_444_left_8x8(
+    frame: &VvcSampledFrame,
+    ibc_search: &VvcIbcHashSearch,
+    origin_x: usize,
+    origin_y: usize,
+) -> Option<VvcTransformSkipResidual444Cu> {
+    let decision = ibc_search.decide_left_8x8(frame, origin_x, origin_y)?;
+    let mut y_coeffs = vec![0i16; 64];
+    let mut cb_coeffs = vec![0i16; 64];
+    let mut cr_coeffs = vec![0i16; 64];
+    let mut cbf_y = false;
+    let mut cbf_cb = false;
+    let mut cbf_cr = false;
+
+    for y_off in 0..8 {
+        for x_off in 0..8 {
+            let cur = (origin_y + y_off) * frame.geometry.width + origin_x + x_off;
+            let ref_idx = (decision.ref_origin_y + y_off) * frame.geometry.width
+                + decision.ref_origin_x
+                + x_off;
+            let in_residual_subset = x_off < 4 && y_off < 4;
+            let y_diff = i16::from(frame.luma[cur]) - i16::from(frame.luma[ref_idx]);
+            let cb_diff = i16::from(frame.cb[cur]) - i16::from(frame.cb[ref_idx]);
+            let cr_diff = i16::from(frame.cr[cur]) - i16::from(frame.cr[ref_idx]);
+            if !in_residual_subset && (y_diff != 0 || cb_diff != 0 || cr_diff != 0) {
+                return None;
+            }
+            if in_residual_subset {
+                let local = y_off * 8 + x_off;
+                y_coeffs[local] = y_diff;
+                cb_coeffs[local] = cb_diff;
+                cr_coeffs[local] = cr_diff;
+                cbf_y |= y_diff != 0;
+                cbf_cb |= cb_diff != 0;
+                cbf_cr |= cr_diff != 0;
+            }
+        }
+    }
+
+    // Keep this first transform-skip subset observable and syntax-simple:
+    // require at least one chroma residual so QtCbf[Y] is explicitly present,
+    // and leave pure-luma IBC residuals for the later full-CU residual path.
+    if !cbf_y && !cbf_cb && !cbf_cr {
+        return None;
+    }
+    if !cbf_cb && !cbf_cr {
+        return None;
+    }
+    // H.266 8.6.2.2 derives the IBC predictor list from A1/B1/HMVP/zero.
+    // The first RTL transform-skip residual subset hardcodes MVD -8,0, so
+    // software only selects this mode while that zero-predictor syntax applies.
+    if decision.pred_mode_ibc_ctx != 0 || decision.mvd_x != -8 || decision.mvd_y != 0 {
+        return None;
+    }
+
+    Some(VvcTransformSkipResidual444Cu {
+        decision,
+        y_coeffs,
+        cb_coeffs,
+        cr_coeffs,
+        cbf_y,
+        cbf_cb,
+        cbf_cr,
+    })
+}
+
+fn add_i16_to_u8(sample: u8, delta: i16) -> u8 {
+    let value = i16::from(sample) + delta;
+    value.clamp(0, 255) as u8
 }
 
 pub(super) fn vvc_palette_444_ctu_slice_unit(
@@ -268,6 +382,16 @@ fn vvc_palette_444_slice_payload(
     }
     if tool_flags.sign_data_hiding_enabled && !tool_flags.dependent_quantization_enabled {
         writer.write_flag("sh_sign_data_hiding_used_flag", true);
+    }
+    if tool_flags.transform_skip_enabled
+        && !tool_flags.dependent_quantization_enabled
+        && !tool_flags.sign_data_hiding_enabled
+    {
+        // H.266 7.3.7.1: when this flag is 1, transform-skipped TUs still
+        // use residual_coding() rather than residual_codingTS(). The first
+        // 4:4:4 residual subset uses transform skip for reconstruction while
+        // deliberately reusing the existing regular residual CABAC path.
+        writer.write_flag("sh_ts_residual_coding_disabled_flag", true);
     }
     writer.write_flag("cabac_alignment_one_bit", true);
     if picture_kind.is_cra() {
@@ -433,6 +557,17 @@ struct VvcPaletteCuEmitRequest {
     predictor_mode: VvcPalettePredictorMode,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VvcTransformSkipResidual444Cu {
+    decision: VvcIbcCuDecision,
+    y_coeffs: Vec<i16>,
+    cb_coeffs: Vec<i16>,
+    cr_coeffs: Vec<i16>,
+    cbf_y: bool,
+    cbf_cb: bool,
+    cbf_cr: bool,
+}
+
 fn append_vvc_palette_444_8x8_cu_with_events(
     cabac: &mut VvcCabacEncoder,
     ctx: &mut VvcCabacContexts,
@@ -454,14 +589,33 @@ fn append_vvc_palette_444_8x8_cu_with_events(
     ctx.encode(cabac, VvcCabacContext::CuSkipFlag(0), false);
     let origin_x = request.origin_x as usize;
     let origin_y = request.origin_y as usize;
-    if let Some(decision) = ibc_search.decide_8x8(frame, origin_x, origin_y) {
+    if vvc_exact_hash_ibc_444_enabled(frame) {
+        if let Some(decision) = ibc_search.decide_8x8(frame, origin_x, origin_y) {
+            ctx.encode(
+                cabac,
+                VvcCabacContext::PredModeIbcFlag(decision.pred_mode_ibc_ctx),
+                true,
+            );
+            append_vvc_ibc_444_8x8_cu(cabac, ctx, decision);
+            ibc_search.record_ibc_8x8(frame, decision);
+            return false;
+        }
+    }
+    if let Some(residual) =
+        vvc_transform_skip_residual_444_left_8x8(frame, ibc_search, origin_x, origin_y)
+    {
         ctx.encode(
             cabac,
-            VvcCabacContext::PredModeIbcFlag(decision.pred_mode_ibc_ctx),
+            VvcCabacContext::PredModeIbcFlag(residual.decision.pred_mode_ibc_ctx),
             true,
         );
-        append_vvc_ibc_444_8x8_cu(cabac, ctx, decision);
-        ibc_search.record_ibc_8x8(frame, decision);
+        append_vvc_ibc_444_8x8_cu_residual(
+            cabac,
+            ctx,
+            VvcSliceSyntaxConfig::palette_444(),
+            &residual,
+        );
+        ibc_search.record_ibc_8x8(frame, residual.decision);
         return false;
     }
     ctx.encode(
@@ -491,7 +645,29 @@ fn append_vvc_palette_444_8x8_cu_with_events(
     true
 }
 
+fn vvc_exact_hash_ibc_444_enabled(frame: &VvcSampledFrame) -> bool {
+    let _ = frame;
+    // H.266 8.6.2.2 constructs the IBC BVP list from decoded neighbouring IBC
+    // CUs and HMVP entries. The RTL exact-hash matcher currently precomputes
+    // BVDs before the later transform-skip residual path can mark a CU as IBC,
+    // which leaves subsequent exact-hash CUs with stale predictors. Keep the
+    // encoder on palette / runtime left-IBC residual modes until the matcher
+    // can make exact decisions against the final runtime IBC state.
+    false
+}
+
 fn append_vvc_ibc_444_8x8_cu(
+    cabac: &mut VvcCabacEncoder,
+    ctx: &mut VvcCabacContexts,
+    decision: VvcIbcCuDecision,
+) {
+    append_vvc_ibc_444_8x8_prediction(cabac, ctx, decision);
+    // H.266 7.3.11.4/7.4.12.4: cu_coded_flag=0 means no transform_tree()
+    // follows; the exact-match IBC CU reconstructs entirely from prediction.
+    ctx.encode(cabac, VvcCabacContext::CuCodedFlag(0), false);
+}
+
+fn append_vvc_ibc_444_8x8_prediction(
     cabac: &mut VvcCabacEncoder,
     ctx: &mut VvcCabacContexts,
     decision: VvcIbcCuDecision,
@@ -506,9 +682,56 @@ fn append_vvc_ibc_444_8x8_cu(
     // absent; H.266 Table 16 then scales the coded integer-sample IBC MVD into
     // the 1/16 luma-sample BVD consumed by H.266 8.6.2.1.
     //
-    // H.266 7.3.11.4/7.4.12.4: cu_coded_flag=0 means no transform_tree()
-    // follows; the exact-match IBC CU reconstructs entirely from prediction.
-    ctx.encode(cabac, VvcCabacContext::CuCodedFlag(0), false);
+}
+
+fn append_vvc_ibc_444_8x8_cu_residual(
+    cabac: &mut VvcCabacEncoder,
+    ctx: &mut VvcCabacContexts,
+    slice_config: VvcSliceSyntaxConfig,
+    residual: &VvcTransformSkipResidual444Cu,
+) {
+    append_vvc_ibc_444_8x8_prediction(cabac, ctx, residual.decision);
+    ctx.encode(cabac, VvcCabacContext::CuCodedFlag(0), true);
+
+    // H.266 7.3.11.10 transform_unit(), non-separate 4:4:4 tree:
+    // chroma cbf flags are coded before luma. For inter/IBC CUs with no
+    // chroma CBF, the luma CBF at transform depth 0 is inferred true by VTM
+    // CABACWriter::transform_unit(); otherwise QtCbf[Y][0] is signalled.
+    ctx.encode(cabac, VvcCabacContext::QtCbfCb(0), residual.cbf_cb);
+    ctx.encode(
+        cabac,
+        VvcCabacContext::QtCbfCr(u8::from(residual.cbf_cb)),
+        residual.cbf_cr,
+    );
+    if residual.cbf_cb || residual.cbf_cr {
+        ctx.encode(cabac, VvcCabacContext::QtCbfY(0), residual.cbf_y);
+    } else {
+        debug_assert!(residual.cbf_y);
+    }
+
+    let mut encoder = VvcResidualCabacEncoder::new(ctx, slice_config.residual_options());
+    if residual.cbf_y {
+        VvcResidualCabacSymbolStream::luma_transform_skip_coefficients(3, 3, &residual.y_coeffs)
+            .emit(&mut encoder, cabac);
+    }
+    if residual.cbf_cb {
+        VvcResidualCabacSymbolStream::chroma_transform_skip_coefficients(
+            VvcResidualComponent::ChromaCb,
+            3,
+            3,
+            &residual.cb_coeffs,
+        )
+        .emit(&mut encoder, cabac);
+    }
+    if residual.cbf_cr {
+        VvcResidualCabacSymbolStream::chroma_transform_skip_coefficients(
+            VvcResidualComponent::ChromaCr,
+            3,
+            3,
+            &residual.cr_coeffs,
+        )
+        .emit(&mut encoder, cabac);
+    }
 }
 
 fn append_vvc_ibc_mvd_coding(
