@@ -48,6 +48,7 @@ module ff_vvc_cabac_syntax_frontend #(
   localparam logic [7:0] TS_PKT_COEFF_Y        = 8'h8B;
   localparam logic [7:0] TS_PKT_COEFF_CB       = 8'h8C;
   localparam logic [7:0] TS_PKT_COEFF_CR       = 8'h8D;
+  localparam logic [7:0] BDPCM_PKT_CU_START    = 8'h8E;
 
   `include "ff_vvc_cabac_context_ids.svh"
 
@@ -90,6 +91,13 @@ module ff_vvc_cabac_syntax_frontend #(
     ST_TS_FLAG,
     ST_TS_START_RESIDUAL,
     ST_TS_WAIT_RESIDUAL,
+    ST_BDPCM_CU_SKIP,
+    ST_BDPCM_PRED_MODE_IBC,
+    ST_BDPCM_PRED_MODE_PLT,
+    ST_BDPCM_LUMA_FLAG,
+    ST_BDPCM_LUMA_DIR,
+    ST_BDPCM_CHROMA_FLAG,
+    ST_BDPCM_CHROMA_DIR,
     ST_PAL_TERMINATE
   } state_t;
 
@@ -141,6 +149,7 @@ module ff_vvc_cabac_syntax_frontend #(
   logic signed [15:0] ibc_mvd_x_q;
   logic signed [15:0] ibc_mvd_y_q;
   logic ibc_residual_q;
+  logic bdpcm_residual_q;
   logic [15:0] ibc_abs_mvd_x;
   logic [15:0] ibc_abs_mvd_y;
   logic [15:0] ibc_abs_mvd_cur;
@@ -390,6 +399,7 @@ module ff_vvc_cabac_syntax_frontend #(
       ibc_mvd_x_q <= 16'sd0;
       ibc_mvd_y_q <= 16'sd0;
       ibc_residual_q <= 1'b0;
+      bdpcm_residual_q <= 1'b0;
       ibc_pred_mode_ctx_q <= 3'd0;
       ts_cbf_y_q <= 1'b0;
       ts_cbf_cb_q <= 1'b0;
@@ -434,6 +444,7 @@ module ff_vvc_cabac_syntax_frontend #(
       ibc_mvd_x_q <= 16'sd0;
       ibc_mvd_y_q <= 16'sd0;
       ibc_residual_q <= 1'b0;
+      bdpcm_residual_q <= 1'b0;
       ibc_pred_mode_ctx_q <= 3'd0;
       ts_cbf_y_q <= 1'b0;
       ts_cbf_cb_q <= 1'b0;
@@ -799,10 +810,67 @@ module ff_vvc_cabac_syntax_frontend #(
                      (pending_raw_last_q ? ST_PAL_TERMINATE : ST_IDLE);
         end
 
+        ST_BDPCM_CU_SKIP: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BIN_CTX;
+          m_axis_data <= ({22'd0, CTX_CU_SKIP_FLAG_0} << 8);
+          m_axis_last <= 1'b0;
+          state_q <= ST_BDPCM_PRED_MODE_IBC;
+        end
+
+        ST_BDPCM_PRED_MODE_IBC: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BIN_CTX;
+          m_axis_data <= ({22'd0, CTX_PRED_MODE_IBC_FLAG_0 + ibc_pred_mode_ctx_q} << 8);
+          m_axis_last <= 1'b0;
+          state_q <= ST_BDPCM_PRED_MODE_PLT;
+        end
+
+        ST_BDPCM_PRED_MODE_PLT: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BIN_CTX;
+          m_axis_data <= ({22'd0, CTX_PRED_MODE_PLT_FLAG} << 8);
+          m_axis_last <= 1'b0;
+          state_q <= ST_BDPCM_LUMA_FLAG;
+        end
+
+        ST_BDPCM_LUMA_FLAG: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BIN_CTX;
+          m_axis_data <= 32'd1 | ({22'd0, CTX_BDPCM_MODE_0} << 8);
+          m_axis_last <= 1'b0;
+          state_q <= ST_BDPCM_LUMA_DIR;
+        end
+
+        ST_BDPCM_LUMA_DIR: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BIN_CTX;
+          m_axis_data <= ({22'd0, CTX_BDPCM_MODE_1} << 8);
+          m_axis_last <= 1'b0;
+          state_q <= ST_BDPCM_CHROMA_FLAG;
+        end
+
+        ST_BDPCM_CHROMA_FLAG: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BIN_CTX;
+          m_axis_data <= 32'd1 | ({22'd0, CTX_BDPCM_MODE_2} << 8);
+          m_axis_last <= 1'b0;
+          state_q <= ST_BDPCM_CHROMA_DIR;
+        end
+
+        ST_BDPCM_CHROMA_DIR: begin
+          m_axis_valid <= 1'b1;
+          m_axis_kind <= SYMBOL_BIN_CTX;
+          m_axis_data <= ({22'd0, CTX_BDPCM_MODE_3} << 8);
+          m_axis_last <= 1'b0;
+          state_q <= ST_TS_CBF_CB;
+        end
+
         ST_TS_CBF_CB: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_CTX;
-          m_axis_data <= ({22'd0, CTX_QT_CBF_CB_0} << 8) | {31'd0, ts_cbf_cb_q};
+          m_axis_data <= ({22'd0, (bdpcm_residual_q ? CTX_QT_CBF_CB_1 : CTX_QT_CBF_CB_0)} << 8) |
+                         {31'd0, ts_cbf_cb_q};
           m_axis_last <= 1'b0;
           state_q <= ST_TS_CBF_CR;
         end
@@ -810,7 +878,8 @@ module ff_vvc_cabac_syntax_frontend #(
         ST_TS_CBF_CR: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_CTX;
-          m_axis_data <= ({22'd0, (ts_cbf_cb_q ? CTX_QT_CBF_CR_1 : CTX_QT_CBF_CR_0)} << 8) |
+          m_axis_data <= ({22'd0, (bdpcm_residual_q ? CTX_QT_CBF_CR_2 :
+                           (ts_cbf_cb_q ? CTX_QT_CBF_CR_1 : CTX_QT_CBF_CR_0))} << 8) |
                          {31'd0, ts_cbf_cr_q};
           m_axis_last <= 1'b0;
           state_q <= ST_TS_CBF_Y;
@@ -819,7 +888,8 @@ module ff_vvc_cabac_syntax_frontend #(
         ST_TS_CBF_Y: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_CTX;
-          m_axis_data <= ({22'd0, CTX_QT_CBF_Y_0} << 8) | {31'd0, ts_cbf_y_q};
+          m_axis_data <= ({22'd0, (bdpcm_residual_q ? CTX_QT_CBF_Y_1 : CTX_QT_CBF_Y_0)} << 8) |
+                         {31'd0, ts_cbf_y_q};
           m_axis_last <= 1'b0;
           ts_component_q <= 2'd0;
           state_q <= ST_TS_SELECT_COMPONENT;
@@ -828,6 +898,7 @@ module ff_vvc_cabac_syntax_frontend #(
         ST_TS_SELECT_COMPONENT: begin
           if (ts_component_q >= 2'd3) begin
             ibc_residual_q <= 1'b0;
+            bdpcm_residual_q <= 1'b0;
             state_q <= pending_raw_last_q ? ST_PAL_TERMINATE : ST_IDLE;
           end else if (ts_component_cbf_w) begin
             ts_coeff_q <= '0;
@@ -866,14 +937,19 @@ module ff_vvc_cabac_syntax_frontend #(
         end
 
         ST_TS_FLAG: begin
-          m_axis_valid <= 1'b1;
-          m_axis_kind <= SYMBOL_BIN_CTX;
-          m_axis_data <= ({22'd0,
-                           ((ts_component_q == 2'd0) ?
-                            CTX_TRANSFORM_SKIP_FLAG_0 : CTX_TRANSFORM_SKIP_FLAG_1)} << 8) |
-                         32'd1;
-          m_axis_last <= 1'b0;
-          state_q <= ST_TS_START_RESIDUAL;
+          if (bdpcm_residual_q) begin
+            // H.266 7.4.12.11 infers transform_skip_flag to 1 for BDPCM TUs.
+            state_q <= ST_TS_START_RESIDUAL;
+          end else begin
+            m_axis_valid <= 1'b1;
+            m_axis_kind <= SYMBOL_BIN_CTX;
+            m_axis_data <= ({22'd0,
+                             ((ts_component_q == 2'd0) ?
+                              CTX_TRANSFORM_SKIP_FLAG_0 : CTX_TRANSFORM_SKIP_FLAG_1)} << 8) |
+                           32'd1;
+            m_axis_last <= 1'b0;
+            state_q <= ST_TS_START_RESIDUAL;
+          end
         end
 
         ST_TS_START_RESIDUAL: begin
@@ -994,6 +1070,7 @@ module ff_vvc_cabac_syntax_frontend #(
                 ibc_mvd_y_q <= {{3{raw_symbol_data[25]}}, raw_symbol_data[25:13]};
                 ibc_pred_mode_ctx_q <= raw_symbol_data[28:26];
                 ibc_residual_q <= 1'b0;
+                bdpcm_residual_q <= 1'b0;
                 state_q <= ST_IBC_CU_SKIP;
               end
 
@@ -1008,7 +1085,21 @@ module ff_vvc_cabac_syntax_frontend #(
                 ibc_mvd_y_q <= 16'sd0;
                 ibc_pred_mode_ctx_q <= 3'd0;
                 ibc_residual_q <= 1'b1;
+                bdpcm_residual_q <= 1'b0;
                 state_q <= ST_IBC_CU_SKIP;
+              end
+
+              BDPCM_PKT_CU_START: begin
+                ts_cbf_y_q <= raw_symbol_data[0];
+                ts_cbf_cb_q <= raw_symbol_data[1];
+                ts_cbf_cr_q <= raw_symbol_data[2];
+                ts_coeff_q <= '0;
+                ts_component_q <= 2'd0;
+                ts_collect_count_q <= 4'd0;
+                ibc_pred_mode_ctx_q <= raw_symbol_data[5:3];
+                ibc_residual_q <= 1'b0;
+                bdpcm_residual_q <= 1'b1;
+                state_q <= ST_BDPCM_CU_SKIP;
               end
 
               TS_PKT_COEFF_Y: begin

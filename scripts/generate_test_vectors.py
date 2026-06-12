@@ -365,6 +365,8 @@ def sample_yuv(vector: TestVector, x: int, y: int, frame: int) -> tuple[int, int
         return palette_tile_sample(x, y, frame)
     if vector.pattern == "transform_skip_left_delta":
         return transform_skip_left_delta_sample(x, y, frame)
+    if vector.pattern == "bdpcm_horizontal":
+        return bdpcm_horizontal_sample(x, y, frame)
     if vector.pattern == "palette_escape_prng":
         return palette_escape_prng_sample(vector, x, y, frame)
     if vector.pattern == "moving_blocks":
@@ -395,6 +397,23 @@ def transform_skip_left_delta_sample(x: int, y: int, frame: int) -> tuple[int, i
         cb_sample = (cb_sample + 4) & 0xFF
         cr_sample = (cr_sample + 5) & 0xFF
     return y_sample, cb_sample, cr_sample
+
+
+def bdpcm_horizontal_sample(x: int, y: int, frame: int) -> tuple[int, int, int]:
+    tile_x = x // 8
+    tile_y = y // 8
+    local_x = x & 7
+    local_y = y & 7
+    row_delta = [1, 3, 6, 10, 10, 10, 10, 10][local_x] if local_y < 4 else 0
+    carry = tile_x * 10 if local_y < 4 else 0
+    y_base = 44 + (tile_y * 23) + (frame * 5)
+    cb_base = 82 + (tile_y * 17) + (frame * 7)
+    cr_base = 118 + (tile_y * 13) + (frame * 3)
+    return (
+        (y_base + carry + row_delta) & 0xFF,
+        (cb_base + carry + row_delta + 2) & 0xFF,
+        (cr_base + carry + row_delta + 4) & 0xFF,
+    )
 
 
 def palette_escape_prng_sample(vector: TestVector, x: int, y: int, frame: int) -> tuple[int, int, int]:

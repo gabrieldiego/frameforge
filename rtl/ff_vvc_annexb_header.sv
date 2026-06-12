@@ -17,6 +17,7 @@ module ff_vvc_annexb_header #(
   input  logic        sps_ref_pic_resampling_enabled_flag,
   input  logic        sps_entry_point_offsets_present_flag,
   input  logic        sps_transform_skip_enabled_flag,
+  input  logic        sps_bdpcm_enabled_flag,
   input  logic        sps_mts_enabled_flag,
   input  logic        sps_lfnst_enabled_flag,
   input  logic        sps_joint_cbcr_enabled_flag,
@@ -349,7 +350,7 @@ module ff_vvc_annexb_header #(
         7'd50: begin syntax_value = 32'd1; syntax_bits = 6'd1; end // sps_max_luma_transform_size_64_flag
         7'd51: begin syntax_value = {31'd0, sps_transform_skip_enabled_flag}; syntax_bits = 6'd1; end // sps_transform_skip_enabled_flag
         7'd52: begin syntax_value = 32'd2; syntax_bits = sps_transform_skip_enabled_flag ? 6'd3 : 6'd0; end // sps_log2_transform_skip_max_size_minus2 ue(1)
-        7'd53: begin syntax_value = 32'd0; syntax_bits = sps_transform_skip_enabled_flag ? 6'd1 : 6'd0; end // sps_bdpcm_enabled_flag
+        7'd53: begin syntax_value = {31'd0, sps_bdpcm_enabled_flag}; syntax_bits = sps_transform_skip_enabled_flag ? 6'd1 : 6'd0; end // sps_bdpcm_enabled_flag
         7'd54: begin syntax_value = {31'd0, sps_mts_enabled_flag}; syntax_bits = 6'd1; end // sps_mts_enabled_flag
         7'd55: begin syntax_value = {31'd0, sps_lfnst_enabled_flag}; syntax_bits = 6'd1; end // sps_lfnst_enabled_flag
         7'd56: begin syntax_value = {31'd0, sps_joint_cbcr_enabled_flag}; syntax_bits = 6'd1; end // sps_joint_cbcr_enabled_flag

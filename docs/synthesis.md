@@ -916,6 +916,58 @@ Result:
   4,439 estimated LCs, and the palette CU symbolizer at 9,286 cells and 3,097
   estimated LCs.
 
+## Top Encoder 4:4:4 BDPCM
+
+Measured on June 11, 2026 after adding the first 4:4:4 horizontal BDPCM path.
+The current subset only tries horizontal BDPCM for 8x8 CUs that have a
+left-neighbour predictor and nonzero coefficients confined to the top-left 4x4
+group. Wider BDPCM direction and block-size coverage remains future work.
+
+Validation:
+
+```sh
+cargo test vvc_
+make validate INPUT=verification/generated/test_vectors/bdpcm_horizontal_64x64_1f_yuv444p8.yuv VALIDATE_SYNTH=0
+make hardware-regression HARDWARE_REGRESSION_EXTRA_SET=bdpcm-444 HARDWARE_REGRESSION_SYNTH=0
+```
+
+The hardware regression passed all 192 SW/RTL/VTM geometry cases: the public
+4:2:0 sweep, the public 4:4:4 screen-block sweep, and the new 4:4:4 BDPCM
+sweep.
+
+Synthesis:
+
+```sh
+make synth SYNTH_DUT=vvc-encoder
+```
+
+Configuration:
+
+- target: Arty Z7-10 (`xc7z010clg400-1`)
+- clock metadata: 25 MHz
+- max visible size: 1024x1024
+- 4:4:4 palette support: enabled
+- exact-hash IBC for 4:4:4: disabled (`SYNTH_SUPPORT_EXACT_HASH_IBC_444=0`)
+- synthesis timeout: 600 seconds, with a 300 second review threshold
+- synthesis memory cap: 3072 MiB
+
+Result:
+
+- Top `ff_vvc_encoder` synthesis completed in 376.3 seconds with 1882.95 MiB
+  peak child RSS observed by the synthesis runner.
+- Critical-path reporting completed in 68.3 seconds with the same observed peak
+  child RSS.
+- Longest topological path stayed at 55. The reported path remains in
+  `ff_vvc_cabac_syntax_frontend` IBC MVD absolute-value and EG1 prefix
+  generation before `m_axis_data`, so BDPCM did not introduce the top reported
+  timing path.
+- Post-synth netlist restat reported 118,404 total cells and 45,381 estimated
+  LCs. Compared with the 4:4:4 transform-skip residual baseline, total cells
+  increased by 3,748 and estimated LCs increased by 1,275.
+- Runtime stayed inside the 600 second hard timeout but exceeded the 300 second
+  review threshold. Peak child RSS increased by about 30 MiB from the previous
+  top-encoder baseline and remains inside the 3072 MiB cap.
+
 ## Top Encoder Vivado Z7-10 Timing Snapshot
 
 Measured on June 9, 2026 with Vivado 2025.2 after the narrow chroma

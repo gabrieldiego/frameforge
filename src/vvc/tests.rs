@@ -475,6 +475,7 @@ fn vvc_sps_tool_flags_can_enable_gated_tools_from_one_config() {
     assert_vvc_flag(&rbsp, "sps_qtbtt_dual_tree_intra_flag", true);
     assert_vvc_flag(&palette_rbsp, "sps_qtbtt_dual_tree_intra_flag", false);
     assert_eq!(vvc_u_value(&palette_rbsp, "sps_chroma_format_idc"), 3);
+    assert_vvc_flag(&palette_rbsp, "sps_bdpcm_enabled_flag", true);
     assert_vvc_flag(&palette_rbsp, "sps_palette_enabled_flag", true);
     assert_eq!(
         vvc_ue_value(
@@ -766,6 +767,10 @@ fn vvc_contexts_derive_split_probability_from_init_tables() {
 fn vvc_contexts_include_residual_init_tables() {
     assert_eq!(VvcCabacContext::TransformSkipFlag(0).init_value(), 25);
     assert_eq!(VvcCabacContext::TransformSkipFlag(0).log2_window_size(), 1);
+    assert_eq!(VvcCabacContext::BdpcmMode(0).init_value(), 19);
+    assert_eq!(VvcCabacContext::BdpcmMode(1).init_value(), 35);
+    assert_eq!(VvcCabacContext::BdpcmMode(2).init_value(), 1);
+    assert_eq!(VvcCabacContext::BdpcmMode(3).log2_window_size(), 0);
     assert_eq!(VvcCabacContext::MtsIdx(2).init_value(), 28);
     assert_eq!(VvcCabacContext::MtsIdx(2).log2_window_size(), 9);
     assert_eq!(VvcCabacContext::LastSigCoeffXPrefix(20).init_value(), 12);
@@ -1965,6 +1970,74 @@ fn vvc_palette_444_uses_transform_skip_residual_for_left_ibc_delta() {
             true
         )),
         "chroma residual should use transform_skip_flag=1"
+    );
+}
+
+#[test]
+fn vvc_palette_444_uses_horizontal_bdpcm_for_left_predicted_rows() {
+    let geometry = VvcVideoGeometry {
+        width: 16,
+        height: 8,
+    };
+    let mut luma = vec![70; geometry.luma_samples()];
+    let mut cb = vec![96; geometry.luma_samples()];
+    let mut cr = vec![132; geometry.luma_samples()];
+    for y in 0..4 {
+        for x in 0..8 {
+            let dst = y * geometry.width + 8 + x;
+            let hold: u8 = if x < 4 { [1, 3, 6, 10][x] } else { 10 };
+            luma[dst] = 70 + hold;
+            cb[dst] = 96 + hold + 2;
+            cr[dst] = 132 + hold + 4;
+        }
+    }
+    let frame = VvcSampledFrame {
+        geometry,
+        format: VvcPictureFormat {
+            chroma_sampling: ChromaSampling::Cs444,
+            bit_depth: SampleBitDepth::Eight,
+        },
+        luma: luma.clone(),
+        cb: cb.clone(),
+        cr: cr.clone(),
+        chroma_len: geometry.luma_samples(),
+    };
+
+    assert_eq!(
+        vvc_palette_444_reconstruction_yuv(&frame),
+        [luma, cb, cr].concat()
+    );
+
+    let ctx_bins = vvc_palette_444_cabac_context_bins(&frame);
+    assert!(
+        ctx_bins.contains(&(
+            VvcCabacContext::BdpcmMode(0).rtl_context_id().unwrap(),
+            true
+        )),
+        "BDPCM CU should signal intra_bdpcm_luma_flag=1"
+    );
+    assert!(
+        ctx_bins.contains(&(
+            VvcCabacContext::BdpcmMode(1).rtl_context_id().unwrap(),
+            false
+        )),
+        "BDPCM CU should use horizontal luma direction"
+    );
+    assert!(
+        ctx_bins.contains(&(
+            VvcCabacContext::BdpcmMode(2).rtl_context_id().unwrap(),
+            true
+        )),
+        "BDPCM CU should signal intra_bdpcm_chroma_flag=1"
+    );
+    assert!(
+        !ctx_bins.contains(&(
+            VvcCabacContext::TransformSkipFlag(0)
+                .rtl_context_id()
+                .unwrap(),
+            true
+        )),
+        "BDPCM infers transform_skip_flag=1 instead of coding it"
     );
 }
 

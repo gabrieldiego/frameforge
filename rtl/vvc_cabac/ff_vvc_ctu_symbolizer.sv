@@ -380,7 +380,7 @@ module ff_vvc_ctu_symbolizer #(
   integer chroma_num_nonzero_tmp;
   logic [2:0] chroma_last_x_cmax_tmp;
   logic [2:0] chroma_last_y_cmax_tmp;
-  logic [8:0] chroma_rice_sum_abs_tmp;
+  logic [10:0] chroma_rice_sum_abs_tmp;
   logic [2:0] chroma_rice_param_tmp;
   logic [1:0] chroma_last_ctx_offset_tmp;
   logic [8:0] chroma_bypass_zero_pos_tmp;
@@ -1451,7 +1451,7 @@ module ff_vvc_ctu_symbolizer #(
           default: begin chroma_scan_x_tmp = 4'd3; chroma_scan_y_tmp = 4'd3; chroma_scan_raster_tmp = 5'd15; end
         endcase
 
-        chroma_rice_sum_abs_tmp = 9'd0;
+        chroma_rice_sum_abs_tmp = 11'd0;
         for (chroma_local_i = 0; chroma_local_i < 5; chroma_local_i = chroma_local_i + 1) begin
           case (chroma_local_i)
             0: begin chroma_local_x_i = chroma_scan_x_tmp + 1; chroma_local_y_i = chroma_scan_y_tmp; end
@@ -1463,15 +1463,19 @@ module ff_vvc_ctu_symbolizer #(
           chroma_mark_coeff_i = (chroma_local_y_i * 4) + chroma_local_x_i;
           if ((chroma_local_x_i < 4) && (chroma_local_y_i < 4)) begin
             chroma_rice_sum_abs_tmp =
-              chroma_rice_sum_abs_tmp + chroma_coeff_abs[chroma_mark_coeff_i];
+              chroma_rice_sum_abs_tmp +
+              {2'd0, chroma_coeff_abs[chroma_mark_coeff_i]};
           end
         end
 
-        if (chroma_rice_sum_abs_tmp <= 9'd6) begin
+        // H.266 9.3.3 derives cRiceParam from a template sum of up to five
+        // absolute coefficient levels. With 8-bit residual levels this reaches
+        // 1275, so the accumulator must not wrap at the 9-bit coefficient width.
+        if (chroma_rice_sum_abs_tmp <= 11'd6) begin
           chroma_rice_param_tmp = 3'd0;
-        end else if (chroma_rice_sum_abs_tmp <= 9'd13) begin
+        end else if (chroma_rice_sum_abs_tmp <= 11'd13) begin
           chroma_rice_param_tmp = 3'd1;
-        end else if (chroma_rice_sum_abs_tmp <= 9'd27) begin
+        end else if (chroma_rice_sum_abs_tmp <= 11'd27) begin
           chroma_rice_param_tmp = 3'd2;
         end else begin
           chroma_rice_param_tmp = 3'd3;

@@ -204,7 +204,12 @@ impl<'a> VvcResidualCabacEncoder<'a> {
         cabac: &mut VvcCabacEncoder,
         state: &VvcResidualPass1State,
     ) {
-        self.emit_transform_skip_flag(cabac, state.config.component, state.config.transform_skip);
+        self.emit_transform_skip_flag(
+            cabac,
+            state.config.component,
+            state.config.transform_skip,
+            state.config.bdpcm,
+        );
         self.emit_mts_idx_zero(cabac);
         self.observe_future_chroma_defaults();
         self.observe_current_disabled_tool_defaults();
@@ -221,7 +226,14 @@ impl<'a> VvcResidualCabacEncoder<'a> {
         cabac: &mut VvcCabacEncoder,
         component: VvcResidualComponent,
         transform_skip: bool,
+        bdpcm: bool,
     ) {
+        if bdpcm {
+            // H.266 7.4.12.11: intra_bdpcm_*_flag=1 infers
+            // transform_skip_flag to 1 instead of coding it.
+            debug_assert!(transform_skip);
+            return;
+        }
         if !self.options.transform_skip_enabled {
             debug_assert!(!transform_skip);
             return;
@@ -692,6 +704,21 @@ impl VvcResidualCabacSymbolStream {
         )
     }
 
+    pub(in crate::vvc) fn luma_bdpcm_transform_skip_coefficients(
+        log2_tb_width: u8,
+        log2_tb_height: u8,
+        coeff_levels: &[i16],
+    ) -> Self {
+        Self::coefficients_with_tool_flags(
+            VvcResidualComponent::Luma,
+            log2_tb_width,
+            log2_tb_height,
+            coeff_levels,
+            true,
+            true,
+        )
+    }
+
     pub(in crate::vvc) fn chroma_coefficients(
         component: VvcResidualComponent,
         log2_tb_width: u8,
@@ -724,6 +751,26 @@ impl VvcResidualCabacSymbolStream {
         )
     }
 
+    pub(in crate::vvc) fn chroma_bdpcm_transform_skip_coefficients(
+        component: VvcResidualComponent,
+        log2_tb_width: u8,
+        log2_tb_height: u8,
+        coeff_levels: &[i16],
+    ) -> Self {
+        debug_assert!(matches!(
+            component,
+            VvcResidualComponent::ChromaCb | VvcResidualComponent::ChromaCr
+        ));
+        Self::coefficients_with_tool_flags(
+            component,
+            log2_tb_width,
+            log2_tb_height,
+            coeff_levels,
+            true,
+            true,
+        )
+    }
+
     fn coefficients(
         component: VvcResidualComponent,
         log2_tb_width: u8,
@@ -745,6 +792,24 @@ impl VvcResidualCabacSymbolStream {
         log2_tb_height: u8,
         coeff_levels: &[i16],
         transform_skip: bool,
+    ) -> Self {
+        Self::coefficients_with_tool_flags(
+            component,
+            log2_tb_width,
+            log2_tb_height,
+            coeff_levels,
+            transform_skip,
+            false,
+        )
+    }
+
+    fn coefficients_with_tool_flags(
+        component: VvcResidualComponent,
+        log2_tb_width: u8,
+        log2_tb_height: u8,
+        coeff_levels: &[i16],
+        transform_skip: bool,
+        bdpcm: bool,
     ) -> Self {
         // H.266 7.3.11.11 residual_coding() first codes the last significant
         // coefficient position and then walks earlier scan positions with
@@ -780,6 +845,7 @@ impl VvcResidualCabacSymbolStream {
             VvcResidualCtxConfig::subset(component, log2_tb_width, log2_tb_height, last_x, last_y);
         config.transform_skip = transform_skip;
         config.ts_residual_coding_disabled = true;
+        config.bdpcm = bdpcm;
         let mut pass1_state = VvcResidualPass1State::new(config);
         for pos in scan.iter().take(last_scan_pos + 1) {
             let level = coeff_levels[pos.raster_index];

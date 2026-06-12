@@ -286,6 +286,7 @@ module ff_vvc_encoder #(
   logic [VVC_LUMA_TU_SAMPLE_BITS - 1:0] luma_quant_sample_tu_w;
 
   logic        vvc_tool_transform_skip_enabled;
+  logic        vvc_tool_bdpcm_enabled;
   logic        vvc_tool_mts_enabled;
   logic        vvc_tool_lfnst_enabled;
   logic        vvc_tool_joint_cbcr_enabled;
@@ -378,6 +379,7 @@ module ff_vvc_encoder #(
   // slice-header, and CABAC-producing blocks. This mirrors the Rust
   // VvcSliceSyntaxConfig for the current residual/palette subset.
   assign vvc_tool_transform_skip_enabled = ctu_screen_444_mode;
+  assign vvc_tool_bdpcm_enabled = ctu_screen_444_mode;
   assign vvc_tool_mts_enabled = 1'b0;
   assign vvc_tool_lfnst_enabled = 1'b0;
   assign vvc_tool_joint_cbcr_enabled = 1'b0;
@@ -891,7 +893,9 @@ module ff_vvc_encoder #(
     palette_stream_data |
     (palette_stream_cu_last ? 32'h0800_0000 : 32'd0) |
     ((palette_stream_data[31:28] == 4'h1) ?
-      {29'd0, palette_current_pred_ibc_ctx_q} : 32'd0);
+      {29'd0, palette_current_pred_ibc_ctx_q} :
+     ((palette_stream_data[31:28] == 4'hE) ?
+      {26'd0, palette_current_pred_ibc_ctx_q, 3'd0} : 32'd0));
   assign palette_leaf_marker_valid =
     ctu_has_palette_cu && (palette_mux_state_q == PALETTE_MUX_PARTITION) &&
     ctu_symbol_valid && (ctu_symbol_kind == SYMBOL_PALETTE_LEAF);
@@ -1012,6 +1016,7 @@ module ff_vvc_encoder #(
     .sps_ref_pic_resampling_enabled_flag(vvc_sps_ref_pic_resampling_enabled),
     .sps_entry_point_offsets_present_flag(vvc_sps_entry_point_offsets_present),
     .sps_transform_skip_enabled_flag(vvc_tool_transform_skip_enabled),
+    .sps_bdpcm_enabled_flag(vvc_tool_bdpcm_enabled),
     .sps_mts_enabled_flag(vvc_tool_mts_enabled),
     .sps_lfnst_enabled_flag(vvc_tool_lfnst_enabled),
     .sps_joint_cbcr_enabled_flag(vvc_tool_joint_cbcr_enabled),

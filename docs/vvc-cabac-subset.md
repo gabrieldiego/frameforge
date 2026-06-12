@@ -139,6 +139,10 @@ From Table 127:
 | `transform_skip_flag` | FL | `cMax = 1` |
 | `cu_skip_flag` | FL | `cMax = 1` |
 | `pred_mode_ibc_flag` | FL | `cMax = 1` |
+| `intra_bdpcm_luma_flag` | FL | `cMax = 1` |
+| `intra_bdpcm_luma_dir_flag` | FL | `cMax = 1` |
+| `intra_bdpcm_chroma_flag` | FL | `cMax = 1` |
+| `intra_bdpcm_chroma_dir_flag` | FL | `cMax = 1` |
 | `general_merge_flag` | FL | `cMax = 1` |
 | `abs_mvd_greater0_flag` | FL | `cMax = 1` |
 | `abs_mvd_greater1_flag` | FL | `cMax = 1` |
@@ -160,13 +164,20 @@ From Table 132:
 | `tu_cr_coded_flag` | `intra_bdpcm_chroma_flag ? 2 : tu_cb_coded_flag` | `na` | `na` | `na` |
 | `cu_skip_flag` | `0..8`, neighbour-derived | `na` | `na` | `na` |
 | `pred_mode_ibc_flag` | `0..8`, neighbour-derived | `na` | `na` | `na` |
+| `intra_bdpcm_luma_flag` | `0` | `na` | `na` | `na` |
+| `intra_bdpcm_luma_dir_flag` | `1` | `na` | `na` | `na` |
+| `intra_bdpcm_chroma_flag` | `2` | `na` | `na` | `na` |
+| `intra_bdpcm_chroma_dir_flag` | `3` | `na` | `na` | `na` |
 | `general_merge_flag` | `0..2` | `na` | `na` | `na` |
 | `abs_mvd_greater0_flag` | `0..2` | `na` | `na` | `na` |
 | `abs_mvd_greater1_flag` | `0..2` | `na` | `na` | `na` |
 
-For the current subset, `intra_bdpcm_chroma_flag` is not enabled, so
-`tu_cb_coded_flag` uses ctxInc `0`, and `tu_cr_coded_flag` uses ctxInc equal to
-the previously coded Cb coded flag for the colocated chroma TU.
+For the non-BDPCM residual subset, `tu_cb_coded_flag` uses ctxInc `0`, and
+`tu_cr_coded_flag` uses ctxInc equal to the previously coded Cb coded flag for
+the colocated chroma TU. The current 4:4:4 screen-content subset also supports a
+restricted horizontal BDPCM CU mode; when `intra_bdpcm_chroma_flag` is signalled,
+VTM `CABACWriter::cbf_comp()` remaps the coded-block-flag contexts to ctxInc `1`
+for Y/Cb and ctxInc `2` for Cr.
 
 ## Residual Coding Audit Notes
 
@@ -462,3 +473,6 @@ model; rows marked restricted are legal only for the stated current subset.
 | IBC | `general_merge_flag` | Merge-vs-explicit-BVD decision | Context-coded zero | Implemented; merge list search TODO |
 | IBC | `mvd_coding()` | Explicit block-vector difference | Context-coded `abs_mvd_greater*`, bypass EG1 suffix, bypass signs | Implemented for integer-sample BVD |
 | IBC | `cu_coded_flag` | Residual presence after IBC prediction | Context-coded zero | Implemented for exact-match, no-residual IBC CUs |
+| BDPCM | `intra_bdpcm_luma_flag` / `intra_bdpcm_luma_dir_flag` | Horizontal 4:4:4 intra BDPCM CU | Context-coded flag and horizontal direction (`dir_flag = 0`) | Implemented for simple 8x8 leaves |
+| BDPCM | `intra_bdpcm_chroma_flag` / `intra_bdpcm_chroma_dir_flag` | Horizontal 4:4:4 intra BDPCM CU | Context-coded flag and horizontal direction (`dir_flag = 0`) | Implemented for simple 8x8 leaves |
+| BDPCM | `transform_skip_flag` inference | BDPCM transform unit | Not coded; inferred true by H.266 7.4.12.11 | Implemented |

@@ -68,6 +68,10 @@ raster fetches.
 - No real RDO.
 - Screen-content coding remains narrow: only the current experimental 4:4:4 palette plus exact-match IBC subset is present.
 - Residual path currently supports coefficient-coded luma residuals with AC limited to the first 4x4 coefficient group.
+- 4:4:4 screen-content path includes a restricted horizontal BDPCM mode for 8x8
+  leaves. It predicts from the immediate left sample, keeps coefficients in the
+  first 4x4 group, infers transform skip as required by H.266 7.4.12.11, and is
+  intended as a simple lossless building block before broader intra prediction.
 - Decoder validation target: generated bitstreams for the current subset should decode with external tools such as VTM.
 
 ## Planned Next
@@ -91,7 +95,9 @@ raster fetches.
 - Imported VTM or VVdeC source code.
 - CABAC completeness beyond syntax elements currently audited and emitted.
 - Complete transform/quantization, loop filters, inter prediction, B-frames, rate control, or production RDO.
-- Complete SCC tools such as full IBC search/window handling, BDPCM, transform skip, and broader palette predictor/copy-above behavior.
+- Complete SCC tools such as full IBC search/window handling, broader BDPCM
+  direction/block-size coverage, transform skip, and broader palette
+  predictor/copy-above behavior.
 - FPGA vendor integration or proprietary EDA requirements.
 
 ## VVC Isolation

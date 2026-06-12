@@ -53,6 +53,7 @@ pub(in crate::vvc) enum VvcCabacContext {
     QtCbfCb(u8),
     QtCbfCr(u8),
     TransformSkipFlag(u8),
+    BdpcmMode(u8),
     MtsIdx(u8),
     CuSkipFlag(u8),
     PredModeIbcFlag(u8),
@@ -243,6 +244,10 @@ impl VvcCabacContext {
             VvcCabacContext::AbsMvdGreater1Flag(ctx @ 0..=2) => Some(289 + u16::from(ctx)),
             VvcCabacContext::CuCodedFlag(ctx @ 0..=2) => Some(292 + u16::from(ctx)),
             VvcCabacContext::TransformSkipFlag(ctx @ 0..=1) => Some(295 + u16::from(ctx)),
+            VvcCabacContext::BdpcmMode(ctx @ 0..=3) => Some(297 + u16::from(ctx)),
+            VvcCabacContext::QtCbfY(1) => Some(301),
+            VvcCabacContext::QtCbfCb(1) => Some(302),
+            VvcCabacContext::QtCbfCr(2) => Some(303),
             _ => None,
         }
     }
@@ -297,6 +302,11 @@ impl VvcCabacContext {
             }
             VvcCabacContext::TransformSkipFlag(ctx) => {
                 const I_SLICE_INIT: [u8; 2] = [25, 9];
+                I_SLICE_INIT[ctx as usize]
+            }
+            VvcCabacContext::BdpcmMode(ctx) => {
+                // H.266 Table 78, initType 0 / I-slice.
+                const I_SLICE_INIT: [u8; 4] = [19, 35, 1, 27];
                 I_SLICE_INIT[ctx as usize]
             }
             VvcCabacContext::MtsIdx(ctx) => {
@@ -437,6 +447,11 @@ impl VvcCabacContext {
                 const LOG2_WINDOW: [u8; 2] = [1, 1];
                 LOG2_WINDOW[ctx as usize]
             }
+            VvcCabacContext::BdpcmMode(ctx) => {
+                // H.266 Table 78, initType 0 / I-slice.
+                const LOG2_WINDOW: [u8; 4] = [1, 4, 1, 0];
+                LOG2_WINDOW[ctx as usize]
+            }
             VvcCabacContext::MtsIdx(ctx) => {
                 const LOG2_WINDOW: [u8; 4] = [8, 0, 9, 0];
                 LOG2_WINDOW[ctx as usize]
@@ -535,6 +550,7 @@ pub(in crate::vvc) struct VvcCabacContexts {
     pub(in crate::vvc) qt_cbf_cb: [VvcCabacProbModel; 2],
     pub(in crate::vvc) qt_cbf_cr: [VvcCabacProbModel; 3],
     pub(in crate::vvc) transform_skip_flag: [VvcCabacProbModel; 2],
+    pub(in crate::vvc) bdpcm_mode: [VvcCabacProbModel; 4],
     pub(in crate::vvc) mts_idx: [VvcCabacProbModel; 4],
     pub(in crate::vvc) cu_skip_flag: [VvcCabacProbModel; 9],
     pub(in crate::vvc) pred_mode_ibc_flag: [VvcCabacProbModel; 9],
@@ -649,6 +665,13 @@ impl VvcCabacContexts {
                     VvcCabacContext::TransformSkipFlag(idx as u8).init_value(),
                     slice_qp,
                     VvcCabacContext::TransformSkipFlag(idx as u8).log2_window_size(),
+                )
+            }),
+            bdpcm_mode: std::array::from_fn(|idx| {
+                VvcCabacProbModel::from_init_value(
+                    VvcCabacContext::BdpcmMode(idx as u8).init_value(),
+                    slice_qp,
+                    VvcCabacContext::BdpcmMode(idx as u8).log2_window_size(),
                 )
             }),
             mts_idx: std::array::from_fn(|idx| {
@@ -799,6 +822,7 @@ impl VvcCabacContexts {
             VvcCabacContext::QtCbfCb(idx) => &self.qt_cbf_cb[idx as usize],
             VvcCabacContext::QtCbfCr(idx) => &self.qt_cbf_cr[idx as usize],
             VvcCabacContext::TransformSkipFlag(idx) => &self.transform_skip_flag[idx as usize],
+            VvcCabacContext::BdpcmMode(idx) => &self.bdpcm_mode[idx as usize],
             VvcCabacContext::MtsIdx(idx) => &self.mts_idx[idx as usize],
             VvcCabacContext::CuSkipFlag(idx) => &self.cu_skip_flag[idx as usize],
             VvcCabacContext::PredModeIbcFlag(idx) => &self.pred_mode_ibc_flag[idx as usize],
@@ -872,6 +896,7 @@ impl VvcCabacContexts {
             VvcCabacContext::TransformSkipFlag(idx) => {
                 self.transform_skip_flag[idx as usize].encode(cabac, bin)
             }
+            VvcCabacContext::BdpcmMode(idx) => self.bdpcm_mode[idx as usize].encode(cabac, bin),
             VvcCabacContext::MtsIdx(idx) => self.mts_idx[idx as usize].encode(cabac, bin),
             VvcCabacContext::CuSkipFlag(idx) => self.cu_skip_flag[idx as usize].encode(cabac, bin),
             VvcCabacContext::PredModeIbcFlag(idx) => {

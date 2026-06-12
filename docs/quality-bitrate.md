@@ -276,3 +276,35 @@ vtm_recon_from_software_bitstream_psnr_vs_input_db: inf
 
 The 4:2:0 RaceHorses 64x64 crop guard remained unchanged from the previous
 residual baseline at 540 bytes, 1.0547 bits per luma pixel, and 22.55 dB PSNR.
+
+## 2026-06-11 4:4:4 Horizontal BDPCM Baseline
+
+The first BDPCM subset adds horizontal BDPCM for 8x8 4:4:4 CUs whose residuals
+fit in the top-left 4x4 coefficient group. Reconstruction remains lossless
+against the source, RTL, and VTM.
+
+Main validation commands:
+
+```bash
+make validate INPUT=verification/generated/test_vectors/bdpcm_horizontal_64x64_1f_yuv444p8.yuv \
+  VALIDATE_SYNTH=0
+
+make hardware-regression HARDWARE_REGRESSION_EXTRA_SET=bdpcm-444 \
+  HARDWARE_REGRESSION_SYNTH=0
+```
+
+Measured result for the 64x64 BDPCM 4:4:4 guard:
+
+```text
+software_bitstream_bytes: 1593
+software_bitstream_bits: 12744
+software_bitstream_bits_per_luma_pixel: 3.1113
+software_bitstream_encoded_to_source_bytes: 0.1296
+software_internal_recon_psnr_vs_input_db: inf
+rtl_internal_recon_psnr_vs_input_db: inf
+vtm_recon_from_decodable_bitstream_psnr_vs_input_db: inf
+```
+
+The public hardware regression passed 192 SW/RTL/VTM geometry cases: 64 4:2:0
+black-frame sweep vectors, 64 4:4:4 screen-block sweep vectors, and 64 4:4:4
+BDPCM-horizontal sweep vectors.

@@ -180,6 +180,19 @@ pub(super) fn vvc_palette_444_reconstruction_yuv(frame: &VvcSampledFrame) -> Vec
                 ibc_search.record_ibc_8x8(frame, residual.decision);
                 continue;
             }
+            if let Some(bdpcm) = vvc_bdpcm_horizontal_444_8x8(frame, origin_x, origin_y) {
+                add_vvc_bdpcm_horizontal_444_8x8_reconstruction(
+                    &mut luma,
+                    &mut cb,
+                    &mut cr,
+                    frame.geometry.width,
+                    origin_x,
+                    origin_y,
+                    &bdpcm,
+                );
+                ibc_search.record_palette_8x8(frame, origin_x, origin_y);
+                continue;
+            }
             let syntax = vvc_palette_444_cu_syntax(frame, origin_x, origin_y);
             let width = syntax.cb_width;
             let height = syntax.cb_height;
@@ -308,6 +321,101 @@ fn vvc_transform_skip_residual_444_left_8x8(
         cbf_cb,
         cbf_cr,
     })
+}
+
+fn add_vvc_bdpcm_horizontal_444_8x8_reconstruction(
+    luma: &mut [u8],
+    cb: &mut [u8],
+    cr: &mut [u8],
+    stride: usize,
+    origin_x: usize,
+    origin_y: usize,
+    residual: &VvcBdpcm444Cu,
+) {
+    debug_assert!(origin_x > 0);
+    for y_off in 0..8 {
+        let row = origin_y + y_off;
+        let left = row * stride + origin_x - 1;
+        let mut y_residual = 0i16;
+        let mut cb_residual = 0i16;
+        let mut cr_residual = 0i16;
+        for x_off in 0..8 {
+            let local = y_off * 8 + x_off;
+            y_residual += residual.y_coeffs[local];
+            cb_residual += residual.cb_coeffs[local];
+            cr_residual += residual.cr_coeffs[local];
+            let dst = row * stride + origin_x + x_off;
+            luma[dst] = add_i16_to_u8(luma[left], y_residual);
+            cb[dst] = add_i16_to_u8(cb[left], cb_residual);
+            cr[dst] = add_i16_to_u8(cr[left], cr_residual);
+        }
+    }
+}
+
+fn vvc_bdpcm_horizontal_444_8x8(
+    frame: &VvcSampledFrame,
+    origin_x: usize,
+    origin_y: usize,
+) -> Option<VvcBdpcm444Cu> {
+    if origin_x == 0 || origin_x + 8 > frame.geometry.width || origin_y + 8 > frame.geometry.height
+    {
+        return None;
+    }
+
+    let (y_coeffs, cbf_y) =
+        vvc_bdpcm_horizontal_coefficients(&frame.luma, frame.geometry.width, origin_x, origin_y)?;
+    let (cb_coeffs, cbf_cb) =
+        vvc_bdpcm_horizontal_coefficients(&frame.cb, frame.geometry.width, origin_x, origin_y)?;
+    let (cr_coeffs, cbf_cr) =
+        vvc_bdpcm_horizontal_coefficients(&frame.cr, frame.geometry.width, origin_x, origin_y)?;
+
+    if !cbf_y && !cbf_cb && !cbf_cr {
+        return None;
+    }
+
+    Some(VvcBdpcm444Cu {
+        y_coeffs,
+        cb_coeffs,
+        cr_coeffs,
+        cbf_y,
+        cbf_cb,
+        cbf_cr,
+    })
+}
+
+fn vvc_bdpcm_horizontal_coefficients(
+    plane: &[u8],
+    stride: usize,
+    origin_x: usize,
+    origin_y: usize,
+) -> Option<(Vec<i16>, bool)> {
+    let mut coeffs = vec![0i16; 64];
+    let mut cbf = false;
+    for y_off in 0..8 {
+        let row = origin_y + y_off;
+        let left = row * stride + origin_x - 1;
+        let left_sample = i16::from(plane[left]);
+        let mut prev_residual = 0i16;
+        for x_off in 0..8 {
+            let cur = row * stride + origin_x + x_off;
+            let residual = i16::from(plane[cur]) - left_sample;
+            let coeff = if x_off == 0 {
+                residual
+            } else {
+                residual - prev_residual
+            };
+            let in_residual_subset = x_off < 4 && y_off < 4;
+            if !in_residual_subset && coeff != 0 {
+                return None;
+            }
+            if in_residual_subset {
+                coeffs[y_off * 8 + x_off] = coeff;
+                cbf |= coeff != 0;
+            }
+            prev_residual = residual;
+        }
+    }
+    Some((coeffs, cbf))
 }
 
 fn add_i16_to_u8(sample: u8, delta: i16) -> u8 {
@@ -568,6 +676,16 @@ struct VvcTransformSkipResidual444Cu {
     cbf_cr: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VvcBdpcm444Cu {
+    y_coeffs: Vec<i16>,
+    cb_coeffs: Vec<i16>,
+    cr_coeffs: Vec<i16>,
+    cbf_y: bool,
+    cbf_cb: bool,
+    cbf_cr: bool,
+}
+
 fn append_vvc_palette_444_8x8_cu_with_events(
     cabac: &mut VvcCabacEncoder,
     ctx: &mut VvcCabacContexts,
@@ -616,6 +734,17 @@ fn append_vvc_palette_444_8x8_cu_with_events(
             &residual,
         );
         ibc_search.record_ibc_8x8(frame, residual.decision);
+        return false;
+    }
+    if let Some(bdpcm) = vvc_bdpcm_horizontal_444_8x8(frame, origin_x, origin_y) {
+        ctx.encode(
+            cabac,
+            VvcCabacContext::PredModeIbcFlag(ibc_search.pred_mode_ibc_ctx(origin_x, origin_y)),
+            false,
+        );
+        ctx.encode(cabac, VvcCabacContext::PredModePltFlag, false);
+        append_vvc_bdpcm_444_8x8_cu(cabac, ctx, VvcSliceSyntaxConfig::palette_444(), &bdpcm);
+        ibc_search.record_palette_8x8(frame, origin_x, origin_y);
         return false;
     }
     ctx.encode(
@@ -682,6 +811,56 @@ fn append_vvc_ibc_444_8x8_prediction(
     // absent; H.266 Table 16 then scales the coded integer-sample IBC MVD into
     // the 1/16 luma-sample BVD consumed by H.266 8.6.2.1.
     //
+}
+
+fn append_vvc_bdpcm_444_8x8_cu(
+    cabac: &mut VvcCabacEncoder,
+    ctx: &mut VvcCabacContexts,
+    slice_config: VvcSliceSyntaxConfig,
+    residual: &VvcBdpcm444Cu,
+) {
+    // H.266 7.3.11.4/7.4.12.5: an intra BDPCM CU first signals
+    // intra_bdpcm_luma_flag and intra_bdpcm_luma_dir_flag through
+    // bdpcm_mode(); intra_luma_pred_modes() then infers horizontal mode.
+    // The current simple subset uses horizontal BDPCM for both luma and chroma.
+    ctx.encode(cabac, VvcCabacContext::BdpcmMode(0), true);
+    ctx.encode(cabac, VvcCabacContext::BdpcmMode(1), false);
+    ctx.encode(cabac, VvcCabacContext::BdpcmMode(2), true);
+    ctx.encode(cabac, VvcCabacContext::BdpcmMode(3), false);
+
+    // H.266 7.3.11.10 and VTM CABACWriter::cbf_comp(): BDPCM remaps CBF
+    // contexts to 1 for Y/Cb and 2 for Cr, independent of prevCbf.
+    ctx.encode(cabac, VvcCabacContext::QtCbfCb(1), residual.cbf_cb);
+    ctx.encode(cabac, VvcCabacContext::QtCbfCr(2), residual.cbf_cr);
+    ctx.encode(cabac, VvcCabacContext::QtCbfY(1), residual.cbf_y);
+
+    let mut encoder = VvcResidualCabacEncoder::new(ctx, slice_config.residual_options());
+    if residual.cbf_y {
+        VvcResidualCabacSymbolStream::luma_bdpcm_transform_skip_coefficients(
+            3,
+            3,
+            &residual.y_coeffs,
+        )
+        .emit(&mut encoder, cabac);
+    }
+    if residual.cbf_cb {
+        VvcResidualCabacSymbolStream::chroma_bdpcm_transform_skip_coefficients(
+            VvcResidualComponent::ChromaCb,
+            3,
+            3,
+            &residual.cb_coeffs,
+        )
+        .emit(&mut encoder, cabac);
+    }
+    if residual.cbf_cr {
+        VvcResidualCabacSymbolStream::chroma_bdpcm_transform_skip_coefficients(
+            VvcResidualComponent::ChromaCr,
+            3,
+            3,
+            &residual.cr_coeffs,
+        )
+        .emit(&mut encoder, cabac);
+    }
 }
 
 fn append_vvc_ibc_444_8x8_cu_residual(

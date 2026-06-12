@@ -48,6 +48,7 @@ module ff_vvc_palette_symbolizer #(
   localparam logic [3:0] TS_PKT_COEFF_Y   = 4'hB;
   localparam logic [3:0] TS_PKT_COEFF_CB  = 4'hC;
   localparam logic [3:0] TS_PKT_COEFF_CR  = 4'hD;
+  localparam logic [3:0] BDPCM_PKT_CU_START = 4'hE;
   localparam int MAX_CU_SAMPLES = PALETTE_CU_SIZE * PALETTE_CU_SIZE;
   localparam int MAX_PLANE_SAMPLES = CTU_SIZE * CTU_SIZE;
   localparam int PLANE_COUNT_BITS = $clog2(MAX_PLANE_SAMPLES + 1);
@@ -109,6 +110,9 @@ module ff_vvc_palette_symbolizer #(
   logic [7:0] feed_left_y_sample_q;
   logic [7:0] feed_left_cb_sample_q;
   logic [7:0] feed_left_cr_sample_q;
+  logic [7:0] feed_left_boundary_y_sample_q;
+  logic [7:0] feed_left_boundary_cb_sample_q;
+  logic [7:0] feed_left_boundary_cr_sample_q;
   logic       feed_sample_last_q;
   logic       feed_sample_valid_q;
   logic       ts_candidate_q;
@@ -118,6 +122,17 @@ module ff_vvc_palette_symbolizer #(
   logic [(9 * 16) - 1:0] ts_y_coeff_q;
   logic [(9 * 16) - 1:0] ts_cb_coeff_q;
   logic [(9 * 16) - 1:0] ts_cr_coeff_q;
+  logic       bdpcm_candidate_q;
+  logic       bdpcm_cbf_y_q;
+  logic       bdpcm_cbf_cb_q;
+  logic       bdpcm_cbf_cr_q;
+  logic [(9 * 16) - 1:0] bdpcm_y_coeff_q;
+  logic [(9 * 16) - 1:0] bdpcm_cb_coeff_q;
+  logic [(9 * 16) - 1:0] bdpcm_cr_coeff_q;
+  logic [7:0] bdpcm_prev_y_sample_q;
+  logic [7:0] bdpcm_prev_cb_sample_q;
+  logic [7:0] bdpcm_prev_cr_sample_q;
+  logic       drain_bdpcm_q;
   logic [3:0] ts_coeff_index_q;
   logic [1:0] ts_coeff_component_q;
   logic cu_s_axis_valid;
@@ -129,12 +144,17 @@ module ff_vvc_palette_symbolizer #(
   logic [31:0] cu_m_axis_data;
   logic cu_m_axis_last;
   logic ts_residual_selected_w;
+  logic bdpcm_residual_selected_w;
+  logic residual_selected_w;
   logic ts_residual_drain_w;
   logic ts_coeff_last_w;
   logic [3:0] ts_coeff_packet_kind_w;
   logic signed [8:0] feed_y_diff_w;
   logic signed [8:0] feed_cb_diff_w;
   logic signed [8:0] feed_cr_diff_w;
+  logic signed [8:0] feed_bdpcm_y_coeff_w;
+  logic signed [8:0] feed_bdpcm_cb_coeff_w;
+  logic signed [8:0] feed_bdpcm_cr_coeff_w;
   logic [3:0] feed_coeff_lane_w;
   logic feed_in_ts_subset_w;
   logic prior_runtime_ibc_seen_q;
@@ -144,7 +164,14 @@ module ff_vvc_palette_symbolizer #(
   logic request_cu_left_ibc_w;
   logic request_cu_above_ibc_w;
   logic [PLANE_COUNT_BITS - 1:0] feed_left_frame_index;
+  logic [PLANE_COUNT_BITS - 1:0] feed_left_boundary_frame_index;
   logic signed [8:0] ts_coeff_value_w;
+  logic signed [8:0] bdpcm_coeff_value_w;
+  logic signed [8:0] residual_coeff_value_w;
+  logic [3:0] residual_start_packet_kind_w;
+  logic residual_cbf_y_w;
+  logic residual_cbf_cb_w;
+  logic residual_cbf_cr_w;
 
   (* ram_style = "block" *) logic [7:0] frame_y [0:MAX_PLANE_SAMPLES - 1];
   (* ram_style = "block" *) logic [7:0] frame_cb [0:MAX_PLANE_SAMPLES - 1];
@@ -214,6 +241,10 @@ module ff_vvc_palette_symbolizer #(
   assign feed_left_frame_index =
     (drain_cu_order_valid_w && (drain_cu_col_w != 3'd0) && feed_left_order_valid_w) ?
     ((feed_left_order_index_ext_w * MAX_CU_SAMPLES_L) + feed_sample_ext_w) : '0;
+  assign feed_left_boundary_frame_index =
+    (drain_cu_order_valid_w && (drain_cu_col_w != 3'd0) && feed_left_order_valid_w) ?
+    ((feed_left_order_index_ext_w * MAX_CU_SAMPLES_L) +
+     {{(PLANE_COUNT_BITS - 6){1'b0}}, feed_y[2:0], 3'b111}) : '0;
   assign feed_y_sample = feed_y_sample_q;
   assign feed_cb_sample = feed_cb_sample_q;
   assign feed_cr_sample = feed_cr_sample_q;
@@ -222,6 +253,9 @@ module ff_vvc_palette_symbolizer #(
   assign ts_residual_selected_w =
     ts_candidate_q && (ts_cbf_y_q || ts_cbf_cb_q || ts_cbf_cr_q) &&
     (ts_cbf_cb_q || ts_cbf_cr_q);
+  assign bdpcm_residual_selected_w =
+    bdpcm_candidate_q && (bdpcm_cbf_y_q || bdpcm_cbf_cb_q || bdpcm_cbf_cr_q);
+  assign residual_selected_w = ts_residual_selected_w || bdpcm_residual_selected_w;
   assign ts_residual_drain_w =
     (state_q == ST_DRAIN_TS_START) || (state_q == ST_DRAIN_TS_COEFF);
   assign ts_coeff_last_w =
@@ -237,27 +271,48 @@ module ff_vvc_palette_symbolizer #(
       default: ts_coeff_value_w = ts_cr_coeff_q[ts_coeff_index_q * 9 +: 9];
     endcase
   end
+  always @* begin
+    case (ts_coeff_component_q)
+      2'd0: bdpcm_coeff_value_w = bdpcm_y_coeff_q[ts_coeff_index_q * 9 +: 9];
+      2'd1: bdpcm_coeff_value_w = bdpcm_cb_coeff_q[ts_coeff_index_q * 9 +: 9];
+      default: bdpcm_coeff_value_w = bdpcm_cr_coeff_q[ts_coeff_index_q * 9 +: 9];
+    endcase
+  end
+  assign residual_coeff_value_w = drain_bdpcm_q ? bdpcm_coeff_value_w : ts_coeff_value_w;
+  assign residual_start_packet_kind_w = drain_bdpcm_q ? BDPCM_PKT_CU_START : TS_PKT_CU_START;
+  assign residual_cbf_y_w = drain_bdpcm_q ? bdpcm_cbf_y_q : ts_cbf_y_q;
+  assign residual_cbf_cb_w = drain_bdpcm_q ? bdpcm_cbf_cb_q : ts_cbf_cb_q;
+  assign residual_cbf_cr_w = drain_bdpcm_q ? bdpcm_cbf_cr_q : ts_cbf_cr_q;
   assign cu_symbolizer_clear_w = clear || !enable || ts_residual_drain_w ||
-                                 ((state_q == ST_SELECT_CU) && ts_residual_selected_w);
+                                 ((state_q == ST_SELECT_CU) && residual_selected_w);
   assign cu_m_axis_ready = ts_residual_drain_w ? 1'b0 : m_axis_ready;
   assign m_axis_valid = ts_residual_drain_w ? 1'b1 : cu_m_axis_valid;
   assign m_axis_data =
     (state_q == ST_DRAIN_TS_START) ?
-      {TS_PKT_CU_START, 25'd0, ts_cbf_cr_q, ts_cbf_cb_q, ts_cbf_y_q} :
+      {residual_start_packet_kind_w, 25'd0, residual_cbf_cr_w, residual_cbf_cb_w, residual_cbf_y_w} :
     (state_q == ST_DRAIN_TS_COEFF) ?
-      {ts_coeff_packet_kind_w, 15'd0, ts_coeff_index_q, ts_coeff_value_w} :
+      {ts_coeff_packet_kind_w, 15'd0, ts_coeff_index_q, residual_coeff_value_w} :
       cu_m_axis_data;
   assign m_axis_last = ts_residual_drain_w ?
     (ts_coeff_last_w && drain_cu_is_last_selected) :
     (cu_m_axis_last && drain_cu_is_last_selected);
   assign m_axis_cu_last = ts_residual_drain_w ? ts_coeff_last_w : cu_m_axis_last;
-  assign m_axis_cu_ibc_mode = ts_residual_drain_w;
+  assign m_axis_cu_ibc_mode = ts_residual_drain_w && !drain_bdpcm_q;
   assign feed_y_diff_w = $signed({1'b0, feed_y_sample_q}) -
                          $signed({1'b0, feed_left_y_sample_q});
   assign feed_cb_diff_w = $signed({1'b0, feed_cb_sample_q}) -
                           $signed({1'b0, feed_left_cb_sample_q});
   assign feed_cr_diff_w = $signed({1'b0, feed_cr_sample_q}) -
                           $signed({1'b0, feed_left_cr_sample_q});
+  assign feed_bdpcm_y_coeff_w = (feed_x == 16'd0) ?
+    ($signed({1'b0, feed_y_sample_q}) - $signed({1'b0, feed_left_boundary_y_sample_q})) :
+    ($signed({1'b0, feed_y_sample_q}) - $signed({1'b0, bdpcm_prev_y_sample_q}));
+  assign feed_bdpcm_cb_coeff_w = (feed_x == 16'd0) ?
+    ($signed({1'b0, feed_cb_sample_q}) - $signed({1'b0, feed_left_boundary_cb_sample_q})) :
+    ($signed({1'b0, feed_cb_sample_q}) - $signed({1'b0, bdpcm_prev_cb_sample_q}));
+  assign feed_bdpcm_cr_coeff_w = (feed_x == 16'd0) ?
+    ($signed({1'b0, feed_cr_sample_q}) - $signed({1'b0, feed_left_boundary_cr_sample_q})) :
+    ($signed({1'b0, feed_cr_sample_q}) - $signed({1'b0, bdpcm_prev_cr_sample_q}));
   assign feed_in_ts_subset_w = (feed_x < 16'd4) && (feed_y < 16'd4);
   assign feed_coeff_lane_w = {feed_y[1:0], feed_x[1:0]};
   assign request_cu_col_w = cu_request_origin_x[5:3];
@@ -334,6 +389,17 @@ module ff_vvc_palette_symbolizer #(
       ts_y_coeff_q <= '0;
       ts_cb_coeff_q <= '0;
       ts_cr_coeff_q <= '0;
+      bdpcm_candidate_q <= 1'b0;
+      bdpcm_cbf_y_q <= 1'b0;
+      bdpcm_cbf_cb_q <= 1'b0;
+      bdpcm_cbf_cr_q <= 1'b0;
+      bdpcm_y_coeff_q <= '0;
+      bdpcm_cb_coeff_q <= '0;
+      bdpcm_cr_coeff_q <= '0;
+      bdpcm_prev_y_sample_q <= 8'd0;
+      bdpcm_prev_cb_sample_q <= 8'd0;
+      bdpcm_prev_cr_sample_q <= 8'd0;
+      drain_bdpcm_q <= 1'b0;
       ts_coeff_index_q <= 4'd0;
       ts_coeff_component_q <= 2'd0;
       prior_runtime_ibc_seen_q <= 1'b0;
@@ -356,6 +422,17 @@ module ff_vvc_palette_symbolizer #(
       ts_y_coeff_q <= '0;
       ts_cb_coeff_q <= '0;
       ts_cr_coeff_q <= '0;
+      bdpcm_candidate_q <= 1'b0;
+      bdpcm_cbf_y_q <= 1'b0;
+      bdpcm_cbf_cb_q <= 1'b0;
+      bdpcm_cbf_cr_q <= 1'b0;
+      bdpcm_y_coeff_q <= '0;
+      bdpcm_cb_coeff_q <= '0;
+      bdpcm_cr_coeff_q <= '0;
+      bdpcm_prev_y_sample_q <= 8'd0;
+      bdpcm_prev_cb_sample_q <= 8'd0;
+      bdpcm_prev_cr_sample_q <= 8'd0;
+      drain_bdpcm_q <= 1'b0;
       ts_coeff_index_q <= 4'd0;
       ts_coeff_component_q <= 2'd0;
       prior_runtime_ibc_seen_q <= 1'b0;
@@ -377,6 +454,7 @@ module ff_vvc_palette_symbolizer #(
           drain_cu_index_q <= 8'd0;
           feed_sample_q <= 8'd0;
           prior_runtime_ibc_seen_q <= 1'b0;
+          drain_bdpcm_q <= 1'b0;
         end
       end
 
@@ -405,12 +483,26 @@ module ff_vvc_palette_symbolizer #(
                 // HMVP before the current request.
                 !request_cu_left_ibc_w && !request_cu_above_ibc_w &&
                 !prior_runtime_ibc_seen_q;
+              bdpcm_candidate_q <=
+                (cu_request_origin_x >= 16'd8) &&
+                ((cu_request_origin_x + 16'd8) <= ctu_visible_width) &&
+                ((cu_request_origin_y + 16'd8) <= ctu_visible_height);
               ts_cbf_y_q <= 1'b0;
               ts_cbf_cb_q <= 1'b0;
               ts_cbf_cr_q <= 1'b0;
               ts_y_coeff_q <= '0;
               ts_cb_coeff_q <= '0;
               ts_cr_coeff_q <= '0;
+              bdpcm_cbf_y_q <= 1'b0;
+              bdpcm_cbf_cb_q <= 1'b0;
+              bdpcm_cbf_cr_q <= 1'b0;
+              bdpcm_y_coeff_q <= '0;
+              bdpcm_cb_coeff_q <= '0;
+              bdpcm_cr_coeff_q <= '0;
+              bdpcm_prev_y_sample_q <= 8'd0;
+              bdpcm_prev_cb_sample_q <= 8'd0;
+              bdpcm_prev_cr_sample_q <= 8'd0;
+              drain_bdpcm_q <= 1'b0;
               ts_coeff_index_q <= 4'd0;
               ts_coeff_component_q <= 2'd0;
             end
@@ -438,6 +530,23 @@ module ff_vvc_palette_symbolizer #(
                   ts_candidate_q <= 1'b0;
                 end
               end
+              if (bdpcm_candidate_q) begin
+                if (feed_in_ts_subset_w) begin
+                  bdpcm_y_coeff_q[feed_coeff_lane_w * 9 +: 9] <= feed_bdpcm_y_coeff_w;
+                  bdpcm_cb_coeff_q[feed_coeff_lane_w * 9 +: 9] <= feed_bdpcm_cb_coeff_w;
+                  bdpcm_cr_coeff_q[feed_coeff_lane_w * 9 +: 9] <= feed_bdpcm_cr_coeff_w;
+                  bdpcm_cbf_y_q <= bdpcm_cbf_y_q || (feed_bdpcm_y_coeff_w != 9'sd0);
+                  bdpcm_cbf_cb_q <= bdpcm_cbf_cb_q || (feed_bdpcm_cb_coeff_w != 9'sd0);
+                  bdpcm_cbf_cr_q <= bdpcm_cbf_cr_q || (feed_bdpcm_cr_coeff_w != 9'sd0);
+                end else if ((feed_bdpcm_y_coeff_w != 9'sd0) ||
+                             (feed_bdpcm_cb_coeff_w != 9'sd0) ||
+                             (feed_bdpcm_cr_coeff_w != 9'sd0)) begin
+                  bdpcm_candidate_q <= 1'b0;
+                end
+              end
+              bdpcm_prev_y_sample_q <= feed_y_sample_q;
+              bdpcm_prev_cb_sample_q <= feed_cb_sample_q;
+              bdpcm_prev_cr_sample_q <= feed_cr_sample_q;
               if (cu_s_axis_last) begin
                 state_q <= ST_SELECT_CU;
                 feed_sample_q <= 8'd0;
@@ -451,7 +560,8 @@ module ff_vvc_palette_symbolizer #(
           end
 
           ST_SELECT_CU: begin
-            state_q <= ts_residual_selected_w ? ST_DRAIN_TS_START : ST_DRAIN_CU;
+            state_q <= residual_selected_w ? ST_DRAIN_TS_START : ST_DRAIN_CU;
+            drain_bdpcm_q <= (!ts_residual_selected_w) && bdpcm_residual_selected_w;
             ts_coeff_index_q <= 4'd0;
             ts_coeff_component_q <= 2'd0;
           end
@@ -479,7 +589,10 @@ module ff_vvc_palette_symbolizer #(
           ST_DRAIN_TS_COEFF: begin
             if (m_axis_ready) begin
               if (ts_coeff_last_w) begin
-                prior_runtime_ibc_seen_q <= 1'b1;
+                if (!drain_bdpcm_q) begin
+                  prior_runtime_ibc_seen_q <= 1'b1;
+                end
+                drain_bdpcm_q <= 1'b0;
                 if (drain_cu_is_last_selected) begin
                   state_q <= ST_INPUT;
                   drain_cu_index_q <= 8'd0;
@@ -526,6 +639,9 @@ module ff_vvc_palette_symbolizer #(
       feed_left_y_sample_q <= frame_y[feed_left_frame_index];
       feed_left_cb_sample_q <= frame_cb[feed_left_frame_index];
       feed_left_cr_sample_q <= frame_cr[feed_left_frame_index];
+      feed_left_boundary_y_sample_q <= frame_y[feed_left_boundary_frame_index];
+      feed_left_boundary_cb_sample_q <= frame_cb[feed_left_boundary_frame_index];
+      feed_left_boundary_cr_sample_q <= frame_cr[feed_left_boundary_frame_index];
     end
   end
 endmodule

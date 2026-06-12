@@ -91,9 +91,12 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
   logic coeff_negative_w;
   logic [8:0] loc_sum_abs_w;
   logic [7:0] loc_num_sig_w;
-  logic [8:0] rice_sum_abs_w;
-  logic [8:0] sum_abs_for_rice_w;
+  // H.266 9.3.3 derives cRiceParam from up to five neighbouring absolute
+  // coefficient levels; 5 * 255 needs 11 bits and must not wrap to 9 bits.
+  logic [10:0] rice_sum_abs_w;
+  logic [10:0] sum_abs_for_rice_w;
   logic [8:0] coeff_abs_lane_w [0:15];
+  logic [10:0] coeff_abs_rice_lane_w [0:15];
   logic [8:0] coeff_template_sig_lane_w [0:15];
   logic [15:0] coeff_sig_w;
   genvar coeff_lane_i;
@@ -136,6 +139,8 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
     for (coeff_lane_i = 0; coeff_lane_i < 16; coeff_lane_i = coeff_lane_i + 1) begin : gen_coeff_lanes
       assign coeff_abs_lane_w[coeff_lane_i] =
         coeff_abs_q[(coeff_lane_i * 9) +: 9];
+      assign coeff_abs_rice_lane_w[coeff_lane_i] =
+        {2'd0, coeff_abs_q[(coeff_lane_i * 9) +: 9]};
       assign coeff_sig_w[coeff_lane_i] =
         (coeff_abs_lane_w[coeff_lane_i] != 9'd0);
       assign coeff_template_sig_lane_w[coeff_lane_i] =
@@ -300,11 +305,11 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
   always @* begin
     loc_sum_abs_w = 9'd0;
     loc_num_sig_w = 8'd0;
-    rice_sum_abs_w = 9'd0;
+    rice_sum_abs_w = 11'd0;
     case (scan_pos_q)
       5'd0: begin
-        rice_sum_abs_w = coeff_abs_lane_w[1] + coeff_abs_lane_w[2] +
-          coeff_abs_lane_w[5] + coeff_abs_lane_w[4] + coeff_abs_lane_w[8];
+        rice_sum_abs_w = coeff_abs_rice_lane_w[1] + coeff_abs_rice_lane_w[2] +
+          coeff_abs_rice_lane_w[5] + coeff_abs_rice_lane_w[4] + coeff_abs_rice_lane_w[8];
         loc_num_sig_w = {7'd0, coeff_sig_w[1]} + {7'd0, coeff_sig_w[2]} +
           {7'd0, coeff_sig_w[5]} + {7'd0, coeff_sig_w[4]} + {7'd0, coeff_sig_w[8]};
         loc_sum_abs_w = coeff_template_sig_lane_w[1] + coeff_template_sig_lane_w[2] +
@@ -312,8 +317,8 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
           coeff_template_sig_lane_w[8];
       end
       5'd1: begin
-        rice_sum_abs_w = coeff_abs_lane_w[5] + coeff_abs_lane_w[6] +
-          coeff_abs_lane_w[9] + coeff_abs_lane_w[8] + coeff_abs_lane_w[12];
+        rice_sum_abs_w = coeff_abs_rice_lane_w[5] + coeff_abs_rice_lane_w[6] +
+          coeff_abs_rice_lane_w[9] + coeff_abs_rice_lane_w[8] + coeff_abs_rice_lane_w[12];
         loc_num_sig_w = {7'd0, coeff_sig_w[5]} + {7'd0, coeff_sig_w[6]} +
           {7'd0, coeff_sig_w[9]} + {7'd0, coeff_sig_w[8]} + {7'd0, coeff_sig_w[12]};
         loc_sum_abs_w = coeff_template_sig_lane_w[5] + coeff_template_sig_lane_w[6] +
@@ -321,8 +326,8 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
           coeff_template_sig_lane_w[12];
       end
       5'd2: begin
-        rice_sum_abs_w = coeff_abs_lane_w[2] + coeff_abs_lane_w[3] +
-          coeff_abs_lane_w[6] + coeff_abs_lane_w[5] + coeff_abs_lane_w[9];
+        rice_sum_abs_w = coeff_abs_rice_lane_w[2] + coeff_abs_rice_lane_w[3] +
+          coeff_abs_rice_lane_w[6] + coeff_abs_rice_lane_w[5] + coeff_abs_rice_lane_w[9];
         loc_num_sig_w = {7'd0, coeff_sig_w[2]} + {7'd0, coeff_sig_w[3]} +
           {7'd0, coeff_sig_w[6]} + {7'd0, coeff_sig_w[5]} + {7'd0, coeff_sig_w[9]};
         loc_sum_abs_w = coeff_template_sig_lane_w[2] + coeff_template_sig_lane_w[3] +
@@ -330,16 +335,16 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
           coeff_template_sig_lane_w[9];
       end
       5'd3: begin
-        rice_sum_abs_w = coeff_abs_lane_w[9] + coeff_abs_lane_w[10] +
-          coeff_abs_lane_w[13] + coeff_abs_lane_w[12];
+        rice_sum_abs_w = coeff_abs_rice_lane_w[9] + coeff_abs_rice_lane_w[10] +
+          coeff_abs_rice_lane_w[13] + coeff_abs_rice_lane_w[12];
         loc_num_sig_w = {7'd0, coeff_sig_w[9]} + {7'd0, coeff_sig_w[10]} +
           {7'd0, coeff_sig_w[13]} + {7'd0, coeff_sig_w[12]};
         loc_sum_abs_w = coeff_template_sig_lane_w[9] + coeff_template_sig_lane_w[10] +
           coeff_template_sig_lane_w[13] + coeff_template_sig_lane_w[12];
       end
       5'd4: begin
-        rice_sum_abs_w = coeff_abs_lane_w[6] + coeff_abs_lane_w[7] +
-          coeff_abs_lane_w[10] + coeff_abs_lane_w[9] + coeff_abs_lane_w[13];
+        rice_sum_abs_w = coeff_abs_rice_lane_w[6] + coeff_abs_rice_lane_w[7] +
+          coeff_abs_rice_lane_w[10] + coeff_abs_rice_lane_w[9] + coeff_abs_rice_lane_w[13];
         loc_num_sig_w = {7'd0, coeff_sig_w[6]} + {7'd0, coeff_sig_w[7]} +
           {7'd0, coeff_sig_w[10]} + {7'd0, coeff_sig_w[9]} + {7'd0, coeff_sig_w[13]};
         loc_sum_abs_w = coeff_template_sig_lane_w[6] + coeff_template_sig_lane_w[7] +
@@ -347,71 +352,71 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
           coeff_template_sig_lane_w[13];
       end
       5'd5: begin
-        rice_sum_abs_w = coeff_abs_lane_w[3] + coeff_abs_lane_w[7] +
-          coeff_abs_lane_w[6] + coeff_abs_lane_w[10];
+        rice_sum_abs_w = coeff_abs_rice_lane_w[3] + coeff_abs_rice_lane_w[7] +
+          coeff_abs_rice_lane_w[6] + coeff_abs_rice_lane_w[10];
         loc_num_sig_w = {7'd0, coeff_sig_w[3]} + {7'd0, coeff_sig_w[7]} +
           {7'd0, coeff_sig_w[6]} + {7'd0, coeff_sig_w[10]};
         loc_sum_abs_w = coeff_template_sig_lane_w[3] + coeff_template_sig_lane_w[7] +
           coeff_template_sig_lane_w[6] + coeff_template_sig_lane_w[10];
       end
       5'd6: begin
-        rice_sum_abs_w = coeff_abs_lane_w[13] + coeff_abs_lane_w[14];
+        rice_sum_abs_w = coeff_abs_rice_lane_w[13] + coeff_abs_rice_lane_w[14];
         loc_num_sig_w = {7'd0, coeff_sig_w[13]} + {7'd0, coeff_sig_w[14]};
         loc_sum_abs_w = coeff_template_sig_lane_w[13] + coeff_template_sig_lane_w[14];
       end
       5'd7: begin
-        rice_sum_abs_w = coeff_abs_lane_w[10] + coeff_abs_lane_w[11] +
-          coeff_abs_lane_w[14] + coeff_abs_lane_w[13];
+        rice_sum_abs_w = coeff_abs_rice_lane_w[10] + coeff_abs_rice_lane_w[11] +
+          coeff_abs_rice_lane_w[14] + coeff_abs_rice_lane_w[13];
         loc_num_sig_w = {7'd0, coeff_sig_w[10]} + {7'd0, coeff_sig_w[11]} +
           {7'd0, coeff_sig_w[14]} + {7'd0, coeff_sig_w[13]};
         loc_sum_abs_w = coeff_template_sig_lane_w[10] + coeff_template_sig_lane_w[11] +
           coeff_template_sig_lane_w[14] + coeff_template_sig_lane_w[13];
       end
       5'd8: begin
-        rice_sum_abs_w = coeff_abs_lane_w[7] + coeff_abs_lane_w[11] +
-          coeff_abs_lane_w[10] + coeff_abs_lane_w[14];
+        rice_sum_abs_w = coeff_abs_rice_lane_w[7] + coeff_abs_rice_lane_w[11] +
+          coeff_abs_rice_lane_w[10] + coeff_abs_rice_lane_w[14];
         loc_num_sig_w = {7'd0, coeff_sig_w[7]} + {7'd0, coeff_sig_w[11]} +
           {7'd0, coeff_sig_w[10]} + {7'd0, coeff_sig_w[14]};
         loc_sum_abs_w = coeff_template_sig_lane_w[7] + coeff_template_sig_lane_w[11] +
           coeff_template_sig_lane_w[10] + coeff_template_sig_lane_w[14];
       end
       5'd9: begin
-        rice_sum_abs_w = coeff_abs_lane_w[7] + coeff_abs_lane_w[11];
+        rice_sum_abs_w = coeff_abs_rice_lane_w[7] + coeff_abs_rice_lane_w[11];
         loc_num_sig_w = {7'd0, coeff_sig_w[7]} + {7'd0, coeff_sig_w[11]};
         loc_sum_abs_w = coeff_template_sig_lane_w[7] + coeff_template_sig_lane_w[11];
       end
       5'd10: begin
-        rice_sum_abs_w = coeff_abs_lane_w[14] + coeff_abs_lane_w[15];
+        rice_sum_abs_w = coeff_abs_rice_lane_w[14] + coeff_abs_rice_lane_w[15];
         loc_num_sig_w = {7'd0, coeff_sig_w[14]} + {7'd0, coeff_sig_w[15]};
         loc_sum_abs_w = coeff_template_sig_lane_w[14] + coeff_template_sig_lane_w[15];
       end
       5'd11: begin
-        rice_sum_abs_w = coeff_abs_lane_w[11] + coeff_abs_lane_w[15] +
-          coeff_abs_lane_w[14];
+        rice_sum_abs_w = coeff_abs_rice_lane_w[11] + coeff_abs_rice_lane_w[15] +
+          coeff_abs_rice_lane_w[14];
         loc_num_sig_w = {7'd0, coeff_sig_w[11]} + {7'd0, coeff_sig_w[15]} +
           {7'd0, coeff_sig_w[14]};
         loc_sum_abs_w = coeff_template_sig_lane_w[11] + coeff_template_sig_lane_w[15] +
           coeff_template_sig_lane_w[14];
       end
       5'd12: begin
-        rice_sum_abs_w = coeff_abs_lane_w[11] + coeff_abs_lane_w[15];
+        rice_sum_abs_w = coeff_abs_rice_lane_w[11] + coeff_abs_rice_lane_w[15];
         loc_num_sig_w = {7'd0, coeff_sig_w[11]} + {7'd0, coeff_sig_w[15]};
         loc_sum_abs_w = coeff_template_sig_lane_w[11] + coeff_template_sig_lane_w[15];
       end
       5'd13: begin
-        rice_sum_abs_w = coeff_abs_lane_w[15];
+        rice_sum_abs_w = coeff_abs_rice_lane_w[15];
         loc_num_sig_w = {7'd0, coeff_sig_w[15]};
         loc_sum_abs_w = coeff_template_sig_lane_w[15];
       end
       5'd14: begin
-        rice_sum_abs_w = coeff_abs_lane_w[15];
+        rice_sum_abs_w = coeff_abs_rice_lane_w[15];
         loc_num_sig_w = {7'd0, coeff_sig_w[15]};
         loc_sum_abs_w = coeff_template_sig_lane_w[15];
       end
       default: begin
         loc_sum_abs_w = 9'd0;
         loc_num_sig_w = 8'd0;
-        rice_sum_abs_w = 9'd0;
+        rice_sum_abs_w = 11'd0;
       end
     endcase
   end
@@ -570,7 +575,7 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
   end
 
   always @* begin
-    sum_abs_for_rice_w = 9'd0;
+    sum_abs_for_rice_w = 11'd0;
     rice_param_w = 3'd0;
     bypass_zero_pos_w = 9'd0;
     bypass_value_w = 9'd0;
@@ -586,11 +591,11 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
     prefix_len_i = 0;
     if (mode_q && (state_q == ST_SECOND)) begin
       sum_abs_for_rice_w = rice_sum_abs_w;
-      if (sum_abs_for_rice_w <= 9'd6) begin
+      if (sum_abs_for_rice_w <= 11'd6) begin
         rice_param_w = 3'd0;
-      end else if (sum_abs_for_rice_w <= 9'd13) begin
+      end else if (sum_abs_for_rice_w <= 11'd13) begin
         rice_param_w = 3'd1;
-      end else if (sum_abs_for_rice_w <= 9'd27) begin
+      end else if (sum_abs_for_rice_w <= 11'd27) begin
         rice_param_w = 3'd2;
       end else begin
         rice_param_w = 3'd3;
@@ -637,12 +642,12 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
       // residuals are routed through residual_coding() by
       // sh_ts_residual_coding_disabled_flag=1.
       sum_abs_for_rice_w =
-        (rice_sum_abs_w > 9'd20) ? (rice_sum_abs_w - 9'd20) : 9'd0;
-      if (sum_abs_for_rice_w <= 9'd6) begin
+        (rice_sum_abs_w > 11'd20) ? (rice_sum_abs_w - 11'd20) : 11'd0;
+      if (sum_abs_for_rice_w <= 11'd6) begin
         rice_param_w = 3'd0;
-      end else if (sum_abs_for_rice_w <= 9'd13) begin
+      end else if (sum_abs_for_rice_w <= 11'd13) begin
         rice_param_w = 3'd1;
-      end else if (sum_abs_for_rice_w <= 9'd27) begin
+      end else if (sum_abs_for_rice_w <= 11'd27) begin
         rice_param_w = 3'd2;
       end else begin
         rice_param_w = 3'd3;
