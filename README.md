@@ -474,10 +474,11 @@ For AV2, the same helper can prepare AVM:
 AV2 validation currently supports one fixed black 64x64 `yuv444p8` software
 path. The Rust AV2 command emits an unmuxed AV2 OBU stream and writes the raw
 internal reconstruction. AVM decodes the software stream and also supplies the
-reference encode/decode comparison. The AV2 RTL still emits the previous
-temporary raw payload and is expected to fail full AV2 validation until it is
-updated to the same OBU stream. See [docs/av2/progress.md](docs/av2/progress.md)
-for the current AV2 checkpoint list.
+reference encode/decode comparison. The AV2 RTL simulation path emits the same
+fixed OBU stream and writes a hard-coded black reconstruction so the first
+SW/RTL/reference smoke path can pass. See
+[docs/av2/progress.md](docs/av2/progress.md) for the current AV2 checkpoint
+list.
 
 Prepare a decoder:
 

@@ -538,13 +538,13 @@ def validate_av2_fixed_black_bitstream(
     ran_rtl = False
     if not args.sw_only:
         ran_rtl = True
-        print("FrameForge validate: AV2 RTL temporary black-frame payload", flush=True)
+        print("FrameForge validate: AV2 RTL fixed black-frame OBU stream", flush=True)
         env = os.environ.copy()
         env["RTL_CHROMA_FORMAT_IDC"] = "3"
         env["FRAMEFORGE_RTL_AV2_ENCODER_OUT_1F"] = str(rtl_bitstream)
         env["FRAMEFORGE_RTL_AV2_ENCODER_RECON_OUT_1F"] = str(rtl_internal_recon)
         env["COCOTB_TEST_FILTER"] = (
-            "^test_av2_encoder\\.av2_encoder_emits_temporary_black_64x64_444_payload$"
+            "^test_av2_encoder\\.av2_encoder_emits_fixed_black_64x64_444_obu_stream$"
         )
         rtl = subprocess.run(
             [
@@ -562,7 +562,7 @@ def validate_av2_fixed_black_bitstream(
             check=False,
         )
         if rtl.returncode != 0:
-            print("FAIL: AV2 RTL temporary payload simulation failed", file=sys.stderr)
+            print("FAIL: AV2 RTL fixed OBU simulation failed", file=sys.stderr)
             return rtl.returncode
 
     digests = {
@@ -574,8 +574,8 @@ def validate_av2_fixed_black_bitstream(
         "ref_recon": sha256(reference_recon),
     }
     if ran_rtl:
-        digests["rtl_temporary_payload"] = sha256(rtl_bitstream)
-        digests["rtl_temporary_recon"] = sha256(rtl_internal_recon)
+        digests["rtl_bitstream"] = sha256(rtl_bitstream)
+        digests["rtl_internal_recon"] = sha256(rtl_internal_recon)
 
     print("FrameForge AV2 validation checksums")
     print(
@@ -587,12 +587,12 @@ def validate_av2_fixed_black_bitstream(
     print_bitrate_report("software_bitstream", sw_bitstream, info)
     print_bitrate_report("ref_bitstream", reference_bitstream, info)
     if ran_rtl:
-        print_bitrate_report("rtl_temporary_payload", rtl_bitstream, info)
+        print_bitrate_report("rtl_bitstream", rtl_bitstream, info)
     print_psnr_report("software_internal_recon", validation_input_path, sw_internal_recon)
     print_psnr_report("software_ref_decoded_recon", validation_input_path, sw_ref_decoded_recon)
     print_psnr_report("ref_recon", validation_input_path, reference_recon)
     if ran_rtl:
-        print_psnr_report("rtl_temporary_recon", validation_input_path, rtl_internal_recon)
+        print_psnr_report("rtl_internal_recon", validation_input_path, rtl_internal_recon)
     recon_views = {
         "input": validation_input_path,
         "software_internal_recon": sw_internal_recon,
@@ -600,7 +600,7 @@ def validate_av2_fixed_black_bitstream(
         "ref_recon": reference_recon,
     }
     if ran_rtl:
-        recon_views["rtl_temporary_recon"] = rtl_internal_recon
+        recon_views["rtl_internal_recon"] = rtl_internal_recon
     write_recon_views(
         args.recon_format,
         info,
@@ -622,13 +622,14 @@ def validate_av2_fixed_black_bitstream(
     print("OK: AV2 REF decode of software bitstream matches black input")
     print("OK: AV2 REF reconstruction matches black input")
     if ran_rtl:
-        if digests["rtl_temporary_payload"] != digests["software_bitstream"]:
-            print("FAIL: AV2 RTL still emits the temporary raw payload, not the fixed OBU bitstream", file=sys.stderr)
+        if digests["rtl_bitstream"] != digests["software_bitstream"]:
+            print("FAIL: AV2 RTL bitstream differs from software OBU bitstream", file=sys.stderr)
             return 1
-        if digests["rtl_temporary_recon"] != digests["input_yuv"]:
-            print("FAIL: AV2 RTL temporary reconstruction differs from black input", file=sys.stderr)
+        if digests["rtl_internal_recon"] != digests["input_yuv"]:
+            print("FAIL: AV2 RTL reconstruction differs from black input", file=sys.stderr)
             return 1
-        print("OK: AV2 RTL temporary reconstruction matches black input")
+        print("OK: AV2 RTL bitstream matches software OBU bitstream")
+        print("OK: AV2 RTL reconstruction matches black input")
     return 0
 
 

@@ -28,6 +28,7 @@ encoder implementation.
 ## Temporary Black-Frame Payload Note
 
 After this baseline, the AV2 RTL top gained a TODO-marked simulation-only fixed
-payload for one black 64x64 `yuv444p8` frame. That path is intentionally not a
+OBU stream for one black 64x64 `yuv444p8` frame. The testbench also writes a
+matching hard-coded black reconstruction. That path is intentionally not a
 synthesis target and should be removed when real AV2 syntax emission starts.
 Do not record it as an area/timing baseline.
