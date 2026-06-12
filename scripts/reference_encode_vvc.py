@@ -10,13 +10,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+from codec_config import add_codec_arg, codec_config_from_args, CodecConfig
 
-DEFAULT_REF_DIR = Path("verification/reference")
 DEFAULT_GENERATED_DIR = Path("verification/generated")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    add_codec_arg(parser)
     parser.add_argument("--input", help="optional planar YUV input path matching --bit-depth and --chroma-format")
     parser.add_argument("--output", required=True, help="VVC bitstream output path")
     parser.add_argument("--recon", help="optional reconstructed YUV output path")
@@ -26,6 +27,7 @@ def main() -> int:
     parser.add_argument("--bit-depth", type=int, choices=(8, 10, 12, 16), default=8)
     parser.add_argument("--chroma-format", choices=("420", "422", "444"), default="420")
     args = parser.parse_args()
+    codec = codec_config_from_args(args)
 
     if args.width <= 0 or args.height <= 0:
         print("reference VVC encode expects positive dimensions", file=sys.stderr)
@@ -41,7 +43,7 @@ def main() -> int:
         return 2
 
     try:
-        encoder = find_encoder()
+        encoder, encoder_root = find_encoder(codec)
     except RuntimeError as err:
         print(err, file=sys.stderr)
         return 2
@@ -65,7 +67,7 @@ def main() -> int:
     cmd = [
         str(encoder),
         "-c",
-        str(vtm_root() / "cfg" / "encoder_intra_vtm.cfg"),
+        str(encoder_root / "cfg" / "encoder_intra_vtm.cfg"),
         "-i",
         str(input_path),
         "-b",
@@ -128,38 +130,55 @@ def main() -> int:
     return 0
 
 
-def find_encoder() -> Path:
+def find_encoder(codec: CodecConfig) -> tuple[Path, Path]:
     configured = os.environ.get("FRAMEFORGE_VTM_ENCODER")
     if configured:
         path = Path(configured)
         if path.exists():
-            return path
+            return path, vtm_root(codec)
         raise RuntimeError(f"FRAMEFORGE_VTM_ENCODER does not exist: {path}")
 
-    root = vtm_root()
     names = ("EncoderAppStatic", "EncoderAppStatic.exe", "EncoderApp", "EncoderApp.exe")
-    for name in names:
-        for path in root.rglob(name):
-            if path.is_file() and os.access(path, os.X_OK):
-                return path
+    found = find_encoder_in_roots(names, candidate_vtm_roots(codec))
+    if found:
+        return found
 
     helper = Path(__file__).with_name("ensure_reference_decoder.py")
-    completed = subprocess.run([sys.executable, str(helper)], check=False)
+    completed = subprocess.run([sys.executable, str(helper), "--codec", codec.name], check=False)
     if completed.returncode != 0:
         raise RuntimeError("failed to build VTM reference tools")
 
-    for name in names:
-        for path in root.rglob(name):
-            if path.is_file() and os.access(path, os.X_OK):
-                return path
+    found = find_encoder_in_roots(names, candidate_vtm_roots(codec))
+    if found:
+        return found
 
-    raise RuntimeError(f"no VTM encoder executable found under {root}")
+    roots = ", ".join(str(root) for root in candidate_vtm_roots(codec))
+    raise RuntimeError(f"no VTM encoder executable found under: {roots}")
 
 
-def vtm_root() -> Path:
+def find_encoder_in_roots(names: tuple[str, ...], roots: list[Path]) -> tuple[Path, Path] | None:
+    for root in roots:
+        if not root.exists():
+            continue
+        for name in names:
+            for path in root.rglob(name):
+                if path.is_file() and os.access(path, os.X_OK):
+                    return path, root
+    return None
+
+
+def candidate_vtm_roots(codec: CodecConfig) -> list[Path]:
+    root = vtm_root(codec)
+    roots = [root]
+    if "FRAMEFORGE_VTM_ROOT" not in os.environ and "FRAMEFORGE_REF_DIR" not in os.environ:
+        roots.extend(legacy / "vtm" for legacy in codec.legacy_reference_dirs)
+    return roots
+
+
+def vtm_root(codec: CodecConfig) -> Path:
     if root := os.environ.get("FRAMEFORGE_VTM_ROOT"):
         return Path(root)
-    return Path(os.environ.get("FRAMEFORGE_REF_DIR", DEFAULT_REF_DIR)) / "vtm"
+    return Path(os.environ.get("FRAMEFORGE_REF_DIR", codec.reference_dir)) / "vtm"
 
 
 def default_black_yuv(

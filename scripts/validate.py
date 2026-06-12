@@ -13,6 +13,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from codec_config import add_codec_arg, codec_config_from_args
+
 try:
     from PIL import Image
 except ImportError:  # pragma: no cover - exercised only when validating PNG inputs.
@@ -75,6 +77,7 @@ class InputInfo:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    add_codec_arg(parser)
     parser.add_argument("input", help="input raw YUV file, or a lossless PNG still image")
     parser.add_argument("--width", type=int)
     parser.add_argument("--height", type=int)
@@ -121,6 +124,7 @@ def main() -> int:
         help="validate only the Rust software encoder against VTM; skip RTL simulation and synthesis",
     )
     args = parser.parse_args()
+    codec = codec_config_from_args(args)
 
     input_path = Path(args.input).resolve()
     if not input_path.exists():
@@ -147,8 +151,8 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     stem = f"{input_path.stem}_{info.width}x{info.height}_{info.frames}f_{info.fmt}"
-    sw_bitstream = out_dir / f"{stem}_software.vvc"
-    rtl_bitstream = out_dir / f"{stem}_rtl.vvc"
+    sw_bitstream = out_dir / f"{stem}_software.{codec.bitstream_extension}"
+    rtl_bitstream = out_dir / f"{stem}_rtl.{codec.bitstream_extension}"
     sw_internal_recon = out_dir / f"{stem}_software_internal_rec.yuv"
     rtl_internal_recon = out_dir / f"{stem}_rtl_internal_rec.yuv"
     vtm_recon = out_dir / f"{stem}_vtm_from_decodable_bitstream.yuv"
@@ -168,7 +172,7 @@ def main() -> int:
             "run",
             "--quiet",
             "--",
-            "vvc-encode",
+            codec.rust_encode_command,
             "--input",
             str(validation_input_path),
             "--frames",
@@ -195,6 +199,8 @@ def main() -> int:
                 [
                     sys.executable,
                     "scripts/validate_decode.py",
+                    "--codec",
+                    codec.name,
                     str(sw_bitstream),
                     "--output",
                     str(vtm_recon),
@@ -258,7 +264,7 @@ def main() -> int:
         return 0
 
     if not args.skip_synth:
-        run(["make", "synth", f"SYNTH_DUT={args.synth_dut}"])
+        run(["make", "synth", f"CODEC={codec.name}", f"SYNTH_DUT={args.synth_dut}"])
 
     env = os.environ.copy()
     rtl_sample_bits = format_bit_depth(info.fmt) if format_chroma_sampling(info.fmt) == "444" else 8
@@ -283,6 +289,7 @@ def main() -> int:
             "make",
             "-B",
             "rtl-test",
+            f"CODEC={codec.name}",
             "DUT=vvc-encoder",
             f"RTL_VISIBLE_WIDTH={info.width}",
             f"RTL_VISIBLE_HEIGHT={info.height}",
@@ -300,6 +307,8 @@ def main() -> int:
             [
                 sys.executable,
                 "scripts/validate_decode.py",
+                "--codec",
+                codec.name,
                 str(rtl_bitstream),
                 "--output",
                 str(vtm_recon),

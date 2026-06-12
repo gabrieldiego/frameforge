@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from codec_config import add_codec_arg, codec_config_from_args
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VTM_CRASH_SKIP_EXIT = 77
@@ -21,7 +23,7 @@ VTM_CRASH_SIGNALS = {
 }
 
 
-def find_decoder_command() -> list[str] | None:
+def find_decoder_command(codec) -> list[str] | None:
     decoder = os.environ.get("FRAMEFORGE_DECODER")
     if decoder:
         return shlex.split(decoder)
@@ -32,7 +34,7 @@ def find_decoder_command() -> list[str] | None:
 
     helper = Path(__file__).with_name("ensure_reference_decoder.py")
     completed = subprocess.run(
-        [sys.executable, str(helper), "--print-command"],
+        [sys.executable, str(helper), "--codec", codec.name, "--print-command"],
         check=False,
         capture_output=True,
         text=True,
@@ -53,16 +55,18 @@ def main() -> int:
             "placeholder data, so successful decoding is not guaranteed."
         )
     )
+    add_codec_arg(parser)
     parser.add_argument("bitstream", help="bitstream path to pass to the decoder")
     parser.add_argument("-o", "--output", help="optional decoded output path")
     args, extra = parser.parse_known_args()
+    codec = codec_config_from_args(args)
 
-    cmd = find_decoder_command()
+    cmd = find_decoder_command(codec)
     if not cmd:
         print(
             "No external decoder is configured or available. Set FRAMEFORGE_DECODER, "
             "FRAMEFORGE_VTM_DECODER, or FRAMEFORGE_VTM_ROOT, or allow the reference "
-            "decoder helper to clone/build VTM under verification/reference.",
+            f"decoder helper to clone/build VTM under {codec.reference_dir}.",
             file=sys.stderr,
         )
         return 2

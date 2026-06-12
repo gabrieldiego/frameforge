@@ -28,7 +28,7 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - `EncoderParams`, `Picture`, reconstruction buffers, and CTU/CU traversal for the current subset.
 - JSONL trace events.
 - Optional external decoder wrapper that does not assume a decoder is installed.
-- Reference-decoder setup helper that uses local decoder settings first and can clone/build VTM under `verification/reference`.
+- Reference-decoder setup helper that uses local decoder settings first and can clone/build VTM under `verification/codecs/vvc/reference`.
 - SystemVerilog RTL blocks with stream-style handshakes.
 - RTL VVC generator that drains a parameterized CTU-local leaf stream converted from planar YUV by the testbench, emits sequence headers, per-picture Annex-B start codes, VVC NAL headers, and CABAC-coded NAL payload bytes to match the Rust VVC stream.
 - cocotb/Icarus verification fixtures.
@@ -100,6 +100,12 @@ raster fetches.
   predictor/copy-above behavior.
 - FPGA vendor integration or proprietary EDA requirements.
 
-## VVC Isolation
+## Codec Isolation
 
-VVC-specific code belongs in isolated modules such as `src/vvc/` or future `src/codecs/vvc/` modules. Generic infrastructure should use names such as `bitstream`, `encoder`, `picture`, `trace`, `packet`, and `golden` where reasonable. The project should not become permanently shaped around VVC terminology when a generic abstraction is sufficient.
+VVC-specific code belongs in isolated modules such as `src/vvc/`, `rtl/vvc/`,
+`tb/vvc/`, and `verification/codecs/vvc/`. Generic infrastructure should use
+names such as `bitstream`, `encoder`, `picture`, `trace`, `packet`, and
+`golden` where reasonable. Shared generated vector manifests remain under
+`verification/test_vector_sets/` because the same sources can be reused by
+future codecs. The project should not become permanently shaped around VVC
+terminology when a generic abstraction is sufficient.

@@ -4,7 +4,8 @@ This directory is for local verification resources and generated outputs.
 
 FrameForge does not vendor VTM source code. If no decoder is configured through
 environment variables, `scripts/ensure_reference_decoder.py` clones and builds
-VTM under `verification/reference/vtm`.
+VTM under `verification/codecs/vvc/reference/vtm` for the VVC codec. Existing
+legacy trees under `verification/reference/vtm` are still detected.
 
 Useful variables:
 

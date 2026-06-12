@@ -10,6 +10,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from codec_config import add_codec_arg, codec_config_from_args
 import generate_test_vectors
 
 
@@ -28,6 +29,7 @@ class ValidationResult:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    add_codec_arg(parser)
     parser.add_argument("set", help="named vector set manifest to generate and validate")
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_VECTOR_DIR)
     parser.add_argument("--set-dir", type=Path, default=generate_test_vectors.DEFAULT_SET_DIR)
@@ -39,6 +41,8 @@ def main() -> int:
     parser.add_argument("--sw-only", action="store_true", help="run software/VTM validation only")
     parser.add_argument("--stop-on-fail", action="store_true")
     args = parser.parse_args()
+    codec = codec_config_from_args(args)
+    args.codec_config = codec
 
     vector_paths = generate_test_vectors.generate_vectors(args.set, args.out_dir, args.set_dir)
     if args.limit:
@@ -78,6 +82,8 @@ def run_validation(path: Path, args: argparse.Namespace) -> ValidationResult:
     cmd = [
         sys.executable,
         "scripts/validate.py",
+        "--codec",
+        args.codec_config.name,
         str(path),
         "--max-width",
         str(args.max_width),

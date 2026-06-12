@@ -53,6 +53,7 @@ make synth
 
 Defaults:
 
+- codec: `vvc`
 - board: `synth/boards/arty-z7-10.env`
 - DUT source selection: `vvc-cabac-stream-writer`, derived from `tb/Makefile`
 - top: derived from the selected `SYNTH_DUT`
@@ -67,6 +68,7 @@ Override these from the command line:
 
 ```sh
 make synth \
+  CODEC=vvc \
   SYNTH_BOARD=synth/boards/arty-z7-20.env \
   SYNTH_DUT=vvc-cabac-stream-writer \
   SYNTH_CLOCK_MHZ=100 \

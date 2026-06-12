@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Find or build an external VVC reference decoder for validation.
+"""Find or build a codec reference decoder for validation.
 
 FrameForge does not vendor VTM source code. This helper uses configured local
-paths first and only clones/builds VTM into verification/reference when needed.
+paths first and only clones/builds VTM into the selected codec reference tree
+when needed.
 """
 
 import argparse
@@ -12,9 +13,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+from codec_config import add_codec_arg, codec_config_from_args
+
 
 DEFAULT_VTM_REPO = "https://vcgit.hhi.fraunhofer.de/jvet/VVCSoftware_VTM.git"
-DEFAULT_REF_DIR = Path("verification/reference")
 DECODER_NAMES = (
     "DecoderAnalyserAppStatic",
     "DecoderAnalyserAppStatic.exe",
@@ -29,6 +31,7 @@ DECODER_NAMES = (
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    add_codec_arg(parser)
     parser.add_argument(
         "--no-build",
         action="store_true",
@@ -40,6 +43,7 @@ def main() -> int:
         help="print the decoder executable path or configured command",
     )
     args = parser.parse_args()
+    codec = codec_config_from_args(args)
 
     configured = configured_decoder()
     if configured:
@@ -48,8 +52,14 @@ def main() -> int:
         return 0
 
     root = configured_vtm_root()
-    if root is None and default_vtm_root().exists():
-        root = default_vtm_root()
+    if root is None and default_vtm_root(codec).exists():
+        root = default_vtm_root(codec)
+    elif root is None:
+        for legacy in codec.legacy_reference_dirs:
+            legacy_vtm = legacy / "vtm"
+            if legacy_vtm.exists():
+                root = legacy_vtm
+                break
     decoder = find_decoder(root) if root else None
     if decoder:
         if args.print_command:
@@ -64,7 +74,7 @@ def main() -> int:
         )
         return 2
 
-    root = root or default_vtm_root()
+    root = root or default_vtm_root(codec)
     if not root.exists():
         clone_vtm(root)
 
@@ -106,8 +116,8 @@ def configured_vtm_root() -> Path | None:
     return Path(root) if root else None
 
 
-def default_vtm_root() -> Path:
-    base = Path(os.environ.get("FRAMEFORGE_REF_DIR", DEFAULT_REF_DIR))
+def default_vtm_root(codec) -> Path:
+    base = Path(os.environ.get("FRAMEFORGE_REF_DIR", codec.reference_dir))
     return base / "vtm"
 
 

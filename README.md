@@ -21,8 +21,8 @@ Current status: experimental, not production-ready. The current VVC software and
 - `src/` - Rust CLI, encoder framework, bitstream utilities, trace support, and VVC software model.
 - `docs/` - lightweight subset and design notes.
 - `scripts/` - helper tools such as optional external decoder validation.
-- `rtl/` - SystemVerilog packages and VVC RTL blocks.
-- `tb/` - cocotb verification fixtures.
+- `rtl/vvc/` - VVC SystemVerilog RTL blocks.
+- `tb/vvc/` - VVC cocotb verification fixtures.
 - `Makefile` - common build, test, format, RTL-test, and clean targets.
 
 ## Build
@@ -441,7 +441,7 @@ FrameForge looks for decoder resources in this order:
 - `FRAMEFORGE_VTM_DECODER`: direct path to a built VTM decoder executable.
 - `FRAMEFORGE_VTM_ENCODER`: direct path to a built VTM encoder executable.
 - `FRAMEFORGE_VTM_ROOT`: path to an existing VTM source/build tree to search.
-- `verification/reference/vtm`: automatically cloned and built when no configured decoder is found.
+- `verification/codecs/vvc/reference/vtm`: automatically cloned and built when no configured decoder is found. The helper still accepts the legacy `verification/reference/vtm` location when it already exists.
 
 The automatic VTM setup can be customized:
 
@@ -460,7 +460,7 @@ make decoder-setup
 ```
 
 ```sh
-FRAMEFORGE_DECODER=/path/to/decoder scripts/validate_decode.py out.vvc --output decoded.yuv
+FRAMEFORGE_DECODER=/path/to/decoder scripts/validate_decode.py --codec vvc out.vvc --output decoded.yuv
 ```
 
 or:

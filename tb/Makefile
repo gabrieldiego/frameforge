@@ -9,6 +9,7 @@ COCOTB_CONFIG ?= cocotb-config
 endif
 
 RTL_DIR := ../rtl
+CODEC ?= vvc
 DUT ?= vvc-coding-tree-scheduler
 RTL_SAMPLE_BITS ?= 8
 RTL_SOURCE_SAMPLE_BITS ?= $(RTL_SAMPLE_BITS)
@@ -30,68 +31,75 @@ export RTL_MAX_VISIBLE_HEIGHT
 export RTL_CTU_SIZE
 export RTL_SUPPORT_PALETTE_444
 
+ifeq ($(CODEC),vvc)
+CODEC_RTL_DIR := $(RTL_DIR)/vvc
+export PYTHONPATH := $(abspath vvc):$(PYTHONPATH)
+else
+$(error unsupported CODEC '$(CODEC)')
+endif
+
 ifeq ($(DUT),vvc-coding-tree-scheduler)
-VERILOG_SOURCES := $(RTL_DIR)/ff_vvc_coding_tree_scheduler.sv
+VERILOG_SOURCES := $(CODEC_RTL_DIR)/ff_vvc_coding_tree_scheduler.sv
 TOPLEVEL := ff_vvc_coding_tree_scheduler
 COCOTB_TEST_MODULES := test_vvc_coding_tree_scheduler
 else ifeq ($(DUT),vvc-palette-symbolizer)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_residual/ff_vvc_chroma_tu_mapper_420.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_cu_symbolizer.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_symbolizer.sv
+VERILOG_SOURCES := $(CODEC_RTL_DIR)/residual/ff_vvc_chroma_tu_mapper_420.sv $(CODEC_RTL_DIR)/palette/ff_vvc_palette_cu_symbolizer.sv $(CODEC_RTL_DIR)/palette/ff_vvc_palette_symbolizer.sv
 TOPLEVEL := ff_vvc_palette_symbolizer
 COCOTB_TEST_MODULES := test_vvc_palette_symbolizer
 else ifeq ($(DUT),vvc-palette-cu-symbolizer)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_palette/ff_vvc_palette_cu_symbolizer.sv
+VERILOG_SOURCES := $(CODEC_RTL_DIR)/palette/ff_vvc_palette_cu_symbolizer.sv
 TOPLEVEL := ff_vvc_palette_cu_symbolizer
 COCOTB_TEST_MODULES := test_vvc_palette_cu_symbolizer
 else ifeq ($(DUT),residual)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_residual/ff_vvc_residual_transform.sv
+VERILOG_SOURCES := $(CODEC_RTL_DIR)/residual/ff_vvc_residual_transform.sv
 TOPLEVEL := ff_vvc_residual_transform
 COCOTB_TEST_MODULES := test_vvc_residual_transform
 else ifeq ($(DUT),vvc-cabac)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_byte_queue.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_bit_writer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_bin_engine.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_context_model.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_stream_writer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_symbol_binarizer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_syntax_frontend.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_pipeline.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac.sv
+VERILOG_SOURCES := $(CODEC_RTL_DIR)/cabac/ff_vvc_byte_queue.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_bit_writer.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_bin_engine.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_context_model.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_stream_writer.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_symbol_binarizer.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_syntax_frontend.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_pipeline.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac.sv
 TOPLEVEL := ff_vvc_cabac
 COCOTB_TEST_MODULES := test_vvc_cabac
 else ifeq ($(DUT),vvc-cabac-stream-writer)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_byte_queue.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_bit_writer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_bin_engine.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_context_model.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_stream_writer.sv
+VERILOG_SOURCES := $(CODEC_RTL_DIR)/cabac/ff_vvc_byte_queue.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_bit_writer.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_bin_engine.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_context_model.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_stream_writer.sv
 TOPLEVEL := ff_vvc_cabac_stream_writer
 COCOTB_TEST_MODULES := test_vvc_cabac_stream_writer
 else ifeq ($(DUT),vvc-cabac-pipeline)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_byte_queue.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_bit_writer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_bin_engine.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_context_model.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_stream_writer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_symbol_binarizer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_syntax_frontend.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_pipeline.sv
+VERILOG_SOURCES := $(CODEC_RTL_DIR)/cabac/ff_vvc_byte_queue.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_bit_writer.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_bin_engine.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_context_model.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_stream_writer.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_symbol_binarizer.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_syntax_frontend.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_pipeline.sv
 TOPLEVEL := ff_vvc_cabac_pipeline
 COCOTB_TEST_MODULES := test_vvc_cabac_pipeline
 else ifeq ($(DUT),vvc-cabac-symbol-binarizer)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_symbol_binarizer.sv
+VERILOG_SOURCES := $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_symbol_binarizer.sv
 TOPLEVEL := ff_vvc_cabac_symbol_binarizer
 COCOTB_TEST_MODULES := test_vvc_cabac_symbol_binarizer
 else ifeq ($(DUT),vvc-cabac-syntax-frontend)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_syntax_frontend.sv
+VERILOG_SOURCES := $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_syntax_frontend.sv
 TOPLEVEL := ff_vvc_cabac_syntax_frontend
 COCOTB_TEST_MODULES := test_vvc_cabac_syntax_frontend
 else ifeq ($(DUT),vvc-cabac-context-model)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_context_model.sv
+VERILOG_SOURCES := $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_context_model.sv
 TOPLEVEL := ff_vvc_cabac_context_model
 COCOTB_TEST_MODULES := test_vvc_cabac_context_model
 else ifeq ($(DUT),vvc-cabac-bin-engine)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_bin_engine.sv
+VERILOG_SOURCES := $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_bin_engine.sv
 TOPLEVEL := ff_vvc_cabac_bin_engine
 COCOTB_TEST_MODULES := test_vvc_cabac_bin_engine
 else ifeq ($(DUT),vvc-cabac-bit-writer)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_bit_writer.sv
+VERILOG_SOURCES := $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_bit_writer.sv
 TOPLEVEL := ff_vvc_cabac_bit_writer
 COCOTB_TEST_MODULES := test_vvc_cabac_bit_writer
 else ifeq ($(DUT),vvc-byte-queue)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_byte_queue.sv
+VERILOG_SOURCES := $(CODEC_RTL_DIR)/cabac/ff_vvc_byte_queue.sv
 TOPLEVEL := ff_vvc_byte_queue
 COCOTB_TEST_MODULES := test_vvc_byte_queue
 else ifeq ($(DUT),vvc-emulation-prevention)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_bitstream/ff_vvc_emulation_prevention_stream.sv
+VERILOG_SOURCES := $(CODEC_RTL_DIR)/bitstream/ff_vvc_emulation_prevention_stream.sv
 TOPLEVEL := ff_vvc_emulation_prevention_stream
 COCOTB_TEST_MODULES := test_vvc_emulation_prevention_stream
 else ifeq ($(DUT),vvc-ctu-symbolizer)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_cabac/ff_vvc_residual_symbol_emitter_4x4.sv $(RTL_DIR)/vvc_cabac/ff_vvc_ctu_symbolizer.sv
+VERILOG_SOURCES := $(CODEC_RTL_DIR)/cabac/ff_vvc_residual_symbol_emitter_4x4.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_ctu_symbolizer.sv
 TOPLEVEL := ff_vvc_ctu_symbolizer
 COCOTB_TEST_MODULES := test_vvc_encoder
 else ifeq ($(DUT),vvc-encoder)
-VERILOG_SOURCES := $(RTL_DIR)/vvc_residual/ff_vvc_chroma_tu_mapper_420.sv $(RTL_DIR)/vvc_residual/ff_vvc_chroma_quant_recon_420.sv $(RTL_DIR)/vvc_residual/ff_vvc_luma_quant_recon_8x8.sv $(RTL_DIR)/ff_vvc_coding_tree_scheduler.sv $(RTL_DIR)/ff_vvc_cu_activity_mask.sv $(RTL_DIR)/vvc_ibc/ff_vvc_ibc_hash_matcher.sv $(RTL_DIR)/vvc_bitstream/ff_vvc_ue_code.sv $(RTL_DIR)/ff_vvc_annexb_header.sv $(RTL_DIR)/vvc_bitstream/ff_vvc_emulation_prevention_stream.sv $(RTL_DIR)/vvc_bitstream/ff_vvc_annexb_picture_header_stream.sv $(RTL_DIR)/vvc_bitstream/ff_vvc_annexb_slice_stream.sv $(RTL_DIR)/vvc_cabac/ff_vvc_residual_symbol_emitter_4x4.sv $(RTL_DIR)/vvc_cabac/ff_vvc_ctu_symbolizer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_byte_queue.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_bit_writer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_bin_engine.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_context_model.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_stream_writer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_symbol_binarizer.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_syntax_frontend.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac_pipeline.sv $(RTL_DIR)/vvc_cabac/ff_vvc_cabac.sv $(RTL_DIR)/vvc_cabac/ff_vvc_rbsp_payload_stream.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_cu_symbolizer.sv $(RTL_DIR)/vvc_palette/ff_vvc_palette_symbolizer.sv $(RTL_DIR)/ff_vvc_encoder.sv
+VERILOG_SOURCES := $(CODEC_RTL_DIR)/residual/ff_vvc_chroma_tu_mapper_420.sv $(CODEC_RTL_DIR)/residual/ff_vvc_chroma_quant_recon_420.sv $(CODEC_RTL_DIR)/residual/ff_vvc_luma_quant_recon_8x8.sv $(CODEC_RTL_DIR)/ff_vvc_coding_tree_scheduler.sv $(CODEC_RTL_DIR)/ff_vvc_cu_activity_mask.sv $(CODEC_RTL_DIR)/ibc/ff_vvc_ibc_hash_matcher.sv $(CODEC_RTL_DIR)/bitstream/ff_vvc_ue_code.sv $(CODEC_RTL_DIR)/ff_vvc_annexb_header.sv $(CODEC_RTL_DIR)/bitstream/ff_vvc_emulation_prevention_stream.sv $(CODEC_RTL_DIR)/bitstream/ff_vvc_annexb_picture_header_stream.sv $(CODEC_RTL_DIR)/bitstream/ff_vvc_annexb_slice_stream.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_residual_symbol_emitter_4x4.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_ctu_symbolizer.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_byte_queue.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_bit_writer.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_bin_engine.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_context_model.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_stream_writer.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_symbol_binarizer.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_syntax_frontend.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac_pipeline.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_cabac.sv $(CODEC_RTL_DIR)/cabac/ff_vvc_rbsp_payload_stream.sv $(CODEC_RTL_DIR)/palette/ff_vvc_palette_cu_symbolizer.sv $(CODEC_RTL_DIR)/palette/ff_vvc_palette_symbolizer.sv $(CODEC_RTL_DIR)/ff_vvc_encoder.sv
 TOPLEVEL := ff_vvc_encoder
 COCOTB_TEST_MODULES := test_vvc_encoder
 else
@@ -99,7 +107,7 @@ $(error unsupported DUT '$(DUT)')
 endif
 
 COMPILE_ARGS += -g2012
-COMPILE_ARGS += -I$(RTL_DIR)/vvc_cabac
+COMPILE_ARGS += -I$(CODEC_RTL_DIR)/cabac
 ifeq ($(DUT),vvc-encoder)
 ifeq ($(SIM),icarus)
 COMPILE_ARGS += -P$(TOPLEVEL).SAMPLE_BITS=$(RTL_SAMPLE_BITS)

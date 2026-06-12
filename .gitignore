@@ -4,6 +4,9 @@
 /tb/results.xml
 /tb/__pycache__/
 /scripts/__pycache__/
+__pycache__/
+/verification/codecs/vvc/reference/vtm/
+/verification/codecs/vvc/reference/build/
 /verification/reference/vtm/
 /verification/reference/build/
 /verification/generated/
