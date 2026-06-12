@@ -20,10 +20,10 @@ reporting, synthesis wrappers, and cocotb/Yosys entry points.
   streaming shell with `start`, `busy`, `input_error`, and byte-stream
   handshakes.
 - `rtl/av2/ff_av2_encoder.sv` also contains a TODO-marked temporary
-  simulation-only fixed OBU stream for one black 64x64 4:4:4 frame. It
-  deliberately ignores input samples and is not intended to synthesize. The
-  testbench writes a matching hard-coded black raw reconstruction for checksum
-  comparison.
+  synthesizable fixed OBU stream for one black 64x64 4:4:4 frame. It
+  deliberately ignores input samples until the first real AV2 syntax generator
+  is added. The testbench writes a matching hard-coded black raw reconstruction
+  for checksum comparison.
 - The AV2 top-level interface intentionally mirrors `ff_vvc_encoder` for common
   integration signals. The shared `CTU_SIZE` parameter name is temporary until
   the AV2 block/superblock naming is settled.
@@ -110,9 +110,9 @@ Last checked on 2026-06-12:
   using matching unmuxed OBU output and black raw reconstructions.
 - `make rtl-test CODEC=av2`: passed cocotb tests for the AV2 top-level
   interface and fixed black-frame OBU stream.
-- Historical pre-temporary-path synthesis:
-  `make synth CODEC=av2 SYNTH_TIMEOUT_SEC=120 SYNTH_WARN_AFTER_SEC=60` passed
-  Yosys synthesis for `ff_av2_encoder` in 4.2 seconds with 127.36 MiB peak RSS.
+- `make synth CODEC=av2`: passed Yosys synthesis for the synthesizable fixed
+  black-frame OBU stream in 4.8 seconds with 128.29 MiB peak RSS. The
+  topological critical-path length stayed at 9.
 - `python3 -m py_compile scripts/*.py tb/av2/*.py tb/vvc/*.py`: passed after
   adding the AV2 reference setup and reference encode wrapper.
 - `python3 scripts/ensure_reference_decoder.py --codec av2 --no-build
@@ -123,6 +123,9 @@ Last checked on 2026-06-12:
 
 - Replace the remaining fixed black tile entropy payload with a reusable AV2
   entropy/range writer.
+- Replace the fixed AV2 RTL OBU byte source with parameterized syntax emission
+  once the software syntax generator is expanded beyond the black-frame smoke
+  vector.
 - Add software reconstruction plumbing for the first non-fixed intra-only
   picture path.
 - Replace fixed SW/RTL black-frame comparison with parameterized AV2

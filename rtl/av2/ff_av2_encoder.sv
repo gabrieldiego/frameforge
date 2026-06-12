@@ -33,16 +33,24 @@ module ff_av2_encoder #(
   localparam logic [15:0] FIXED_BLACK_444_WIDTH = 16'd64;
   localparam logic [15:0] FIXED_BLACK_444_HEIGHT = 16'd64;
   localparam int FIXED_BLACK_444_OBU_BYTES = 39;
+  localparam int FIXED_BLACK_444_OBU_INDEX_BITS = $clog2(FIXED_BLACK_444_OBU_BYTES);
 
-  // TODO(av2): remove this simulation-only fixed black-frame OBU stream as
-  // soon as the first real AV2 header/picture pipeline exists. This mirrors
-  // the current Rust fixed 64x64 yuv444p8 black-frame encoder and deliberately
-  // ignores input samples. It is not intended to be synthesizable hardware.
+  // TODO(av2): replace this fixed black-frame OBU stream with real AV2 syntax
+  // generation. This temporary synthesizable source mirrors the Rust fixed
+  // 64x64 yuv444p8 black-frame encoder and deliberately ignores input samples.
+  //
+  // Byte layout:
+  //   [0:1]   temporal-delimiter OBU
+  //   [2:15]  sequence-header OBU with a 64x64 yuv444p8 configuration
+  //   [16:38] closed-loop-key OBU with a fixed black tile entropy payload
   logic active_q;
   logic start_invalid_w;
-  logic [$clog2(FIXED_BLACK_444_OBU_BYTES):0] payload_index_q;
+  logic [FIXED_BLACK_444_OBU_INDEX_BITS - 1:0] payload_index_q;
+  logic [FIXED_BLACK_444_OBU_INDEX_BITS - 1:0] payload_next_index_w;
+  logic [FIXED_BLACK_444_OBU_INDEX_BITS - 1:0] payload_lookup_index_w;
   logic [7:0] payload_byte_w;
-  logic payload_next_done_w;
+  logic payload_advance_w;
+  logic payload_lookup_last_w;
 
   assign busy = active_q;
   assign s_axis_ready = 1'b0;
@@ -52,12 +60,14 @@ module ff_av2_encoder #(
     (visible_width > MAX_VISIBLE_WIDTH) ||
     (visible_height > MAX_VISIBLE_HEIGHT) ||
     (chroma_format_idc != 2'd3);
-  assign payload_next_done_w = ((payload_index_q + 1'b1) == (FIXED_BLACK_444_OBU_BYTES - 1));
+  assign payload_advance_w = m_axis_valid && m_axis_ready && !m_axis_last;
+  assign payload_next_index_w = payload_index_q + 1'b1;
+  assign payload_lookup_index_w = payload_advance_w ? payload_next_index_w : payload_index_q;
+  assign payload_lookup_last_w = (payload_lookup_index_w == (FIXED_BLACK_444_OBU_BYTES - 1));
 
-  // synthesis translate_off
   always_comb begin
     payload_byte_w = 8'h00;
-    case (payload_index_q)
+    case (payload_lookup_index_w)
       0: payload_byte_w = 8'h01;
       1: payload_byte_w = 8'h08;
       2: payload_byte_w = 8'h0d;
@@ -128,55 +138,13 @@ module ff_av2_encoder #(
           m_axis_valid <= 1'b0;
           m_axis_last <= 1'b0;
         end else begin
-          payload_index_q <= payload_index_q + 1'b1;
+          payload_index_q <= payload_next_index_w;
           m_axis_valid <= 1'b1;
-          case (payload_index_q + 1'b1)
-            0: m_axis_data <= 8'h01;
-            1: m_axis_data <= 8'h08;
-            2: m_axis_data <= 8'h0d;
-            3: m_axis_data <= 8'h04;
-            4: m_axis_data <= 8'h92;
-            5: m_axis_data <= 8'h06;
-            6: m_axis_data <= 8'h95;
-            7: m_axis_data <= 8'h7f;
-            8: m_axis_data <= 8'hfc;
-            9: m_axis_data <= 8'h70;
-            10: m_axis_data <= 8'he7;
-            11: m_axis_data <= 8'h36;
-            12: m_axis_data <= 8'h11;
-            13: m_axis_data <= 8'hb8;
-            14: m_axis_data <= 8'h08;
-            15: m_axis_data <= 8'h80;
-            16: m_axis_data <= 8'h16;
-            17: m_axis_data <= 8'h10;
-            18: m_axis_data <= 8'he2;
-            19: m_axis_data <= 8'h00;
-            20: m_axis_data <= 8'h00;
-            21: m_axis_data <= 8'h00;
-            22: m_axis_data <= 8'h12;
-            23: m_axis_data <= 8'h2e;
-            24: m_axis_data <= 8'h6a;
-            25: m_axis_data <= 8'h24;
-            26: m_axis_data <= 8'hb3;
-            27: m_axis_data <= 8'he1;
-            28: m_axis_data <= 8'h80;
-            29: m_axis_data <= 8'hd0;
-            30: m_axis_data <= 8'h4c;
-            31: m_axis_data <= 8'h79;
-            32: m_axis_data <= 8'hff;
-            33: m_axis_data <= 8'h4e;
-            34: m_axis_data <= 8'hdb;
-            35: m_axis_data <= 8'h90;
-            36: m_axis_data <= 8'h36;
-            37: m_axis_data <= 8'he7;
-            38: m_axis_data <= 8'hc0;
-            default: m_axis_data <= 8'h00;
-          endcase
-          m_axis_last <= payload_next_done_w;
+          m_axis_data <= payload_byte_w;
+          m_axis_last <= payload_lookup_last_w;
         end
       end
     end
   end
-  // synthesis translate_on
 
 endmodule
