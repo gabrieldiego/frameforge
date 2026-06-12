@@ -1,8 +1,8 @@
-# Quality And Bitrate Baselines
+# VVC Quality And Bitrate Baselines
 
 This document records validation points for reconstruction quality and encoded
-bitrate. Synthesis area/timing belongs in `docs/synthesis.md`; this file is for
-codec-output metrics that should move as new coding tools are added.
+bitrate. Synthesis area/timing belongs in [synthesis.md](synthesis.md); this file is
+for VVC codec-output metrics that should move as new coding tools are added.
 
 `scripts/validate.py` prints the following bitrate metrics for every encoded
 bitstream:

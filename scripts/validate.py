@@ -121,7 +121,7 @@ def main() -> int:
     parser.add_argument(
         "--sw-only",
         action="store_true",
-        help="validate only the Rust software encoder against VTM; skip RTL simulation and synthesis",
+        help="skip RTL simulation and synthesis; VVC validates only the Rust software encoder against VTM",
     )
     args = parser.parse_args()
     codec = codec_config_from_args(args)
@@ -140,7 +140,7 @@ def main() -> int:
             args.max_width,
             args.max_height,
             input_format,
-            args.sw_only,
+            args.sw_only or codec.name == "av2",
             allow_trailing=args.frames is not None,
         )
     except ValueError as err:
@@ -157,6 +157,22 @@ def main() -> int:
     rtl_internal_recon = out_dir / f"{stem}_rtl_internal_rec.yuv"
     vtm_recon = out_dir / f"{stem}_vtm_from_decodable_bitstream.yuv"
     validation_input_path = materialized_validation_input(input_path, info, out_dir, stem, input_format)
+    if codec.name == "av2":
+        return validate_av2_reference_only(
+            codec,
+            args,
+            validation_input_path,
+            info,
+            out_dir,
+            stem,
+        )
+    if codec.name != "vvc":
+        print(
+            f"FAIL: {codec.name.upper()} validation is not implemented yet",
+            file=sys.stderr,
+        )
+        return 2
+
     rtl_input_path = normalized_rtl_input(validation_input_path, info, out_dir, stem)
 
     print(
@@ -398,6 +414,84 @@ def main() -> int:
         validate_decoded_non_monochrome(vtm_recon, info)
         print("OK: VTM reconstruction contains decoder-visible chroma")
     return 0
+
+
+def validate_av2_reference_only(
+    codec,
+    args: argparse.Namespace,
+    validation_input_path: Path,
+    info: InputInfo,
+    out_dir: Path,
+    stem: str,
+) -> int:
+    reference_bitstream = out_dir / f"{stem}_reference.{codec.bitstream_extension}"
+    reference_recon = out_dir / f"{stem}_reference_recon.yuv"
+
+    print(
+        f"FrameForge validate: AV2 reference encode {info.frames} frame(s), "
+        f"{info.width}x{info.height} {info.fmt}",
+        flush=True,
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/reference_encode_av2.py",
+            "--codec",
+            codec.name,
+            "--input",
+            str(validation_input_path),
+            "--frames",
+            str(info.frames),
+            "--width",
+            str(info.width),
+            "--height",
+            str(info.height),
+            "--format",
+            info.fmt,
+            "--output",
+            str(reference_bitstream),
+            "--recon",
+            str(reference_recon),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+    )
+    if completed.returncode != 0:
+        print("FAIL: AV2 reference encode/decode failed", file=sys.stderr)
+        return completed.returncode
+
+    digests = {
+        "input_yuv": sha256(validation_input_path),
+        "av2_reference_bitstream": sha256(reference_bitstream),
+        "av2_reference_recon": sha256(reference_recon),
+    }
+
+    print("FrameForge AV2 reference validation checksums")
+    print(
+        f"input={validation_input_path} width={info.width} height={info.height} "
+        f"frames={info.frames} format={info.fmt}"
+    )
+    for name, digest in digests.items():
+        print(f"{digest}  {name}")
+    print_bitrate_report("av2_reference_bitstream", reference_bitstream, info)
+    print_psnr_report("av2_reference_recon", validation_input_path, reference_recon)
+    write_recon_views(
+        args.recon_format,
+        info,
+        out_dir,
+        stem,
+        {
+            "input": validation_input_path,
+            "av2_reference_recon": reference_recon,
+        },
+    )
+    sys.stdout.flush()
+    print(
+        "FAIL: AV2 reference path ran, but FrameForge AV2 software/RTL "
+        "bitstream and reconstruction comparison is not implemented yet",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def resolve_input_format(input_path: Path, requested: str) -> str:

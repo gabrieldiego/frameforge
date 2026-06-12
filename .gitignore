@@ -7,6 +7,9 @@
 __pycache__/
 /verification/codecs/vvc/reference/vtm/
 /verification/codecs/vvc/reference/build/
+/verification/codecs/av2/reference/avm/
+/verification/codecs/av2/reference/aom/
+/verification/codecs/av2/reference/build/
 /verification/reference/vtm/
 /verification/reference/build/
 /verification/generated/
@@ -18,6 +21,9 @@ __pycache__/
 # Local generated media artifacts should live under verification/generated/.
 /*.yuv
 /*.vvc
+/*.av2
+/*.ivf
+/*.y4m
 /*.mp4
 
 *.vcd

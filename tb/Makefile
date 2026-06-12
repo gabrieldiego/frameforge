@@ -10,7 +10,11 @@ endif
 
 RTL_DIR := ../rtl
 CODEC ?= vvc
+ifeq ($(CODEC),av2)
+DUT ?= av2-encoder
+else
 DUT ?= vvc-coding-tree-scheduler
+endif
 RTL_SAMPLE_BITS ?= 8
 RTL_SOURCE_SAMPLE_BITS ?= $(RTL_SAMPLE_BITS)
 RTL_CHROMA_FORMAT_IDC ?= 1
@@ -34,11 +38,22 @@ export RTL_SUPPORT_PALETTE_444
 ifeq ($(CODEC),vvc)
 CODEC_RTL_DIR := $(RTL_DIR)/vvc
 export PYTHONPATH := $(abspath vvc):$(PYTHONPATH)
+else ifeq ($(CODEC),av2)
+CODEC_RTL_DIR := $(RTL_DIR)/av2
+export PYTHONPATH := $(abspath av2):$(PYTHONPATH)
 else
 $(error unsupported CODEC '$(CODEC)')
 endif
 
-ifeq ($(DUT),vvc-coding-tree-scheduler)
+ifeq ($(CODEC),av2)
+ifeq ($(DUT),av2-encoder)
+VERILOG_SOURCES := $(CODEC_RTL_DIR)/ff_av2_encoder.sv
+TOPLEVEL := ff_av2_encoder
+COCOTB_TEST_MODULES := test_av2_encoder
+else
+$(error unsupported AV2 DUT '$(DUT)')
+endif
+else ifeq ($(DUT),vvc-coding-tree-scheduler)
 VERILOG_SOURCES := $(CODEC_RTL_DIR)/ff_vvc_coding_tree_scheduler.sv
 TOPLEVEL := ff_vvc_coding_tree_scheduler
 COCOTB_TEST_MODULES := test_vvc_coding_tree_scheduler
@@ -107,7 +122,9 @@ $(error unsupported DUT '$(DUT)')
 endif
 
 COMPILE_ARGS += -g2012
+ifeq ($(CODEC),vvc)
 COMPILE_ARGS += -I$(CODEC_RTL_DIR)/cabac
+endif
 ifeq ($(DUT),vvc-encoder)
 ifeq ($(SIM),icarus)
 COMPILE_ARGS += -P$(TOPLEVEL).SAMPLE_BITS=$(RTL_SAMPLE_BITS)

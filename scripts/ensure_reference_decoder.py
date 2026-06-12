@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Find or build a codec reference decoder for validation.
 
-FrameForge does not vendor VTM source code. This helper uses configured local
-paths first and only clones/builds VTM into the selected codec reference tree
-when needed.
+FrameForge does not vendor reference source code. This helper uses configured
+local paths first and only clones/builds reference tools into the selected codec
+reference tree when needed.
 """
 
 import argparse
@@ -17,7 +17,8 @@ from codec_config import add_codec_arg, codec_config_from_args
 
 
 DEFAULT_VTM_REPO = "https://vcgit.hhi.fraunhofer.de/jvet/VVCSoftware_VTM.git"
-DECODER_NAMES = (
+DEFAULT_AVM_REPO = "https://github.com/AOMediaCodec/avm.git"
+VTM_DECODER_NAMES = (
     "DecoderAnalyserAppStatic",
     "DecoderAnalyserAppStatic.exe",
     "DecoderAnalyserApp",
@@ -26,6 +27,12 @@ DECODER_NAMES = (
     "DecoderAppStatic.exe",
     "DecoderApp",
     "DecoderApp.exe",
+)
+AVM_DECODER_NAMES = (
+    "avmdec",
+    "avmdec.exe",
+    "aomdec",
+    "aomdec.exe",
 )
 
 
@@ -45,45 +52,39 @@ def main() -> int:
     args = parser.parse_args()
     codec = codec_config_from_args(args)
 
-    configured = configured_decoder()
+    configured = configured_decoder(codec.name)
     if configured:
         if args.print_command:
             print(configured)
         return 0
 
-    root = configured_vtm_root()
-    if root is None and default_vtm_root(codec).exists():
-        root = default_vtm_root(codec)
-    elif root is None:
-        for legacy in codec.legacy_reference_dirs:
-            legacy_vtm = legacy / "vtm"
-            if legacy_vtm.exists():
-                root = legacy_vtm
-                break
-    decoder = find_decoder(root) if root else None
+    root = configured_reference_root(codec.name)
+    if root is None and default_reference_root(codec).exists():
+        root = default_reference_root(codec)
+    elif root is None and codec.name == "vvc":
+        root = first_existing_legacy_vtm_root(codec)
+
+    decoder = find_decoder(root, decoder_names(codec.name)) if root else None
     if decoder:
         if args.print_command:
             print(decoder)
         return 0
 
     if args.no_build:
-        print(
-            "No decoder found. Set FRAMEFORGE_DECODER, FRAMEFORGE_VTM_DECODER, "
-            "or FRAMEFORGE_VTM_ROOT, or run without --no-build to clone/build VTM.",
-            file=sys.stderr,
-        )
+        print(no_decoder_message(codec.name), file=sys.stderr)
         return 2
 
-    root = root or default_vtm_root(codec)
+    root = root or default_reference_root(codec)
     if not root.exists():
-        clone_vtm(root)
+        clone_reference(codec.name, root)
 
-    build_vtm(root)
-    decoder = find_decoder(root)
+    build_reference(codec.name, root)
+    decoder = find_decoder(root, decoder_names(codec.name))
     if not decoder:
+        names = ", ".join(decoder_names(codec.name))
         print(
-            f"VTM build completed but no decoder executable was found under {root}. "
-            f"Looked for: {', '.join(DECODER_NAMES)}",
+            f"{codec.name.upper()} reference build completed but no decoder "
+            f"executable was found under {root}. Looked for: {names}",
             file=sys.stderr,
         )
         return 1
@@ -95,51 +96,117 @@ def main() -> int:
     return 0
 
 
-def configured_decoder() -> str | None:
+def configured_decoder(codec_name: str) -> str | None:
     decoder = os.environ.get("FRAMEFORGE_DECODER")
     if decoder:
         return decoder
 
-    decoder_path = os.environ.get("FRAMEFORGE_VTM_DECODER")
-    if decoder_path:
-        path = Path(decoder_path)
-        if path.exists():
-            return str(path)
-        print(f"FRAMEFORGE_VTM_DECODER does not exist: {path}", file=sys.stderr)
-        return None
+    for env_name in decoder_env_names(codec_name):
+        decoder_path = os.environ.get(env_name)
+        if decoder_path:
+            path = Path(decoder_path)
+            if path.exists():
+                return str(path)
+            print(f"{env_name} does not exist: {path}", file=sys.stderr)
+            return None
 
     return None
 
 
-def configured_vtm_root() -> Path | None:
-    root = os.environ.get("FRAMEFORGE_VTM_ROOT")
-    return Path(root) if root else None
+def configured_reference_root(codec_name: str) -> Path | None:
+    for env_name in root_env_names(codec_name):
+        root = os.environ.get(env_name)
+        if root:
+            return Path(root)
+    return None
 
 
-def default_vtm_root(codec) -> Path:
+def default_reference_root(codec) -> Path:
     base = Path(os.environ.get("FRAMEFORGE_REF_DIR", codec.reference_dir))
-    return base / "vtm"
+    if codec.name == "vvc":
+        return base / "vtm"
+    if codec.name == "av2":
+        return base / "avm"
+    raise ValueError(f"unsupported codec '{codec.name}'")
 
 
-def clone_vtm(root: Path) -> None:
-    repo = os.environ.get("FRAMEFORGE_VTM_REPO", DEFAULT_VTM_REPO)
-    ref = os.environ.get("FRAMEFORGE_VTM_REF")
+def first_existing_legacy_vtm_root(codec) -> Path | None:
+    for legacy in codec.legacy_reference_dirs:
+        legacy_vtm = legacy / "vtm"
+        if legacy_vtm.exists():
+            return legacy_vtm
+    return None
+
+
+def decoder_names(codec_name: str) -> tuple[str, ...]:
+    if codec_name == "vvc":
+        return VTM_DECODER_NAMES
+    if codec_name == "av2":
+        return AVM_DECODER_NAMES
+    raise ValueError(f"unsupported codec '{codec_name}'")
+
+
+def decoder_env_names(codec_name: str) -> tuple[str, ...]:
+    if codec_name == "vvc":
+        return ("FRAMEFORGE_VTM_DECODER",)
+    if codec_name == "av2":
+        return ("FRAMEFORGE_AV2_DECODER", "FRAMEFORGE_AVM_DECODER")
+    raise ValueError(f"unsupported codec '{codec_name}'")
+
+
+def root_env_names(codec_name: str) -> tuple[str, ...]:
+    if codec_name == "vvc":
+        return ("FRAMEFORGE_VTM_ROOT",)
+    if codec_name == "av2":
+        return ("FRAMEFORGE_AV2_ROOT", "FRAMEFORGE_AVM_ROOT")
+    raise ValueError(f"unsupported codec '{codec_name}'")
+
+
+def no_decoder_message(codec_name: str) -> str:
+    if codec_name == "vvc":
+        return (
+            "No decoder found. Set FRAMEFORGE_DECODER, FRAMEFORGE_VTM_DECODER, "
+            "or FRAMEFORGE_VTM_ROOT, or run without --no-build to clone/build VTM."
+        )
+    if codec_name == "av2":
+        return (
+            "No decoder found. Set FRAMEFORGE_DECODER, FRAMEFORGE_AV2_DECODER, "
+            "FRAMEFORGE_AVM_DECODER, FRAMEFORGE_AV2_ROOT, or FRAMEFORGE_AVM_ROOT, "
+            "or run without --no-build to clone/build AVM."
+        )
+    raise ValueError(f"unsupported codec '{codec_name}'")
+
+
+def clone_reference(codec_name: str, root: Path) -> None:
+    if codec_name == "vvc":
+        repo = os.environ.get("FRAMEFORGE_VTM_REPO", DEFAULT_VTM_REPO)
+        ref = os.environ.get("FRAMEFORGE_VTM_REF")
+        label = "VTM"
+    elif codec_name == "av2":
+        repo = os.environ.get(
+            "FRAMEFORGE_AV2_REPO",
+            os.environ.get("FRAMEFORGE_AVM_REPO", DEFAULT_AVM_REPO),
+        )
+        ref = os.environ.get("FRAMEFORGE_AV2_REF", os.environ.get("FRAMEFORGE_AVM_REF"))
+        label = "AVM"
+    else:
+        raise ValueError(f"unsupported codec '{codec_name}'")
 
     root.parent.mkdir(parents=True, exist_ok=True)
     cmd = ["git", "clone", "--depth", "1"]
     if ref:
         cmd.extend(["--branch", ref])
     cmd.extend([repo, str(root)])
-    print(f"cloning VTM reference software into {root}", file=sys.stderr)
+    print(f"cloning {label} reference software into {root}", file=sys.stderr)
     run(cmd)
 
 
-def build_vtm(root: Path) -> None:
+def build_reference(codec_name: str, root: Path) -> None:
     if not shutil.which("cmake"):
-        raise SystemExit("cmake is required to build VTM")
+        raise SystemExit(f"cmake is required to build {codec_name.upper()} reference tools")
 
-    build_dir = Path(os.environ.get("FRAMEFORGE_VTM_BUILD_DIR", root / "build"))
-    build_type = os.environ.get("FRAMEFORGE_VTM_BUILD_TYPE", "Release")
+    build_dir = configured_build_dir(codec_name, root)
+    build_type = configured_build_type(codec_name)
     jobs = os.environ.get("FRAMEFORGE_BUILD_JOBS")
 
     configure = [
@@ -154,17 +221,45 @@ def build_vtm(root: Path) -> None:
     if jobs:
         build.extend(["--parallel", jobs])
 
-    print(f"configuring VTM in {build_dir}", file=sys.stderr)
+    print(f"configuring {codec_name.upper()} reference in {build_dir}", file=sys.stderr)
     run(configure)
-    print("building VTM decoder tools", file=sys.stderr)
+    print(f"building {codec_name.upper()} reference tools", file=sys.stderr)
     run(build)
 
 
-def find_decoder(root: Path) -> str | None:
+def configured_build_dir(codec_name: str, root: Path) -> Path:
+    if codec_name == "vvc":
+        env_names = ("FRAMEFORGE_VTM_BUILD_DIR",)
+    elif codec_name == "av2":
+        env_names = ("FRAMEFORGE_AV2_BUILD_DIR", "FRAMEFORGE_AVM_BUILD_DIR")
+    else:
+        raise ValueError(f"unsupported codec '{codec_name}'")
+
+    for env_name in env_names:
+        if value := os.environ.get(env_name):
+            return Path(value)
+    return root / "build"
+
+
+def configured_build_type(codec_name: str) -> str:
+    if codec_name == "vvc":
+        env_names = ("FRAMEFORGE_VTM_BUILD_TYPE",)
+    elif codec_name == "av2":
+        env_names = ("FRAMEFORGE_AV2_BUILD_TYPE", "FRAMEFORGE_AVM_BUILD_TYPE")
+    else:
+        raise ValueError(f"unsupported codec '{codec_name}'")
+
+    for env_name in env_names:
+        if value := os.environ.get(env_name):
+            return value
+    return "Release"
+
+
+def find_decoder(root: Path, names: tuple[str, ...]) -> str | None:
     if not root.exists():
         return None
 
-    for name in DECODER_NAMES:
+    for name in names:
         for path in root.rglob(name):
             if path.is_file() and os.access(path, os.X_OK):
                 return str(path)

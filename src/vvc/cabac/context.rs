@@ -11,7 +11,7 @@ impl VvcLastSigCoeffPrefixCtxInput {
     pub(in crate::vvc) fn ctx_inc(self) -> u8 {
         // VVC 9.3.4.2.4 derives ctxInc for last_sig_coeff_x_prefix and
         // last_sig_coeff_y_prefix from binIdx, component, and transform block
-        // size. See docs/vvc-cabac-subset.md.
+        // size. See docs/vvc/cabac-subset.md.
         if self.is_luma {
             const OFFSET_Y: [u8; 6] = [0, 0, 3, 6, 10, 15];
             let offset = OFFSET_Y[(self.log2_tb_size - 1) as usize];
@@ -255,7 +255,7 @@ impl VvcCabacContext {
     pub(in crate::vvc) fn init_value(self) -> u8 {
         match self {
             // ITU-T H.266 CABAC context initialization tables, I-slice
-            // initializationType. See docs/vvc-cabac-subset.md.
+            // initializationType. See docs/vvc/cabac-subset.md.
             VvcCabacContext::SplitFlag(ctx) => {
                 const I_SLICE_INIT: [u8; 9] = [19, 28, 38, 27, 29, 38, 20, 30, 31];
                 I_SLICE_INIT[ctx as usize]

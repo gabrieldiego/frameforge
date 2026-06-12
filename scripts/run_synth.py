@@ -16,7 +16,6 @@ from codec_config import CodecConfig, add_codec_arg, codec_config_from_args
 
 
 DEFAULT_BOARD = Path("synth/boards/arty-z7-10.env")
-DEFAULT_DUT = "vvc-cabac-stream-writer"
 DEFAULT_TOP = "ff_vvc_cabac_stream_writer"
 LOCAL_LICENSE = Path(".tools/Xilinx.lic")
 LOCAL_VIVADO_ROOT = Path(".tools/Xilinx/Vivado")
@@ -38,7 +37,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     add_codec_arg(parser)
     parser.add_argument("--board", type=Path, default=DEFAULT_BOARD)
-    parser.add_argument("--dut", default=DEFAULT_DUT)
+    parser.add_argument("--dut", default=None)
     parser.add_argument("--filelist", type=Path, default=None)
     parser.add_argument("--top", default=None)
     parser.add_argument("--out-dir", type=Path, default=Path("synth/out"))
@@ -95,10 +94,11 @@ def main() -> int:
     parser.add_argument("--post-synth-smoke", action="store_true")
     args = parser.parse_args()
     codec = codec_config_from_args(args)
+    dut = args.dut or codec.default_synth_dut
 
     board = load_env_file(args.board)
-    sources = read_filelist(args.filelist) if args.filelist else tb_verilog_sources(args.dut, codec)
-    top = args.top or tb_toplevel(args.dut, codec)
+    sources = read_filelist(args.filelist) if args.filelist else tb_verilog_sources(dut, codec)
+    top = args.top or tb_toplevel(dut, codec)
     out_dir = args.out_dir / board.get("BOARD_NAME", "board") / top
     out_dir.mkdir(parents=True, exist_ok=True)
     clock_mhz = args.clock_mhz or float(board.get("DEFAULT_CLOCK_MHZ", "25"))

@@ -4,7 +4,7 @@ FrameForge is an open-source hardware video-compression project with SystemVeril
 
 FrameForge is starting with a minimal VVC/H.266 encoder foundation, but the project is not limited to VVC, H.266, screen-content coding, FPGA work, or encoding only. The long-term goal is a practical research workspace for codec block experiments, software golden models, bitstream generation, RTL acceleration, FPGA-oriented blocks, encoder and decoder research, and hardware/software co-verification.
 
-Current status: experimental, not production-ready. The current VVC software and RTL encoders generate Annex-B VVC streams from planar 8-bit YUV 4:2:0 or 4:4:4 input. Larger pictures are emitted as 64x64 CTU-local slices, with one slice per CTU. RTL validation remains bounded by the instantiated maximum geometry parameters. The 4:2:0 path uses fixed 8x8 luma transform blocks and 4x4 chroma transform blocks with local reconstruction, fixed quantization, luma DC plus the first 4x4 low-frequency AC group, and chroma DC plus the 2x2 low-frequency AC group. The 4:4:4 path uses an experimental lossless 8x8 screen-content subset: exact repeated CUs can use CTU-local IBC by 32-bit hash match, and the remaining CUs use palette mode with up to 31 direct palette entries plus raw 8-bit escape values for additional YCbCr/GBR colors. Software, RTL, and VTM-backed validation are wired for the current subset, and unsupported syntax must remain explicit instead of being hidden in sideband payloads.
+Current status: experimental, not production-ready. The current VVC software and RTL encoders generate Annex-B VVC streams from planar 8-bit YUV 4:2:0 or 4:4:4 input. Larger pictures are emitted as 64x64 CTU-local slices, with one slice per CTU. RTL validation remains bounded by the instantiated maximum geometry parameters. The 4:2:0 path uses fixed 8x8 luma transform blocks and 4x4 chroma transform blocks with local reconstruction, fixed quantization, luma DC plus the first 4x4 low-frequency AC group, and chroma DC plus the 2x2 low-frequency AC group. The 4:4:4 path uses an experimental lossless 8x8 screen-content subset: exact repeated CUs can use CTU-local IBC by 32-bit hash match, and the remaining CUs use palette mode with up to 31 direct palette entries plus raw 8-bit escape values for additional YCbCr/GBR colors. Software, RTL, and VTM-backed validation are wired for the current subset, and unsupported syntax must remain explicit instead of being hidden in sideband payloads. AV2 infrastructure is present as a second codec target; its progress is tracked in [docs/av2/progress.md](docs/av2/progress.md).
 
 ## Current Status
 
@@ -18,11 +18,15 @@ Current status: experimental, not production-ready. The current VVC software and
 
 ## Repository Layout
 
-- `src/` - Rust CLI, encoder framework, bitstream utilities, trace support, and VVC software model.
-- `docs/` - lightweight subset and design notes.
+- `src/` - Rust CLI, encoder framework, bitstream utilities, trace support, and codec software models.
+- `docs/` - shared process notes plus codec-specific implementation reports.
+- `docs/vvc/` and `docs/av2/` - VVC and AV2 implementation notes, including
+  codec-specific synthesis baselines.
 - `scripts/` - helper tools such as optional external decoder validation.
 - `rtl/vvc/` - VVC SystemVerilog RTL blocks.
+- `rtl/av2/` - AV2 SystemVerilog RTL blocks.
 - `tb/vvc/` - VVC cocotb verification fixtures.
+- `tb/av2/` - AV2 cocotb verification fixtures.
 - `Makefile` - common build, test, format, RTL-test, and clean targets.
 
 ## Build
@@ -435,7 +439,7 @@ make rtl-test SIM=icarus TOPLEVEL_LANG=verilog
 
 External decoder validation is wired for the current small VVC subset. The `vvc-eos` command emits only a VVC EOS NAL unit. The `vvc-encode` command assembles VTM-decodable streams for the current subset, using internally generated sequence and picture NALs plus CABAC-coded slice entropy. Larger software pictures are emitted as one CTU-local slice per 64x64 CTU. Non-4:4:4 inputs use the current 4:2:0 residual path; 4:4:4 inputs use the current lossless screen-content path with CTU-local exact-match IBC and palette fallback with raw escape values. This is still not a conformance claim: the syntax subset is narrow, residual AC coding is intentionally limited to low-frequency coefficients, IBC search is CTU-local and hash-exact only, palette heuristics are intentionally simple, and broader profile/tool combinations are intentionally unsupported.
 
-FrameForge looks for decoder resources in this order:
+FrameForge looks for VVC decoder resources in this order:
 
 - `FRAMEFORGE_DECODER`: complete decoder command, optionally with fixed arguments.
 - `FRAMEFORGE_VTM_DECODER`: direct path to a built VTM decoder executable.
@@ -443,7 +447,7 @@ FrameForge looks for decoder resources in this order:
 - `FRAMEFORGE_VTM_ROOT`: path to an existing VTM source/build tree to search.
 - `verification/codecs/vvc/reference/vtm`: automatically cloned and built when no configured decoder is found. The helper still accepts the legacy `verification/reference/vtm` location when it already exists.
 
-The automatic VTM setup can be customized:
+The automatic VVC/VTM setup can be customized:
 
 - `FRAMEFORGE_REF_DIR`: parent directory for downloaded validation tools.
 - `FRAMEFORGE_VTM_REPO`: VTM git repository URL.
@@ -453,10 +457,22 @@ The automatic VTM setup can be customized:
 - `FRAMEFORGE_BUILD_JOBS`: optional build parallelism.
 - `FRAMEFORGE_GENERATED_DIR`: local generated input directory for helper scripts.
 
+For AV2, the same helper can prepare AVM:
+
+- `FRAMEFORGE_AV2_ROOT` / `FRAMEFORGE_AVM_ROOT`: existing AVM source/build tree.
+- `FRAMEFORGE_AV2_DECODER` / `FRAMEFORGE_AVM_DECODER`: direct path to `avmdec` or `aomdec`.
+- `FRAMEFORGE_AV2_ENCODER` / `FRAMEFORGE_AVM_ENCODER`: direct path to `avmenc` or `aomenc`.
+- `FRAMEFORGE_AV2_REPO` / `FRAMEFORGE_AVM_REPO`: AVM git repository URL.
+- `FRAMEFORGE_AV2_REF` / `FRAMEFORGE_AVM_REF`: optional branch or tag.
+- `FRAMEFORGE_AV2_ENCODER_CMD` / `FRAMEFORGE_AVM_ENCODER_CMD`: full encoder command template for local AVM command-line differences.
+
+AV2 validation is reference-only for now: `make validate CODEC=av2 ...` runs the AVM reference encode/decode path and then returns failure because FrameForge AV2 software/RTL bitstream generation is not implemented yet. See [docs/av2/progress.md](docs/av2/progress.md) for the current AV2 checkpoint list.
+
 Prepare a decoder:
 
 ```sh
 make decoder-setup
+make decoder-setup CODEC=av2
 ```
 
 ```sh
@@ -476,7 +492,16 @@ make reference-vvc BITSTREAM=out.vvc RECON=rec.yuv
 make reference-vvc BITSTREAM=out-2f.vvc RECON=rec-2f.yuv FRAMES=2
 ```
 
-This path uses VTM as an external reference encoder and does not mean FrameForge's Rust encoder implements the same toolset. The helper fails gracefully if `FRAMEFORGE_DECODER` is not set or the decoder cannot be run.
+Reference encode through AVM:
+
+```sh
+make reference-av2 \
+  INPUT=path/to/input_8x8_1f_yuv444p8.yuv \
+  BITSTREAM=out.av2 RECON=rec.yuv \
+  WIDTH=8 HEIGHT=8 FRAMES=1 FORMAT=yuv444p8
+```
+
+These paths use external reference encoders and do not mean FrameForge's Rust encoders implement the same toolsets. The helpers fail gracefully if the configured decoder or encoder cannot be found or run.
 
 ## Non-Goals For The Initial Milestone
 

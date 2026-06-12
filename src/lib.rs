@@ -1,3 +1,4 @@
+pub mod av2;
 pub mod bitstream;
 pub mod encoder;
 pub mod picture;

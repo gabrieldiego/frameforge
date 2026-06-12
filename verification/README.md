@@ -20,4 +20,5 @@ Useful variables:
 - `FRAMEFORGE_GENERATED_DIR`: local generated input directory for helper scripts.
 
 Quality and bitrate validation baselines are recorded in
-`docs/quality-bitrate.md`. Synthesis baselines remain in `docs/synthesis.md`.
+`docs/vvc/quality-bitrate.md`. Synthesis process notes remain in
+`docs/synthesis.md`, with VVC synthesis baselines in `docs/vvc/synthesis.md`.

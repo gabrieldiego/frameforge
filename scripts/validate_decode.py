@@ -28,9 +28,10 @@ def find_decoder_command(codec) -> list[str] | None:
     if decoder:
         return shlex.split(decoder)
 
-    decoder = os.environ.get("FRAMEFORGE_VTM_DECODER")
-    if decoder:
-        return [decoder]
+    for env_name in decoder_env_names(codec.name):
+        decoder = os.environ.get(env_name)
+        if decoder:
+            return [decoder]
 
     helper = Path(__file__).with_name("ensure_reference_decoder.py")
     completed = subprocess.run(
@@ -63,21 +64,26 @@ def main() -> int:
 
     cmd = find_decoder_command(codec)
     if not cmd:
-        print(
-            "No external decoder is configured or available. Set FRAMEFORGE_DECODER, "
-            "FRAMEFORGE_VTM_DECODER, or FRAMEFORGE_VTM_ROOT, or allow the reference "
-            f"decoder helper to clone/build VTM under {codec.reference_dir}.",
-            file=sys.stderr,
-        )
+        print(no_decoder_message(codec), file=sys.stderr)
         return 2
 
-    if is_vtm_decoder(cmd):
+    vtm_decoder = is_vtm_decoder(cmd)
+    avm_decoder = is_avm_decoder(cmd)
+    if vtm_decoder:
         cmd.extend(["-b", args.bitstream])
         if is_vtm_analyser(cmd) and not any(arg.startswith("--Stats") for arg in cmd):
             cmd.append("--Stats=0")
+    elif avm_decoder:
+        cmd.extend(extra)
+        extra = []
+        if args.output:
+            cmd.extend(["-o", args.output])
+        cmd.append(args.bitstream)
     else:
         cmd.append(args.bitstream)
-    if args.output:
+        if args.output:
+            cmd.extend(["-o", args.output])
+    if args.output and vtm_decoder:
         cmd.extend(["-o", args.output])
     cmd.extend(extra)
 
@@ -92,7 +98,7 @@ def main() -> int:
     except FileNotFoundError:
         print(
             f"decoder '{cmd[0]}' was not found. Set FRAMEFORGE_DECODER to an "
-            "installed decoder executable such as vvdecapp or a VTM decoder.",
+            f"installed decoder executable such as {decoder_hint(codec.name)}.",
             file=sys.stderr,
         )
         return 127
@@ -116,7 +122,7 @@ def main() -> int:
                 return VTM_CRASH_SKIP_EXIT
         print(
             "decoder returned a non-zero status. This is expected for experimental "
-            "FrameForge streams that are not yet decodable VVC/H.266 pictures, and "
+            f"FrameForge {codec.name.upper()} streams that are not yet decodable, and "
             "does not imply conformance.",
             file=sys.stderr,
         )
@@ -158,6 +164,41 @@ def is_vtm_decoder(cmd: list[str]) -> bool:
 
 def is_vtm_analyser(cmd: list[str]) -> bool:
     return bool(cmd) and Path(cmd[0]).name.startswith("DecoderAnalyserApp")
+
+
+def is_avm_decoder(cmd: list[str]) -> bool:
+    if not cmd:
+        return False
+    return Path(cmd[0]).name in {"avmdec", "avmdec.exe", "aomdec", "aomdec.exe"}
+
+
+def decoder_env_names(codec_name: str) -> tuple[str, ...]:
+    if codec_name == "vvc":
+        return ("FRAMEFORGE_VTM_DECODER",)
+    if codec_name == "av2":
+        return ("FRAMEFORGE_AV2_DECODER", "FRAMEFORGE_AVM_DECODER")
+    return ()
+
+
+def no_decoder_message(codec) -> str:
+    if codec.name == "av2":
+        return (
+            "No external decoder is configured or available. Set FRAMEFORGE_DECODER, "
+            "FRAMEFORGE_AV2_DECODER, FRAMEFORGE_AVM_DECODER, FRAMEFORGE_AV2_ROOT, "
+            "or FRAMEFORGE_AVM_ROOT, or allow the reference helper to clone/build "
+            f"AVM under {codec.reference_dir}."
+        )
+    return (
+        "No external decoder is configured or available. Set FRAMEFORGE_DECODER, "
+        "FRAMEFORGE_VTM_DECODER, or FRAMEFORGE_VTM_ROOT, or allow the reference "
+        f"decoder helper to clone/build VTM under {codec.reference_dir}."
+    )
+
+
+def decoder_hint(codec_name: str) -> str:
+    if codec_name == "av2":
+        return "avmdec or aomdec"
+    return "vvdecapp or a VTM decoder"
 
 
 if __name__ == "__main__":

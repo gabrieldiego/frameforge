@@ -7,11 +7,23 @@ use frameforge::PixelFormat;
 
 #[derive(Debug)]
 enum Command {
+    Av2Encode(Av2EncodeCli),
     Eos(VvcEosCli),
     Encode(VvcEncodeCli),
     CabacVectorDump(VvcCabacVectorDumpCli),
     PaletteCabacDump(VvcPaletteCabacDumpCli),
     List(VvcListCli),
+}
+
+#[derive(Debug)]
+struct Av2EncodeCli {
+    input: PathBuf,
+    output: PathBuf,
+    recon: Option<PathBuf>,
+    frames: usize,
+    width: usize,
+    height: usize,
+    format: PixelFormat,
 }
 
 #[derive(Debug)]
@@ -74,12 +86,26 @@ fn main() {
 
 fn run(command: Command) -> Result<(), String> {
     match command {
+        Command::Av2Encode(cli) => run_av2_encode(cli),
         Command::Eos(cli) => run_vvc_eos(cli),
         Command::Encode(cli) => run_vvc_encode(cli),
         Command::CabacVectorDump(cli) => run_vvc_cabac_vector_dump(cli),
         Command::PaletteCabacDump(cli) => run_vvc_palette_cabac_dump(cli),
         Command::List(cli) => run_vvc_list(cli),
     }
+}
+
+fn run_av2_encode(cli: Av2EncodeCli) -> Result<(), String> {
+    let request = frameforge::av2::Av2EncodeRequest {
+        params: frameforge::av2::Av2EncodeParams { frames: cli.frames },
+        geometry: frameforge::av2::Av2VideoGeometry {
+            width: cli.width,
+            height: cli.height,
+        },
+        format: cli.format,
+    };
+    let _paths = (&cli.input, &cli.output, &cli.recon);
+    frameforge::av2::av2_encode_not_implemented(request)
 }
 
 fn run_vvc_eos(cli: VvcEosCli) -> Result<(), String> {
@@ -214,6 +240,9 @@ fn run_vvc_list(cli: VvcListCli) -> Result<(), String> {
 }
 
 fn parse_cli(args: Vec<String>) -> Result<Command, String> {
+    if args.first().map(String::as_str) == Some("av2-encode") {
+        return parse_av2_encode_cli(args.into_iter().skip(1).collect());
+    }
     if args.first().map(String::as_str) == Some("vvc-eos") {
         return parse_vvc_eos_cli(args.into_iter().skip(1).collect());
     }
@@ -230,6 +259,44 @@ fn parse_cli(args: Vec<String>) -> Result<Command, String> {
         return parse_vvc_list_cli(args.into_iter().skip(1).collect());
     }
     Err("missing or unknown subcommand".to_string())
+}
+
+fn parse_av2_encode_cli(args: Vec<String>) -> Result<Command, String> {
+    let mut input = None;
+    let mut output = None;
+    let mut recon = None;
+    let mut frames = 1;
+    let mut width = 64;
+    let mut height = 64;
+    let mut format = PixelFormat::Yuv420p8;
+
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--input" => input = Some(next_value(&mut iter, "--input")?.into()),
+            "--output" => output = Some(next_value(&mut iter, "--output")?.into()),
+            "--recon" => recon = Some(next_value(&mut iter, "--recon")?.into()),
+            "--frames" => frames = parse_usize(next_value(&mut iter, "--frames")?, "--frames")?,
+            "--width" => width = parse_usize(next_value(&mut iter, "--width")?, "--width")?,
+            "--height" => height = parse_usize(next_value(&mut iter, "--height")?, "--height")?,
+            "--format" => {
+                let value = next_value(&mut iter, "--format")?;
+                format = value.parse::<PixelFormat>()?;
+            }
+            "--help" | "-h" => return Err(String::new()),
+            other => return Err(format!("unknown av2-encode argument '{other}'")),
+        }
+    }
+
+    Ok(Command::Av2Encode(Av2EncodeCli {
+        input: input.ok_or_else(|| "missing --input <path>".to_string())?,
+        output: output.ok_or_else(|| "missing --output <path>".to_string())?,
+        recon,
+        frames,
+        width,
+        height,
+        format,
+    }))
 }
 
 fn parse_vvc_eos_cli(args: Vec<String>) -> Result<Command, String> {
@@ -397,7 +464,7 @@ fn parse_usize(value: String, flag: &str) -> Result<usize, String> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-encode --input <yuv> --output <vvc> [--recon <yuv>] [--frames <n>] [--width <w> --height <h>] [--max-width <w> --max-height <h>] [--format yuv420p8|yuv422p8|yuv444p8|i420|i422|i444|i010|i210|i410|...]\n  frameforge vvc-cabac-vector-dump --input <yuv420> --output <json> [--frames 1 --width <w> --height <h> --format yuv420p8]\n  frameforge vvc-palette-cabac-dump --input <yuv444> --output <json> [--width <w> --height <h> --format yuv444p8]\n  frameforge vvc-list --input <vvc>"
+    "usage:\n  frameforge av2-encode --input <yuv> --output <av2> [--recon <yuv>] [--frames <n>] [--width <w> --height <h>] [--format yuv420p8|yuv422p8|yuv444p8|i420|i422|i444|i010|i210|i410|...]\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-encode --input <yuv> --output <vvc> [--recon <yuv>] [--frames <n>] [--width <w> --height <h>] [--max-width <w> --max-height <h>] [--format yuv420p8|yuv422p8|yuv444p8|i420|i422|i444|i010|i210|i410|...]\n  frameforge vvc-cabac-vector-dump --input <yuv420> --output <json> [--frames 1 --width <w> --height <h> --format yuv420p8]\n  frameforge vvc-palette-cabac-dump --input <yuv444> --output <json> [--width <w> --height <h> --format yuv444p8]\n  frameforge vvc-list --input <vvc>"
 }
 
 #[cfg(test)]
@@ -420,6 +487,36 @@ mod tests {
             panic!("expected vvc-eos command");
         };
         assert_eq!(cli.output, PathBuf::from("eos.vvc"));
+    }
+
+    #[test]
+    fn parse_cli_accepts_av2_encode_subcommand() {
+        let command = parse_cli(vec![
+            "av2-encode".into(),
+            "--input".into(),
+            "input_64x64_1f_yuv420p8.yuv".into(),
+            "--output".into(),
+            "encoded.av2".into(),
+            "--frames".into(),
+            "1".into(),
+            "--width".into(),
+            "64".into(),
+            "--height".into(),
+            "64".into(),
+            "--format".into(),
+            "yuv420p8".into(),
+        ])
+        .unwrap();
+
+        let Command::Av2Encode(cli) = command else {
+            panic!("expected av2-encode command");
+        };
+        assert_eq!(cli.input, PathBuf::from("input_64x64_1f_yuv420p8.yuv"));
+        assert_eq!(cli.output, PathBuf::from("encoded.av2"));
+        assert_eq!(cli.frames, 1);
+        assert_eq!(cli.width, 64);
+        assert_eq!(cli.height, 64);
+        assert_eq!(cli.format, PixelFormat::Yuv420p8);
     }
 
     #[test]

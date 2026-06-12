@@ -28,6 +28,9 @@ def main() -> int:
     parser.add_argument("--chroma-format", choices=("420", "422", "444"), default="420")
     args = parser.parse_args()
     codec = codec_config_from_args(args)
+    if codec.name != "vvc":
+        print("reference_encode_vvc.py only supports --codec vvc", file=sys.stderr)
+        return 2
 
     if args.width <= 0 or args.height <= 0:
         print("reference VVC encode expects positive dimensions", file=sys.stderr)

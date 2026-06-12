@@ -13,6 +13,9 @@ FrameForge is a general codec experimentation and hardware-acceleration lab. The
 - Current 4:4:4 path: experimental lossless screen-content coding with 8x8 CUs. Exact repeated CUs can use CTU-local IBC by 32-bit hash match; unmatched CUs fall back to palette coding with up to 31 direct palette entries and raw 8-bit escape values for additional YCbCr/GBR colors.
 - External VTM reference-encode helper that can generate a real small-geometry YUV VVC stream for validation.
 - Basic encoder trait boundary for adding more codec implementations.
+- AV2 codec namespace, Rust CLI entry point, RTL entry point, cocotb smoke path,
+  and synthesis routing. AV2 implementation progress is tracked separately in
+  `docs/av2/progress.md`.
 - Generic bitstream utilities:
   - `BitWriter`
   - byte alignment
@@ -103,7 +106,8 @@ raster fetches.
 ## Codec Isolation
 
 VVC-specific code belongs in isolated modules such as `src/vvc/`, `rtl/vvc/`,
-`tb/vvc/`, and `verification/codecs/vvc/`. Generic infrastructure should use
+`tb/vvc/`, and `verification/codecs/vvc/`. AV2-specific code belongs in
+`src/av2/`, `rtl/av2/`, `tb/av2/`, and `verification/codecs/av2/`. Generic infrastructure should use
 names such as `bitstream`, `encoder`, `picture`, `trace`, `packet`, and
 `golden` where reasonable. Shared generated vector manifests remain under
 `verification/test_vector_sets/` because the same sources can be reused by
