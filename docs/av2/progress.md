@@ -12,9 +12,10 @@ reporting, synthesis wrappers, and cocotb/Yosys entry points.
 - `cargo run -- av2-encode ...` currently implements a fixed reference path for
   one black 64x64 `yuv444p8` frame. It emits an unmuxed AV2 OBU stream with
   spec-framed temporal-delimiter, sequence-header, and closed-loop-key OBUs.
-  The OBU payload bytes are still fixed and clearly labeled in `src/av2/`
-  until the structured sequence-header, frame-header, and tile writers are
-  expanded.
+  The software path now writes the sequence header and closed-loop-key
+  tile-group header from named AV2 syntax fields in `src/av2/`. The actual
+  black tile entropy payload is still a clearly isolated TODO until a reusable
+  AV2 entropy/range writer is added.
 - `rtl/av2/ff_av2_encoder.sv` is the initial hardware entry point. It provides a
   streaming shell with `start`, `busy`, `input_error`, and byte-stream
   handshakes.
@@ -99,7 +100,8 @@ Other AV2 inputs fail clearly until parameterized AV2 syntax emission exists.
 
 Last checked on 2026-06-12:
 
-- `cargo test av2`: passed, including AV2 fixed OBU-byte and CLI parsing tests.
+- `cargo test av2`: passed, including AV2 fixed OBU-byte, labeled syntax-field,
+  and CLI parsing tests.
 - `make validate-set CODEC=av2 VALIDATION_SET=av2-smoke
   VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0 VALIDATION_SW_ONLY=1`:
   passed SW/REF checks using unmuxed OBU output.
@@ -119,9 +121,10 @@ Last checked on 2026-06-12:
 
 ## Next Implementation Checkpoints
 
-- Replace the fixed 64x64 OBU payload byte tables with structured AV2 syntax
-  writers in `src/av2/`.
-- Add software reconstruction plumbing for the first intra-only picture path.
+- Replace the remaining fixed black tile entropy payload with a reusable AV2
+  entropy/range writer.
+- Add software reconstruction plumbing for the first non-fixed intra-only
+  picture path.
 - Replace fixed SW/RTL black-frame comparison with parameterized AV2
   software/RTL bitstream comparison.
 - Add full RTL/reference comparison once the AV2 hardware path emits a
