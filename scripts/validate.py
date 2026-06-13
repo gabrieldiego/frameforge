@@ -542,8 +542,10 @@ def validate_av2_fixed_black_path(
         print("FrameForge validate: AV2 RTL OBU stream", flush=True)
         env = os.environ.copy()
         env["RTL_CHROMA_FORMAT_IDC"] = "3"
+        env["FRAMEFORGE_RTL_AV2_ENCODER_OUT"] = str(rtl_bitstream)
+        env["FRAMEFORGE_RTL_AV2_ENCODER_RECON_OUT"] = str(rtl_internal_recon)
         env["COCOTB_TEST_FILTER"] = (
-            "^test_av2_encoder\\.av2_encoder_reports_unimplemented_tile_entropy$"
+            "^test_av2_encoder\\.av2_encoder_emits_black_obu_stream$"
         )
         rtl = subprocess.run(
             [
