@@ -4,9 +4,10 @@ use crate::picture::{Picture, PixelFormat};
 
 pub mod entropy;
 mod syntax;
+mod tile;
 
-use entropy::av2_empty_tile_entropy_payload;
 use syntax::{Av2SyntaxPayload, Av2SyntaxWriter};
+use tile::av2_black_444_tile_entropy_payload;
 
 pub const AV2_CODEC_NAME: &str = "av2";
 pub const AV2_BITSTREAM_EXTENSION: &str = "av2";
@@ -21,6 +22,64 @@ const AV2_CHROMA_FORMAT_444: u32 = 2;
 const AV2_BITDEPTH_INDEX_8BIT: u32 = 1;
 const AV2_DELTA_DCQUANT_MIN: i8 = -23;
 const AV2_MAX_MAX_IBC_DRL_BITS_MINUS_MIN_PLUS_ONE: u16 = 3;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Av2Black444MvpProfile {
+    enable_sdp: bool,
+    enable_ext_partitions: bool,
+    enable_uneven_4way_partitions: bool,
+    enable_intra_edge_filter: bool,
+    enable_mrls: bool,
+    enable_cfl_intra: bool,
+    enable_mhccp: bool,
+    enable_ibp: bool,
+    enable_refmvbank: bool,
+    is_drl_reorder_disable: bool,
+    def_max_bvp_drl_bits_minus_min: u16,
+    allow_frame_max_bvp_drl_bits: bool,
+    enable_bawp: bool,
+    enable_fsc: bool,
+    enable_idtx_intra: bool,
+    enable_chroma_dctonly: bool,
+    enable_cctx: bool,
+    disable_cdf_update: bool,
+}
+
+impl Av2Black444MvpProfile {
+    fn current() -> Self {
+        Self {
+            // Keep the first tile payload on the shared luma/chroma tree. AVM
+            // decode_partition() enters separate luma/chroma trees at 64x64
+            // when SDP is enabled, which is unnecessary for the first black
+            // 4:4:4 bring-up stream.
+            enable_sdp: false,
+            enable_ext_partitions: false,
+            enable_uneven_4way_partitions: false,
+            enable_intra_edge_filter: false,
+            enable_mrls: false,
+            enable_cfl_intra: false,
+            enable_mhccp: false,
+            enable_ibp: false,
+            enable_refmvbank: false,
+            is_drl_reorder_disable: true,
+            def_max_bvp_drl_bits_minus_min: 0,
+            allow_frame_max_bvp_drl_bits: false,
+            enable_bawp: false,
+            enable_fsc: false,
+            // AVM read_sequence_transform_quant_entropy_group_tool_flags()
+            // sets IDTX from this bit only when FSC is disabled.
+            enable_idtx_intra: true,
+            enable_chroma_dctonly: false,
+            enable_cctx: false,
+            // AV2 v1.0.0 tile_group_obu() calls init_symbol(tileSize) before
+            // decode_tile(). Disabling CDF updates keeps this first generated
+            // stream independent from traversal history while block syntax is
+            // being ported.
+            disable_cdf_update: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Av2ObuType {
     SequenceHeader = 1,
@@ -112,7 +171,7 @@ fn av2_black_444_bitstream_for_geometry(geometry: Av2VideoGeometry) -> Vec<u8> {
     append_obu(
         &mut out,
         Av2ObuType::ClosedLoopKey,
-        &av2_black_444_closed_loop_key_payload(),
+        &av2_black_444_closed_loop_key_payload(geometry),
     );
     out
 }
@@ -214,44 +273,74 @@ fn av2_frame_dimension_bits(dimension: usize) -> u8 {
 }
 
 fn write_fixed_black_444_sequence_tools(writer: &mut Av2SyntaxWriter) {
+    let profile = Av2Black444MvpProfile::current();
+
     // AV2 v1.0.0 sequence_header() tool groups, mirrored from AVM
     // write_sequence_header(). Values are the fixed AVM choices for one
-    // lossless yuv444p8 still picture in the 32/64 bring-up subset.
+    // black yuv444p8 still picture in the minimum viable bitstream subset.
     writer.write_flag("sequence_partition.sb_size_is_256", false);
     writer.write_flag("sequence_partition.sb_size_is_128", false);
-    writer.write_flag("sequence_partition.enable_sdp", true);
-    writer.write_flag("sequence_partition.enable_ext_partitions", true);
-    writer.write_flag("sequence_partition.enable_uneven_4way_partitions", true);
+    writer.write_flag("sequence_partition.enable_sdp", profile.enable_sdp);
+    writer.write_flag(
+        "sequence_partition.enable_ext_partitions",
+        profile.enable_ext_partitions,
+    );
+    if profile.enable_ext_partitions {
+        writer.write_flag(
+            "sequence_partition.enable_uneven_4way_partitions",
+            profile.enable_uneven_4way_partitions,
+        );
+    }
     writer.write_flag("sequence_partition.max_pb_aspect_ratio_lt2", false);
 
     writer.write_flag("sequence_segment.enable_ext_seg", false);
     writer.write_flag("sequence_segment.seq_seg_info_present_flag", false);
 
     writer.write_flag("sequence_intra.enable_intra_dip", false);
-    writer.write_flag("sequence_intra.enable_intra_edge_filter", true);
-    writer.write_flag("sequence_intra.enable_mrls", true);
-    writer.write_flag("sequence_intra.enable_cfl_intra", true);
+    writer.write_flag(
+        "sequence_intra.enable_intra_edge_filter",
+        profile.enable_intra_edge_filter,
+    );
+    writer.write_flag("sequence_intra.enable_mrls", profile.enable_mrls);
+    writer.write_flag("sequence_intra.enable_cfl_intra", profile.enable_cfl_intra);
     writer.write_literal("sequence_intra.cfl_ds_filter_index", 0, 2);
-    writer.write_flag("sequence_intra.enable_mhccp", true);
-    writer.write_flag("sequence_intra.enable_ibp", true);
+    writer.write_flag("sequence_intra.enable_mhccp", profile.enable_mhccp);
+    writer.write_flag("sequence_intra.enable_ibp", profile.enable_ibp);
 
-    writer.write_flag("sequence_inter.enable_refmvbank", true);
-    writer.write_flag("sequence_inter.is_drl_reorder_disable", false);
-    writer.write_flag("sequence_inter.enable_drl_reorder_constraint", false);
+    writer.write_flag("sequence_inter.enable_refmvbank", profile.enable_refmvbank);
+    writer.write_flag(
+        "sequence_inter.is_drl_reorder_disable",
+        profile.is_drl_reorder_disable,
+    );
+    if !profile.is_drl_reorder_disable {
+        writer.write_flag("sequence_inter.enable_drl_reorder_constraint", false);
+    }
     writer.write_quniform(
         "sequence_inter.def_max_bvp_drl_bits_minus_min",
         AV2_MAX_MAX_IBC_DRL_BITS_MINUS_MIN_PLUS_ONE,
-        2,
+        profile.def_max_bvp_drl_bits_minus_min,
     );
-    writer.write_flag("sequence_inter.allow_frame_max_bvp_drl_bits", false);
-    writer.write_flag("sequence_inter.enable_bawp", true);
+    writer.write_flag(
+        "sequence_inter.allow_frame_max_bvp_drl_bits",
+        profile.allow_frame_max_bvp_drl_bits,
+    );
+    writer.write_flag("sequence_inter.enable_bawp", profile.enable_bawp);
 
-    writer.write_flag("sequence_transform.enable_fsc", true);
+    writer.write_flag("sequence_transform.enable_fsc", profile.enable_fsc);
+    if !profile.enable_fsc {
+        writer.write_flag(
+            "sequence_transform.enable_idtx_intra",
+            profile.enable_idtx_intra,
+        );
+    }
     writer.write_flag("sequence_transform.enable_ist", false);
     writer.write_flag("sequence_transform.enable_inter_ist", false);
-    writer.write_flag("sequence_transform.enable_chroma_dctonly", false);
+    writer.write_flag(
+        "sequence_transform.enable_chroma_dctonly",
+        profile.enable_chroma_dctonly,
+    );
     writer.write_flag("sequence_transform.reduced_tx_part_set", false);
-    writer.write_flag("sequence_transform.enable_cctx", true);
+    writer.write_flag("sequence_transform.enable_cctx", profile.enable_cctx);
     writer.write_flag("sequence_transform.enable_tcq_nonzero", false);
     writer.write_flag("sequence_transform.enable_parity_hiding", false);
     writer.write_flag("sequence_transform.separate_uv_delta_q", false);
@@ -274,6 +363,7 @@ fn write_fixed_black_444_sequence_tools(writer: &mut Av2SyntaxWriter) {
 }
 
 fn av2_black_444_closed_loop_key_header_payload() -> Av2SyntaxPayload {
+    let profile = Av2Black444MvpProfile::current();
     let mut writer = Av2SyntaxWriter::new();
 
     // AV2 v1.0.0 tile_group_obu() for a single-tile OBU_CLOSED_LOOP_KEY.
@@ -285,7 +375,10 @@ fn av2_black_444_closed_loop_key_header_payload() -> Av2SyntaxPayload {
     writer.write_uvlc("uncompressed_header.seq_header_id", 0);
     writer.write_flag("uncompressed_header.allow_screen_content_tools", false);
     writer.write_flag("uncompressed_header.allow_intrabc", false);
-    writer.write_flag("uncompressed_header.disable_cdf_update", false);
+    writer.write_flag(
+        "uncompressed_header.disable_cdf_update",
+        profile.disable_cdf_update,
+    );
     writer.write_flag("tile_info.uniform_spacing_flag", true);
     writer.write_literal("quantization.base_qindex", 0, 8);
     writer.write_flag("segmentation.enabled", false);
@@ -296,9 +389,9 @@ fn av2_black_444_closed_loop_key_header_payload() -> Av2SyntaxPayload {
     writer.finish()
 }
 
-fn av2_black_444_closed_loop_key_payload() -> Av2SyntaxPayload {
+fn av2_black_444_closed_loop_key_payload(geometry: Av2VideoGeometry) -> Av2SyntaxPayload {
     let mut payload = av2_black_444_closed_loop_key_header_payload();
-    let entropy = av2_empty_tile_entropy_payload();
+    let entropy = av2_black_444_tile_entropy_payload(geometry, Av2Black444MvpProfile::current());
     let bit_offset = payload.bytes.len() * 8;
     payload.fields.push(syntax::Av2SyntaxField {
         name: "tile_group.tile_entropy_payload",
@@ -392,7 +485,7 @@ mod tests {
 
         assert_eq!(
             payload.bytes,
-            vec![0x92, 0x06, 0x95, 0x7f, 0xfc, 0x70, 0xe7, 0x36, 0x11, 0xb8, 0x08, 0x80]
+            vec![0x92, 0x06, 0x95, 0x7f, 0xfc, 0x00, 0x01, 0x08, 0x06, 0xe0, 0x22]
         );
         assert_has_field(
             &payload,
@@ -412,15 +505,15 @@ mod tests {
             &payload,
             "sequence_transform.base_uv_ac_delta_q_minus_min",
             Av2SyntaxCode::Literal,
-            72,
+            70,
             5,
         );
         assert_has_field(
             &payload,
             "trailing_bits",
             Av2SyntaxCode::TrailingBits,
-            88,
-            8,
+            86,
+            2,
         );
     }
 
@@ -428,7 +521,7 @@ mod tests {
     fn av2_fixed_black_444_closed_loop_key_labels_header_fields() {
         let payload = av2_black_444_closed_loop_key_header_payload();
 
-        assert_eq!(payload.bytes, vec![0xe2, 0x00, 0x00]);
+        assert_eq!(payload.bytes, vec![0xe6, 0x00, 0x00]);
         assert_has_field(
             &payload,
             "tile_group.first_tile_group_in_frame",
@@ -447,9 +540,12 @@ mod tests {
 
     #[test]
     fn av2_fixed_black_444_closed_loop_key_carries_generated_tile_entropy_payload() {
-        let payload = av2_black_444_closed_loop_key_payload();
+        let payload = av2_black_444_closed_loop_key_payload(Av2VideoGeometry {
+            width: 64,
+            height: 64,
+        });
 
-        assert_eq!(&payload.bytes[..3], &[0xe2, 0x00, 0x00]);
+        assert_eq!(&payload.bytes[..3], &[0xe6, 0x00, 0x00]);
         assert!(payload.bytes.len() > 3);
         assert_has_field(
             &payload,

@@ -19,8 +19,14 @@ synthesis wrappers, and cocotb/Yosys entry points remains shared.
   bytes are generated from labeled syntax fields rather than stored streams.
 - `src/av2/entropy.rs` contains the first Rust AV2 range-writer implementation,
   following the AVM encoder side of the spec descriptors for arithmetic-coded
-  literals and symbols. It currently emits the smallest generated tile entropy
-  payload: a finalized range stream with no block-level syntax decisions.
+  literals and symbols.
+- `src/av2/tile.rs` contains the first structured black 4:4:4 tile plan. The
+  current minimum viable profile disables SDP, extended partitions, palette,
+  IBC, loop tools, and CDF updates, then plans one 64x64 superblock as 8x8
+  shared luma/chroma leaves with DC intra prediction and zero transform
+  coefficients. The plan is intentionally not yet encoded into CDF-backed
+  symbols; the range writer still emits only the generated entropy terminator
+  until the partition, mode, and coefficient CDF calls are ported.
 - `cargo run -- av2-encode ...` validates the staged black `yuv444p8` input
   shape, emits a generated unmuxed OBU skeleton, and writes a black internal
   reconstruction. AVM currently rejects this stream at tile decode because the
@@ -92,13 +98,13 @@ Treat any opaque AV2 bitstream payload or traced entropy table as a bug.
 
 ## Current Checks
 
-Last checked on 2026-06-12:
+Last checked on 2026-06-13:
 
-- `cargo test av2`: passed after adding the generated AV2 entropy writer and
-  OBU skeleton.
+- `cargo test av2`: passed after adding the generated AV2 entropy writer, the
+  narrowed black-444 MVP profile, and the 8x8 tile syntax plan.
 - `python3 scripts/validate_decode.py --codec av2
-  verification/generated/software_encodes/black_8x8_1f_yuv444p8_skeleton.av2
-  --output verification/generated/software_encodes/black_8x8_1f_yuv444p8_skeleton_refdec.yuv
+  verification/generated/software_encodes/black_8x8_1f_yuv444p8_mvp.av2
+  --output verification/generated/software_encodes/black_8x8_1f_yuv444p8_mvp_refdec.yuv
   --rawvideo`: failed in AVM with `Failed to decode tile data`, confirming the
   generated stream reaches tile decoding before the expected rejection.
 - `make rtl-test CODEC=av2 RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64
@@ -114,8 +120,9 @@ Last checked on 2026-06-12:
 
 ## Next Steps
 
-- Add the first named block-level AV2 tile syntax decisions in Rust so the range
-  writer emits real decode_tile() content instead of only an exit terminator.
+- Port the first CDF-backed symbols for the existing 8x8 tile plan: split
+  partitions down to 8x8, intra DC luma/chroma modes, and all-zero transform
+  block coefficient syntax.
 - Once software emits a valid stream, decode it through AVM and keep checksum,
   bitrate, and PSNR reporting in the shared validation path.
 - Port the same syntax decisions into RTL without byte-stream blobs or traced
