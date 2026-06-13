@@ -22,15 +22,16 @@ synthesis wrappers, and cocotb/Yosys entry points remains shared.
   literals and symbols.
 - `src/av2/tile.rs` contains the first structured black 4:4:4 tile plan. The
   current minimum viable profile disables SDP, extended partitions, palette,
-  IBC, loop tools, and CDF updates, then plans one 64x64 superblock as 8x8
-  shared luma/chroma leaves with DC intra prediction and zero transform
-  coefficients. The plan is intentionally not yet encoded into CDF-backed
-  symbols; the range writer still emits only the generated entropy terminator
-  until the partition, mode, and coefficient CDF calls are ported.
+  IBC, loop tools, and CDF updates. For a full 64x64 frame it now emits one
+  shared luma/chroma `PARTITION_NONE` block with DC luma/chroma intra modes and
+  all-zero TXB flags for every 4x4 transform block. Geometry below 64x64 still
+  needs the AVM boundary-partition path before the full 8x8-to-64x64 sweep can
+  decode.
 - `cargo run -- av2-encode ...` validates the staged black `yuv444p8` input
   shape, emits a generated unmuxed OBU skeleton, and writes a black internal
-  reconstruction. AVM currently rejects this stream at tile decode because the
-  block-level tile syntax is incomplete.
+  reconstruction. AVM accepts the 64x64 generated stream, but reconstructs the
+  default DC intra predictor value 128 because residual DC coefficient coding is
+  not implemented yet.
 - `rtl/av2/ff_av2_encoder.sv` is a synthesizable integration shell with the same
   top-level handshake shape as the VVC encoder. It reports `input_error` on
   `start` and emits no output until the AV2 tile entropy path exists.
@@ -82,7 +83,8 @@ make reference-av2 \
   WIDTH=64 HEIGHT=64 FRAMES=1 FORMAT=yuv444p8
 ```
 
-FrameForge AV2 validation currently fails at the AVM decode step:
+FrameForge AV2 validation currently fails on the first sub-64 geometry because
+boundary partition syntax is not implemented yet:
 
 ```sh
 make test-vectors TEST_VECTOR_SET=sweep-black-444
@@ -93,7 +95,8 @@ make validate-set \
   VALIDATION_WITH_SYNTH=0
 ```
 
-This failure is the expected state until block-level tile syntax is generated.
+The 64x64 software stream is decoder-accepted, but its reconstruction still
+does not checksum-match the all-zero input until residual DC coding is added.
 Treat any opaque AV2 bitstream payload or traced entropy table as a bug.
 
 ## Current Checks
@@ -101,30 +104,33 @@ Treat any opaque AV2 bitstream payload or traced entropy table as a bug.
 Last checked on 2026-06-13:
 
 - `cargo test av2`: passed after adding the generated AV2 entropy writer, the
-  narrowed black-444 MVP profile, and the 8x8 tile syntax plan.
+  narrowed black-444 MVP profile, and the first 64x64 generated tile syntax.
 - `python3 scripts/validate_decode.py --codec av2
-  verification/generated/software_encodes/black_8x8_1f_yuv444p8_mvp.av2
-  --output verification/generated/software_encodes/black_8x8_1f_yuv444p8_mvp_refdec.yuv
-  --rawvideo`: failed in AVM with `Failed to decode tile data`, confirming the
-  generated stream reaches tile decoding before the expected rejection.
+  verification/generated/software_encodes/black_64x64_1f_yuv444p8_intra_txb.av2
+  --output verification/generated/software_encodes/black_64x64_1f_yuv444p8_intra_txb_refdec.yuv
+  --rawvideo`: passed. The decoded raw frame was 12288 bytes but had SHA-256
+  `2203a98fd84adfbd3cbbfda33c94fcc2d33f0e1d6ebfa4e0ced17c5469ba54e5`,
+  while the all-zero input/internal reconstruction had SHA-256
+  `f3cc103136423a57975750907ebc1d367e2985ac6338976d4d5a439f50323f4a`.
 - `make rtl-test CODEC=av2 RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64
   RTL_CHROMA_FORMAT_IDC=3`: passed, verifying that the RTL shell rejects encode
   attempts and emits no payload.
 - `make validate-set CODEC=av2 VALIDATION_SET=sweep-black-444
   VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0`: expected failure at the
-  first AVM software-bitstream decode because block-level tile syntax is not
-  implemented.
+  first 8x8 case because sub-64 boundary partition syntax is not implemented.
 - `make synth CODEC=av2`: passed Yosys synthesis for the explicit unsupported
   shell in 3.6 seconds with 127.45 MiB peak RSS. The topological critical-path
   length is 1.
 
 ## Next Steps
 
-- Port the first CDF-backed symbols for the existing 8x8 tile plan: split
-  partitions down to 8x8, intra DC luma/chroma modes, and all-zero transform
-  block coefficient syntax.
-- Once software emits a valid stream, decode it through AVM and keep checksum,
-  bitrate, and PSNR reporting in the shared validation path.
+- Port AVM boundary partition derivation/signaling for sub-64 geometries so the
+  shared `sweep-black-444` set reaches reconstruction comparison.
+- Add residual DC coefficient coding for the all-zero input path. The current
+  64x64 stream is syntactically valid but reconstructs the default 128 DC
+  predictor because every TXB is coded all-zero.
+- Once software emits a valid checksum-matching stream, keep checksum, bitrate,
+  and PSNR reporting in the shared validation path.
 - Port the same syntax decisions into RTL without byte-stream blobs or traced
   operation tables.
 - Re-enable SW/RTL/reference checksum comparison for `sweep-black-444`.
