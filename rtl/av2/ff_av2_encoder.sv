@@ -30,121 +30,51 @@ module ff_av2_encoder #(
   output logic       m_axis_last
 );
 
-  localparam logic [15:0] FIXED_BLACK_444_WIDTH = 16'd64;
-  localparam logic [15:0] FIXED_BLACK_444_HEIGHT = 16'd64;
-  localparam int FIXED_BLACK_444_OBU_BYTES = 39;
-  localparam int FIXED_BLACK_444_OBU_INDEX_BITS = $clog2(FIXED_BLACK_444_OBU_BYTES);
-
-  // TODO(av2): replace this fixed black-frame OBU stream with real AV2 syntax
-  // generation. This temporary synthesizable source mirrors the Rust fixed
-  // 64x64 yuv444p8 black-frame encoder and deliberately ignores input samples.
-  //
-  // Byte layout:
-  //   [0:1]   temporal-delimiter OBU
-  //   [2:15]  sequence-header OBU with a 64x64 yuv444p8 configuration
-  //   [16:38] closed-loop-key OBU with a fixed black tile entropy payload
-  logic active_q;
+  logic supported_black_geometry_w;
   logic start_invalid_w;
-  logic [FIXED_BLACK_444_OBU_INDEX_BITS - 1:0] payload_index_q;
-  logic [FIXED_BLACK_444_OBU_INDEX_BITS - 1:0] payload_next_index_w;
-  logic [FIXED_BLACK_444_OBU_INDEX_BITS - 1:0] payload_lookup_index_w;
-  logic [7:0] payload_byte_w;
-  logic payload_advance_w;
-  logic payload_lookup_last_w;
 
-  assign busy = active_q;
-  assign s_axis_ready = 1'b0;
+  assign supported_black_geometry_w =
+    (visible_width >= 16'd8) &&
+    (visible_width <= 16'd64) &&
+    (visible_height >= 16'd8) &&
+    (visible_height <= 16'd64) &&
+    (visible_width[2:0] == 3'd0) &&
+    (visible_height[2:0] == 3'd0);
+
   assign start_invalid_w =
-    (visible_width != FIXED_BLACK_444_WIDTH) ||
-    (visible_height != FIXED_BLACK_444_HEIGHT) ||
+    !supported_black_geometry_w ||
     (visible_width > MAX_VISIBLE_WIDTH) ||
     (visible_height > MAX_VISIBLE_HEIGHT) ||
     (chroma_format_idc != 2'd3);
-  assign payload_advance_w = m_axis_valid && m_axis_ready && !m_axis_last;
-  assign payload_next_index_w = payload_index_q + 1'b1;
-  assign payload_lookup_index_w = payload_advance_w ? payload_next_index_w : payload_index_q;
-  assign payload_lookup_last_w = (payload_lookup_index_w == (FIXED_BLACK_444_OBU_BYTES - 1));
 
-  always_comb begin
-    payload_byte_w = 8'h00;
-    case (payload_lookup_index_w)
-      0: payload_byte_w = 8'h01;
-      1: payload_byte_w = 8'h08;
-      2: payload_byte_w = 8'h0d;
-      3: payload_byte_w = 8'h04;
-      4: payload_byte_w = 8'h92;
-      5: payload_byte_w = 8'h06;
-      6: payload_byte_w = 8'h95;
-      7: payload_byte_w = 8'h7f;
-      8: payload_byte_w = 8'hfc;
-      9: payload_byte_w = 8'h70;
-      10: payload_byte_w = 8'he7;
-      11: payload_byte_w = 8'h36;
-      12: payload_byte_w = 8'h11;
-      13: payload_byte_w = 8'hb8;
-      14: payload_byte_w = 8'h08;
-      15: payload_byte_w = 8'h80;
-      16: payload_byte_w = 8'h16;
-      17: payload_byte_w = 8'h10;
-      18: payload_byte_w = 8'he2;
-      19: payload_byte_w = 8'h00;
-      20: payload_byte_w = 8'h00;
-      21: payload_byte_w = 8'h00;
-      22: payload_byte_w = 8'h12;
-      23: payload_byte_w = 8'h2e;
-      24: payload_byte_w = 8'h6a;
-      25: payload_byte_w = 8'h24;
-      26: payload_byte_w = 8'hb3;
-      27: payload_byte_w = 8'he1;
-      28: payload_byte_w = 8'h80;
-      29: payload_byte_w = 8'hd0;
-      30: payload_byte_w = 8'h4c;
-      31: payload_byte_w = 8'h79;
-      32: payload_byte_w = 8'hff;
-      33: payload_byte_w = 8'h4e;
-      34: payload_byte_w = 8'hdb;
-      35: payload_byte_w = 8'h90;
-      36: payload_byte_w = 8'h36;
-      37: payload_byte_w = 8'he7;
-      38: payload_byte_w = 8'hc0;
-      default: payload_byte_w = 8'h00;
-    endcase
-  end
+  // TODO(av2): replace this shell with field-generated AV2 tile entropy
+  // syntax. Hard-coded bitstream blobs and traced entropy operation tables are
+  // intentionally not allowed here because they block real block/mode logic.
+  assign busy = 1'b0;
+  assign s_axis_ready = 1'b0;
+  assign m_axis_valid = 1'b0;
+  assign m_axis_data = 8'd0;
+  assign m_axis_last = 1'b0;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      active_q <= 1'b0;
-      payload_index_q <= '0;
       input_error <= 1'b0;
-      m_axis_valid <= 1'b0;
-      m_axis_data <= '0;
-      m_axis_last <= 1'b0;
+    end else if (start) begin
+      input_error <= 1'b1;
     end else begin
-      if (start && !active_q) begin
-        input_error <= start_invalid_w;
-        active_q <= !start_invalid_w;
-        payload_index_q <= '0;
-        if (!start_invalid_w) begin
-          m_axis_valid <= 1'b1;
-          m_axis_data <= payload_byte_w;
-          m_axis_last <= (FIXED_BLACK_444_OBU_BYTES == 1);
-        end
-      end
-
-      if (m_axis_valid && m_axis_ready) begin
-        if (m_axis_last) begin
-          active_q <= 1'b0;
-          payload_index_q <= '0;
-          m_axis_valid <= 1'b0;
-          m_axis_last <= 1'b0;
-        end else begin
-          payload_index_q <= payload_next_index_w;
-          m_axis_valid <= 1'b1;
-          m_axis_data <= payload_byte_w;
-          m_axis_last <= payload_lookup_last_w;
-        end
-      end
+      input_error <= 1'b0;
     end
   end
+
+  wire _unused_inputs_w = &{
+    1'b0,
+    CTU_SIZE[0],
+    SOURCE_SAMPLE_BITS[0],
+    start_invalid_w,
+    s_axis_valid,
+    s_axis_data,
+    s_axis_last,
+    m_axis_ready
+  };
 
 endmodule

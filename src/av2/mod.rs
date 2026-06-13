@@ -2,8 +2,10 @@ use std::io::{Read, Write};
 
 use crate::picture::{Picture, PixelFormat};
 
+pub mod entropy;
 mod syntax;
 
+use entropy::av2_empty_tile_entropy_payload;
 use syntax::{Av2SyntaxPayload, Av2SyntaxWriter};
 
 pub const AV2_CODEC_NAME: &str = "av2";
@@ -17,18 +19,8 @@ const AV2_SEQUENCE_PROFILE_CONFIGURABLE: u8 = 4;
 const AV2_SEQUENCE_LEVEL_2_0: u8 = 0;
 const AV2_CHROMA_FORMAT_444: u32 = 2;
 const AV2_BITDEPTH_INDEX_8BIT: u32 = 1;
-const AV2_MAX_FRAME_DIMENSION_BITS: u8 = 6;
 const AV2_DELTA_DCQUANT_MIN: i8 = -23;
 const AV2_MAX_MAX_IBC_DRL_BITS_MINUS_MIN_PLUS_ONE: u16 = 3;
-
-// TODO(av2-entropy): replace this fixed black-tile entropy payload with a
-// reusable AV2 entropy/range writer. The surrounding OBU, sequence header, and
-// tile-group header are already emitted from named syntax fields below.
-const AV2_BLACK_64X64_444_TILE_ENTROPY_PAYLOAD: &[u8] = &[
-    0x00, 0x12, 0x2e, 0x6a, 0x24, 0xb3, 0xe1, 0x80, 0xd0, 0x4c, 0x79, 0xff, 0x4e, 0xdb, 0x90, 0x36,
-    0xe7, 0xc0,
-];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Av2ObuType {
     SequenceHeader = 1,
@@ -79,73 +71,92 @@ pub fn av2_encode_fixed_black_444(
     request: Av2EncodeRequest,
 ) -> Result<(), String> {
     request.validate()?;
-    validate_fixed_black_444_request(request)?;
+    let geometry = validate_fixed_black_444_request(request)?;
 
-    let expected_recon = av2_black_64x64_444_reconstruction();
+    let expected_recon = av2_black_444_reconstruction_for_geometry(geometry);
     let mut frame = vec![0; expected_recon.len()];
     input
         .read_exact(&mut frame)
         .map_err(|err| format!("failed to read AV2 fixed black-frame input: {err}"))?;
     if frame != expected_recon {
-        return Err("fixed AV2 encoder expects a black 64x64 yuv444p8 input frame".to_string());
+        return Err(format!(
+            "fixed AV2 encoder expects a black {}x{} yuv444p8 input frame",
+            geometry.width, geometry.height
+        ));
     }
 
-    let bitstream = av2_black_64x64_444_bitstream();
+    let bitstream = av2_black_444_bitstream_for_geometry(geometry);
     output
         .write_all(&bitstream)
-        .map_err(|err| format!("failed to write fixed AV2 bitstream: {err}"))?;
+        .map_err(|err| format!("failed to write AV2 bitstream skeleton: {err}"))?;
     if let Some(recon) = recon {
         recon
             .write_all(&expected_recon)
-            .map_err(|err| format!("failed to write AV2 fixed reconstruction: {err}"))?;
+            .map_err(|err| format!("failed to write AV2 reconstruction skeleton: {err}"))?;
     }
     Ok(())
 }
 
-pub fn av2_black_64x64_444_bitstream() -> Vec<u8> {
+fn av2_black_444_bitstream_for_geometry(geometry: Av2VideoGeometry) -> Vec<u8> {
     let mut out = Vec::new();
     append_obu(
         &mut out,
         Av2ObuType::TemporalDelimiter,
-        &Av2SyntaxPayload::empty(),
+        &Av2SyntaxPayload::default(),
     );
     append_obu(
         &mut out,
         Av2ObuType::SequenceHeader,
-        &av2_black_64x64_444_sequence_header_payload(),
+        &av2_black_444_sequence_header_payload(geometry),
     );
     append_obu(
         &mut out,
         Av2ObuType::ClosedLoopKey,
-        &av2_black_64x64_444_closed_loop_key_payload(),
+        &av2_black_444_closed_loop_key_payload(),
     );
     out
 }
 
 pub fn av2_black_64x64_444_reconstruction() -> Vec<u8> {
-    vec![
-        0;
-        Picture::expected_len(
-            AV2_FIXED_BLACK_444_WIDTH,
-            AV2_FIXED_BLACK_444_HEIGHT,
-            PixelFormat::Yuv444p8,
-        )
-    ]
+    av2_black_444_reconstruction_for_geometry(Av2VideoGeometry {
+        width: 64,
+        height: 64,
+    })
 }
 
-fn validate_fixed_black_444_request(request: Av2EncodeRequest) -> Result<(), String> {
-    if request.geometry.width != AV2_FIXED_BLACK_444_WIDTH
-        || request.geometry.height != AV2_FIXED_BLACK_444_HEIGHT
-        || request.params.frames != 1
-        || request.format != PixelFormat::Yuv444p8
-    {
-        return Err("fixed AV2 encoder only supports one 64x64 yuv444p8 black frame".to_string());
+pub fn av2_black_444_reconstruction(geometry: Av2VideoGeometry) -> Option<Vec<u8>> {
+    validate_fixed_black_444_geometry(geometry).map(av2_black_444_reconstruction_for_geometry)
+}
+
+fn av2_black_444_reconstruction_for_geometry(geometry: Av2VideoGeometry) -> Vec<u8> {
+    vec![0; Picture::expected_len(geometry.width, geometry.height, PixelFormat::Yuv444p8,)]
+}
+
+fn validate_fixed_black_444_request(request: Av2EncodeRequest) -> Result<Av2VideoGeometry, String> {
+    if request.params.frames != 1 || request.format != PixelFormat::Yuv444p8 {
+        return Err(
+            "fixed AV2 encoder only supports one yuv444p8 black frame at 8-pixel geometry"
+                .to_string(),
+        );
     }
-    Ok(())
+    validate_fixed_black_444_geometry(request.geometry).ok_or_else(|| {
+        "fixed AV2 encoder only supports 8x8 through 64x64 yuv444p8 black frames in 8-pixel steps"
+            .to_string()
+    })
 }
 
-fn av2_black_64x64_444_sequence_header_payload() -> Av2SyntaxPayload {
+fn validate_fixed_black_444_geometry(geometry: Av2VideoGeometry) -> Option<Av2VideoGeometry> {
+    let supported = (8..=64).contains(&geometry.width)
+        && (8..=64).contains(&geometry.height)
+        && geometry.width % 8 == 0
+        && geometry.height % 8 == 0;
+    supported.then_some(geometry)
+}
+
+fn av2_black_444_sequence_header_payload(geometry: Av2VideoGeometry) -> Av2SyntaxPayload {
     let mut writer = Av2SyntaxWriter::new();
+    let width_bits = av2_frame_dimension_bits(geometry.width);
+    let height_bits = av2_frame_dimension_bits(geometry.height);
 
     // AV2 v1.0.0 sequence_header_obu(), mirrored from AVM
     // av2_write_sequence_header_obu().
@@ -168,23 +179,23 @@ fn av2_black_64x64_444_sequence_header_payload() -> Av2SyntaxPayload {
     writer.write_uvlc("sequence_header.bitdepth_lut_idx", AV2_BITDEPTH_INDEX_8BIT);
     writer.write_literal(
         "sequence_header.num_bits_width_minus_1",
-        (AV2_MAX_FRAME_DIMENSION_BITS - 1) as u64,
+        (width_bits - 1) as u64,
         4,
     );
     writer.write_literal(
         "sequence_header.num_bits_height_minus_1",
-        (AV2_MAX_FRAME_DIMENSION_BITS - 1) as u64,
+        (height_bits - 1) as u64,
         4,
     );
     writer.write_literal(
         "sequence_header.max_frame_width_minus_1",
-        (AV2_FIXED_BLACK_444_WIDTH - 1) as u64,
-        AV2_MAX_FRAME_DIMENSION_BITS,
+        (geometry.width - 1) as u64,
+        width_bits,
     );
     writer.write_literal(
         "sequence_header.max_frame_height_minus_1",
-        (AV2_FIXED_BLACK_444_HEIGHT - 1) as u64,
-        AV2_MAX_FRAME_DIMENSION_BITS,
+        (geometry.height - 1) as u64,
+        height_bits,
     );
     writer.write_flag("sequence_header.conf_win_enabled_flag", false);
 
@@ -196,10 +207,16 @@ fn av2_black_64x64_444_sequence_header_payload() -> Av2SyntaxPayload {
     writer.finish()
 }
 
+fn av2_frame_dimension_bits(dimension: usize) -> u8 {
+    assert!(dimension > 0, "AV2 frame dimension must be positive");
+    let max_index = (dimension - 1) as u64;
+    (64 - max_index.leading_zeros()) as u8
+}
+
 fn write_fixed_black_444_sequence_tools(writer: &mut Av2SyntaxWriter) {
     // AV2 v1.0.0 sequence_header() tool groups, mirrored from AVM
     // write_sequence_header(). Values are the fixed AVM choices for one
-    // lossless 64x64 yuv444p8 still picture.
+    // lossless yuv444p8 still picture in the 32/64 bring-up subset.
     writer.write_flag("sequence_partition.sb_size_is_256", false);
     writer.write_flag("sequence_partition.sb_size_is_128", false);
     writer.write_flag("sequence_partition.enable_sdp", true);
@@ -256,13 +273,13 @@ fn write_fixed_black_444_sequence_tools(writer: &mut Av2SyntaxWriter) {
     writer.write_flag("sequence_tile_config.seq_tile_info_present_flag", false);
 }
 
-fn av2_black_64x64_444_closed_loop_key_payload() -> Av2SyntaxPayload {
+fn av2_black_444_closed_loop_key_header_payload() -> Av2SyntaxPayload {
     let mut writer = Av2SyntaxWriter::new();
 
     // AV2 v1.0.0 tile_group_obu() for a single-tile OBU_CLOSED_LOOP_KEY.
     // The uncompressed header follows AVM write_tilegroup_header() and
-    // write_uncompressed_header(); the still-opaque bytes appended below are
-    // the entropy-coded black tile payload.
+    // write_uncompressed_header(). The tile entropy payload is generated by
+    // the AV2 range writer below; block-level decisions are still incomplete.
     writer.write_flag("tile_group.first_tile_group_in_frame", true);
     writer.write_uvlc("uncompressed_header.cur_mfh_id", 0);
     writer.write_uvlc("uncompressed_header.seq_header_id", 0);
@@ -276,11 +293,20 @@ fn av2_black_64x64_444_closed_loop_key_payload() -> Av2SyntaxPayload {
     writer.write_literal("uncompressed_header.reduced_tx_set_used", 0, 2);
     writer.byte_align_zero("tile_group.header_byte_alignment");
 
-    let mut payload = writer.finish();
-    payload.append_entropy_payload_bytes(
-        "tile_group.black_64x64_entropy_payload",
-        AV2_BLACK_64X64_444_TILE_ENTROPY_PAYLOAD,
-    );
+    writer.finish()
+}
+
+fn av2_black_444_closed_loop_key_payload() -> Av2SyntaxPayload {
+    let mut payload = av2_black_444_closed_loop_key_header_payload();
+    let entropy = av2_empty_tile_entropy_payload();
+    let bit_offset = payload.bytes.len() * 8;
+    payload.fields.push(syntax::Av2SyntaxField {
+        name: "tile_group.tile_entropy_payload",
+        code: syntax::Av2SyntaxCode::TileEntropyPayload,
+        bit_offset,
+        bit_count: entropy.bytes.len() * 8,
+    });
+    payload.bytes.extend_from_slice(&entropy.bytes);
     payload
 }
 
@@ -333,43 +359,36 @@ mod tests {
     }
 
     #[test]
-    fn av2_fixed_black_444_emits_bitstream_and_recon() {
-        let request = Av2EncodeRequest {
-            params: Av2EncodeParams { frames: 1 },
-            geometry: Av2VideoGeometry {
-                width: AV2_FIXED_BLACK_444_WIDTH,
-                height: AV2_FIXED_BLACK_444_HEIGHT,
-            },
-            format: PixelFormat::Yuv444p8,
-        };
-        let input = av2_black_64x64_444_reconstruction();
-        let mut source = input.as_slice();
-        let mut output = Vec::new();
-        let mut recon = Vec::new();
+    fn av2_fixed_black_444_emits_generated_obu_skeleton_and_reconstruction() {
+        for geometry in supported_black_444_geometries() {
+            let request = Av2EncodeRequest {
+                params: Av2EncodeParams { frames: 1 },
+                geometry,
+                format: PixelFormat::Yuv444p8,
+            };
+            let input =
+                av2_black_444_reconstruction(geometry).expect("supported AV2 fixed black geometry");
+            let mut source = input.as_slice();
+            let mut output = Vec::new();
+            let mut recon = Vec::new();
 
-        av2_encode_fixed_black_444(&mut source, &mut output, Some(&mut recon), request)
-            .expect("fixed AV2 black-frame encode should succeed");
+            let result =
+                av2_encode_fixed_black_444(&mut source, &mut output, Some(&mut recon), request);
 
-        assert_eq!(output, av2_black_64x64_444_bitstream());
-        assert_ne!(output, input);
-        assert_eq!(recon, input);
-    }
-
-    #[test]
-    fn av2_fixed_black_444_matches_decoder_backed_obu_bytes() {
-        assert_eq!(
-            av2_black_64x64_444_bitstream(),
-            vec![
-                0x01, 0x08, 0x0d, 0x04, 0x92, 0x06, 0x95, 0x7f, 0xfc, 0x70, 0xe7, 0x36, 0x11, 0xb8,
-                0x08, 0x80, 0x16, 0x10, 0xe2, 0x00, 0x00, 0x00, 0x12, 0x2e, 0x6a, 0x24, 0xb3, 0xe1,
-                0x80, 0xd0, 0x4c, 0x79, 0xff, 0x4e, 0xdb, 0x90, 0x36, 0xe7, 0xc0,
-            ]
-        );
+            result.expect("AV2 OBU skeleton encode should succeed");
+            assert_eq!(output, av2_black_444_bitstream_for_geometry(geometry));
+            assert_eq!(&output[..2], &[0x01, 0x08]);
+            assert_ne!(output, input);
+            assert_eq!(recon, input);
+        }
     }
 
     #[test]
     fn av2_fixed_black_444_sequence_header_has_labeled_fields() {
-        let payload = av2_black_64x64_444_sequence_header_payload();
+        let payload = av2_black_444_sequence_header_payload(Av2VideoGeometry {
+            width: 64,
+            height: 64,
+        });
 
         assert_eq!(
             payload.bytes,
@@ -406,14 +425,10 @@ mod tests {
     }
 
     #[test]
-    fn av2_fixed_black_444_closed_loop_key_labels_header_and_entropy_payload() {
-        let payload = av2_black_64x64_444_closed_loop_key_payload();
+    fn av2_fixed_black_444_closed_loop_key_labels_header_fields() {
+        let payload = av2_black_444_closed_loop_key_header_payload();
 
-        assert_eq!(&payload.bytes[..3], &[0xe2, 0x00, 0x00]);
-        assert_eq!(
-            &payload.bytes[3..],
-            AV2_BLACK_64X64_444_TILE_ENTROPY_PAYLOAD
-        );
+        assert_eq!(payload.bytes, vec![0xe2, 0x00, 0x00]);
         assert_has_field(
             &payload,
             "tile_group.first_tile_group_in_frame",
@@ -428,12 +443,20 @@ mod tests {
             7,
             8,
         );
+    }
+
+    #[test]
+    fn av2_fixed_black_444_closed_loop_key_carries_generated_tile_entropy_payload() {
+        let payload = av2_black_444_closed_loop_key_payload();
+
+        assert_eq!(&payload.bytes[..3], &[0xe2, 0x00, 0x00]);
+        assert!(payload.bytes.len() > 3);
         assert_has_field(
             &payload,
-            "tile_group.black_64x64_entropy_payload",
-            Av2SyntaxCode::EntropyPayloadBytes,
+            "tile_group.tile_entropy_payload",
+            Av2SyntaxCode::TileEntropyPayload,
             24,
-            AV2_BLACK_64X64_444_TILE_ENTROPY_PAYLOAD.len() * 8,
+            8,
         );
     }
 
@@ -487,5 +510,15 @@ mod tests {
             }),
             "missing AV2 syntax field {name} at bit {bit_offset} with {bit_count} bit(s)"
         );
+    }
+
+    fn supported_black_444_geometries() -> Vec<Av2VideoGeometry> {
+        let mut geometries = Vec::new();
+        for height in (8..=64).step_by(8) {
+            for width in (8..=64).step_by(8) {
+                geometries.push(Av2VideoGeometry { width, height });
+            }
+        }
+        geometries
     }
 }

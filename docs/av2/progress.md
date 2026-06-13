@@ -1,45 +1,39 @@
 # AV2 Implementation Progress
 
 This document tracks the AV2 path as it grows from the shared FrameForge
-infrastructure into a real encoder. The goal is to keep codec-specific work
-under `src/av2/`, `rtl/av2/`, `tb/av2/`, and `verification/codecs/av2/`, while
-reusing generic infrastructure such as generated test vectors, PSNR/bitrate
-reporting, synthesis wrappers, and cocotb/Yosys entry points.
+infrastructure into a real encoder. Codec-specific work belongs under
+`src/av2/`, `rtl/av2/`, `tb/av2/`, and `verification/codecs/av2/`; reusable
+infrastructure such as test-vector generation, PSNR/bitrate reporting,
+synthesis wrappers, and cocotb/Yosys entry points remains shared.
 
 ## Current State
 
 - `CODEC=av2` is accepted by the shared script codec registry.
-- `cargo run -- av2-encode ...` currently implements a fixed reference path for
-  one black 64x64 `yuv444p8` frame. It emits an unmuxed AV2 OBU stream with
-  spec-framed temporal-delimiter, sequence-header, and closed-loop-key OBUs.
-  The software path now writes the sequence header and closed-loop-key
-  tile-group header from named AV2 syntax fields in `src/av2/`. The actual
-  black tile entropy payload is still a clearly isolated TODO until a reusable
-  AV2 entropy/range writer is added.
-- `rtl/av2/ff_av2_encoder.sv` is the initial hardware entry point. It provides a
-  streaming shell with `start`, `busy`, `input_error`, and byte-stream
-  handshakes.
-- `rtl/av2/ff_av2_encoder.sv` also contains a TODO-marked temporary
-  synthesizable fixed OBU stream for one black 64x64 4:4:4 frame. It
-  deliberately ignores input samples until the first real AV2 syntax generator
-  is added. The testbench writes a matching hard-coded black raw reconstruction
-  for checksum comparison.
-- The AV2 top-level interface intentionally mirrors `ff_vvc_encoder` for common
-  integration signals. The shared `CTU_SIZE` parameter name is temporary until
-  the AV2 block/superblock naming is settled.
-- `tb/av2/test_av2_encoder.py` validates the initial AV2 RTL handshakes.
-- `make rtl-test CODEC=av2` and `make synth CODEC=av2` route through the shared
-  infrastructure.
-- `make decoder-setup CODEC=av2` finds or builds AVM under
-  `verification/codecs/av2/reference/avm` unless an external path is configured.
 - `scripts/reference_encode_av2.py` adapts raw planar YUV to Y4M, invokes the
   AVM encoder, decodes the resulting reference bitstream, and writes a raw
   reconstruction for checksum, bitrate, and PSNR reporting.
-- Functional validation with `make validate CODEC=av2 ...` now supports the
-  fixed black-frame vector. It runs FrameForge software, decodes that unmuxed
-  OBU stream with AVM, runs AVM reference encode/decode, checks both
-  reconstructions against the black 64x64 `yuv444p8` input, and compares the
-  RTL simulation OBU stream against the software bitstream.
+- `make decoder-setup CODEC=av2` finds or builds AVM under
+  `verification/codecs/av2/reference/avm` unless an external path is configured.
+- `src/av2/` contains a named-field writer for the initial sequence header and
+  closed-loop-key tile-group header fields. These helpers are kept because the
+  bytes are generated from labeled syntax fields rather than stored streams.
+- `src/av2/entropy.rs` contains the first Rust AV2 range-writer implementation,
+  following the AVM encoder side of the spec descriptors for arithmetic-coded
+  literals and symbols. It currently emits the smallest generated tile entropy
+  payload: a finalized range stream with no block-level syntax decisions.
+- `cargo run -- av2-encode ...` validates the staged black `yuv444p8` input
+  shape, emits a generated unmuxed OBU skeleton, and writes a black internal
+  reconstruction. AVM currently rejects this stream at tile decode because the
+  block-level tile syntax is incomplete.
+- `rtl/av2/ff_av2_encoder.sv` is a synthesizable integration shell with the same
+  top-level handshake shape as the VVC encoder. It reports `input_error` on
+  `start` and emits no output until the AV2 tile entropy path exists.
+- `tb/av2/test_av2_encoder.py` verifies that the AV2 RTL shell rejects the
+  missing entropy implementation instead of emitting a placeholder stream.
+- Hard-coded AV2 bitstream blobs, traced entropy operation tables, and opaque
+  entropy payload append hooks have been removed. Future AV2 entropy coding
+  must be generated from named, spec-auditable syntax decisions in both
+  software and RTL.
 
 ## Reference Tool Setup
 
@@ -65,16 +59,16 @@ with local paths when experimenting with a specific build:
 - `FRAMEFORGE_AV2_ENCODER_CMD` or `FRAMEFORGE_AVM_ENCODER_CMD`: full encoder
   command template when the local AVM command line differs from the default.
   Placeholders include `{encoder}`, `{input}`, `{output}`, `{frames}`,
-  `{width}`, `{height}`, `{format}`, `{sampling}`, `{bit_depth}`,
-  `{cpu_used}`, and `{cq_level}`.
-- `FRAMEFORGE_AV2_DECODER_ARGS` or `FRAMEFORGE_AVM_DECODER_ARGS`: extra
-  decoder arguments for reconstruction output. The default is `--rawvideo`.
+  `{width}`, `{height}`, `{format}`, `{sampling}`, `{bit_depth}`, `{cpu_used}`,
+  and `{cq_level}`.
+- `FRAMEFORGE_AV2_DECODER_ARGS` or `FRAMEFORGE_AVM_DECODER_ARGS`: extra decoder
+  arguments for reconstruction output. The default is `--rawvideo`.
 
 Manual reference run:
 
 ```sh
 make decoder-setup CODEC=av2
-make test-vectors TEST_VECTOR_SET=av2-smoke
+make test-vectors TEST_VECTOR_SET=sweep-black-444
 make reference-av2 \
   INPUT=verification/generated/test_vectors/black_64x64_1f_yuv444p8.yuv \
   BITSTREAM=verification/generated/av2_reference/black_64x64.av2 \
@@ -82,53 +76,48 @@ make reference-av2 \
   WIDTH=64 HEIGHT=64 FRAMES=1 FORMAT=yuv444p8
 ```
 
-Software/RTL/reference validation run:
+FrameForge AV2 validation currently fails at the AVM decode step:
 
 ```sh
-make test-vectors TEST_VECTOR_SET=av2-smoke
+make test-vectors TEST_VECTOR_SET=sweep-black-444
 make validate-set \
   CODEC=av2 \
-  VALIDATION_SET=av2-smoke \
+  VALIDATION_SET=sweep-black-444 \
   VALIDATION_STOP_ON_FAIL=1 \
   VALIDATION_WITH_SYNTH=0
 ```
 
-This command should pass only for the fixed black 64x64 `yuv444p8` vector.
-Other AV2 inputs fail clearly until parameterized AV2 syntax emission exists.
+This failure is the expected state until block-level tile syntax is generated.
+Treat any opaque AV2 bitstream payload or traced entropy table as a bug.
 
 ## Current Checks
 
 Last checked on 2026-06-12:
 
-- `cargo test av2`: passed, including AV2 fixed OBU-byte, labeled syntax-field,
-  and CLI parsing tests.
-- `make validate-set CODEC=av2 VALIDATION_SET=av2-smoke
-  VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0 VALIDATION_SW_ONLY=1`:
-  passed SW/REF checks using unmuxed OBU output.
-- `make validate-set CODEC=av2 VALIDATION_SET=av2-smoke
-  VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0`: passed SW/RTL/REF checks
-  using matching unmuxed OBU output and black raw reconstructions.
-- `make rtl-test CODEC=av2`: passed cocotb tests for the AV2 top-level
-  interface and fixed black-frame OBU stream.
-- `make synth CODEC=av2`: passed Yosys synthesis for the synthesizable fixed
-  black-frame OBU stream in 4.8 seconds with 128.29 MiB peak RSS. The
-  topological critical-path length stayed at 9.
-- `python3 -m py_compile scripts/*.py tb/av2/*.py tb/vvc/*.py`: passed after
-  adding the AV2 reference setup and reference encode wrapper.
-- `python3 scripts/ensure_reference_decoder.py --codec av2 --no-build
-  --print-command`: fails gracefully when no local AVM decoder is configured or
-  built.
+- `cargo test av2`: passed after adding the generated AV2 entropy writer and
+  OBU skeleton.
+- `python3 scripts/validate_decode.py --codec av2
+  verification/generated/software_encodes/black_8x8_1f_yuv444p8_skeleton.av2
+  --output verification/generated/software_encodes/black_8x8_1f_yuv444p8_skeleton_refdec.yuv
+  --rawvideo`: failed in AVM with `Failed to decode tile data`, confirming the
+  generated stream reaches tile decoding before the expected rejection.
+- `make rtl-test CODEC=av2 RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64
+  RTL_CHROMA_FORMAT_IDC=3`: passed, verifying that the RTL shell rejects encode
+  attempts and emits no payload.
+- `make validate-set CODEC=av2 VALIDATION_SET=sweep-black-444
+  VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0`: expected failure at the
+  first AVM software-bitstream decode because block-level tile syntax is not
+  implemented.
+- `make synth CODEC=av2`: passed Yosys synthesis for the explicit unsupported
+  shell in 3.6 seconds with 127.45 MiB peak RSS. The topological critical-path
+  length is 1.
 
-## Next Implementation Checkpoints
+## Next Steps
 
-- Replace the remaining fixed black tile entropy payload with a reusable AV2
-  entropy/range writer.
-- Replace the fixed AV2 RTL OBU byte source with parameterized syntax emission
-  once the software syntax generator is expanded beyond the black-frame smoke
-  vector.
-- Add software reconstruction plumbing for the first non-fixed intra-only
-  picture path.
-- Replace fixed SW/RTL black-frame comparison with parameterized AV2
-  software/RTL bitstream comparison.
-- Add full RTL/reference comparison once the AV2 hardware path emits a
-  decodable AV2 stream.
+- Add the first named block-level AV2 tile syntax decisions in Rust so the range
+  writer emits real decode_tile() content instead of only an exit terminator.
+- Once software emits a valid stream, decode it through AVM and keep checksum,
+  bitrate, and PSNR reporting in the shared validation path.
+- Port the same syntax decisions into RTL without byte-stream blobs or traced
+  operation tables.
+- Re-enable SW/RTL/reference checksum comparison for `sweep-black-444`.

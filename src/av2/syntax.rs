@@ -8,7 +8,7 @@ pub enum Av2SyntaxCode {
     Quniform,
     TrailingBits,
     ByteAlignZero,
-    EntropyPayloadBytes,
+    TileEntropyPayload,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,22 +23,6 @@ pub struct Av2SyntaxField {
 pub struct Av2SyntaxPayload {
     pub bytes: Vec<u8>,
     pub fields: Vec<Av2SyntaxField>,
-}
-
-impl Av2SyntaxPayload {
-    pub fn empty() -> Self {
-        Self::default()
-    }
-
-    pub fn append_entropy_payload_bytes(&mut self, name: &'static str, bytes: &[u8]) {
-        self.fields.push(Av2SyntaxField {
-            name,
-            code: Av2SyntaxCode::EntropyPayloadBytes,
-            bit_offset: self.bytes.len() * 8,
-            bit_count: bytes.len() * 8,
-        });
-        self.bytes.extend_from_slice(bytes);
-    }
 }
 
 #[derive(Debug, Default, Clone)]

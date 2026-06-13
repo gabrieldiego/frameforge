@@ -1,4 +1,0 @@
-# generator=scripts/generate_test_vectors.py
-# description=Temporary AV2 RTL bring-up vector for one fixed 64x64 4:4:4 black frame.
-name,width,height,frames,format,pattern,fps,source,crop_x,crop_y
-black,64,64,1,yuv444p8,black,,,,

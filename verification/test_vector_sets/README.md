@@ -2,6 +2,9 @@
 
 This directory contains CSV manifests for deterministic generated YUV test
 vectors. Each manifest is consumed by `scripts/generate_test_vectors.py`.
+`sweep-black-444.csv` exercises black 4:4:4 geometries from 8x8 through 64x64
+in 8-pixel steps and is intended as the first AV2 geometry sweep once AV2 tile
+entropy syntax emission is implemented.
 
 Committed manifests must be portable. Do not put workstation-local media paths
 in committed files.

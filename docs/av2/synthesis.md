@@ -4,36 +4,7 @@ This file records AV2-specific synthesis measurements. The shared command
 wrapper is documented in [../synthesis.md](../synthesis.md), but AV2 area,
 timing, elapsed time, and memory results are tracked separately from VVC.
 
-## 2026-06-12 Initial Top-Level Entry
-
-Configuration:
-
-- command: `make synth CODEC=av2 SYNTH_TIMEOUT_SEC=120 SYNTH_WARN_AFTER_SEC=60`
-- DUT: `av2-encoder`
-- RTL top: `ff_av2_encoder`
-- board: `synth/boards/arty-z7-10.env`
-- clock metadata: `25 MHz`
-
-Result:
-
-- Yosys synthesis passed in 4.2 seconds.
-- Peak child RSS observed by the synthesis runner was 127.36 MiB.
-- Post-synthesis critical-path reporting completed in 0.1 seconds and reported
-  path length 9.
-
-This measurement covers only the initial AV2 streaming entry point. It is useful
-as a routing and synthesis-wrapper baseline, not as an estimate of a real AV2
-encoder implementation.
-
-## Temporary Black-Frame Payload Note
-
-After this baseline, the AV2 RTL top gained a TODO-marked fixed OBU stream for
-one black 64x64 `yuv444p8` frame. The first version was simulation-only. It was
-then replaced with the synthesizable fixed-emitter baseline below so AV2
-synthesis remains continuously checked while real AV2 syntax emission is
-implemented.
-
-## 2026-06-12 Fixed Black-Frame OBU Emitter
+## 2026-06-12 Integration Shell
 
 Configuration:
 
@@ -47,21 +18,19 @@ Configuration:
 
 Result:
 
-- Yosys synthesis passed in 4.8 seconds.
-- Peak child RSS observed by the synthesis runner was 128.29 MiB.
+- Yosys synthesis passed in 3.6 seconds.
+- Peak child RSS observed by the synthesis runner was 127.45 MiB.
 - Post-synthesis critical-path reporting completed in 0.1 seconds and reported
-  path length 9.
-- Mapped top cell count from `ff_av2_encoder.json`: 173 total cells.
-- Primitive breakdown: `BUFG=1`, `CARRY4=4`, `FDCE=18`, `IBUF=48`, `INV=23`,
-  `LUT2=7`, `LUT3=8`, `LUT4=8`, `LUT5=15`, `LUT6=18`, `MUXF7=7`, `MUXF8=3`,
-  `OBUF=13`.
+  path length 1.
 
-Comparison to the initial streaming shell:
+This measurement covers only the AV2 streaming entry point and explicit
+unsupported-encode response. It is useful as a routing and synthesis-wrapper
+baseline, not as an estimate of a real AV2 encoder implementation.
 
-- Runtime increased by 0.6 seconds.
-- Peak RSS increased by 0.93 MiB.
-- Reported critical-path length is unchanged at 9.
+## Retired Bring-Up Measurements
 
-This remains a bring-up baseline. The fixed byte stream is synthesizable, but it
-is still a temporary source until the AV2 syntax generator is implemented in
-RTL.
+Temporary AV2 fixed-output emitters existed during validation plumbing bring-up.
+Those measurements are intentionally retired because the source streams and
+trace-derived entropy data were removed. Future synthesis baselines should only
+cover implementations that generate bitstream content from named, spec-auditable
+syntax decisions.

@@ -158,7 +158,7 @@ def main() -> int:
     vtm_recon = out_dir / f"{stem}_vtm_from_decodable_bitstream.yuv"
     validation_input_path = materialized_validation_input(input_path, info, out_dir, stem, input_format)
     if codec.name == "av2":
-        return validate_av2_fixed_black_bitstream(
+        return validate_av2_fixed_black_path(
             codec,
             args,
             validation_input_path,
@@ -416,7 +416,7 @@ def main() -> int:
     return 0
 
 
-def validate_av2_fixed_black_bitstream(
+def validate_av2_fixed_black_path(
     codec,
     args: argparse.Namespace,
     validation_input_path: Path,
@@ -431,23 +431,24 @@ def validate_av2_fixed_black_bitstream(
     sw_ref_decoded_recon = out_dir / f"{stem}_software_ref_decoded.yuv"
     rtl_bitstream = out_dir / f"{stem}_rtl.{codec.bitstream_extension}"
     rtl_internal_recon = out_dir / f"{stem}_rtl_internal_rec.yuv"
-    expected_recon = av2_black_64x64_444_reconstruction(info)
+    expected_recon = av2_black_444_reconstruction(info)
     if expected_recon is None:
         print(
-            "FAIL: fixed AV2 software validation only supports one 64x64 "
-            "yuv444p8 black frame",
+            "FAIL: fixed AV2 software validation only supports one yuv444p8 "
+            "black frame from 8x8 through 64x64 in 8-pixel steps",
             file=sys.stderr,
         )
         return 2
     if validation_input_path.read_bytes() != expected_recon:
         print(
-            "FAIL: fixed AV2 software validation expects a black 64x64 yuv444p8 input",
+            f"FAIL: fixed AV2 software validation expects a black {info.width}x{info.height} "
+            "yuv444p8 input",
             file=sys.stderr,
         )
         return 1
 
     print(
-        f"FrameForge validate: AV2 software fixed encode {info.frames} frame(s), "
+        f"FrameForge validate: AV2 software encode {info.frames} frame(s), "
         f"{info.width}x{info.height} {info.fmt}",
         flush=True,
     )
@@ -477,7 +478,7 @@ def validate_av2_fixed_black_bitstream(
         check=False,
     )
     if sw.returncode != 0:
-        print("FAIL: AV2 software fixed encode failed", file=sys.stderr)
+        print("FAIL: AV2 software encode failed", file=sys.stderr)
         return sw.returncode
 
     print("FrameForge validate: AV2 REF decode software bitstream", flush=True)
@@ -533,18 +534,16 @@ def validate_av2_fixed_black_bitstream(
         return completed.returncode
 
     if not args.skip_synth:
-        print("SKIP: AV2 fixed software path is not ready for synthesis validation")
+        print("SKIP: AV2 software path is not ready for synthesis validation")
 
     ran_rtl = False
     if not args.sw_only:
         ran_rtl = True
-        print("FrameForge validate: AV2 RTL fixed black-frame OBU stream", flush=True)
+        print("FrameForge validate: AV2 RTL OBU stream", flush=True)
         env = os.environ.copy()
         env["RTL_CHROMA_FORMAT_IDC"] = "3"
-        env["FRAMEFORGE_RTL_AV2_ENCODER_OUT_1F"] = str(rtl_bitstream)
-        env["FRAMEFORGE_RTL_AV2_ENCODER_RECON_OUT_1F"] = str(rtl_internal_recon)
         env["COCOTB_TEST_FILTER"] = (
-            "^test_av2_encoder\\.av2_encoder_emits_fixed_black_64x64_444_obu_stream$"
+            "^test_av2_encoder\\.av2_encoder_reports_unimplemented_tile_entropy$"
         )
         rtl = subprocess.run(
             [
@@ -553,8 +552,8 @@ def validate_av2_fixed_black_bitstream(
                 "rtl-test",
                 f"CODEC={codec.name}",
                 "DUT=av2-encoder",
-                "RTL_VISIBLE_WIDTH=64",
-                "RTL_VISIBLE_HEIGHT=64",
+                f"RTL_VISIBLE_WIDTH={info.width}",
+                f"RTL_VISIBLE_HEIGHT={info.height}",
                 "RTL_CHROMA_FORMAT_IDC=3",
             ],
             cwd=REPO_ROOT,
@@ -562,7 +561,7 @@ def validate_av2_fixed_black_bitstream(
             check=False,
         )
         if rtl.returncode != 0:
-            print("FAIL: AV2 RTL fixed OBU simulation failed", file=sys.stderr)
+            print("FAIL: AV2 RTL simulation failed", file=sys.stderr)
             return rtl.returncode
 
     digests = {
@@ -617,7 +616,7 @@ def validate_av2_fixed_black_bitstream(
     if digests["ref_recon"] != digests["input_yuv"]:
         print("FAIL: AV2 REF reconstruction differs from black input", file=sys.stderr)
         return 1
-    print("OK: AV2 software bitstream decodes to black 64x64 yuv444p8")
+    print(f"OK: AV2 software bitstream decodes to black {info.width}x{info.height} yuv444p8")
     print("OK: AV2 software internal reconstruction matches black input")
     print("OK: AV2 REF decode of software bitstream matches black input")
     print("OK: AV2 REF reconstruction matches black input")
@@ -633,10 +632,17 @@ def validate_av2_fixed_black_bitstream(
     return 0
 
 
-def av2_black_64x64_444_reconstruction(info: InputInfo) -> bytes | None:
-    if info.width != 64 or info.height != 64 or info.frames != 1:
+def av2_black_444_reconstruction(info: InputInfo) -> bytes | None:
+    if info.frames != 1:
         return None
     if normalize_format(info.fmt) != "yuv444p8":
+        return None
+    if not (
+        8 <= info.width <= 64
+        and 8 <= info.height <= 64
+        and info.width % 8 == 0
+        and info.height % 8 == 0
+    ):
         return None
     return bytes(frame_len(info))
 
