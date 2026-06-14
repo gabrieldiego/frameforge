@@ -176,6 +176,60 @@ fn av2_black_444_bitstream_for_geometry(geometry: Av2VideoGeometry) -> Vec<u8> {
     out
 }
 
+pub fn av2_black_444_trace_jsonl(request: Av2EncodeRequest) -> Result<String, String> {
+    request.validate()?;
+    let geometry = validate_fixed_black_444_request(request)?;
+    let sequence = av2_black_444_sequence_header_payload(geometry);
+    let closed_loop_header = av2_black_444_closed_loop_key_header_payload();
+    let entropy = av2_black_444_tile_entropy_payload(geometry, Av2Black444MvpProfile::current());
+    let mut lines = String::new();
+
+    push_av2_trace_line(
+        &mut lines,
+        "obu",
+        "obu.temporal_delimiter",
+        "AV2 v1.0.0 Section 5.4 OBU syntax",
+        "header+payload",
+        0,
+        16,
+    );
+    for field in &sequence.fields {
+        push_av2_trace_line(
+            &mut lines,
+            "sequence_header",
+            field.name,
+            av2_spec_section_for_syntax_field(field.name),
+            &format!("{:?}", field.code),
+            field.bit_offset,
+            field.bit_count,
+        );
+    }
+    push_av2_trace_line(
+        &mut lines,
+        "obu",
+        "obu.closed_loop_key",
+        "AV2 v1.0.0 Sections 5.19 and 5.20.1 tile group syntax",
+        "header",
+        0,
+        8,
+    );
+    for field in &closed_loop_header.fields {
+        push_av2_trace_line(
+            &mut lines,
+            "closed_loop_key_header",
+            field.name,
+            av2_spec_section_for_syntax_field(field.name),
+            &format!("{:?}", field.code),
+            field.bit_offset,
+            field.bit_count,
+        );
+    }
+    for field in &entropy.fields {
+        push_av2_entropy_trace_line(&mut lines, field);
+    }
+    Ok(lines)
+}
+
 pub fn av2_black_64x64_444_reconstruction() -> Vec<u8> {
     av2_black_444_reconstruction_for_geometry(Av2VideoGeometry {
         width: 64,
@@ -431,6 +485,103 @@ fn write_leb128(mut value: u32, out: &mut Vec<u8>) {
             break;
         }
     }
+}
+
+fn push_av2_trace_line(
+    out: &mut String,
+    phase: &str,
+    name: &str,
+    spec: &str,
+    code: &str,
+    bit_offset: usize,
+    bit_count: usize,
+) {
+    out.push_str(&format!(
+        "{{\"codec\":\"av2\",\"source\":\"software\",\"phase\":\"{}\",\"name\":\"{}\",\"spec\":\"{}\",\"code\":\"{}\",\"bit_offset\":{},\"bit_count\":{}}}\n",
+        escape_json(phase),
+        escape_json(name),
+        escape_json(spec),
+        escape_json(code),
+        bit_offset,
+        bit_count
+    ));
+}
+
+fn push_av2_entropy_trace_line(out: &mut String, field: &entropy::Av2EntropyField) {
+    let mut line = format!(
+        "{{\"codec\":\"av2\",\"source\":\"software\",\"phase\":\"tile_entropy\",\"name\":\"{}\",\"spec\":\"{}\",\"code\":\"{}\",\"bit_offset\":{},\"bit_count\":{}",
+        escape_json(field.name),
+        escape_json(av2_spec_section_for_entropy_field(field.name)),
+        escape_json(&format!("{:?}", field.code)),
+        field.symbol_offset,
+        field.bit_count
+    );
+    if let Some(symbol) = field.symbol {
+        line.push_str(&format!(",\"symbol\":{symbol}"));
+    }
+    if let Some(value) = field.literal_value {
+        line.push_str(&format!(",\"literal_value\":{value}"));
+    }
+    if let Some(fl) = field.fl {
+        line.push_str(&format!(",\"fl\":{fl}"));
+    }
+    if let Some(fh) = field.fh {
+        line.push_str(&format!(",\"fh\":{fh}"));
+    }
+    if let Some(fl_inc) = field.fl_inc {
+        line.push_str(&format!(",\"fl_inc\":{fl_inc}"));
+    }
+    if let Some(fh_inc) = field.fh_inc {
+        line.push_str(&format!(",\"fh_inc\":{fh_inc}"));
+    }
+    line.push_str("}\n");
+    out.push_str(&line);
+}
+
+fn av2_spec_section_for_syntax_field(name: &str) -> &'static str {
+    if name.starts_with("sequence_header.") || name.starts_with("sequence_") {
+        "AV2 v1.0.0 Section 5.4.1 sequence_header_obu()"
+    } else if name.starts_with("tile_group.") || name.starts_with("uncompressed_header.") {
+        "AV2 v1.0.0 Sections 5.19 and 5.20.1 tile_group_obu()"
+    } else if name.starts_with("tile_info.")
+        || name.starts_with("quantization.")
+        || name.starts_with("segmentation.")
+        || name.starts_with("quantization_matrix.")
+    {
+        "AV2 v1.0.0 Section 5.20.1 uncompressed header syntax"
+    } else if name == "trailing_bits" {
+        "AV2 v1.0.0 Section 5.4.1 trailing bits"
+    } else {
+        "AV2 v1.0.0 syntax"
+    }
+}
+
+fn av2_spec_section_for_entropy_field(name: &str) -> &'static str {
+    if name.starts_with("tile.partition.") {
+        "AV2 v1.0.0 Section 5.20.3.2 partition()"
+    } else if name.starts_with("tile.intra.") {
+        "AV2 v1.0.0 Section 5.20.5.3 intra_frame_mode_info()"
+    } else if name.starts_with("tile.coeff.") {
+        "AV2 v1.0.0 Sections 5.20.7.24 and 5.20.7.25 transform coefficient syntax"
+    } else {
+        "AV2 v1.0.0 tile entropy syntax"
+    }
+}
+
+fn escape_json(value: &str) -> String {
+    let mut out = String::new();
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]

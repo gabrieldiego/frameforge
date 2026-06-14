@@ -30,37 +30,76 @@ module ff_av2_encoder #(
   output logic       m_axis_last
 );
 
-  localparam int AV2_MAX_TILE_BYTES = 512;
-  localparam int AV2_PREFIX_BYTES_8X8 = 20;
+  localparam int AV2_MAX_SEQUENCE_BYTES = 16;
+  localparam int AV2_MAX_TILE_BYTES = 4096;
 
-  typedef enum logic [2:0] {
+  typedef enum logic [3:0] {
     ST_IDLE,
-    ST_ENCODE,
+    ST_SEQ_LOAD,
+    ST_SEQ_WRITE,
+    ST_LOAD_BLOCK,
+    ST_PARTITION,
+    ST_LEAF,
     ST_FINISH_INIT,
     ST_FINISH_PUSH,
     ST_CARRY,
     ST_OUTPUT
   } state_t;
 
+  localparam logic [1:0] PARTITION_NONE = 2'd0;
+  localparam logic [1:0] PARTITION_HORZ = 2'd1;
+  localparam logic [1:0] PARTITION_VERT = 2'd2;
+  localparam int AV2_STACK_DEPTH = 16;
+  localparam int AV2_PARTITION_CONTEXT_DIM = 16;
+
   state_t state_q;
-  logic supported_black_geometry_w;
   logic start_invalid_w;
   logic [15:0] precarry_mem_q [0:AV2_MAX_TILE_BYTES - 1];
   logic [7:0] tile_mem_q [0:AV2_MAX_TILE_BYTES - 1];
+  logic [7:0] seq_mem_q [0:AV2_MAX_SEQUENCE_BYTES - 1];
   logic [15:0] precarry_len_q;
   logic [15:0] tile_len_q;
+  logic [15:0] seq_len_q;
   logic [15:0] stream_index_q;
+  logic [15:0] width_q;
+  logic [15:0] height_q;
+  logic [3:0] width_bits_q;
+  logic [3:0] height_bits_q;
+  logic [7:0] seq_op_q;
+  logic [6:0] seq_bits_left_q;
+  logic [63:0] seq_value_q;
+  logic [15:0] seq_bit_pos_q;
   logic [63:0] low_q;
   logic [31:0] rng_q;
   integer cnt_q;
   logic [1:0] phase_q;
   logic [3:0] step_q;
-  logic [1:0] txb_q;
+  logic [15:0] txb_index_q;
+  logic [15:0] txb_width_q;
+  logic [15:0] txb_count_q;
+  logic [4:0] txb_local_row_q;
+  logic [4:0] txb_local_col_q;
+  logic [4:0] visible_rows_mi_q;
+  logic [4:0] visible_cols_mi_q;
+  logic [4:0] block_row_mi_q;
+  logic [4:0] block_col_mi_q;
+  logic [4:0] block_w_mi_q;
+  logic [4:0] block_h_mi_q;
+  logic [1:0] partition_q;
+  logic partition_emit_step_q;
+  logic [4:0] stack_sp_q;
+  logic [4:0] stack_row_mi_q [0:AV2_STACK_DEPTH - 1];
+  logic [4:0] stack_col_mi_q [0:AV2_STACK_DEPTH - 1];
+  logic [4:0] stack_w_mi_q [0:AV2_STACK_DEPTH - 1];
+  logic [4:0] stack_h_mi_q [0:AV2_STACK_DEPTH - 1];
+  logic [7:0] partition_above_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
+  logic [7:0] partition_left_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
   logic [63:0] finish_e_q;
   integer finish_c_q;
   integer finish_s_q;
   logic [15:0] carry_q;
   integer carry_index_q;
+  integer context_index_q;
 
   logic        op_valid_w;
   logic        op_literal_w;
@@ -94,31 +133,401 @@ module ff_av2_encoder #(
   logic [63:0] norm_low_w;
   logic [31:0] norm_rng_w;
   integer norm_cnt_w;
-  logic [7:0] prefix_byte_w;
+  logic [63:0] seq_load_value_w;
+  logic [6:0] seq_load_bits_w;
+  logic [3:0] width_bits_w;
+  logic [3:0] height_bits_w;
+  logic [15:0] closed_len_w;
+  logic [1:0] closed_leb_len_w;
+  logic [15:0] seq_end_index_w;
+  logic [15:0] closed_leb_start_w;
+  logic [15:0] closed_header_start_w;
   logic [15:0] total_stream_len_w;
+  logic [15:0] tile_stream_index_w;
+  logic [15:0] seq_stream_index_w;
+  logic [15:0] closed_leb_index_w;
+  logic [7:0] output_byte_w;
   logic [15:0] carry_sum_w;
+  logic leaf_fsc_symbol_w;
+  logic [31:0] leaf_fsc_fh_w;
+  logic [15:0] txb_width_w;
+  logic [15:0] txb_count_w;
+  logic [15:0] txb_row_w;
+  logic [15:0] txb_col_w;
+  logic [31:0] y_txb_nonzero_fh_w;
+  logic [31:0] u_txb_nonzero_fh_w;
+  logic [31:0] v_txb_nonzero_fh_w;
+  logic [31:0] y_dc_sign_fl_w;
+  logic [4:0] visible_rows_mi_w;
+  logic [4:0] visible_cols_mi_w;
+  logic block_visible_w;
+  logic block_partition_point_w;
+  logic block_square_w;
+  logic block_tall_w;
+  logic [4:0] block_half_w_mi_w;
+  logic [4:0] block_half_h_mi_w;
+  logic [4:0] block_quarter_w_mi_w;
+  logic [4:0] block_quarter_h_mi_w;
+  logic has_rows_w;
+  logic has_cols_w;
+  logic sub_has_rows_w;
+  logic sub_has_cols_w;
+  logic rect_implied_horz_w;
+  logic rect_implied_vert_w;
+  logic aspect_none_w;
+  logic aspect_horz_w;
+  logic aspect_vert_w;
+  logic [8:0] block_w_mi_ext_w;
+  logic [8:0] block_h_mi_ext_w;
+  logic [8:0] block_half_w_mi_ext_w;
+  logic [8:0] block_half_h_mi_ext_w;
+  logic allowed_none_pre_w;
+  logic allowed_horz_pre_w;
+  logic allowed_vert_pre_w;
+  logic allowed_none_w;
+  logic allowed_horz_w;
+  logic allowed_vert_w;
+  logic allowed_any_w;
+  logic allowed_only_w;
+  logic forced_valid_w;
+  logic [1:0] forced_partition_w;
+  logic preferred_valid_w;
+  logic [1:0] preferred_partition_w;
+  logic [1:0] chosen_partition_w;
+  logic chosen_do_split_w;
+  logic partition_forced_implied_w;
+  logic partition_need_do_split_w;
+  logic partition_need_rect_w;
+  logic partition_emit_do_split_w;
+  logic partition_emit_rect_w;
+  logic partition_emit_done_w;
+  logic [5:0] partition_split_ctx_w;
+  logic [5:0] partition_rect_ctx_w;
+  logic [1:0] partition_raw_ctx_w;
+  logic [1:0] partition_above_shift_w;
+  logic [1:0] partition_left_shift_w;
+  logic [7:0] partition_above_ctx_w;
+  logic [7:0] partition_left_ctx_w;
+  logic partition_above_bit_w;
+  logic partition_left_bit_w;
+  logic [3:0] bsize_map_w;
+  logic [3:0] bsize_rect_map_w;
+  logic [31:0] partition_do_cdf0_w;
+  logic [31:0] partition_rect_cdf0_w;
+  logic [7:0] partition_update_above_w;
+  logic [7:0] partition_update_left_w;
+  logic [4:0] leaf_visible_txb_w_w;
+  logic [4:0] leaf_visible_txb_h_w;
 
-  assign supported_black_geometry_w =
-    (visible_width == 16'd8) &&
-    (visible_height == 16'd8);
+  ff_av2_partition_cdf_lut partition_cdf_lut (
+    .split_ctx(partition_split_ctx_w),
+    .rect_ctx(partition_rect_ctx_w),
+    .do_split_cdf0(partition_do_cdf0_w),
+    .rect_type_cdf0(partition_rect_cdf0_w)
+  );
 
-  assign start_invalid_w =
-    !supported_black_geometry_w ||
-    (visible_width > MAX_VISIBLE_WIDTH) ||
-    (visible_height > MAX_VISIBLE_HEIGHT) ||
-    (chroma_format_idc != 2'd3);
+  assign start_invalid_w = (chroma_format_idc != 2'd3);
 
-  // TODO(av2): widen this 8x8 smoke generator into the full recursive
-  // superblock traversal used by the Rust model. The tile entropy bytes below
-  // are generated through the AV2 range-coder state, not stored as bitstream
-  // blobs, so later geometry support can reuse the same writer.
+  // AV2 black 4:4:4 bring-up path: traverse one 64x64 superblock, clip leaves
+  // to the visible frame edge, and generate syntax through the range coder.
+  // No coded bitstream bytes are stored as blobs in the RTL.
   assign busy = (state_q != ST_IDLE);
   assign s_axis_ready = 1'b0;
-  assign total_stream_len_w = 16'd20 + tile_len_q;
+  assign closed_len_w = 16'd4 + tile_len_q;
+  assign closed_leb_len_w = (closed_len_w >= 16'd128) ? 2'd2 : 2'd1;
+  assign seq_end_index_w = 16'd4 + seq_len_q;
+  assign closed_leb_start_w = seq_end_index_w;
+  assign closed_header_start_w = closed_leb_start_w + {14'd0, closed_leb_len_w};
+  assign total_stream_len_w = closed_header_start_w + 16'd4 + tile_len_q;
+  assign seq_stream_index_w = stream_index_q - 16'd4;
+  assign closed_leb_index_w = stream_index_q - closed_leb_start_w;
+  assign tile_stream_index_w = stream_index_q - (closed_header_start_w + 16'd4);
   assign carry_sum_w = carry_q + precarry_mem_q[carry_index_q];
+  assign visible_rows_mi_w = visible_height[6:2];
+  assign visible_cols_mi_w = visible_width[6:2];
+  assign block_visible_w =
+    (block_row_mi_q < visible_rows_mi_q) &&
+    (block_col_mi_q < visible_cols_mi_q);
+  assign block_partition_point_w =
+    !((block_w_mi_q == 5'd2 && block_h_mi_q == 5'd16) ||
+      (block_w_mi_q == 5'd16 && block_h_mi_q == 5'd2));
+  assign block_square_w = (block_w_mi_q == block_h_mi_q);
+  assign block_tall_w = (block_h_mi_q > block_w_mi_q);
+  assign block_half_w_mi_w = block_w_mi_q >> 1;
+  assign block_half_h_mi_w = block_h_mi_q >> 1;
+  assign block_quarter_w_mi_w = block_w_mi_q >> 2;
+  assign block_quarter_h_mi_w = block_h_mi_q >> 2;
+  assign block_w_mi_ext_w = {4'd0, block_w_mi_q};
+  assign block_h_mi_ext_w = {4'd0, block_h_mi_q};
+  assign block_half_w_mi_ext_w = {4'd0, block_half_w_mi_w};
+  assign block_half_h_mi_ext_w = {4'd0, block_half_h_mi_w};
+  assign has_rows_w = (block_row_mi_q + block_half_h_mi_w) < visible_rows_mi_q;
+  assign has_cols_w = (block_col_mi_q + block_half_w_mi_w) < visible_cols_mi_q;
+  assign sub_has_rows_w = (block_row_mi_q + block_quarter_h_mi_w) < visible_rows_mi_q;
+  assign sub_has_cols_w = (block_col_mi_q + block_quarter_w_mi_w) < visible_cols_mi_q;
+  assign rect_implied_horz_w =
+    (block_w_mi_q == 5'd2 && block_h_mi_q == 5'd8) ||
+    (block_w_mi_q == 5'd4 && block_h_mi_q == 5'd16) ||
+    (block_w_mi_q == 5'd2 && block_h_mi_q == 5'd16);
+  assign rect_implied_vert_w =
+    (block_w_mi_q == 5'd8 && block_h_mi_q == 5'd2) ||
+    (block_w_mi_q == 5'd16 && block_h_mi_q == 5'd4) ||
+    (block_w_mi_q == 5'd16 && block_h_mi_q == 5'd2);
+  assign aspect_none_w =
+    !((block_w_mi_ext_w > (block_h_mi_ext_w << 3)) ||
+      (block_h_mi_ext_w > (block_w_mi_ext_w << 3)));
+  assign aspect_horz_w =
+    !((block_w_mi_ext_w >= (block_half_h_mi_ext_w << 3)) ||
+      (block_half_h_mi_ext_w >= (block_w_mi_ext_w << 3)));
+  assign aspect_vert_w =
+    !((block_half_w_mi_ext_w >= (block_h_mi_ext_w << 3)) ||
+      (block_h_mi_ext_w >= (block_half_w_mi_ext_w << 3)));
+  assign allowed_none_pre_w = has_rows_w && has_cols_w && aspect_none_w;
+  assign allowed_horz_pre_w =
+    (block_h_mi_q >= 5'd2) && !rect_implied_vert_w && aspect_horz_w;
+  assign allowed_vert_pre_w =
+    (block_w_mi_q >= 5'd2) && !rect_implied_horz_w && aspect_vert_w;
+  assign allowed_any_w = allowed_none_pre_w || allowed_horz_pre_w || allowed_vert_pre_w;
+  assign allowed_none_w = allowed_none_pre_w || !allowed_any_w;
+  assign allowed_horz_w = allowed_horz_pre_w;
+  assign allowed_vert_w = allowed_vert_pre_w;
+  assign allowed_only_w =
+    (allowed_none_w && !allowed_horz_w && !allowed_vert_w) ||
+    (!allowed_none_w && allowed_horz_w && !allowed_vert_w) ||
+    (!allowed_none_w && !allowed_horz_w && allowed_vert_w);
+  assign preferred_valid_w =
+    (visible_rows_mi_q == 5'd4) &&
+    (visible_cols_mi_q == 5'd4) &&
+    (((block_w_mi_q == 5'd4) && (block_h_mi_q == 5'd4)) ||
+     ((block_w_mi_q == 5'd4) && (block_h_mi_q == 5'd2)));
+  assign preferred_partition_w =
+    ((block_w_mi_q == 5'd4) && (block_h_mi_q == 5'd4)) ?
+      PARTITION_HORZ : PARTITION_VERT;
+  assign chosen_do_split_w = (partition_q != PARTITION_NONE);
+  assign partition_forced_implied_w =
+    forced_valid_w &&
+    (forced_partition_w == partition_q) &&
+    (((forced_partition_w == PARTITION_NONE) && allowed_none_w) ||
+     ((forced_partition_w == PARTITION_HORZ) && allowed_horz_w) ||
+     ((forced_partition_w == PARTITION_VERT) && allowed_vert_w));
+  assign partition_need_do_split_w =
+    !(partition_forced_implied_w || allowed_only_w) && allowed_none_w;
+  assign partition_need_rect_w =
+    !(partition_forced_implied_w || allowed_only_w) &&
+    chosen_do_split_w &&
+    allowed_horz_w &&
+    allowed_vert_w &&
+    !(rect_implied_horz_w || rect_implied_vert_w);
+  assign partition_emit_do_split_w = !partition_emit_step_q && partition_need_do_split_w;
+  assign partition_emit_rect_w =
+    (!partition_emit_step_q && !partition_need_do_split_w && partition_need_rect_w) ||
+    (partition_emit_step_q && partition_need_do_split_w && partition_need_rect_w);
+  assign partition_emit_done_w =
+    (!partition_need_do_split_w && !partition_need_rect_w) ||
+    (partition_emit_step_q && partition_need_rect_w) ||
+    (!partition_emit_step_q && partition_need_do_split_w && !partition_need_rect_w);
+  assign partition_above_shift_w =
+    (block_w_mi_q == 5'd2) ? 2'd0 :
+    (block_w_mi_q == 5'd4) ? 2'd1 :
+    (block_w_mi_q == 5'd8) ? 2'd2 : 2'd3;
+  assign partition_left_shift_w =
+    (block_h_mi_q == 5'd2) ? 2'd0 :
+    (block_h_mi_q == 5'd4) ? 2'd1 :
+    (block_h_mi_q == 5'd8) ? 2'd2 : 2'd3;
+  assign partition_above_ctx_w = partition_above_q[block_col_mi_q];
+  assign partition_left_ctx_w = partition_left_q[block_row_mi_q];
+  assign partition_above_bit_w =
+    (partition_above_shift_w == 2'd0) ? partition_above_ctx_w[0] :
+    (partition_above_shift_w == 2'd1) ? partition_above_ctx_w[1] :
+    (partition_above_shift_w == 2'd2) ? partition_above_ctx_w[2] :
+                                        partition_above_ctx_w[3];
+  assign partition_left_bit_w =
+    (partition_left_shift_w == 2'd0) ? partition_left_ctx_w[0] :
+    (partition_left_shift_w == 2'd1) ? partition_left_ctx_w[1] :
+    (partition_left_shift_w == 2'd2) ? partition_left_ctx_w[2] :
+                                       partition_left_ctx_w[3];
+  assign partition_raw_ctx_w = {partition_left_bit_w, partition_above_bit_w};
+  assign txb_width_w = {11'd0, leaf_visible_txb_w_w};
+  assign txb_count_w = {11'd0, leaf_visible_txb_w_w} * {11'd0, leaf_visible_txb_h_w};
+  assign txb_row_w = {11'd0, block_row_mi_q + txb_local_row_q};
+  assign txb_col_w = {11'd0, block_col_mi_q + txb_local_col_q};
+  assign leaf_visible_txb_w_w =
+    ((block_col_mi_q + block_w_mi_q) > visible_cols_mi_q) ?
+      (visible_cols_mi_q - block_col_mi_q) : block_w_mi_q;
+  assign leaf_visible_txb_h_w =
+    ((block_row_mi_q + block_h_mi_q) > visible_rows_mi_q) ?
+      (visible_rows_mi_q - block_row_mi_q) : block_h_mi_q;
 
   always @* begin
-    op_valid_w = 1'b1;
+    if (visible_width <= 16'd8) width_bits_w = 4'd3;
+    else if (visible_width <= 16'd16) width_bits_w = 4'd4;
+    else if (visible_width <= 16'd32) width_bits_w = 4'd5;
+    else width_bits_w = 4'd6;
+
+    if (visible_height <= 16'd8) height_bits_w = 4'd3;
+    else if (visible_height <= 16'd16) height_bits_w = 4'd4;
+    else if (visible_height <= 16'd32) height_bits_w = 4'd5;
+    else height_bits_w = 4'd6;
+  end
+
+  always @* begin
+    forced_valid_w = 1'b0;
+    forced_partition_w = PARTITION_NONE;
+    if (!block_partition_point_w) begin
+      forced_valid_w = 1'b1;
+      forced_partition_w = PARTITION_NONE;
+    end else if (!(has_rows_w && has_cols_w)) begin
+      forced_valid_w = 1'b1;
+      if (block_square_w) begin
+        forced_partition_w = (has_rows_w && !has_cols_w) ? PARTITION_VERT : PARTITION_HORZ;
+      end else if (block_tall_w) begin
+        if (!has_rows_w) begin
+          forced_partition_w = PARTITION_HORZ;
+        end else if (block_w_mi_q >= 5'd4 && !sub_has_cols_w) begin
+          forced_partition_w = PARTITION_HORZ;
+        end else begin
+          forced_valid_w = 1'b0;
+        end
+      end else begin
+        if (!has_cols_w) begin
+          forced_partition_w = PARTITION_VERT;
+        end else if (block_h_mi_q >= 5'd4 && !sub_has_rows_w) begin
+          forced_partition_w = PARTITION_VERT;
+        end else begin
+          forced_valid_w = 1'b0;
+        end
+      end
+    end
+
+    chosen_partition_w = PARTITION_NONE;
+    if (!block_partition_point_w) begin
+      chosen_partition_w = PARTITION_NONE;
+    end else if (
+      forced_valid_w &&
+      (((forced_partition_w == PARTITION_NONE) && allowed_none_w) ||
+       ((forced_partition_w == PARTITION_HORZ) && allowed_horz_w) ||
+       ((forced_partition_w == PARTITION_VERT) && allowed_vert_w))
+    ) begin
+      chosen_partition_w = forced_partition_w;
+    end else if (
+      preferred_valid_w &&
+      (((preferred_partition_w == PARTITION_HORZ) && allowed_horz_w) ||
+       ((preferred_partition_w == PARTITION_VERT) && allowed_vert_w))
+    ) begin
+      chosen_partition_w = preferred_partition_w;
+    end else if (allowed_only_w) begin
+      if (allowed_none_w) chosen_partition_w = PARTITION_NONE;
+      else if (allowed_horz_w) chosen_partition_w = PARTITION_HORZ;
+      else chosen_partition_w = PARTITION_VERT;
+    end else if (allowed_none_w) begin
+      chosen_partition_w = PARTITION_NONE;
+    end else if ((block_row_mi_q + block_h_mi_q) > visible_rows_mi_q && allowed_horz_w) begin
+      chosen_partition_w = PARTITION_HORZ;
+    end else if ((block_col_mi_q + block_w_mi_q) > visible_cols_mi_q && allowed_vert_w) begin
+      chosen_partition_w = PARTITION_VERT;
+    end else if (allowed_horz_w) begin
+      chosen_partition_w = PARTITION_HORZ;
+    end else if (allowed_vert_w) begin
+      chosen_partition_w = PARTITION_VERT;
+    end
+
+    bsize_map_w = 4'd0;
+    case ({block_w_mi_q, block_h_mi_q})
+      {5'd2, 5'd2}: bsize_map_w = 4'd0;
+      {5'd2, 5'd4},
+      {5'd4, 5'd2},
+      {5'd4, 5'd4}: bsize_map_w = 4'd1;
+      {5'd4, 5'd8},
+      {5'd8, 5'd4},
+      {5'd8, 5'd8}: bsize_map_w = 4'd2;
+      {5'd8, 5'd16},
+      {5'd16, 5'd8},
+      {5'd16, 5'd16}: bsize_map_w = 4'd3;
+      {5'd2, 5'd8}: bsize_map_w = 4'd12;
+      {5'd8, 5'd2}: bsize_map_w = 4'd13;
+      {5'd4, 5'd16}: bsize_map_w = 4'd14;
+      {5'd16, 5'd4}: bsize_map_w = 4'd15;
+      default: bsize_map_w = 4'd0;
+    endcase
+
+    bsize_rect_map_w = 4'd0;
+    case ({block_w_mi_q, block_h_mi_q})
+      {5'd2, 5'd2},
+      {5'd4, 5'd4}: bsize_rect_map_w = 4'd0;
+      {5'd2, 5'd4},
+      {5'd4, 5'd8}: bsize_rect_map_w = 4'd1;
+      {5'd4, 5'd2},
+      {5'd8, 5'd4}: bsize_rect_map_w = 4'd2;
+      {5'd8, 5'd8}: bsize_rect_map_w = 4'd3;
+      {5'd8, 5'd16}: bsize_rect_map_w = 4'd4;
+      {5'd16, 5'd8}: bsize_rect_map_w = 4'd5;
+      {5'd16, 5'd16}: bsize_rect_map_w = 4'd6;
+      {5'd2, 5'd8},
+      {5'd4, 5'd16}: bsize_rect_map_w = 4'd13;
+      {5'd8, 5'd2},
+      {5'd16, 5'd4}: bsize_rect_map_w = 4'd14;
+      default: bsize_rect_map_w = 4'd0;
+    endcase
+
+    partition_split_ctx_w = {bsize_map_w, 2'b00} + {4'd0, partition_raw_ctx_w};
+    partition_rect_ctx_w = {bsize_rect_map_w, 2'b00} + {4'd0, partition_raw_ctx_w};
+
+    partition_update_above_w = 8'd56;
+    partition_update_left_w = 8'd56;
+    case ({block_w_mi_q, block_h_mi_q})
+      {5'd2, 5'd2}: begin partition_update_above_w = 8'd62; partition_update_left_w = 8'd62; end
+      {5'd2, 5'd4}: begin partition_update_above_w = 8'd62; partition_update_left_w = 8'd60; end
+      {5'd4, 5'd2}: begin partition_update_above_w = 8'd60; partition_update_left_w = 8'd62; end
+      {5'd4, 5'd4}: begin partition_update_above_w = 8'd60; partition_update_left_w = 8'd60; end
+      {5'd4, 5'd8}: begin partition_update_above_w = 8'd60; partition_update_left_w = 8'd56; end
+      {5'd8, 5'd4}: begin partition_update_above_w = 8'd56; partition_update_left_w = 8'd60; end
+      {5'd8, 5'd8}: begin partition_update_above_w = 8'd56; partition_update_left_w = 8'd56; end
+      {5'd8, 5'd16}: begin partition_update_above_w = 8'd56; partition_update_left_w = 8'd48; end
+      {5'd16, 5'd8}: begin partition_update_above_w = 8'd48; partition_update_left_w = 8'd56; end
+      {5'd16, 5'd16}: begin partition_update_above_w = 8'd48; partition_update_left_w = 8'd48; end
+      {5'd2, 5'd8}: begin partition_update_above_w = 8'd62; partition_update_left_w = 8'd56; end
+      {5'd8, 5'd2}: begin partition_update_above_w = 8'd56; partition_update_left_w = 8'd62; end
+      {5'd4, 5'd16}: begin partition_update_above_w = 8'd60; partition_update_left_w = 8'd48; end
+      {5'd16, 5'd4}: begin partition_update_above_w = 8'd48; partition_update_left_w = 8'd60; end
+      {5'd2, 5'd16}: begin partition_update_above_w = 8'd62; partition_update_left_w = 8'd48; end
+      {5'd16, 5'd2}: begin partition_update_above_w = 8'd48; partition_update_left_w = 8'd62; end
+    endcase
+
+    leaf_fsc_symbol_w = (block_w_mi_q <= 5'd8) && (block_h_mi_q <= 5'd8);
+    leaf_fsc_fh_w = 32'd0;
+    case ({block_w_mi_q, block_h_mi_q})
+      {5'd2, 5'd2}: leaf_fsc_fh_w = 32'd514;
+      {5'd2, 5'd4},
+      {5'd4, 5'd2}: leaf_fsc_fh_w = 32'd444;
+      {5'd4, 5'd4},
+      {5'd2, 5'd8},
+      {5'd8, 5'd2}: leaf_fsc_fh_w = 32'd186;
+      {5'd4, 5'd8},
+      {5'd8, 5'd4},
+      {5'd8, 5'd8}: leaf_fsc_fh_w = 32'd77;
+      default: leaf_fsc_fh_w = 32'd0;
+    endcase
+
+    if (txb_row_w == 16'd0 && txb_col_w == 16'd0) begin
+      y_txb_nonzero_fh_w = 32'd31669;
+      u_txb_nonzero_fh_w = 32'd23870;
+      v_txb_nonzero_fh_w = 32'd16384;
+      y_dc_sign_fl_w = 32'd16937;
+    end else if (txb_row_w == 16'd0 || txb_col_w == 16'd0) begin
+      y_txb_nonzero_fh_w = 32'd24824;
+      u_txb_nonzero_fh_w = 32'd19113;
+      v_txb_nonzero_fh_w = 32'd16384;
+      y_dc_sign_fl_w = 32'd19136;
+    end else begin
+      y_txb_nonzero_fh_w = 32'd3692;
+      u_txb_nonzero_fh_w = 32'd10420;
+      v_txb_nonzero_fh_w = 32'd16384;
+      y_dc_sign_fl_w = 32'd19136;
+    end
+  end
+
+  always @* begin
+    op_valid_w = 1'b0;
     op_literal_w = 1'b0;
     op_literal_value_w = 32'd0;
     op_literal_bits_w = 5'd0;
@@ -128,67 +537,104 @@ module ff_av2_encoder #(
     op_fh_inc_w = 0;
     op_last_w = 1'b0;
 
-    if (phase_q == 2'd0) begin
-      case (step_q)
-        4'd0: begin op_fh_w = 32'd4684; op_fh_inc_w = 8; end
-        4'd1: begin op_fh_w = 32'd16384; op_fh_inc_w = 8; end
-        4'd2: begin op_fh_w = 32'd3905; op_fh_inc_w = 12; end
-        4'd3: begin op_fh_w = 32'd17593; op_fh_inc_w = 14; end
-        4'd4: begin op_fh_w = 32'd514; op_fh_inc_w = 8; end
-        4'd5: begin op_fh_w = 32'd16384; op_fh_inc_w = 8; end
-        4'd6: begin op_fh_w = 32'd23405; op_fh_inc_w = 14; end
-        default: op_valid_w = 1'b0;
-      endcase
-    end else if (phase_q == 2'd1) begin
-      case (step_q)
-        4'd0: begin
-          case (txb_q)
-            2'd0: op_fh_w = 32'd31669;
-            2'd1, 2'd2: op_fh_w = 32'd24824;
-            default: op_fh_w = 32'd3692;
-          endcase
+    if (state_q == ST_PARTITION) begin
+      if (partition_emit_do_split_w) begin
+        // AV2 v1.0.0 Section 5.20.3.2 partition(): do_split is present only
+        // when PARTITION_NONE is allowed at the current block.
+        op_valid_w = 1'b1;
+        if (partition_q == PARTITION_NONE) begin
+          op_fh_w = partition_do_cdf0_w;
           op_fh_inc_w = 8;
-        end
-        4'd1: begin op_fh_w = 32'd30822; op_fh_inc_w = 12; end
-        4'd2: begin op_fl_w = 32'd704; op_fh_w = 32'd0; op_fl_inc_w = 3; op_fh_inc_w = 0; end
-        4'd3: begin op_fl_w = 32'd11993; op_fh_w = 32'd0; op_fl_inc_w = 4; op_fh_inc_w = 0; end
-        4'd4: begin
-          op_fl_w = (txb_q == 2'd0) ? 32'd16937 : 32'd19136;
+        end else begin
+          op_fl_w = partition_do_cdf0_w;
           op_fh_w = 32'd0;
           op_fl_inc_w = 8;
           op_fh_inc_w = 0;
         end
-        4'd5: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd5; end
-        4'd6: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd6; end
-        4'd7: begin op_literal_w = 1'b1; op_literal_value_w = 32'd249; op_literal_bits_w = 5'd8; end
-        4'd8: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd1; end
-        default: op_valid_w = 1'b0;
-      endcase
-    end else begin
-      case (step_q)
-        4'd0: begin
-          if (phase_q == 2'd2) begin
-            case (txb_q)
-              2'd0: op_fh_w = 32'd23870;
-              2'd1, 2'd2: op_fh_w = 32'd19113;
-              default: op_fh_w = 32'd10420;
-            endcase
-          end else begin
-            op_fh_w = 32'd16384;
-          end
+      end else if (partition_emit_rect_w) begin
+        // AV2 v1.0.0 Section 5.20.3.2 partition(): rect_type selects
+        // vertical when coded as symbol 1; symbol 0 selects horizontal.
+        op_valid_w = 1'b1;
+        if (partition_q == PARTITION_VERT) begin
+          op_fl_w = partition_rect_cdf0_w;
+          op_fh_w = 32'd0;
+          op_fl_inc_w = 8;
+          op_fh_inc_w = 0;
+        end else begin
+          op_fh_w = partition_rect_cdf0_w;
           op_fh_inc_w = 8;
         end
-        4'd1: begin op_fh_w = 32'd24768; op_fh_inc_w = 12; end
-        4'd2: begin op_fl_w = 32'd511; op_fh_w = 32'd0; op_fl_inc_w = 3; op_fh_inc_w = 0; end
-        4'd3: begin op_literal_w = 1'b1; op_literal_value_w = 32'd1; op_literal_bits_w = 5'd1; end
-        4'd4: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd5; end
-        4'd5: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd6; end
-        4'd6: begin op_literal_w = 1'b1; op_literal_value_w = 32'd250; op_literal_bits_w = 5'd8; end
-        4'd7: begin op_literal_w = 1'b1; op_literal_value_w = 32'd1; op_literal_bits_w = 5'd1; end
-        default: op_valid_w = 1'b0;
-      endcase
-      op_last_w = (phase_q == 2'd3) && (txb_q == 2'd3) && (step_q == 4'd7);
+      end
+    end else if (state_q == ST_LEAF) begin
+      op_valid_w = 1'b1;
+      if (phase_q == 2'd0) begin
+        case (step_q)
+          4'd0: begin op_fh_w = 32'd16384; op_fh_inc_w = 8; end
+          4'd1: begin op_fh_w = 32'd3905; op_fh_inc_w = 12; end
+          4'd2: begin op_fh_w = 32'd17593; op_fh_inc_w = 14; end
+          4'd3: begin
+            if (leaf_fsc_symbol_w) begin
+              op_fh_w = leaf_fsc_fh_w;
+              op_fh_inc_w = 8;
+            end else begin
+              op_valid_w = 1'b0;
+            end
+          end
+          4'd4: begin op_fh_w = 32'd16384; op_fh_inc_w = 8; end
+          4'd5: begin op_fh_w = 32'd23405; op_fh_inc_w = 14; end
+          default: op_valid_w = 1'b0;
+        endcase
+      end else if (phase_q == 2'd1) begin
+        case (step_q)
+          4'd0: begin
+            // AV2 v1.0.0 Section 5.20.7.25 coefficients(): txb_skip=0 for a
+            // black lossless DC-only luma TX_4X4 block.
+            op_fh_w = y_txb_nonzero_fh_w;
+            op_fh_inc_w = 8;
+          end
+          4'd1: begin op_fh_w = 32'd30822; op_fh_inc_w = 12; end
+          4'd2: begin op_fl_w = 32'd704; op_fh_w = 32'd0; op_fl_inc_w = 3; op_fh_inc_w = 0; end
+          4'd3: begin op_fl_w = 32'd11993; op_fh_w = 32'd0; op_fl_inc_w = 4; op_fh_inc_w = 0; end
+          4'd4: begin
+            op_fl_w = y_dc_sign_fl_w;
+            op_fh_w = 32'd0;
+            op_fl_inc_w = 8;
+            op_fh_inc_w = 0;
+          end
+          4'd5: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd5; end
+          4'd6: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd6; end
+          4'd7: begin op_literal_w = 1'b1; op_literal_value_w = 32'd249; op_literal_bits_w = 5'd8; end
+          4'd8: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd1; end
+          default: op_valid_w = 1'b0;
+        endcase
+      end else begin
+        case (step_q)
+          4'd0: begin
+            // AV2 v1.0.0 Section 5.20.7.25 coefficients(): txb_skip=0 for a
+            // black lossless DC-only chroma TX_4X4 block.
+            if (phase_q == 2'd2) begin
+              op_fh_w = u_txb_nonzero_fh_w;
+            end else begin
+              op_fh_w = v_txb_nonzero_fh_w;
+            end
+            op_fh_inc_w = 8;
+          end
+          4'd1: begin op_fh_w = 32'd24768; op_fh_inc_w = 12; end
+          4'd2: begin op_fl_w = 32'd511; op_fh_w = 32'd0; op_fl_inc_w = 3; op_fh_inc_w = 0; end
+          4'd3: begin op_literal_w = 1'b1; op_literal_value_w = 32'd1; op_literal_bits_w = 5'd1; end
+          4'd4: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd5; end
+          4'd5: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd6; end
+          4'd6: begin op_literal_w = 1'b1; op_literal_value_w = 32'd250; op_literal_bits_w = 5'd8; end
+          4'd7: begin op_literal_w = 1'b1; op_literal_value_w = 32'd1; op_literal_bits_w = 5'd1; end
+          default: op_valid_w = 1'b0;
+        endcase
+      end
     end
+    op_last_w = (state_q == ST_LEAF) &&
+                (phase_q == 2'd3) &&
+                (txb_index_q == (txb_count_q - 16'd1)) &&
+                (step_q == 4'd7) &&
+                (stack_sp_q == 5'd0);
   end
 
   always @* begin
@@ -272,29 +718,70 @@ module ff_av2_encoder #(
   end
 
   always @* begin
-    case (stream_index_q)
-      16'd0: prefix_byte_w = 8'h01;
-      16'd1: prefix_byte_w = 8'h08;
-      16'd2: prefix_byte_w = 8'h0c;
-      16'd3: prefix_byte_w = 8'h04;
-      16'd4: prefix_byte_w = 8'h92;
-      16'd5: prefix_byte_w = 8'h06;
-      16'd6: prefix_byte_w = 8'h88;
-      16'd7: prefix_byte_w = 8'hbf;
-      16'd8: prefix_byte_w = 8'h00;
-      16'd9: prefix_byte_w = 8'h00;
-      16'd10: prefix_byte_w = 8'h42;
-      16'd11: prefix_byte_w = 8'h01;
-      16'd12: prefix_byte_w = 8'hb8;
-      16'd13: prefix_byte_w = 8'h08;
-      16'd14: prefix_byte_w = 8'h80;
-      16'd15: prefix_byte_w = 8'h35;
-      16'd16: prefix_byte_w = 8'h10;
-      16'd17: prefix_byte_w = 8'he6;
-      16'd18: prefix_byte_w = 8'h00;
-      16'd19: prefix_byte_w = 8'h00;
-      default: prefix_byte_w = 8'h00;
+    seq_load_value_w = 64'd0;
+    seq_load_bits_w = 7'd0;
+    case (seq_op_q)
+      8'd0: begin seq_load_value_w = 64'd1; seq_load_bits_w = 7'd1; end
+      8'd1: begin seq_load_value_w = 64'd4; seq_load_bits_w = 7'd5; end
+      8'd2: begin seq_load_value_w = 64'd1; seq_load_bits_w = 7'd1; end
+      8'd3: begin seq_load_value_w = 64'd0; seq_load_bits_w = 7'd5; end
+      8'd4: begin seq_load_value_w = 64'd3; seq_load_bits_w = 7'd3; end
+      8'd5: begin seq_load_value_w = 64'd2; seq_load_bits_w = 7'd3; end
+      8'd6: begin seq_load_value_w = {60'd0, width_bits_q - 4'd1}; seq_load_bits_w = 7'd4; end
+      8'd7: begin seq_load_value_w = {60'd0, height_bits_q - 4'd1}; seq_load_bits_w = 7'd4; end
+      8'd8: begin seq_load_value_w = {48'd0, width_q - 16'd1}; seq_load_bits_w = {3'd0, width_bits_q}; end
+      8'd9: begin seq_load_value_w = {48'd0, height_q - 16'd1}; seq_load_bits_w = {3'd0, height_bits_q}; end
+      8'd10: begin seq_load_value_w = 64'd0; seq_load_bits_w = 7'd6; end
+      8'd11: begin seq_load_value_w = 64'd0; seq_load_bits_w = 7'd2; end
+      8'd12: begin seq_load_value_w = 64'd0; seq_load_bits_w = 7'd8; end
+      8'd13: begin seq_load_value_w = 64'd8; seq_load_bits_w = 7'd5; end
+      8'd14: begin seq_load_value_w = 64'd32878; seq_load_bits_w = 7'd17; end
+      8'd15: begin seq_load_value_w = 64'd1; seq_load_bits_w = 7'd7; end
+      8'd16: begin seq_load_value_w = 64'd0; seq_load_bits_w = 7'd3; end
+      8'd17: begin
+        if (seq_bit_pos_q[2:0] == 3'd0) begin
+          seq_load_value_w = 64'h80;
+          seq_load_bits_w = 7'd8;
+        end else begin
+          seq_load_bits_w = 7'd8 - {4'd0, seq_bit_pos_q[2:0]};
+          seq_load_value_w = 64'd1 << (seq_load_bits_w - 7'd1);
+        end
+      end
+      default: begin seq_load_value_w = 64'd0; seq_load_bits_w = 7'd0; end
     endcase
+  end
+
+  always @* begin
+    output_byte_w = 8'h00;
+    if (stream_index_q == 16'd0) begin
+      output_byte_w = 8'h01;
+    end else if (stream_index_q == 16'd1) begin
+      output_byte_w = 8'h08;
+    end else if (stream_index_q == 16'd2) begin
+      output_byte_w = 8'd1 + seq_len_q[7:0];
+    end else if (stream_index_q == 16'd3) begin
+      output_byte_w = 8'h04;
+    end else if (stream_index_q < seq_end_index_w) begin
+      output_byte_w = seq_mem_q[seq_stream_index_w];
+    end else if (stream_index_q < closed_header_start_w) begin
+      if (closed_leb_index_w == 16'd0 && closed_leb_len_w == 2'd2) begin
+        output_byte_w = closed_len_w[6:0] | 8'h80;
+      end else if (closed_leb_index_w == 16'd0) begin
+        output_byte_w = closed_len_w[7:0];
+      end else begin
+        output_byte_w = {1'b0, closed_len_w[13:7]};
+      end
+    end else if (stream_index_q == closed_header_start_w) begin
+      output_byte_w = 8'h10;
+    end else if (stream_index_q == closed_header_start_w + 16'd1) begin
+      output_byte_w = 8'he6;
+    end else if (stream_index_q == closed_header_start_w + 16'd2) begin
+      output_byte_w = 8'h00;
+    end else if (stream_index_q == closed_header_start_w + 16'd3) begin
+      output_byte_w = 8'h00;
+    end else begin
+      output_byte_w = tile_mem_q[tile_stream_index_w];
+    end
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -309,21 +796,72 @@ module ff_av2_encoder #(
       cnt_q <= -9;
       precarry_len_q <= 16'd0;
       tile_len_q <= 16'd0;
+      seq_len_q <= 16'd0;
       stream_index_q <= 16'd0;
+      width_q <= 16'd0;
+      height_q <= 16'd0;
+      width_bits_q <= 4'd0;
+      height_bits_q <= 4'd0;
+      seq_op_q <= 8'd0;
+      seq_bits_left_q <= 7'd0;
+      seq_value_q <= 64'd0;
+      seq_bit_pos_q <= 16'd0;
       phase_q <= 2'd0;
       step_q <= 4'd0;
-      txb_q <= 2'd0;
+      txb_index_q <= 16'd0;
+      txb_width_q <= 16'd0;
+      txb_count_q <= 16'd0;
+      txb_local_row_q <= 5'd0;
+      txb_local_col_q <= 5'd0;
+      visible_rows_mi_q <= 5'd0;
+      visible_cols_mi_q <= 5'd0;
+      block_row_mi_q <= 5'd0;
+      block_col_mi_q <= 5'd0;
+      block_w_mi_q <= 5'd0;
+      block_h_mi_q <= 5'd0;
+      partition_q <= PARTITION_NONE;
+      partition_emit_step_q <= 1'b0;
+      stack_sp_q <= 5'd0;
       finish_e_q <= 64'd0;
       finish_c_q <= 0;
       finish_s_q <= 0;
       carry_q <= 16'd0;
       carry_index_q <= 0;
+      for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
+        partition_above_q[context_index_q] <= 8'd0;
+        partition_left_q[context_index_q] <= 8'd0;
+      end
     end else if (start) begin
       input_error <= start_invalid_w;
       if (!start_invalid_w && state_q == ST_IDLE) begin
-        state_q <= ST_ENCODE;
+        state_q <= ST_SEQ_LOAD;
         m_axis_valid <= 1'b0;
         m_axis_last <= 1'b0;
+        width_q <= visible_width;
+        height_q <= visible_height;
+        width_bits_q <= width_bits_w;
+        height_bits_q <= height_bits_w;
+        seq_op_q <= 8'd0;
+        seq_bits_left_q <= 7'd0;
+        seq_value_q <= 64'd0;
+        seq_bit_pos_q <= 16'd0;
+        seq_len_q <= 16'd0;
+        seq_mem_q[0] <= 8'd0;
+        seq_mem_q[1] <= 8'd0;
+        seq_mem_q[2] <= 8'd0;
+        seq_mem_q[3] <= 8'd0;
+        seq_mem_q[4] <= 8'd0;
+        seq_mem_q[5] <= 8'd0;
+        seq_mem_q[6] <= 8'd0;
+        seq_mem_q[7] <= 8'd0;
+        seq_mem_q[8] <= 8'd0;
+        seq_mem_q[9] <= 8'd0;
+        seq_mem_q[10] <= 8'd0;
+        seq_mem_q[11] <= 8'd0;
+        seq_mem_q[12] <= 8'd0;
+        seq_mem_q[13] <= 8'd0;
+        seq_mem_q[14] <= 8'd0;
+        seq_mem_q[15] <= 8'd0;
         low_q <= 64'd0;
         rng_q <= 32'h8000;
         cnt_q <= -9;
@@ -332,7 +870,24 @@ module ff_av2_encoder #(
         stream_index_q <= 16'd0;
         phase_q <= 2'd0;
         step_q <= 4'd0;
-        txb_q <= 2'd0;
+        txb_index_q <= 16'd0;
+        txb_width_q <= 16'd0;
+        txb_count_q <= 16'd0;
+        txb_local_row_q <= 5'd0;
+        txb_local_col_q <= 5'd0;
+        visible_rows_mi_q <= visible_rows_mi_w;
+        visible_cols_mi_q <= visible_cols_mi_w;
+        block_row_mi_q <= 5'd0;
+        block_col_mi_q <= 5'd0;
+        block_w_mi_q <= 5'd16;
+        block_h_mi_q <= 5'd16;
+        partition_q <= PARTITION_NONE;
+        partition_emit_step_q <= 1'b0;
+        stack_sp_q <= 5'd0;
+        for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
+          partition_above_q[context_index_q] <= 8'd0;
+          partition_left_q[context_index_q] <= 8'd0;
+        end
       end
     end else begin
       input_error <= 1'b0;
@@ -341,7 +896,129 @@ module ff_av2_encoder #(
           m_axis_valid <= 1'b0;
           m_axis_last <= 1'b0;
         end
-        ST_ENCODE: begin
+        ST_SEQ_LOAD: begin
+          if (seq_op_q == 8'd18) begin
+            seq_len_q <= (seq_bit_pos_q + 16'd7) >> 3;
+            state_q <= ST_LOAD_BLOCK;
+          end else begin
+            seq_value_q <= seq_load_value_w;
+            seq_bits_left_q <= seq_load_bits_w;
+            state_q <= ST_SEQ_WRITE;
+          end
+        end
+        ST_SEQ_WRITE: begin
+          seq_mem_q[seq_bit_pos_q[15:3]][7 - seq_bit_pos_q[2:0]] <= seq_value_q[seq_bits_left_q - 7'd1];
+          seq_bit_pos_q <= seq_bit_pos_q + 16'd1;
+          if (seq_bits_left_q == 7'd1) begin
+            seq_bits_left_q <= 7'd0;
+            seq_op_q <= seq_op_q + 8'd1;
+            state_q <= ST_SEQ_LOAD;
+          end else begin
+            seq_bits_left_q <= seq_bits_left_q - 7'd1;
+          end
+        end
+        ST_LOAD_BLOCK: begin
+          if (!block_visible_w) begin
+            if (stack_sp_q != 5'd0) begin
+              block_row_mi_q <= stack_row_mi_q[stack_sp_q - 5'd1];
+              block_col_mi_q <= stack_col_mi_q[stack_sp_q - 5'd1];
+              block_w_mi_q <= stack_w_mi_q[stack_sp_q - 5'd1];
+              block_h_mi_q <= stack_h_mi_q[stack_sp_q - 5'd1];
+              stack_sp_q <= stack_sp_q - 5'd1;
+            end else begin
+              state_q <= ST_FINISH_INIT;
+            end
+          end else begin
+            partition_q <= chosen_partition_w;
+            partition_emit_step_q <= 1'b0;
+            state_q <= ST_PARTITION;
+          end
+        end
+        ST_PARTITION: begin
+          if (op_valid_w) begin
+            if (norm_push_count_w != 2'd0) begin
+              precarry_mem_q[precarry_len_q] <= norm_push0_w;
+            end
+            if (norm_push_count_w == 2'd2) begin
+              precarry_mem_q[precarry_len_q + 16'd1] <= norm_push1_w;
+            end
+            precarry_len_q <= precarry_len_q + {14'd0, norm_push_count_w};
+            low_q <= norm_low_w;
+            rng_q <= norm_rng_w;
+            cnt_q <= norm_cnt_w;
+
+            if (partition_emit_do_split_w && partition_need_rect_w) begin
+              partition_emit_step_q <= 1'b1;
+            end else if (partition_q == PARTITION_NONE) begin
+              for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
+                if (context_index_q >= block_col_mi_q && context_index_q < (block_col_mi_q + block_w_mi_q)) begin
+                  partition_above_q[context_index_q] <= partition_update_above_w;
+                end
+                if (context_index_q >= block_row_mi_q && context_index_q < (block_row_mi_q + block_h_mi_q)) begin
+                  partition_left_q[context_index_q] <= partition_update_left_w;
+                end
+              end
+              phase_q <= 2'd0;
+              step_q <= 4'd0;
+              txb_index_q <= 16'd0;
+              txb_local_row_q <= 5'd0;
+              txb_local_col_q <= 5'd0;
+              txb_width_q <= txb_width_w;
+              txb_count_q <= txb_count_w;
+              state_q <= ST_LEAF;
+            end else if (partition_q == PARTITION_HORZ) begin
+              stack_row_mi_q[stack_sp_q] <= block_row_mi_q + block_half_h_mi_w;
+              stack_col_mi_q[stack_sp_q] <= block_col_mi_q;
+              stack_w_mi_q[stack_sp_q] <= block_w_mi_q;
+              stack_h_mi_q[stack_sp_q] <= block_half_h_mi_w;
+              stack_sp_q <= stack_sp_q + 5'd1;
+              block_h_mi_q <= block_half_h_mi_w;
+              state_q <= ST_LOAD_BLOCK;
+            end else begin
+              stack_row_mi_q[stack_sp_q] <= block_row_mi_q;
+              stack_col_mi_q[stack_sp_q] <= block_col_mi_q + block_half_w_mi_w;
+              stack_w_mi_q[stack_sp_q] <= block_half_w_mi_w;
+              stack_h_mi_q[stack_sp_q] <= block_h_mi_q;
+              stack_sp_q <= stack_sp_q + 5'd1;
+              block_w_mi_q <= block_half_w_mi_w;
+              state_q <= ST_LOAD_BLOCK;
+            end
+          end else if (partition_q == PARTITION_NONE) begin
+            for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
+              if (context_index_q >= block_col_mi_q && context_index_q < (block_col_mi_q + block_w_mi_q)) begin
+                partition_above_q[context_index_q] <= partition_update_above_w;
+              end
+              if (context_index_q >= block_row_mi_q && context_index_q < (block_row_mi_q + block_h_mi_q)) begin
+                partition_left_q[context_index_q] <= partition_update_left_w;
+              end
+            end
+            phase_q <= 2'd0;
+            step_q <= 4'd0;
+            txb_index_q <= 16'd0;
+            txb_local_row_q <= 5'd0;
+            txb_local_col_q <= 5'd0;
+            txb_width_q <= txb_width_w;
+            txb_count_q <= txb_count_w;
+            state_q <= ST_LEAF;
+          end else if (partition_q == PARTITION_HORZ) begin
+            stack_row_mi_q[stack_sp_q] <= block_row_mi_q + block_half_h_mi_w;
+            stack_col_mi_q[stack_sp_q] <= block_col_mi_q;
+            stack_w_mi_q[stack_sp_q] <= block_w_mi_q;
+            stack_h_mi_q[stack_sp_q] <= block_half_h_mi_w;
+            stack_sp_q <= stack_sp_q + 5'd1;
+            block_h_mi_q <= block_half_h_mi_w;
+            state_q <= ST_LOAD_BLOCK;
+          end else begin
+            stack_row_mi_q[stack_sp_q] <= block_row_mi_q;
+            stack_col_mi_q[stack_sp_q] <= block_col_mi_q + block_half_w_mi_w;
+            stack_w_mi_q[stack_sp_q] <= block_half_w_mi_w;
+            stack_h_mi_q[stack_sp_q] <= block_h_mi_q;
+            stack_sp_q <= stack_sp_q + 5'd1;
+            block_w_mi_q <= block_half_w_mi_w;
+            state_q <= ST_LOAD_BLOCK;
+          end
+        end
+        ST_LEAF: begin
           if (op_valid_w) begin
             if (norm_push_count_w != 2'd0) begin
               precarry_mem_q[precarry_len_q] <= norm_push0_w;
@@ -357,33 +1034,68 @@ module ff_av2_encoder #(
             if (op_last_w) begin
               state_q <= ST_FINISH_INIT;
             end else if (phase_q == 2'd0) begin
-              if (step_q == 4'd6) begin
+              if (step_q == 4'd2 && !leaf_fsc_symbol_w) begin
+                step_q <= 4'd4;
+              end else if (step_q == 4'd5) begin
                 phase_q <= 2'd1;
                 step_q <= 4'd0;
-                txb_q <= 2'd0;
+                txb_index_q <= 16'd0;
+                txb_local_row_q <= 5'd0;
+                txb_local_col_q <= 5'd0;
               end else begin
                 step_q <= step_q + 4'd1;
               end
             end else if (phase_q == 2'd1) begin
               if (step_q == 4'd8) begin
-                step_q <= 4'd0;
-                if (txb_q == 2'd3) begin
+                if (txb_index_q == (txb_count_q - 16'd1)) begin
                   phase_q <= 2'd2;
-                  txb_q <= 2'd0;
+                  step_q <= 4'd0;
+                  txb_index_q <= 16'd0;
+                  txb_local_row_q <= 5'd0;
+                  txb_local_col_q <= 5'd0;
                 end else begin
-                  txb_q <= txb_q + 2'd1;
+                  step_q <= 4'd0;
+                  txb_index_q <= txb_index_q + 16'd1;
+                  if (txb_local_col_q == (txb_width_q[4:0] - 5'd1)) begin
+                    txb_local_col_q <= 5'd0;
+                    txb_local_row_q <= txb_local_row_q + 5'd1;
+                  end else begin
+                    txb_local_col_q <= txb_local_col_q + 5'd1;
+                  end
                 end
               end else begin
                 step_q <= step_q + 4'd1;
               end
             end else begin
               if (step_q == 4'd7) begin
-                step_q <= 4'd0;
-                if (txb_q == 2'd3) begin
-                  phase_q <= phase_q + 2'd1;
-                  txb_q <= 2'd0;
+                if (txb_index_q == (txb_count_q - 16'd1)) begin
+                  if (phase_q == 2'd2) begin
+                    phase_q <= 2'd3;
+                    step_q <= 4'd0;
+                    txb_index_q <= 16'd0;
+                  txb_local_row_q <= 5'd0;
+                  txb_local_col_q <= 5'd0;
+                  end else begin
+                    if (stack_sp_q != 5'd0) begin
+                      block_row_mi_q <= stack_row_mi_q[stack_sp_q - 5'd1];
+                      block_col_mi_q <= stack_col_mi_q[stack_sp_q - 5'd1];
+                      block_w_mi_q <= stack_w_mi_q[stack_sp_q - 5'd1];
+                      block_h_mi_q <= stack_h_mi_q[stack_sp_q - 5'd1];
+                      stack_sp_q <= stack_sp_q - 5'd1;
+                      state_q <= ST_LOAD_BLOCK;
+                    end else begin
+                      state_q <= ST_FINISH_INIT;
+                    end
+                  end
                 end else begin
-                  txb_q <= txb_q + 2'd1;
+                  step_q <= 4'd0;
+                  txb_index_q <= txb_index_q + 16'd1;
+                  if (txb_local_col_q == (txb_width_q[4:0] - 5'd1)) begin
+                    txb_local_col_q <= 5'd0;
+                    txb_local_row_q <= txb_local_row_q + 5'd1;
+                  end else begin
+                    txb_local_col_q <= txb_local_col_q + 5'd1;
+                  end
                 end
               end else begin
                 step_q <= step_q + 4'd1;
@@ -430,11 +1142,7 @@ module ff_av2_encoder #(
         ST_OUTPUT: begin
           if (!m_axis_valid || m_axis_ready) begin
             m_axis_valid <= 1'b1;
-            if (stream_index_q < 16'd20) begin
-              m_axis_data <= prefix_byte_w;
-            end else begin
-              m_axis_data <= tile_mem_q[stream_index_q - 16'd20];
-            end
+            m_axis_data <= output_byte_w;
             m_axis_last <= (stream_index_q == (total_stream_len_w - 16'd1));
             if (stream_index_q == (total_stream_len_w - 16'd1)) begin
               if (m_axis_ready) begin

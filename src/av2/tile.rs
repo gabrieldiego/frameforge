@@ -703,6 +703,13 @@ fn choose_partition(
             return forced;
         }
     }
+    if let Some(partition) =
+        preferred_16x16_to_8x8_partition(block_size, visible_rows_mi, visible_cols_mi)
+    {
+        if allowed.contains(partition) {
+            return partition;
+        }
+    }
     if let Some(only_allowed) = allowed.only() {
         return only_allowed;
     }
@@ -719,6 +726,24 @@ fn choose_partition(
         Av2MvpPartition::Vert
     } else {
         Av2MvpPartition::None
+    }
+}
+
+fn preferred_16x16_to_8x8_partition(
+    block_size: Av2MvpBlockSize,
+    visible_rows_mi: usize,
+    visible_cols_mi: usize,
+) -> Option<Av2MvpPartition> {
+    // AV2 v1.0.0 Section 5.20.3 partition syntax permits binary recursive
+    // splits. The first RTL partition bring-up keeps the policy deliberately
+    // small: only an exactly visible 16x16 frame is split into four 8x8 leaves.
+    if visible_rows_mi != 4 || visible_cols_mi != 4 {
+        return None;
+    }
+    match (block_size.width, block_size.height) {
+        (16, 16) => Some(Av2MvpPartition::Horz),
+        (16, 8) => Some(Av2MvpPartition::Vert),
+        _ => None,
     }
 }
 

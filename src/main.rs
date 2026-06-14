@@ -20,6 +20,7 @@ struct Av2EncodeCli {
     input: PathBuf,
     output: PathBuf,
     recon: Option<PathBuf>,
+    trace: Option<PathBuf>,
     frames: usize,
     width: usize,
     height: usize,
@@ -122,7 +123,13 @@ fn run_av2_encode(cli: Av2EncodeCli) -> Result<(), String> {
         None
     };
     let recon_sink = recon_output.as_mut().map(|writer| writer as &mut dyn Write);
-    frameforge::av2::av2_encode_fixed_black_444(&mut input, &mut output, recon_sink, request)
+    frameforge::av2::av2_encode_fixed_black_444(&mut input, &mut output, recon_sink, request)?;
+    if let Some(trace) = cli.trace.as_ref() {
+        let jsonl = frameforge::av2::av2_black_444_trace_jsonl(request)?;
+        fs::write(trace, jsonl)
+            .map_err(|err| format!("failed to write AV2 trace '{}': {err}", trace.display()))?;
+    }
+    Ok(())
 }
 
 fn run_vvc_eos(cli: VvcEosCli) -> Result<(), String> {
@@ -282,6 +289,7 @@ fn parse_av2_encode_cli(args: Vec<String>) -> Result<Command, String> {
     let mut input = None;
     let mut output = None;
     let mut recon = None;
+    let mut trace = None;
     let mut frames = 1;
     let mut width = 64;
     let mut height = 64;
@@ -293,6 +301,7 @@ fn parse_av2_encode_cli(args: Vec<String>) -> Result<Command, String> {
             "--input" => input = Some(next_value(&mut iter, "--input")?.into()),
             "--output" => output = Some(next_value(&mut iter, "--output")?.into()),
             "--recon" => recon = Some(next_value(&mut iter, "--recon")?.into()),
+            "--trace" => trace = Some(next_value(&mut iter, "--trace")?.into()),
             "--frames" => frames = parse_usize(next_value(&mut iter, "--frames")?, "--frames")?,
             "--width" => width = parse_usize(next_value(&mut iter, "--width")?, "--width")?,
             "--height" => height = parse_usize(next_value(&mut iter, "--height")?, "--height")?,
@@ -309,6 +318,7 @@ fn parse_av2_encode_cli(args: Vec<String>) -> Result<Command, String> {
         input: input.ok_or_else(|| "missing --input <path>".to_string())?,
         output: output.ok_or_else(|| "missing --output <path>".to_string())?,
         recon,
+        trace,
         frames,
         width,
         height,

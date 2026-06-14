@@ -428,9 +428,11 @@ def validate_av2_fixed_black_path(
     reference_recon = out_dir / f"{stem}_ref_recon.yuv"
     sw_bitstream = out_dir / f"{stem}_software.{codec.bitstream_extension}"
     sw_internal_recon = out_dir / f"{stem}_software_internal_rec.yuv"
+    sw_trace = out_dir / f"{stem}_software_trace.jsonl"
     sw_ref_decoded_recon = out_dir / f"{stem}_software_ref_decoded.yuv"
     rtl_bitstream = out_dir / f"{stem}_rtl.{codec.bitstream_extension}"
     rtl_internal_recon = out_dir / f"{stem}_rtl_internal_rec.yuv"
+    rtl_trace = out_dir / f"{stem}_rtl_trace.jsonl"
     expected_recon = av2_black_444_reconstruction(info)
     if expected_recon is None:
         print(
@@ -473,6 +475,8 @@ def validate_av2_fixed_black_path(
             str(sw_bitstream),
             "--recon",
             str(sw_internal_recon),
+            "--trace",
+            str(sw_trace),
         ],
         cwd=REPO_ROOT,
         check=False,
@@ -544,6 +548,7 @@ def validate_av2_fixed_black_path(
         env["RTL_CHROMA_FORMAT_IDC"] = "3"
         env["FRAMEFORGE_RTL_AV2_ENCODER_OUT"] = str(rtl_bitstream)
         env["FRAMEFORGE_RTL_AV2_ENCODER_RECON_OUT"] = str(rtl_internal_recon)
+        env["FRAMEFORGE_RTL_AV2_TRACE_OUT"] = str(rtl_trace)
         env["COCOTB_TEST_FILTER"] = (
             "^test_av2_encoder\\.av2_encoder_emits_black_obu_stream$"
         )
@@ -565,7 +570,6 @@ def validate_av2_fixed_black_path(
         if rtl.returncode != 0:
             print("FAIL: AV2 RTL simulation failed", file=sys.stderr)
             return rtl.returncode
-
     digests = {
         "input_yuv": sha256(validation_input_path),
         "software_bitstream": sha256(sw_bitstream),
@@ -622,6 +626,9 @@ def validate_av2_fixed_black_path(
     print("OK: AV2 software internal reconstruction matches black input")
     print("OK: AV2 REF decode of software bitstream matches black input")
     print("OK: AV2 REF reconstruction matches black input")
+    print(f"AV2 software trace: {sw_trace}")
+    if ran_rtl:
+        print(f"AV2 RTL trace: {rtl_trace}")
     if ran_rtl:
         if digests["rtl_bitstream"] != digests["software_bitstream"]:
             print("FAIL: AV2 RTL bitstream differs from software OBU bitstream", file=sys.stderr)

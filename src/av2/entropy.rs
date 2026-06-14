@@ -31,6 +31,12 @@ pub struct Av2EntropyField {
     pub code: Av2EntropyCode,
     pub symbol_offset: usize,
     pub bit_count: usize,
+    pub symbol: Option<usize>,
+    pub literal_value: Option<u32>,
+    pub fl: Option<u32>,
+    pub fh: Option<u32>,
+    pub fl_inc: Option<i32>,
+    pub fh_inc: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +80,12 @@ impl Av2EntropyWriter {
             code: Av2EntropyCode::Literal,
             symbol_offset: self.symbol_bits,
             bit_count: bits as usize,
+            symbol: None,
+            literal_value: Some(value),
+            fl: None,
+            fh: None,
+            fl_inc: None,
+            fh_inc: None,
         });
         self.symbol_bits += bits as usize;
         while bits > 0 {
@@ -103,11 +115,29 @@ impl Av2EntropyWriter {
         // AV2 v1.0.0 Sections 4.11.2 and 8.3: S() reads a symbol using the
         // active CDF selected by the syntax process. Encoder-side this mirrors
         // AVM avm_write_symbol().
+        let fl = if symbol > 0 {
+            cdf[symbol - 1] as u32
+        } else {
+            CDF_PROB_TOP
+        };
+        let fh = cdf[symbol] as u32;
+        let fl_inc = if fl < CDF_PROB_TOP {
+            PROB_INC[nsymbs - 2][symbol.saturating_sub(1)]
+        } else {
+            0
+        };
+        let fh_inc = PROB_INC[nsymbs - 2][symbol];
         self.fields.push(Av2EntropyField {
             name,
             code: Av2EntropyCode::Symbol,
             symbol_offset: self.symbol_bits,
             bit_count: 1,
+            symbol: Some(symbol),
+            literal_value: None,
+            fl: Some(fl),
+            fh: Some(fh),
+            fl_inc: Some(fl_inc),
+            fh_inc: Some(fh_inc),
         });
         self.symbol_bits += 1;
         self.encode_cdf_q15(symbol, cdf, nsymbs);
