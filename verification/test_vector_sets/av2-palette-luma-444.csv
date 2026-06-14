@@ -1,0 +1,4 @@
+# generator=scripts/generate_test_vectors.py
+# description=AV2 luma-only two-color palette smoke vector with zero chroma.
+name,width,height,frames,format,pattern,fps,source,crop_x,crop_y
+av2_luma_palette_bars,64,64,1,yuv444p8,av2_luma_palette_bars,,,,

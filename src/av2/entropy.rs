@@ -73,6 +73,9 @@ impl Av2EntropyWriter {
             bits <= 32,
             "AV2 literal helper currently supports up to 32 bits"
         );
+        if bits == 0 {
+            return;
+        }
         // AV2 v1.0.0 Section 4.11.3: L(n) consumes n literal bits through the
         // arithmetic decoder. Encoder-side this mirrors AVM avm_write_literal().
         self.fields.push(Av2EntropyField {
@@ -95,6 +98,24 @@ impl Av2EntropyWriter {
             self.encode_literal_bypass(chunk, n);
             bits -= n;
             value &= (1u32 << bits) - 1;
+        }
+    }
+
+    pub fn write_uniform(&mut self, name: &'static str, n: u32, value: u32) {
+        assert!(n > 0, "AV2 uniform helper expects a positive range");
+        assert!(value < n, "AV2 uniform value is outside the coding range");
+        // AV2 v1.0.0 Section 4.11.3 uses the same arithmetic-literal path as
+        // AVM write_uniform() for palette map first tokens.
+        let l = 32 - n.leading_zeros();
+        let m = (1u32 << l) - n;
+        if l == 0 {
+            return;
+        }
+        if value < m {
+            self.write_literal(name, value, (l - 1) as u8);
+        } else {
+            self.write_literal(name, m + ((value - m) >> 1), (l - 1) as u8);
+            self.write_literal(name, (value - m) & 1, 1);
         }
     }
 

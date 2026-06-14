@@ -125,7 +125,13 @@ fn run_av2_encode(cli: Av2EncodeCli) -> Result<(), String> {
     let recon_sink = recon_output.as_mut().map(|writer| writer as &mut dyn Write);
     frameforge::av2::av2_encode_fixed_black_444(&mut input, &mut output, recon_sink, request)?;
     if let Some(trace) = cli.trace.as_ref() {
-        let jsonl = frameforge::av2::av2_black_444_trace_jsonl(request)?;
+        let frame = fs::read(&cli.input).map_err(|err| {
+            format!(
+                "failed to reread AV2 input '{}' for trace: {err}",
+                cli.input.display()
+            )
+        })?;
+        let jsonl = frameforge::av2::av2_mvp_444_trace_jsonl_for_frame(&frame, request)?;
         fs::write(trace, jsonl)
             .map_err(|err| format!("failed to write AV2 trace '{}': {err}", trace.display()))?;
     }

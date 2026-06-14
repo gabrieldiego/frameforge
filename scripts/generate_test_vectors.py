@@ -367,6 +367,8 @@ def sample_yuv(vector: TestVector, x: int, y: int, frame: int) -> tuple[int, int
         return transform_skip_left_delta_sample(x, y, frame)
     if vector.pattern == "bdpcm_horizontal":
         return bdpcm_horizontal_sample(x, y, frame)
+    if vector.pattern == "av2_luma_palette_bars":
+        return av2_luma_palette_bars_sample(x, y, frame)
     if vector.pattern == "palette_escape_prng":
         return palette_escape_prng_sample(vector, x, y, frame)
     if vector.pattern == "moving_blocks":
@@ -414,6 +416,15 @@ def bdpcm_horizontal_sample(x: int, y: int, frame: int) -> tuple[int, int, int]:
         (cb_base + carry + row_delta + 2) & 0xFF,
         (cr_base + carry + row_delta + 4) & 0xFF,
     )
+
+
+def av2_luma_palette_bars_sample(x: int, y: int, frame: int) -> tuple[int, int, int]:
+    del x
+    # The first AV2 palette milestone is luma-only. Keep U/V at zero so chroma
+    # remains on the existing black residual path while luma exercises palette
+    # mode, colors, identity-row flags, and one color-index transition.
+    y_sample = 32 if ((y + frame * 8) % 64) < 32 else 176
+    return y_sample, 0, 0
 
 
 def palette_escape_prng_sample(vector: TestVector, x: int, y: int, frame: int) -> tuple[int, int, int]:

@@ -3,11 +3,13 @@ use std::io::{Read, Write};
 use crate::picture::{Picture, PixelFormat};
 
 pub mod entropy;
+mod palette;
 mod syntax;
 mod tile;
 
+use palette::Av2LumaPalette444;
 use syntax::{Av2SyntaxPayload, Av2SyntaxWriter};
-use tile::av2_black_444_tile_entropy_payload;
+use tile::{av2_black_444_tile_entropy_payload, av2_luma_palette_444_tile_entropy_payload};
 
 pub const AV2_CODEC_NAME: &str = "av2";
 pub const AV2_BITSTREAM_EXTENSION: &str = "av2";
@@ -123,6 +125,35 @@ impl Av2EncodeRequest {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Av2Mvp444FrameMode {
+    Black,
+    LumaPalette(Av2LumaPalette444),
+}
+
+impl Av2Mvp444FrameMode {
+    fn from_frame(frame: &[u8], geometry: Av2VideoGeometry) -> Result<Self, String> {
+        let black = av2_black_444_reconstruction_for_geometry(geometry);
+        if frame == black {
+            return Ok(Self::Black);
+        }
+        Ok(Self::LumaPalette(palette::build_luma_palette_444(
+            frame, geometry,
+        )?))
+    }
+
+    fn allow_screen_content_tools(&self) -> bool {
+        matches!(self, Self::LumaPalette(_))
+    }
+
+    fn reconstruction(&self, geometry: Av2VideoGeometry) -> Vec<u8> {
+        match self {
+            Self::Black => av2_black_444_reconstruction_for_geometry(geometry),
+            Self::LumaPalette(palette) => palette.reconstruction().to_vec(),
+        }
+    }
+}
+
 pub fn av2_encode_fixed_black_444(
     input: &mut dyn Read,
     output: &mut dyn Write,
@@ -130,33 +161,38 @@ pub fn av2_encode_fixed_black_444(
     request: Av2EncodeRequest,
 ) -> Result<(), String> {
     request.validate()?;
-    let geometry = validate_fixed_black_444_request(request)?;
+    let geometry = validate_mvp_444_request(request)?;
 
-    let expected_recon = av2_black_444_reconstruction_for_geometry(geometry);
-    let mut frame = vec![0; expected_recon.len()];
+    let expected_len =
+        Picture::expected_len(geometry.width, geometry.height, PixelFormat::Yuv444p8);
+    let mut frame = vec![0; expected_len];
     input
         .read_exact(&mut frame)
-        .map_err(|err| format!("failed to read AV2 fixed black-frame input: {err}"))?;
-    if frame != expected_recon {
-        return Err(format!(
-            "fixed AV2 encoder expects a black {}x{} yuv444p8 input frame",
-            geometry.width, geometry.height
-        ));
-    }
+        .map_err(|err| format!("failed to read AV2 MVP input frame: {err}"))?;
+    let frame_mode = Av2Mvp444FrameMode::from_frame(&frame, geometry)?;
 
-    let bitstream = av2_black_444_bitstream_for_geometry(geometry);
+    let bitstream = av2_mvp_444_bitstream_for_mode(geometry, &frame_mode);
     output
         .write_all(&bitstream)
         .map_err(|err| format!("failed to write AV2 bitstream: {err}"))?;
     if let Some(recon) = recon {
+        let reconstruction = frame_mode.reconstruction(geometry);
         recon
-            .write_all(&expected_recon)
+            .write_all(&reconstruction)
             .map_err(|err| format!("failed to write AV2 reconstruction: {err}"))?;
     }
     Ok(())
 }
 
+#[cfg(test)]
 fn av2_black_444_bitstream_for_geometry(geometry: Av2VideoGeometry) -> Vec<u8> {
+    av2_mvp_444_bitstream_for_mode(geometry, &Av2Mvp444FrameMode::Black)
+}
+
+fn av2_mvp_444_bitstream_for_mode(
+    geometry: Av2VideoGeometry,
+    frame_mode: &Av2Mvp444FrameMode,
+) -> Vec<u8> {
     let mut out = Vec::new();
     append_obu(
         &mut out,
@@ -171,17 +207,35 @@ fn av2_black_444_bitstream_for_geometry(geometry: Av2VideoGeometry) -> Vec<u8> {
     append_obu(
         &mut out,
         Av2ObuType::ClosedLoopKey,
-        &av2_black_444_closed_loop_key_payload(geometry),
+        &av2_mvp_444_closed_loop_key_payload(geometry, frame_mode),
     );
     out
+}
+
+pub fn av2_mvp_444_trace_jsonl_for_frame(
+    frame: &[u8],
+    request: Av2EncodeRequest,
+) -> Result<String, String> {
+    request.validate()?;
+    let geometry = validate_mvp_444_request(request)?;
+    let frame_mode = Av2Mvp444FrameMode::from_frame(frame, geometry)?;
+    av2_mvp_444_trace_jsonl_for_mode(geometry, &frame_mode)
 }
 
 pub fn av2_black_444_trace_jsonl(request: Av2EncodeRequest) -> Result<String, String> {
     request.validate()?;
     let geometry = validate_fixed_black_444_request(request)?;
+    av2_mvp_444_trace_jsonl_for_mode(geometry, &Av2Mvp444FrameMode::Black)
+}
+
+fn av2_mvp_444_trace_jsonl_for_mode(
+    geometry: Av2VideoGeometry,
+    frame_mode: &Av2Mvp444FrameMode,
+) -> Result<String, String> {
     let sequence = av2_black_444_sequence_header_payload(geometry);
-    let closed_loop_header = av2_black_444_closed_loop_key_header_payload();
-    let entropy = av2_black_444_tile_entropy_payload(geometry, Av2Black444MvpProfile::current());
+    let closed_loop_header =
+        av2_mvp_444_closed_loop_key_header_payload(frame_mode.allow_screen_content_tools());
+    let entropy = av2_tile_entropy_payload_for_mode(geometry, frame_mode);
     let mut lines = String::new();
 
     push_av2_trace_line(
@@ -246,14 +300,18 @@ fn av2_black_444_reconstruction_for_geometry(geometry: Av2VideoGeometry) -> Vec<
 }
 
 fn validate_fixed_black_444_request(request: Av2EncodeRequest) -> Result<Av2VideoGeometry, String> {
+    let geometry = validate_mvp_444_request(request)?;
+    Ok(geometry)
+}
+
+fn validate_mvp_444_request(request: Av2EncodeRequest) -> Result<Av2VideoGeometry, String> {
     if request.params.frames != 1 || request.format != PixelFormat::Yuv444p8 {
         return Err(
-            "fixed AV2 encoder only supports one yuv444p8 black frame at 8-pixel geometry"
-                .to_string(),
+            "AV2 MVP encoder only supports one yuv444p8 frame at 8-pixel geometry".to_string(),
         );
     }
     validate_fixed_black_444_geometry(request.geometry).ok_or_else(|| {
-        "fixed AV2 encoder only supports 8x8 through 64x64 yuv444p8 black frames in 8-pixel steps"
+        "AV2 MVP encoder only supports 8x8 through 64x64 yuv444p8 frames in 8-pixel steps"
             .to_string()
     })
 }
@@ -416,7 +474,14 @@ fn write_fixed_black_444_sequence_tools(writer: &mut Av2SyntaxWriter) {
     writer.write_flag("sequence_tile_config.seq_tile_info_present_flag", false);
 }
 
+#[cfg(test)]
 fn av2_black_444_closed_loop_key_header_payload() -> Av2SyntaxPayload {
+    av2_mvp_444_closed_loop_key_header_payload(false)
+}
+
+fn av2_mvp_444_closed_loop_key_header_payload(
+    allow_screen_content_tools: bool,
+) -> Av2SyntaxPayload {
     let profile = Av2Black444MvpProfile::current();
     let mut writer = Av2SyntaxWriter::new();
 
@@ -428,7 +493,13 @@ fn av2_black_444_closed_loop_key_header_payload() -> Av2SyntaxPayload {
     writer.write_flag("tile_group.first_tile_group_in_frame", true);
     writer.write_uvlc("uncompressed_header.cur_mfh_id", 0);
     writer.write_uvlc("uncompressed_header.seq_header_id", 0);
-    writer.write_flag("uncompressed_header.allow_screen_content_tools", false);
+    writer.write_flag(
+        "uncompressed_header.allow_screen_content_tools",
+        allow_screen_content_tools,
+    );
+    if allow_screen_content_tools {
+        writer.write_flag("uncompressed_header.cur_frame_force_integer_mv", false);
+    }
     writer.write_flag("uncompressed_header.allow_intrabc", false);
     writer.write_flag(
         "uncompressed_header.disable_cdf_update",
@@ -444,9 +515,18 @@ fn av2_black_444_closed_loop_key_header_payload() -> Av2SyntaxPayload {
     writer.finish()
 }
 
+#[cfg(test)]
 fn av2_black_444_closed_loop_key_payload(geometry: Av2VideoGeometry) -> Av2SyntaxPayload {
-    let mut payload = av2_black_444_closed_loop_key_header_payload();
-    let entropy = av2_black_444_tile_entropy_payload(geometry, Av2Black444MvpProfile::current());
+    av2_mvp_444_closed_loop_key_payload(geometry, &Av2Mvp444FrameMode::Black)
+}
+
+fn av2_mvp_444_closed_loop_key_payload(
+    geometry: Av2VideoGeometry,
+    frame_mode: &Av2Mvp444FrameMode,
+) -> Av2SyntaxPayload {
+    let mut payload =
+        av2_mvp_444_closed_loop_key_header_payload(frame_mode.allow_screen_content_tools());
+    let entropy = av2_tile_entropy_payload_for_mode(geometry, frame_mode);
     let bit_offset = payload.bytes.len() * 8;
     payload.fields.push(syntax::Av2SyntaxField {
         name: "tile_group.tile_entropy_payload",
@@ -456,6 +536,22 @@ fn av2_black_444_closed_loop_key_payload(geometry: Av2VideoGeometry) -> Av2Synta
     });
     payload.bytes.extend_from_slice(&entropy.bytes);
     payload
+}
+
+fn av2_tile_entropy_payload_for_mode(
+    geometry: Av2VideoGeometry,
+    frame_mode: &Av2Mvp444FrameMode,
+) -> entropy::Av2EntropyPayload {
+    match frame_mode {
+        Av2Mvp444FrameMode::Black => {
+            av2_black_444_tile_entropy_payload(geometry, Av2Black444MvpProfile::current())
+        }
+        Av2Mvp444FrameMode::LumaPalette(palette) => av2_luma_palette_444_tile_entropy_payload(
+            geometry,
+            Av2Black444MvpProfile::current(),
+            palette,
+        ),
+    }
 }
 
 fn append_obu(out: &mut Vec<u8>, obu_type: Av2ObuType, payload: &Av2SyntaxPayload) {
@@ -561,6 +657,8 @@ fn av2_spec_section_for_entropy_field(name: &str) -> &'static str {
         "AV2 v1.0.0 Section 5.20.3.2 partition()"
     } else if name.starts_with("tile.intra.") {
         "AV2 v1.0.0 Section 5.20.5.3 intra_frame_mode_info()"
+    } else if name.starts_with("tile.palette.") {
+        "AV2 v1.0.0 Sections 5.11.55 and 5.20.5.3 palette syntax"
     } else if name.starts_with("tile.coeff.") {
         "AV2 v1.0.0 Sections 5.20.7.24 and 5.20.7.25 transform coefficient syntax"
     } else {
@@ -710,7 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn av2_fixed_black_444_rejects_non_black_input() {
+    fn av2_luma_palette_444_accepts_two_luma_colors_with_zero_chroma() {
         let request = Av2EncodeRequest {
             params: Av2EncodeParams { frames: 1 },
             geometry: Av2VideoGeometry {
@@ -720,13 +818,94 @@ mod tests {
             format: PixelFormat::Yuv444p8,
         };
         let mut input = av2_black_64x64_444_reconstruction();
-        input[0] = 1;
+        let y_plane_len = AV2_FIXED_BLACK_444_WIDTH * AV2_FIXED_BLACK_444_HEIGHT;
+        for sample in &mut input[y_plane_len / 2..y_plane_len] {
+            *sample = 96;
+        }
         let mut source = input.as_slice();
         let mut output = Vec::new();
+        let mut recon = Vec::new();
 
-        let result = av2_encode_fixed_black_444(&mut source, &mut output, None, request);
+        let result =
+            av2_encode_fixed_black_444(&mut source, &mut output, Some(&mut recon), request);
 
-        assert!(result.is_err());
+        result.expect("two-color luma palette should encode");
+        assert_ne!(
+            output,
+            av2_black_444_bitstream_for_geometry(request.geometry)
+        );
+        assert_eq!(recon, input);
+    }
+
+    #[test]
+    fn av2_mvp_444_accepts_nonzero_chroma_as_lossy_luma_palette() {
+        let request = Av2EncodeRequest {
+            params: Av2EncodeParams { frames: 1 },
+            geometry: Av2VideoGeometry {
+                width: AV2_FIXED_BLACK_444_WIDTH,
+                height: AV2_FIXED_BLACK_444_HEIGHT,
+            },
+            format: PixelFormat::Yuv444p8,
+        };
+        let mut input = av2_black_64x64_444_reconstruction();
+        let y_plane_len = AV2_FIXED_BLACK_444_WIDTH * AV2_FIXED_BLACK_444_HEIGHT;
+        input[y_plane_len] = 1;
+        let mut source = input.as_slice();
+        let mut output = Vec::new();
+        let mut recon = Vec::new();
+
+        let result =
+            av2_encode_fixed_black_444(&mut source, &mut output, Some(&mut recon), request);
+
+        result.expect("content must not be rejected by the AV2 MVP path");
+        assert_ne!(
+            output,
+            av2_black_444_bitstream_for_geometry(request.geometry)
+        );
+        assert_ne!(recon, input);
+        assert!(recon[y_plane_len..].iter().all(|&sample| sample == 0));
+    }
+
+    #[test]
+    fn av2_mvp_444_maps_over_limit_luma_colors_lossily() {
+        let request = Av2EncodeRequest {
+            params: Av2EncodeParams { frames: 1 },
+            geometry: Av2VideoGeometry {
+                width: AV2_FIXED_BLACK_444_WIDTH,
+                height: AV2_FIXED_BLACK_444_HEIGHT,
+            },
+            format: PixelFormat::Yuv444p8,
+        };
+        let mut input = av2_black_64x64_444_reconstruction();
+        let y_plane_len = AV2_FIXED_BLACK_444_WIDTH * AV2_FIXED_BLACK_444_HEIGHT;
+        for (index, sample) in input[..y_plane_len].iter_mut().enumerate() {
+            *sample = (index & 0xff) as u8;
+        }
+        let mut source = input.as_slice();
+        let mut output = Vec::new();
+        let mut recon = Vec::new();
+
+        let result =
+            av2_encode_fixed_black_444(&mut source, &mut output, Some(&mut recon), request);
+
+        result.expect("over-limit luma colors should be encoded lossily");
+        assert_ne!(recon, input);
+        for block_y in (0..AV2_FIXED_BLACK_444_HEIGHT).step_by(8) {
+            for block_x in (0..AV2_FIXED_BLACK_444_WIDTH).step_by(8) {
+                let mut colors = Vec::new();
+                for local_y in 0..8 {
+                    for local_x in 0..8 {
+                        let sample = recon
+                            [(block_y + local_y) * AV2_FIXED_BLACK_444_WIDTH + block_x + local_x];
+                        if !colors.contains(&sample) {
+                            colors.push(sample);
+                        }
+                    }
+                }
+                assert!(colors.len() <= 8);
+            }
+        }
+        assert!(recon[y_plane_len..].iter().all(|&sample| sample == 0));
     }
 
     #[test]

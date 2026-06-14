@@ -3,8 +3,9 @@
 This directory contains CSV manifests for deterministic generated YUV test
 vectors. Each manifest is consumed by `scripts/generate_test_vectors.py`.
 `sweep-black-444.csv` exercises black 4:4:4 geometries from 8x8 through 64x64
-in 8-pixel steps and is intended as the first AV2 geometry sweep once AV2 tile
-entropy syntax emission is implemented.
+in 8-pixel steps and is the first AV2 geometry sweep. `av2-palette-luma-444.csv`
+contains the first AV2 palette smoke vector, a 64x64 two-color luma bar pattern
+with zero chroma.
 
 Committed manifests must be portable. Do not put workstation-local media paths
 in committed files.
@@ -39,6 +40,7 @@ screen_crop,64,64,1,yuv444p8,source_crop,,screen,288,144
 Supported procedural patterns are:
 
 - `black`
+- `av2_luma_palette_bars`
 - `screen_blocks`
 - `moving_blocks`
 - `stick_walk`

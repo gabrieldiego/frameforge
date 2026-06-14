@@ -6,6 +6,15 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ReadOnly, RisingEdge
 
+AV2_STATE_PARTITION = 5
+AV2_STATE_LEAF = 6
+AV2_PHASE_INTRA = 0
+AV2_PHASE_PALETTE_HEADER = 1
+AV2_PHASE_PALETTE_MAP = 2
+AV2_PHASE_Y_COEFF = 3
+AV2_PHASE_U_COEFF = 4
+AV2_PHASE_V_COEFF = 5
+
 
 def rtl_geometry():
     return (
@@ -28,14 +37,121 @@ def handle_int(handle):
         return None
 
 
-def av2_rtl_trace_name(state, phase, step, partition_emit_do_split, partition_emit_rect):
-    if state == 4:
+def av2_input_frame():
+    width, height = rtl_geometry()
+    expected_len = width * height * 3
+    input_path = os.environ.get("FRAMEFORGE_RTL_AV2_ENCODER_INPUT")
+    if input_path:
+        data = Path(input_path).read_bytes()
+        assert len(data) == expected_len, (
+            f"AV2 RTL input length mismatch: expected {expected_len}, got {len(data)}"
+        )
+        return data
+    return bytes(expected_len)
+
+
+def av2_palette_reconstruction(data):
+    width, height = rtl_geometry()
+    expected_len = width * height * 3
+    assert len(data) == expected_len
+    if all(sample == 0 for sample in data):
+        return data
+    if width % 8 != 0 or height % 8 != 0:
+        return bytes(expected_len)
+
+    area = width * height
+    y_plane = data[:area]
+    recon_y = bytearray(area)
+    for y0 in range(0, height, 8):
+        for x0 in range(0, width, 8):
+            colors = []
+            for local_y in range(8):
+                row_start = (y0 + local_y) * width + x0
+                for sample in y_plane[row_start : row_start + 8]:
+                    if sample not in colors and len(colors) < 8:
+                        colors.append(sample)
+            target = 2 if len(colors) <= 2 else 4 if len(colors) <= 4 else 8
+            candidate = 0
+            while len(colors) < target:
+                if candidate not in colors:
+                    colors.append(candidate)
+                candidate += 1
+            colors.sort()
+
+            for local_y in range(8):
+                row_start = (y0 + local_y) * width + x0
+                for local_x, sample in enumerate(y_plane[row_start : row_start + 8]):
+                    best_index = min(
+                        range(len(colors)), key=lambda index: abs(sample - colors[index])
+                    )
+                    recon_y[row_start + local_x] = colors[best_index]
+    return bytes(recon_y) + bytes(area * 2)
+
+
+def av2_rtl_input_stream(data):
+    width, height = rtl_geometry()
+    expected_len = width * height * 3
+    assert len(data) == expected_len
+    area = width * height
+    y_plane = data[:area]
+    stream = bytearray()
+    # The AV2 top module accepts luma in 8x8 palette-block order to avoid
+    # synthesizing a full-frame luma buffer in the palette analyzer. Chroma
+    # planes follow in normal planar order and are drained by the analyzer.
+    for y0 in range(0, height, 8):
+        for x0 in range(0, width, 8):
+            for local_y in range(8):
+                row_start = (y0 + local_y) * width + x0
+                stream.extend(y_plane[row_start : row_start + 8])
+    stream.extend(data[area:])
+    return bytes(stream)
+
+
+async def drive_input_frame(dut, data):
+    index = 0
+    if not data:
+        dut.s_axis_valid.value = 0
+        dut.s_axis_data.value = 0
+        dut.s_axis_last.value = 0
+        return
+    dut.s_axis_valid.value = 1
+    dut.s_axis_data.value = data[0]
+    dut.s_axis_last.value = 1 if len(data) == 1 else 0
+    while index < len(data):
+        await RisingEdge(dut.clk)
+        if int(dut.s_axis_ready.value) == 1:
+            index += 1
+            if index < len(data):
+                dut.s_axis_valid.value = 1
+                dut.s_axis_data.value = data[index]
+                dut.s_axis_last.value = 1 if index == len(data) - 1 else 0
+            else:
+                dut.s_axis_valid.value = 0
+                dut.s_axis_data.value = 0
+                dut.s_axis_last.value = 0
+    dut.s_axis_valid.value = 0
+    dut.s_axis_data.value = 0
+    dut.s_axis_last.value = 0
+
+
+def av2_rtl_trace_name(
+    state,
+    phase,
+    step,
+    partition_emit_do_split,
+    partition_emit_rect,
+    palette_mode,
+    palette_row,
+    palette_col,
+    palette_cache_size,
+):
+    if state == AV2_STATE_PARTITION:
         if partition_emit_do_split:
             return "tile.partition.do_split"
         if partition_emit_rect:
             return "tile.partition.rect_type"
         return "tile.partition.implied"
-    if phase == 0:
+    if phase == AV2_PHASE_INTRA:
         return [
             "tile.intra.use_dpcm_y",
             "tile.intra.y_mode_set_index",
@@ -44,7 +160,30 @@ def av2_rtl_trace_name(state, phase, step, partition_emit_do_split, partition_em
             "tile.intra.use_dpcm_uv",
             "tile.intra.uv_mode_idx_dc",
         ][step] if 0 <= step <= 5 else "tile.unknown"
-    if phase == 1:
+    if phase == AV2_PHASE_PALETTE_HEADER:
+        color_first_step = 2 + (palette_cache_size or 0)
+        if step == 0:
+            return "tile.palette.y_mode_present"
+        if step == 1:
+            return "tile.palette.y_size_minus2"
+        if step < color_first_step:
+            return "tile.palette.y_color_cache"
+        if step == color_first_step:
+            return "tile.palette.y_color_first"
+        if step == color_first_step + 1:
+            return "tile.palette.y_delta_bits_minus_min"
+        return "tile.palette.y_color_delta_minus1"
+    if phase == AV2_PHASE_PALETTE_MAP:
+        if step == 0:
+            return "tile.palette.y_direction"
+        if step == 1:
+            return "tile.palette.y_identity_row_flag"
+        if palette_row == 0 and palette_col == 0:
+            return "tile.palette.y_color_index_first"
+        return "tile.palette.y_color_index"
+    if phase == AV2_PHASE_Y_COEFF:
+        if palette_mode:
+            return "tile.coeff.y.txb_all_zero_tx4x4_ctx1"
         return [
             "tile.coeff.y.txb_nonzero",
             "tile.coeff.y.eob_pt_tx4x4_eob1",
@@ -56,6 +195,19 @@ def av2_rtl_trace_name(state, phase, step, partition_emit_do_split, partition_em
             "tile.coeff.y.dc_high_range_suffix1",
             "tile.coeff.y.dc_high_range_suffix2",
         ][step] if 0 <= step <= 8 else "tile.unknown"
+    if phase in (AV2_PHASE_U_COEFF, AV2_PHASE_V_COEFF):
+        plane = "u" if phase == AV2_PHASE_U_COEFF else "v"
+        suffix = [
+            "txb_nonzero",
+            "eob_pt_tx4x4_eob1",
+            "dc_base_lf_eob_ctx0",
+            "dc_sign_negative",
+            "dc_high_range_prefix",
+            "dc_high_range_suffix0",
+            "dc_high_range_suffix1",
+            "dc_high_range_suffix2",
+        ][step] if 0 <= step <= 7 else "unknown"
+        return f"tile.coeff.{plane}.{suffix}"
     return [
         "tile.coeff.uv.txb_nonzero",
         "tile.coeff.uv.eob_pt_tx4x4_eob1",
@@ -73,6 +225,8 @@ def av2_trace_spec(name):
         return "AV2 v1.0.0 Section 5.20.3.2 partition()"
     if name.startswith("tile.intra."):
         return "AV2 v1.0.0 Section 5.20.5.3 intra_frame_mode_info()"
+    if name.startswith("tile.palette."):
+        return "AV2 v1.0.0 Sections 5.11.55 and 5.20.5.3 palette syntax"
     if name.startswith("tile.coeff."):
         return "AV2 v1.0.0 Sections 5.20.7.24 and 5.20.7.25 transform coefficient syntax"
     return "AV2 v1.0.0 tile entropy syntax"
@@ -103,9 +257,11 @@ async def start_encoder(dut):
 
 
 @cocotb.test()
-async def av2_encoder_emits_black_obu_stream(dut):
+async def av2_encoder_emits_obu_stream(dut):
     await reset_dut(dut)
+    input_data = av2_input_frame()
     await start_encoder(dut)
+    driver = cocotb.start_soon(drive_input_frame(dut, av2_rtl_input_stream(input_data)))
 
     observed = []
     trace_records = []
@@ -116,13 +272,25 @@ async def av2_encoder_emits_black_obu_stream(dut):
         await ReadOnly()
         state = signal_int(dut, "state_q")
         op_valid = signal_int(dut, "op_valid_w")
-        if state == 4 or (state == 5 and op_valid == 1):
+        if state == AV2_STATE_PARTITION or (state == AV2_STATE_LEAF and op_valid == 1):
             phase = signal_int(dut, "phase_q")
             step = signal_int(dut, "step_q")
             partition_emit_do_split = signal_int(dut, "partition_emit_do_split_w") == 1
             partition_emit_rect = signal_int(dut, "partition_emit_rect_w") == 1
+            palette_mode = signal_int(dut, "palette_mode_q") == 1
+            palette_row = signal_int(dut, "palette_row_q")
+            palette_col = signal_int(dut, "palette_col_q")
+            palette_cache_size = signal_int(dut, "palette_cache_size_w")
             name = av2_rtl_trace_name(
-                state, phase, step, partition_emit_do_split, partition_emit_rect
+                state,
+                phase,
+                step,
+                partition_emit_do_split,
+                partition_emit_rect,
+                palette_mode,
+                palette_row,
+                palette_col,
+                palette_cache_size,
             )
             record = {
                 "codec": "av2",
@@ -155,6 +323,10 @@ async def av2_encoder_emits_black_obu_stream(dut):
                 "txb_index": signal_int(dut, "txb_index_q"),
                 "txb_local_row": signal_int(dut, "txb_local_row_q"),
                 "txb_local_col": signal_int(dut, "txb_local_col_q"),
+                "palette_mode": signal_int(dut, "palette_mode_q"),
+                "palette_row": palette_row,
+                "palette_col": palette_col,
+                "palette_cache_size": palette_cache_size,
                 "op_phase": phase,
                 "op_step": step,
                 "literal": signal_int(dut, "op_literal_w"),
@@ -167,15 +339,57 @@ async def av2_encoder_emits_black_obu_stream(dut):
             }
             trace_records.append(record)
         if int(dut.input_error.value) == 1:
-            raise AssertionError("AV2 RTL rejected the black 4:4:4 input")
+            details = {
+                "state": signal_int(dut, "state_q"),
+                "s_axis_ready": signal_int(dut, "s_axis_ready"),
+                "s_axis_valid": signal_int(dut, "s_axis_valid"),
+                "s_axis_last": signal_int(dut, "s_axis_last"),
+                "analyzer_state": handle_int(dut.palette_analyzer.state_q),
+                "analyzer_done": handle_int(dut.palette_analyzer.done),
+                "analyzer_unsupported": handle_int(dut.palette_analyzer.unsupported),
+                "analyzer_sample_ready": handle_int(dut.palette_analyzer.sample_ready),
+                "analyzer_sample_index": handle_int(dut.palette_analyzer.sample_index_q),
+                "analyzer_area": handle_int(dut.palette_analyzer.area_q),
+                "analyzer_frame_samples": handle_int(dut.palette_analyzer.frame_samples_q),
+                "analyzer_block_id": handle_int(dut.palette_analyzer.block_id_q),
+                "analyzer_block_sample": handle_int(dut.palette_analyzer.block_sample_q),
+            }
+            raise AssertionError(f"AV2 RTL rejected the 4:4:4 input: {details}")
         if int(dut.m_axis_valid.value) == 1 and int(dut.m_axis_ready.value) == 1:
             observed.append(int(dut.m_axis_data.value))
             if int(dut.m_axis_last.value) == 1:
                 completed = True
                 break
 
-    assert completed, "AV2 RTL did not complete an OBU stream"
+    if not completed:
+        details = {
+            "state": signal_int(dut, "state_q"),
+            "phase": signal_int(dut, "phase_q"),
+            "step": signal_int(dut, "step_q"),
+            "block_row_mi": signal_int(dut, "block_row_mi_q"),
+            "block_col_mi": signal_int(dut, "block_col_mi_q"),
+            "block_w_mi": signal_int(dut, "block_w_mi_q"),
+            "block_h_mi": signal_int(dut, "block_h_mi_q"),
+            "palette_row": signal_int(dut, "palette_row_q"),
+            "palette_col": signal_int(dut, "palette_col_q"),
+            "txb_index": signal_int(dut, "txb_index_q"),
+            "precarry_len": signal_int(dut, "precarry_len_q"),
+            "tile_len": signal_int(dut, "tile_len_q"),
+            "stream_index": signal_int(dut, "stream_index_q"),
+            "observed_bytes": len(observed),
+            "analyzer_state": handle_int(dut.palette_analyzer.state_q),
+            "analyzer_done": handle_int(dut.palette_analyzer.done),
+            "analyzer_sample_index": handle_int(dut.palette_analyzer.sample_index_q),
+            "analyzer_frame_samples": handle_int(dut.palette_analyzer.frame_samples_q),
+            "analyzer_block_id": handle_int(dut.palette_analyzer.block_id_q),
+            "analyzer_block_sample": handle_int(dut.palette_analyzer.block_sample_q),
+            "analyzer_collected_count": handle_int(dut.palette_analyzer.collected_count_q),
+            "analyzer_target_palette_size": handle_int(dut.palette_analyzer.target_palette_size_q),
+            "analyzer_candidate": handle_int(dut.palette_analyzer.candidate_q),
+        }
+        raise AssertionError(f"AV2 RTL did not complete an OBU stream: {details}")
     assert observed, "AV2 RTL produced an empty OBU stream"
+    await driver
 
     output_path = Path(
         os.environ.get("FRAMEFORGE_RTL_AV2_ENCODER_OUT", "/tmp/frameforge_av2_rtl.av2")
@@ -185,8 +399,7 @@ async def av2_encoder_emits_black_obu_stream(dut):
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(bytes(observed))
-    width, height = rtl_geometry()
-    recon_path.write_bytes(bytes(width * height * 3))
+    recon_path.write_bytes(av2_palette_reconstruction(input_data))
     if trace_path := os.environ.get("FRAMEFORGE_RTL_AV2_TRACE_OUT"):
         path = Path(trace_path)
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -433,21 +433,13 @@ def validate_av2_fixed_black_path(
     rtl_bitstream = out_dir / f"{stem}_rtl.{codec.bitstream_extension}"
     rtl_internal_recon = out_dir / f"{stem}_rtl_internal_rec.yuv"
     rtl_trace = out_dir / f"{stem}_rtl_trace.jsonl"
-    expected_recon = av2_black_444_reconstruction(info)
-    if expected_recon is None:
+    if av2_mvp_444_expected_reconstruction(info, validation_input_path) is None:
         print(
-            "FAIL: fixed AV2 software validation only supports one yuv444p8 "
-            "black frame from 8x8 through 64x64 in 8-pixel steps",
+            "FAIL: AV2 software validation only supports one yuv444p8 "
+            "frame from 8x8 through 64x64 in 8-pixel steps",
             file=sys.stderr,
         )
         return 2
-    if validation_input_path.read_bytes() != expected_recon:
-        print(
-            f"FAIL: fixed AV2 software validation expects a black {info.width}x{info.height} "
-            "yuv444p8 input",
-            file=sys.stderr,
-        )
-        return 1
 
     print(
         f"FrameForge validate: AV2 software encode {info.frames} frame(s), "
@@ -546,11 +538,12 @@ def validate_av2_fixed_black_path(
         print("FrameForge validate: AV2 RTL OBU stream", flush=True)
         env = os.environ.copy()
         env["RTL_CHROMA_FORMAT_IDC"] = "3"
+        env["FRAMEFORGE_RTL_AV2_ENCODER_INPUT"] = str(validation_input_path)
         env["FRAMEFORGE_RTL_AV2_ENCODER_OUT"] = str(rtl_bitstream)
         env["FRAMEFORGE_RTL_AV2_ENCODER_RECON_OUT"] = str(rtl_internal_recon)
         env["FRAMEFORGE_RTL_AV2_TRACE_OUT"] = str(rtl_trace)
         env["COCOTB_TEST_FILTER"] = (
-            "^test_av2_encoder\\.av2_encoder_emits_black_obu_stream$"
+            "^test_av2_encoder\\.av2_encoder_emits_obu_stream$"
         )
         rtl = subprocess.run(
             [
@@ -613,19 +606,24 @@ def validate_av2_fixed_black_path(
         stem,
         recon_views,
     )
-    if digests["software_internal_recon"] != digests["input_yuv"]:
-        print("FAIL: AV2 software internal reconstruction differs from black input", file=sys.stderr)
+    if digests["software_ref_decoded_recon"] != digests["software_internal_recon"]:
+        print(
+            "FAIL: AV2 REF decode of software bitstream differs from software reconstruction",
+            file=sys.stderr,
+        )
         return 1
-    if digests["software_ref_decoded_recon"] != digests["input_yuv"]:
-        print("FAIL: AV2 REF decode of software bitstream differs from black input", file=sys.stderr)
-        return 1
-    if digests["ref_recon"] != digests["input_yuv"]:
-        print("FAIL: AV2 REF reconstruction differs from black input", file=sys.stderr)
-        return 1
-    print(f"OK: AV2 software bitstream decodes to black {info.width}x{info.height} yuv444p8")
-    print("OK: AV2 software internal reconstruction matches black input")
-    print("OK: AV2 REF decode of software bitstream matches black input")
-    print("OK: AV2 REF reconstruction matches black input")
+    print(
+        f"OK: AV2 software bitstream decodes to the software reconstruction at "
+        f"{info.width}x{info.height} yuv444p8"
+    )
+    if digests["software_internal_recon"] == digests["input_yuv"]:
+        print("OK: AV2 software reconstruction is lossless for this input")
+    else:
+        print("OK: AV2 software reconstruction is lossy for this input; see PSNR above")
+    if digests["ref_recon"] == digests["input_yuv"]:
+        print("OK: AV2 REF reconstruction matches input")
+    else:
+        print("OK: AV2 REF reconstruction is lossy for this input; see PSNR above")
     print(f"AV2 software trace: {sw_trace}")
     if ran_rtl:
         print(f"AV2 RTL trace: {rtl_trace}")
@@ -633,15 +631,18 @@ def validate_av2_fixed_black_path(
         if digests["rtl_bitstream"] != digests["software_bitstream"]:
             print("FAIL: AV2 RTL bitstream differs from software OBU bitstream", file=sys.stderr)
             return 1
-        if digests["rtl_internal_recon"] != digests["input_yuv"]:
-            print("FAIL: AV2 RTL reconstruction differs from black input", file=sys.stderr)
+        if digests["rtl_internal_recon"] != digests["software_internal_recon"]:
+            print(
+                "FAIL: AV2 RTL reconstruction differs from software reconstruction",
+                file=sys.stderr,
+            )
             return 1
         print("OK: AV2 RTL bitstream matches software OBU bitstream")
-        print("OK: AV2 RTL reconstruction matches black input")
+        print("OK: AV2 RTL reconstruction matches software reconstruction")
     return 0
 
 
-def av2_black_444_reconstruction(info: InputInfo) -> bytes | None:
+def av2_mvp_444_expected_reconstruction(info: InputInfo, input_path: Path) -> bytes | None:
     if info.frames != 1:
         return None
     if normalize_format(info.fmt) != "yuv444p8":
@@ -653,7 +654,11 @@ def av2_black_444_reconstruction(info: InputInfo) -> bytes | None:
         and info.height % 8 == 0
     ):
         return None
-    return bytes(frame_len(info))
+    expected_len = frame_len(info)
+    data = input_path.read_bytes()
+    if len(data) != expected_len:
+        return None
+    return data
 
 
 def resolve_input_format(input_path: Path, requested: str) -> str:

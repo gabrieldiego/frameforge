@@ -14,32 +14,34 @@ synthesis wrappers, and cocotb/Yosys entry points remains shared.
   reconstruction for checksum, bitrate, and PSNR reporting.
 - `make decoder-setup CODEC=av2` finds or builds AVM under
   `verification/codecs/av2/reference/avm` unless an external path is configured.
-- `src/av2/` contains a named-field writer for the initial sequence header and
-  closed-loop-key tile-group header fields. These helpers are kept because the
-  bytes are generated from labeled syntax fields rather than stored streams.
+- `src/av2/` contains a named-field writer for the initial sequence header,
+  closed-loop-key tile-group header fields, and the first range-coded tile
+  syntax subset. The software encoder generates bytes from labeled syntax
+  decisions rather than stored stream payloads.
 - `src/av2/entropy.rs` contains the first Rust AV2 range-writer implementation,
   following the AVM encoder side of the spec descriptors for arithmetic-coded
   literals and symbols.
-- `src/av2/tile.rs` contains the first structured black 4:4:4 tile plan. The
-  current minimum viable profile disables SDP, extended partitions, palette,
-  IBC, loop tools, and CDF updates. For a full 64x64 frame it now emits one
-  shared luma/chroma `PARTITION_NONE` block with DC luma/chroma intra modes and
-  one negative DC residual coefficient for every 4x4 transform block. Geometry
-  below 64x64 still needs the AVM boundary-partition path before the full
-  8x8-to-64x64 sweep can decode.
-- `cargo run -- av2-encode ...` validates the staged black `yuv444p8` input
-  shape, emits a generated unmuxed OBU stream, and writes a black internal
-  reconstruction. AVM accepts the 64x64 generated stream and its decoded
-  reconstruction checksum matches the black input.
-- `rtl/av2/ff_av2_encoder.sv` is a synthesizable integration shell with the same
-  top-level handshake shape as the VVC encoder. It reports `input_error` on
-  `start` and emits no output until the AV2 tile entropy path exists.
-- `tb/av2/test_av2_encoder.py` verifies that the AV2 RTL shell rejects the
-  missing entropy implementation instead of emitting a placeholder stream.
+- `src/av2/tile.rs` contains the structured black 4:4:4 tile plan for the full
+  8x8-through-64x64 geometry sweep. The current minimum viable profile disables
+  SDP, extended partitions, IBC, loop tools, and CDF updates.
+- `src/av2/palette.rs` contains the first palette detector. The supported
+  palette subset is intentionally narrow: one 64x64 `yuv444p8` frame with two
+  luma colors, zero U/V, and the deterministic horizontal bar pattern generated
+  by `av2_luma_palette_bars`.
+- `rtl/av2/ff_av2_encoder.sv` is a synthesizable AV2 top with the same
+  top-level handshake shape as the VVC encoder. It consumes planar 4:4:4 input
+  over `s_axis_*`, classifies the current frame as black or the first luma
+  palette pattern, and emits a generated OBU stream through `m_axis_*`.
+- `rtl/av2/palette/` contains the first standalone palette modules:
+  `ff_av2_input_classifier_444` and
+  `ff_av2_luma_palette_bars_symbolizer`.
+- `tb/av2/test_av2_encoder.py` drives the AV2 RTL input stream and compares the
+  RTL bitstream checksum against the software-generated bitstream through the
+  shared validation path.
 - Hard-coded AV2 bitstream blobs, traced entropy operation tables, and opaque
-  entropy payload append hooks have been removed. Future AV2 entropy coding
-  must be generated from named, spec-auditable syntax decisions in both
-  software and RTL.
+  entropy payload append hooks have been removed. Treat any new opaque AV2
+  payload as a bug; future syntax must be generated from named,
+  spec-auditable decisions in both software and RTL.
 
 ## Reference Tool Setup
 
@@ -82,8 +84,7 @@ make reference-av2 \
   WIDTH=64 HEIGHT=64 FRAMES=1 FORMAT=yuv444p8
 ```
 
-FrameForge AV2 validation currently fails on the first sub-64 geometry because
-boundary partition syntax is not implemented yet:
+FrameForge AV2 validation for the current subsets:
 
 ```sh
 make test-vectors TEST_VECTOR_SET=sweep-black-444
@@ -92,41 +93,50 @@ make validate-set \
   VALIDATION_SET=sweep-black-444 \
   VALIDATION_STOP_ON_FAIL=1 \
   VALIDATION_WITH_SYNTH=0
-```
 
-The 64x64 software path now checksum-matches through the AVM decoder. Treat any
-opaque AV2 bitstream payload or traced entropy table as a bug.
+make test-vectors TEST_VECTOR_SET=av2-palette-luma-444
+make validate-set \
+  CODEC=av2 \
+  VALIDATION_SET=av2-palette-luma-444 \
+  VALIDATION_STOP_ON_FAIL=1 \
+  VALIDATION_WITH_SYNTH=0
+```
 
 ## Current Checks
 
 Last checked on 2026-06-13:
 
-- `cargo test av2`: passed after adding generated DC-only residual coefficient
-  syntax for the 64x64 black 4:4:4 path.
+- `cargo test av2 -- --nocapture`: passed.
+- `make -B rtl-test CODEC=av2 DUT=av2-encoder RTL_VISIBLE_WIDTH=64
+  RTL_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=3`: passed.
 - `make validate CODEC=av2
-  INPUT=verification/generated/test_vectors/black_64x64_1f_yuv444p8.yuv
-  WIDTH=64 HEIGHT=64 FRAMES=1 FORMAT=yuv444p8 VALIDATE_SW_ONLY=1
-  VALIDATE_SYNTH=0`: passed. Input, software internal reconstruction,
-  software stream decoded by AVM, and AVM reference reconstruction all had
-  SHA-256 `f3cc103136423a57975750907ebc1d367e2985ac6338976d4d5a439f50323f4a`.
-  The generated software bitstream was 2987 bytes, or 5.8340 bits per luma
+  INPUT=verification/generated/test_vectors/av2_luma_palette_bars_64x64_1f_yuv444p8.yuv
+  WIDTH=64 HEIGHT=64 FRAMES=1 FORMAT=yuv444p8 VALIDATE_SYNTH=0`: passed. Input,
+  software reconstruction, RTL reconstruction, and AVM-decoded reconstruction
+  all had SHA-256
+  `9b912726e1b5354820c67d65b71e380a5d7644ab0fa5e4fe523341ef47e460f2`.
+  Software and RTL bitstream checksums matched at
+  `b63ef0fdff1273b8d24da8ddb210b8ea2c4df2a0cf8f2e303e0745024b8bc9f4`.
+  The generated FrameForge bitstream was 1962 bytes, or 3.8320 bits per luma
   pixel, and all reported PSNR values were infinite.
-- `make rtl-test CODEC=av2 RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64
-  RTL_CHROMA_FORMAT_IDC=3`: passed, verifying that the RTL shell rejects encode
-  attempts and emits no payload.
 - `make validate-set CODEC=av2 VALIDATION_SET=sweep-black-444
-  VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0`: expected failure at the
-  first 8x8 case because sub-64 boundary partition syntax is not implemented.
-- `make synth CODEC=av2`: passed Yosys synthesis for the explicit unsupported
-  shell in 3.6 seconds with 127.45 MiB peak RSS. The topological critical-path
-  length is 1.
+  VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0`: passed all 64 black
+  4:4:4 geometries.
+- `make validate-set CODEC=av2 VALIDATION_SET=av2-palette-luma-444
+  VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0`: passed the first palette
+  smoke vector.
+- `make synth CODEC=av2`: passed Yosys synthesis for the structured black plus
+  first luma-palette path. The detailed baseline is recorded in
+  [synthesis.md](synthesis.md).
 
 ## Next Steps
 
-- Port AVM boundary partition derivation/signaling for sub-64 geometries so the
-  shared `sweep-black-444` set reaches reconstruction comparison.
+- Generalize palette detection beyond the deterministic 64x64 luma-bar smoke.
+- Add chroma palette and escape-value syntax so 4:4:4 palette can become
+  lossless for arbitrary input.
+- Replace the narrow frame classifier with a real TU/CU-oriented sample ingest
+  path as more AV2 block decisions are added.
 - Keep checksum, bitrate, and PSNR reporting in the shared validation path as
   new AV2 syntax is added.
-- Port the same syntax decisions into RTL without byte-stream blobs or traced
+- Keep porting syntax decisions into RTL without byte-stream blobs or traced
   operation tables.
-- Re-enable SW/RTL/reference checksum comparison for `sweep-black-444`.

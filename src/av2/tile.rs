@@ -1,5 +1,9 @@
 use super::{Av2Black444MvpProfile, Av2VideoGeometry};
 use crate::av2::entropy::{Av2EntropyPayload, Av2EntropyWriter};
+use crate::av2::palette::{
+    Av2LumaPalette444, AV2_LUMA_PALETTE_BLOCK_SIZE, AV2_LUMA_PALETTE_MAX_COLORS,
+    AV2_LUMA_PALETTE_MIN_COLORS,
+};
 
 const MVP_SUPERBLOCK_SIZE: usize = 64;
 const MI_SIZE: usize = 4;
@@ -12,6 +16,18 @@ const NONZERO_NEGATIVE_DC_ENTROPY_CONTEXT: u8 = 15;
 const fn avm_cdf2(a0: u16, p0: i16, p1: i16, p2: i16) -> [u16; 6] {
     [
         AVM_CDF_PROB_TOP - a0,
+        0,
+        0,
+        (p0 + 2) as u16,
+        (p1 + 3) as u16,
+        (p2 + 4) as u16,
+    ]
+}
+
+const fn avm_cdf3(a0: u16, a1: u16, p0: i16, p1: i16, p2: i16) -> [u16; 7] {
+    [
+        AVM_CDF_PROB_TOP - a0,
+        AVM_CDF_PROB_TOP - a1,
         0,
         0,
         (p0 + 2) as u16,
@@ -44,6 +60,146 @@ const fn avm_cdf5(a0: u16, a1: u16, a2: u16, a3: u16, p0: i16, p1: i16, p2: i16)
         (p0 + 3) as u16,
         (p1 + 4) as u16,
         (p2 + 5) as u16,
+    ]
+}
+
+const fn avm_cdf7(
+    a0: u16,
+    a1: u16,
+    a2: u16,
+    a3: u16,
+    a4: u16,
+    a5: u16,
+    p0: i16,
+    p1: i16,
+    p2: i16,
+) -> [u16; 11] {
+    [
+        AVM_CDF_PROB_TOP - a0,
+        AVM_CDF_PROB_TOP - a1,
+        AVM_CDF_PROB_TOP - a2,
+        AVM_CDF_PROB_TOP - a3,
+        AVM_CDF_PROB_TOP - a4,
+        AVM_CDF_PROB_TOP - a5,
+        0,
+        0,
+        (p0 + 3) as u16,
+        (p1 + 4) as u16,
+        (p2 + 5) as u16,
+    ]
+}
+
+const fn avm_cdf2_padded(a0: u16) -> [u16; 12] {
+    [AVM_CDF_PROB_TOP - a0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+}
+
+const fn avm_cdf3_padded(a0: u16, a1: u16) -> [u16; 12] {
+    [
+        AVM_CDF_PROB_TOP - a0,
+        AVM_CDF_PROB_TOP - a1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ]
+}
+
+const fn avm_cdf4_padded(a0: u16, a1: u16, a2: u16) -> [u16; 12] {
+    [
+        AVM_CDF_PROB_TOP - a0,
+        AVM_CDF_PROB_TOP - a1,
+        AVM_CDF_PROB_TOP - a2,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ]
+}
+
+const fn avm_cdf5_padded(a0: u16, a1: u16, a2: u16, a3: u16) -> [u16; 12] {
+    [
+        AVM_CDF_PROB_TOP - a0,
+        AVM_CDF_PROB_TOP - a1,
+        AVM_CDF_PROB_TOP - a2,
+        AVM_CDF_PROB_TOP - a3,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ]
+}
+
+const fn avm_cdf6_padded(a0: u16, a1: u16, a2: u16, a3: u16, a4: u16) -> [u16; 12] {
+    [
+        AVM_CDF_PROB_TOP - a0,
+        AVM_CDF_PROB_TOP - a1,
+        AVM_CDF_PROB_TOP - a2,
+        AVM_CDF_PROB_TOP - a3,
+        AVM_CDF_PROB_TOP - a4,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ]
+}
+
+const fn avm_cdf7_padded(a0: u16, a1: u16, a2: u16, a3: u16, a4: u16, a5: u16) -> [u16; 12] {
+    [
+        AVM_CDF_PROB_TOP - a0,
+        AVM_CDF_PROB_TOP - a1,
+        AVM_CDF_PROB_TOP - a2,
+        AVM_CDF_PROB_TOP - a3,
+        AVM_CDF_PROB_TOP - a4,
+        AVM_CDF_PROB_TOP - a5,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ]
+}
+
+const fn avm_cdf8_padded(
+    a0: u16,
+    a1: u16,
+    a2: u16,
+    a3: u16,
+    a4: u16,
+    a5: u16,
+    a6: u16,
+) -> [u16; 12] {
+    [
+        AVM_CDF_PROB_TOP - a0,
+        AVM_CDF_PROB_TOP - a1,
+        AVM_CDF_PROB_TOP - a2,
+        AVM_CDF_PROB_TOP - a3,
+        AVM_CDF_PROB_TOP - a4,
+        AVM_CDF_PROB_TOP - a5,
+        AVM_CDF_PROB_TOP - a6,
+        0,
+        0,
+        0,
+        0,
+        0,
     ]
 }
 
@@ -258,6 +414,66 @@ const DEFAULT_COEFF_BASE_LF_EOB_UV_CTX0_CDF: [u16; 9] =
 const DEFAULT_COEFF_LPS_LF_CTX0_CDF: [u16; 8] = avm_cdf4(7943, 14193, 20775, -1, -1, -2);
 const DEFAULT_DC_SIGN_Y_CTX0_CDF: [u16; 6] = avm_cdf2(15831, 1, 1, 1);
 const DEFAULT_DC_SIGN_Y_CTX1_CDF: [u16; 6] = avm_cdf2(13632, 1, 0, 0);
+const DEFAULT_PALETTE_Y_MODE_CDF: [u16; 6] = avm_cdf2(30045, -2, -2, -2);
+const DEFAULT_PALETTE_Y_SIZE_CDF: [u16; 11] =
+    avm_cdf7(8779, 15095, 20777, 24903, 27923, 30403, -1, -1, -2);
+const DEFAULT_IDENTITY_ROW_CDF_Y: [[u16; 7]; 4] = [
+    avm_cdf3(22515, 25751, -1, 0, 0),
+    avm_cdf3(4014, 5233, -1, -1, -1),
+    avm_cdf3(3548, 4163, -1, -1, 1),
+    avm_cdf3(12999, 32756, -2, -1, -1),
+];
+const DEFAULT_PALETTE_Y_COLOR_INDEX_CDFS: [[[u16; 12]; 5]; 7] = [
+    [
+        avm_cdf2_padded(28140),
+        avm_cdf2_padded(16384),
+        avm_cdf2_padded(8582),
+        avm_cdf2_padded(27413),
+        avm_cdf2_padded(30429),
+    ],
+    [
+        avm_cdf3_padded(25350, 29026),
+        avm_cdf3_padded(11363, 25273),
+        avm_cdf3_padded(6841, 28579),
+        avm_cdf3_padded(21350, 26012),
+        avm_cdf3_padded(30573, 31646),
+    ],
+    [
+        avm_cdf4_padded(23706, 26962, 29060),
+        avm_cdf4_padded(9976, 22516, 27382),
+        avm_cdf4_padded(6691, 25460, 29234),
+        avm_cdf4_padded(18909, 23925, 28403),
+        avm_cdf4_padded(30308, 31076, 31818),
+    ],
+    [
+        avm_cdf5_padded(24116, 26957, 28486, 29941),
+        avm_cdf5_padded(9568, 20472, 24294, 28942),
+        avm_cdf5_padded(5706, 25243, 28040, 30406),
+        avm_cdf5_padded(20105, 22982, 27024, 28911),
+        avm_cdf5_padded(30897, 31342, 31766, 32199),
+    ],
+    [
+        avm_cdf6_padded(20824, 24227, 25926, 27459, 29266),
+        avm_cdf6_padded(8141, 18989, 21599, 26182, 28576),
+        avm_cdf6_padded(5252, 24340, 26450, 28438, 30625),
+        avm_cdf6_padded(19519, 22695, 25587, 26972, 28423),
+        avm_cdf6_padded(30383, 30890, 31247, 31653, 32150),
+    ],
+    [
+        avm_cdf7_padded(21628, 24512, 25873, 27054, 28131, 29539),
+        avm_cdf7_padded(8028, 18264, 20613, 25424, 27112, 28906),
+        avm_cdf7_padded(6489, 22242, 24461, 26394, 28350, 30510),
+        avm_cdf7_padded(22048, 24429, 26990, 27944, 28417, 29574),
+        avm_cdf7_padded(30801, 31205, 31472, 31728, 32005, 32305),
+    ],
+    [
+        avm_cdf8_padded(22471, 25083, 25984, 26893, 27654, 28750, 29903),
+        avm_cdf8_padded(7542, 17057, 19151, 23550, 25459, 27066, 28804),
+        avm_cdf8_padded(7582, 20437, 22728, 24622, 26515, 28579, 30632),
+        avm_cdf8_padded(22102, 24144, 26916, 28151, 28846, 29212, 30153),
+        avm_cdf8_padded(30524, 30887, 31156, 31393, 31626, 31911, 32281),
+    ],
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Av2MvpBlockSize {
@@ -418,7 +634,10 @@ enum Av2TileDecisionKind {
     Partition(Av2MvpPartition),
     IntraLumaDc,
     IntraChromaDc,
+    LumaPaletteModeInfo,
+    LumaPaletteColorMap,
     BlackDcResidualCoefficients,
+    LumaPaletteResidualCoefficients,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -434,6 +653,7 @@ struct Av2Black444TilePlan {
     decisions: Vec<Av2TileDecision>,
     visible_rows_mi: usize,
     visible_cols_mi: usize,
+    luma_palette: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -479,18 +699,101 @@ impl Av2PartitionContext {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Av2PaletteColorCacheContext {
+    above: Vec<Option<Vec<u8>>>,
+    left: Vec<Option<Vec<u8>>>,
+}
+
+impl Av2PaletteColorCacheContext {
+    fn new(visible_rows_mi: usize, visible_cols_mi: usize) -> Self {
+        Self {
+            above: vec![None; visible_cols_mi],
+            left: vec![None; visible_rows_mi],
+        }
+    }
+
+    fn cache(&self, row_mi: usize, col_mi: usize) -> Vec<u8> {
+        let above = if row_mi > 0 {
+            self.above.get(col_mi).and_then(|entry| entry.as_deref())
+        } else {
+            None
+        };
+        let left = if col_mi > 0 {
+            self.left.get(row_mi).and_then(|entry| entry.as_deref())
+        } else {
+            None
+        };
+        av2_palette_cache_from_neighbors(above, left)
+    }
+
+    fn update_leaf(
+        &mut self,
+        row_mi: usize,
+        col_mi: usize,
+        block_size: Av2MvpBlockSize,
+        colors: &[u8],
+    ) {
+        let colors = Some(colors.to_vec());
+        for col in col_mi..(col_mi + block_size.mi_width()).min(self.above.len()) {
+            self.above[col] = colors.clone();
+        }
+        for row in row_mi..(row_mi + block_size.mi_height()).min(self.left.len()) {
+            self.left[row] = colors.clone();
+        }
+    }
+}
+
+fn av2_palette_cache_from_neighbors(above: Option<&[u8]>, left: Option<&[u8]>) -> Vec<u8> {
+    let mut cache = Vec::with_capacity(2 * AV2_LUMA_PALETTE_MAX_COLORS);
+    let above = above.unwrap_or(&[]);
+    let left = left.unwrap_or(&[]);
+    let mut above_index = 0usize;
+    let mut left_index = 0usize;
+    while above_index < above.len() && left_index < left.len() {
+        cache.push(above[above_index]);
+        above_index += 1;
+        cache.push(left[left_index]);
+        left_index += 1;
+    }
+    while above_index < above.len() {
+        cache.push(above[above_index]);
+        above_index += 1;
+    }
+    while left_index < left.len() {
+        cache.push(left[left_index]);
+        left_index += 1;
+    }
+    cache
+}
+
 pub(crate) fn av2_black_444_tile_entropy_payload(
     geometry: Av2VideoGeometry,
     profile: Av2Black444MvpProfile,
 ) -> Av2EntropyPayload {
-    let plan = Av2Black444TilePlan::for_geometry(geometry, profile);
+    let plan = Av2Black444TilePlan::for_geometry(geometry, profile, false);
     let mut writer = Av2EntropyWriter::new();
-    plan.write_entropy(&mut writer);
+    plan.write_entropy(&mut writer, None);
+    writer.finish()
+}
+
+pub(crate) fn av2_luma_palette_444_tile_entropy_payload(
+    geometry: Av2VideoGeometry,
+    profile: Av2Black444MvpProfile,
+    palette: &Av2LumaPalette444,
+) -> Av2EntropyPayload {
+    let plan = Av2Black444TilePlan::for_geometry(geometry, profile, true);
+    let mut writer = Av2EntropyWriter::new();
+    plan.write_entropy(&mut writer, Some(palette));
     writer.finish()
 }
 
 impl Av2Black444TilePlan {
-    fn for_geometry(geometry: Av2VideoGeometry, profile: Av2Black444MvpProfile) -> Self {
+    fn for_geometry(
+        geometry: Av2VideoGeometry,
+        profile: Av2Black444MvpProfile,
+        luma_palette: bool,
+    ) -> Self {
         assert!(
             !profile.enable_sdp,
             "AV2 MVP tile plan expects a shared luma/chroma partition tree"
@@ -507,13 +810,13 @@ impl Av2Black444TilePlan {
             geometry.width % 8 == 0 && geometry.height % 8 == 0,
             "AV2 MVP tile plan expects visible dimensions in 8-pixel units"
         );
-
         let visible_rows_mi = geometry.height / MI_SIZE;
         let visible_cols_mi = geometry.width / MI_SIZE;
         let mut plan = Self {
             decisions: Vec::new(),
             visible_rows_mi,
             visible_cols_mi,
+            luma_palette,
         };
         let mut partition_context = Av2PartitionContext::new();
         plan.visit_block(
@@ -540,8 +843,17 @@ impl Av2Black444TilePlan {
             return;
         }
 
-        let partition =
-            choose_partition(row_mi, col_mi, block_size, visible_rows_mi, visible_cols_mi);
+        let partition = if self.luma_palette {
+            choose_luma_palette_partition(
+                row_mi,
+                col_mi,
+                block_size,
+                visible_rows_mi,
+                visible_cols_mi,
+            )
+        } else {
+            choose_partition(row_mi, col_mi, block_size, visible_rows_mi, visible_cols_mi)
+        };
         self.decisions.push(Av2TileDecision {
             kind: Av2TileDecisionKind::Partition(partition),
             row: row_mi,
@@ -612,17 +924,37 @@ impl Av2Black444TilePlan {
             col: col_mi,
             block_size,
         });
+        if self.luma_palette {
+            self.decisions.push(Av2TileDecision {
+                kind: Av2TileDecisionKind::LumaPaletteModeInfo,
+                row: row_mi,
+                col: col_mi,
+                block_size,
+            });
+            self.decisions.push(Av2TileDecision {
+                kind: Av2TileDecisionKind::LumaPaletteColorMap,
+                row: row_mi,
+                col: col_mi,
+                block_size,
+            });
+        }
         self.decisions.push(Av2TileDecision {
-            kind: Av2TileDecisionKind::BlackDcResidualCoefficients,
+            kind: if self.luma_palette {
+                Av2TileDecisionKind::LumaPaletteResidualCoefficients
+            } else {
+                Av2TileDecisionKind::BlackDcResidualCoefficients
+            },
             row: row_mi,
             col: col_mi,
             block_size,
         });
     }
 
-    fn write_entropy(&self, writer: &mut Av2EntropyWriter) {
+    fn write_entropy(&self, writer: &mut Av2EntropyWriter, palette: Option<&Av2LumaPalette444>) {
         let mut partition_context = Av2PartitionContext::new();
         let mut txb_contexts = Av2TxbEntropyContexts::new();
+        let mut palette_cache_context =
+            Av2PaletteColorCacheContext::new(self.visible_rows_mi, self.visible_cols_mi);
         for decision in &self.decisions {
             match decision.kind {
                 Av2TileDecisionKind::Partition(partition) => {
@@ -648,8 +980,32 @@ impl Av2Black444TilePlan {
                 Av2TileDecisionKind::IntraChromaDc => {
                     write_intra_chroma_dc(writer, *decision);
                 }
+                Av2TileDecisionKind::LumaPaletteModeInfo => {
+                    write_luma_palette_mode_info(
+                        writer,
+                        *decision,
+                        palette.expect("luma palette decision needs palette state"),
+                        &mut palette_cache_context,
+                    );
+                }
+                Av2TileDecisionKind::LumaPaletteColorMap => {
+                    write_luma_palette_color_map(
+                        writer,
+                        *decision,
+                        palette.expect("luma palette decision needs palette state"),
+                    );
+                }
                 Av2TileDecisionKind::BlackDcResidualCoefficients => {
                     write_black_dc_residual_coefficients(
+                        writer,
+                        *decision,
+                        self.visible_rows_mi,
+                        self.visible_cols_mi,
+                        &mut txb_contexts,
+                    );
+                }
+                Av2TileDecisionKind::LumaPaletteResidualCoefficients => {
+                    write_luma_palette_residual_coefficients(
                         writer,
                         *decision,
                         self.visible_rows_mi,
@@ -720,6 +1076,68 @@ fn choose_partition(
         Av2MvpPartition::Horz
     } else if should_reduce_width(col_mi, block_size, visible_cols_mi) && allowed.vert {
         Av2MvpPartition::Vert
+    } else if allowed.horz {
+        Av2MvpPartition::Horz
+    } else if allowed.vert {
+        Av2MvpPartition::Vert
+    } else {
+        Av2MvpPartition::None
+    }
+}
+
+fn choose_luma_palette_partition(
+    row_mi: usize,
+    col_mi: usize,
+    block_size: Av2MvpBlockSize,
+    visible_rows_mi: usize,
+    visible_cols_mi: usize,
+) -> Av2MvpPartition {
+    if block_size.width == AV2_LUMA_PALETTE_BLOCK_SIZE
+        && block_size.height == AV2_LUMA_PALETTE_BLOCK_SIZE
+    {
+        return Av2MvpPartition::None;
+    }
+    if !block_size.is_partition_point() {
+        return Av2MvpPartition::None;
+    }
+
+    let allowed = allowed_partitions(row_mi, col_mi, block_size, visible_rows_mi, visible_cols_mi);
+    if let Some(forced) =
+        forced_boundary_partition(row_mi, col_mi, block_size, visible_rows_mi, visible_cols_mi)
+    {
+        if allowed.contains(forced) {
+            return forced;
+        }
+    }
+    if let Some(only_allowed) = allowed.only() {
+        return only_allowed;
+    }
+
+    if block_size.width == block_size.height {
+        if block_size.height > AV2_LUMA_PALETTE_BLOCK_SIZE && allowed.horz {
+            return Av2MvpPartition::Horz;
+        }
+        if block_size.width > AV2_LUMA_PALETTE_BLOCK_SIZE && allowed.vert {
+            return Av2MvpPartition::Vert;
+        }
+    } else if block_size.width > block_size.height {
+        if block_size.width > AV2_LUMA_PALETTE_BLOCK_SIZE && allowed.vert {
+            return Av2MvpPartition::Vert;
+        }
+        if block_size.height > AV2_LUMA_PALETTE_BLOCK_SIZE && allowed.horz {
+            return Av2MvpPartition::Horz;
+        }
+    } else {
+        if block_size.height > AV2_LUMA_PALETTE_BLOCK_SIZE && allowed.horz {
+            return Av2MvpPartition::Horz;
+        }
+        if block_size.width > AV2_LUMA_PALETTE_BLOCK_SIZE && allowed.vert {
+            return Av2MvpPartition::Vert;
+        }
+    }
+
+    if allowed.none {
+        Av2MvpPartition::None
     } else if allowed.horz {
         Av2MvpPartition::Horz
     } else if allowed.vert {
@@ -986,6 +1404,323 @@ fn write_intra_chroma_dc(writer: &mut Av2EntropyWriter, _decision: Av2TileDecisi
     writer.write_symbol("tile.intra.uv_mode_idx_dc", 0, &mut uv_mode_cdf, 8, false);
 }
 
+fn write_luma_palette_mode_info(
+    writer: &mut Av2EntropyWriter,
+    decision: Av2TileDecision,
+    palette: &Av2LumaPalette444,
+    cache_context: &mut Av2PaletteColorCacheContext,
+) {
+    assert_eq!(
+        decision.block_size.width, AV2_LUMA_PALETTE_BLOCK_SIZE,
+        "AV2 MVP palette leaves are currently coded as 8x8 blocks"
+    );
+    assert_eq!(
+        decision.block_size.height, AV2_LUMA_PALETTE_BLOCK_SIZE,
+        "AV2 MVP palette leaves are currently coded as 8x8 blocks"
+    );
+    let x0 = decision.col * MI_SIZE;
+    let y0 = decision.row * MI_SIZE;
+    let colors = palette.colors_for_block(x0, y0);
+    assert!(
+        (AV2_LUMA_PALETTE_MIN_COLORS..=AV2_LUMA_PALETTE_MAX_COLORS).contains(&colors.len()),
+        "AV2 palette size must be within the spec range"
+    );
+    let mut mode_cdf = DEFAULT_PALETTE_Y_MODE_CDF;
+    // AV2 v1.0.0 Section 5.11.55 intra_frame_mode_info(), via AVM
+    // write_palette_mode_info(): DC_PRED luma blocks signal whether a luma
+    // palette is present before palette size and color literals.
+    writer.write_symbol("tile.palette.y_mode_present", 1, &mut mode_cdf, 2, false);
+
+    let mut size_cdf = DEFAULT_PALETTE_Y_SIZE_CDF;
+    writer.write_symbol(
+        "tile.palette.y_size_minus2",
+        colors.len() - AV2_LUMA_PALETTE_MIN_COLORS,
+        &mut size_cdf,
+        7,
+        false,
+    );
+    let cache = cache_context.cache(decision.row, decision.col);
+    write_luma_palette_colors(writer, colors, &cache);
+    cache_context.update_leaf(decision.row, decision.col, decision.block_size, colors);
+}
+
+fn write_luma_palette_colors(writer: &mut Av2EntropyWriter, colors: &[u8], cache: &[u8]) {
+    assert!(colors.windows(2).all(|pair| pair[0] < pair[1]));
+    for _ in cache {
+        // AV2 v1.0.0 write_palette_colors_y() permits each above/left cache
+        // entry to be declined. The MVP deliberately declines all cache colors
+        // so the RTL only needs the cache length; color reuse can be optimized
+        // later without changing the block-local palette interface.
+        writer.write_literal("tile.palette.y_color_cache", 0, 1);
+    }
+
+    delta_encode_luma_palette_colors(writer, colors);
+}
+
+fn delta_encode_luma_palette_colors(writer: &mut Av2EntropyWriter, colors: &[u8]) {
+    if colors.is_empty() {
+        return;
+    }
+    // AV2 v1.0.0 luma palette colors use AVM
+    // delta_encode_palette_colors(..., bit_depth=8, min_val=1): first color is
+    // literal, followed by two bits selecting delta precision and then deltas.
+    writer.write_literal("tile.palette.y_color_first", u32::from(colors[0]), 8);
+    if colors.len() == 1 {
+        return;
+    }
+    let mut deltas = Vec::with_capacity(colors.len() - 1);
+    let mut max_delta = 0u32;
+    for pair in colors.windows(2) {
+        let delta = u32::from(pair[1] - pair[0]);
+        assert!(delta >= 1, "AV2 palette deltas must be at least one");
+        max_delta = max_delta.max(delta);
+        deltas.push(delta);
+    }
+    let min_bits = 5u8;
+    let mut bits = ceil_log2(max_delta).max(u32::from(min_bits)) as u8;
+    writer.write_literal(
+        "tile.palette.y_delta_bits_minus_min",
+        u32::from(bits - min_bits),
+        2,
+    );
+    let mut range = (1u32 << 8) - u32::from(colors[0]) - 1;
+    for (delta_index, delta) in deltas.iter().enumerate() {
+        writer.write_literal("tile.palette.y_color_delta_minus1", *delta - 1, bits);
+        range -= *delta;
+        if delta_index + 1 < deltas.len() {
+            bits = bits.min(ceil_log2(range) as u8);
+        }
+    }
+}
+
+fn write_luma_palette_color_map(
+    writer: &mut Av2EntropyWriter,
+    decision: Av2TileDecision,
+    palette: &Av2LumaPalette444,
+) {
+    let x0 = decision.col * MI_SIZE;
+    let y0 = decision.row * MI_SIZE;
+    let colors = palette.color_count_for_block(x0, y0);
+    if decision.block_size.width < 64 && decision.block_size.height < 64 {
+        // AV2 v1.0.0 decode_color_map_tokens(): palette blocks smaller than
+        // 64x64 signal a scan direction before the identity-row and color-index
+        // tokens. The MVP keeps horizontal scan order (direction=0).
+        writer.write_literal("tile.palette.y_direction", 0, 1);
+    }
+    let mut prev_identity_row_flag = 0usize;
+    for row in 0..decision.block_size.height {
+        let identity_row_flag =
+            palette_identity_row_flag(palette, x0, y0, row, decision.block_size.width);
+        let ctx = if row == 0 { 3 } else { prev_identity_row_flag };
+        let mut cdf = DEFAULT_IDENTITY_ROW_CDF_Y[ctx];
+        writer.write_symbol(
+            "tile.palette.y_identity_row_flag",
+            identity_row_flag,
+            &mut cdf,
+            3,
+            false,
+        );
+
+        for col in 0..decision.block_size.width {
+            if row == 0 && col == 0 {
+                writer.write_uniform(
+                    "tile.palette.y_color_index_first",
+                    colors as u32,
+                    u32::from(palette.index_at(x0 + col, y0 + row)),
+                );
+            } else if identity_row_flag != 2 && (identity_row_flag != 1 || col == 0) {
+                let (color_ctx, color_token) = palette_color_index_context(
+                    palette,
+                    x0,
+                    y0,
+                    row,
+                    col,
+                    decision.block_size.width,
+                );
+                let mut color_cdf = DEFAULT_PALETTE_Y_COLOR_INDEX_CDFS
+                    [colors - AV2_LUMA_PALETTE_MIN_COLORS][color_ctx];
+                writer.write_symbol(
+                    "tile.palette.y_color_index",
+                    color_token,
+                    &mut color_cdf,
+                    colors,
+                    false,
+                );
+            }
+        }
+        prev_identity_row_flag = identity_row_flag;
+    }
+}
+
+fn palette_identity_row_flag(
+    palette: &Av2LumaPalette444,
+    x0: usize,
+    y0: usize,
+    row: usize,
+    width: usize,
+) -> usize {
+    let y = y0 + row;
+    if row > 0
+        && (0..width).all(|col| palette.index_at(x0 + col, y) == palette.index_at(x0 + col, y - 1))
+    {
+        return 2;
+    }
+    if (1..width).all(|col| palette.index_at(x0 + col, y) == palette.index_at(x0 + col - 1, y)) {
+        1
+    } else {
+        0
+    }
+}
+
+fn palette_color_index_context(
+    palette: &Av2LumaPalette444,
+    x0: usize,
+    y0: usize,
+    row: usize,
+    col: usize,
+    stride: usize,
+) -> (usize, usize) {
+    assert!(row > 0 || col > 0);
+    let mut color_order = [0u8, 1, 2, 3, 4, 5, 6, 7];
+    let mut color_status = [false; 8];
+    let mut color_count = 0usize;
+    let color_index_ctx;
+
+    if row > 0 && col > 0 {
+        let left = palette.index_at(x0 + col - 1, y0 + row);
+        let top_left = palette.index_at(x0 + col - 1, y0 + row - 1);
+        let top = palette.index_at(x0 + col, y0 + row - 1);
+        if left == top_left && left == top {
+            color_index_ctx = 4;
+            swap_palette_color_order(
+                &mut color_order,
+                &mut color_status,
+                0,
+                left,
+                &mut color_count,
+            );
+        } else if left == top {
+            color_index_ctx = 3;
+            swap_palette_color_order(
+                &mut color_order,
+                &mut color_status,
+                0,
+                left,
+                &mut color_count,
+            );
+            swap_palette_color_order(
+                &mut color_order,
+                &mut color_status,
+                1,
+                top_left,
+                &mut color_count,
+            );
+        } else if left == top_left {
+            color_index_ctx = 2;
+            swap_palette_color_order(
+                &mut color_order,
+                &mut color_status,
+                0,
+                left,
+                &mut color_count,
+            );
+            swap_palette_color_order(
+                &mut color_order,
+                &mut color_status,
+                1,
+                top,
+                &mut color_count,
+            );
+        } else if top_left == top {
+            color_index_ctx = 2;
+            swap_palette_color_order(
+                &mut color_order,
+                &mut color_status,
+                0,
+                top,
+                &mut color_count,
+            );
+            swap_palette_color_order(
+                &mut color_order,
+                &mut color_status,
+                1,
+                left,
+                &mut color_count,
+            );
+        } else {
+            color_index_ctx = 1;
+            swap_palette_color_order(
+                &mut color_order,
+                &mut color_status,
+                0,
+                left,
+                &mut color_count,
+            );
+            swap_palette_color_order(
+                &mut color_order,
+                &mut color_status,
+                1,
+                top,
+                &mut color_count,
+            );
+            swap_palette_color_order(
+                &mut color_order,
+                &mut color_status,
+                2,
+                top_left,
+                &mut color_count,
+            );
+        }
+    } else {
+        color_index_ctx = 0;
+        let neighbor = if col == 0 {
+            palette.index_at(x0 + col, y0 + row - 1)
+        } else {
+            palette.index_at(x0 + col - 1, y0 + row)
+        };
+        swap_palette_color_order(
+            &mut color_order,
+            &mut color_status,
+            0,
+            neighbor,
+            &mut color_count,
+        );
+    }
+
+    let mut write_idx = color_count;
+    let color_count = palette.color_count_for_block(x0, y0);
+    for read_idx in 0..color_count {
+        if !color_status[read_idx] {
+            color_order[write_idx] = read_idx as u8;
+            write_idx += 1;
+        }
+    }
+    let current_color = palette.index_at(x0 + col, y0 + row);
+    let color_token = color_order
+        .iter()
+        .take(color_count)
+        .position(|&color| color == current_color)
+        .unwrap_or_else(|| {
+            panic!(
+                "palette color order missed color {} at ({}, {}) with stride {}",
+                current_color, col, row, stride
+            )
+        });
+    (color_index_ctx, color_token)
+}
+
+fn swap_palette_color_order(
+    color_order: &mut [u8; 8],
+    color_status: &mut [bool; 8],
+    switch_idx: usize,
+    max_idx: u8,
+    color_count: &mut usize,
+) {
+    color_order[switch_idx] = max_idx;
+    color_status[usize::from(max_idx)] = true;
+    *color_count += 1;
+}
+
 fn write_black_dc_residual_coefficients(
     writer: &mut Av2EntropyWriter,
     decision: Av2TileDecision,
@@ -1050,6 +1785,64 @@ fn write_black_dc_residual_coefficients(
     }
 }
 
+fn write_luma_palette_residual_coefficients(
+    writer: &mut Av2EntropyWriter,
+    decision: Av2TileDecision,
+    visible_rows_mi: usize,
+    visible_cols_mi: usize,
+    contexts: &mut Av2TxbEntropyContexts,
+) {
+    // AV2 v1.0.0 palette prediction supplies the reconstructed luma samples
+    // from palette colors and the decoded color-index map. The residual path
+    // therefore emits all-zero luma TXBs, while the first zero-chroma subset
+    // keeps using the established black DC chroma residuals.
+    let txb_width = decision
+        .block_size
+        .tx4x4_width()
+        .min(visible_cols_mi.saturating_sub(decision.col));
+    let txb_height = decision
+        .block_size
+        .tx4x4_height()
+        .min(visible_rows_mi.saturating_sub(decision.row));
+    for row in 0..txb_height {
+        let abs_row = decision.row + row;
+        for col in 0..txb_width {
+            let abs_col = decision.col + col;
+            let skip_ctx =
+                luma_txb_skip_context(contexts.y_above[abs_col], contexts.y_left[abs_row]);
+            write_y_txb_all_zero(writer, skip_ctx);
+            contexts.y_above[abs_col] = 0;
+            contexts.y_left[abs_row] = 0;
+        }
+    }
+
+    for row in 0..txb_height {
+        let abs_row = decision.row + row;
+        for col in 0..txb_width {
+            let abs_col = decision.col + col;
+            let skip_ctx =
+                chroma_txb_skip_base_context(contexts.u_above[abs_col], contexts.u_left[abs_row])
+                    + 6;
+            write_u_black_dc_txb(writer, skip_ctx);
+            contexts.u_above[abs_col] = NONZERO_NEGATIVE_DC_ENTROPY_CONTEXT;
+            contexts.u_left[abs_row] = NONZERO_NEGATIVE_DC_ENTROPY_CONTEXT;
+        }
+    }
+
+    for row in 0..txb_height {
+        let abs_row = decision.row + row;
+        for col in 0..txb_width {
+            let abs_col = decision.col + col;
+            let skip_ctx =
+                chroma_txb_skip_base_context(contexts.v_above[abs_col], contexts.v_left[abs_row])
+                    + 9;
+            write_v_black_dc_txb(writer, skip_ctx);
+            contexts.v_above[abs_col] = NONZERO_NEGATIVE_DC_ENTROPY_CONTEXT;
+            contexts.v_left[abs_row] = NONZERO_NEGATIVE_DC_ENTROPY_CONTEXT;
+        }
+    }
+}
+
 fn write_y_black_dc_txb(writer: &mut Av2EntropyWriter, skip_ctx: u8, dc_sign_ctx: u8) {
     write_y_txb_nonzero(writer, skip_ctx);
     write_eob_one_y(writer);
@@ -1072,6 +1865,25 @@ fn write_v_black_dc_txb(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
     write_uv_dc_level(writer, BLACK_LOSSLESS_DC_LEVEL);
     writer.write_literal("tile.coeff.v.dc_sign_negative", 1, 1);
     write_uv_dc_high_range(writer, BLACK_LOSSLESS_DC_LEVEL);
+}
+
+fn write_y_txb_all_zero(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
+    let (name, mut cdf) = match skip_ctx {
+        1 => (
+            "tile.coeff.y.txb_all_zero_tx4x4_ctx1",
+            DEFAULT_TXB_SKIP_Y_TX4X4_CTX1_CDF,
+        ),
+        3 => (
+            "tile.coeff.y.txb_all_zero_tx4x4_ctx3",
+            DEFAULT_TXB_SKIP_Y_TX4X4_CTX3_CDF,
+        ),
+        5 => (
+            "tile.coeff.y.txb_all_zero_tx4x4_ctx5",
+            DEFAULT_TXB_SKIP_Y_TX4X4_CTX5_CDF,
+        ),
+        _ => panic!("unsupported AV2 luma TXB skip context {skip_ctx}"),
+    };
+    writer.write_symbol(name, 1, &mut cdf, 2, false);
 }
 
 fn write_y_txb_nonzero(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
@@ -1241,6 +2053,15 @@ fn write_exp_golomb(writer: &mut Av2EntropyWriter, name: &'static str, value: u3
     writer.write_literal(name, x, length);
 }
 
+fn ceil_log2(value: u32) -> u32 {
+    assert!(value > 0, "ceil_log2 expects a positive value");
+    if value == 1 {
+        0
+    } else {
+        u32::BITS - (value - 1).leading_zeros()
+    }
+}
+
 fn luma_txb_skip_context(above: u8, left: u8) -> u8 {
     let top = (above & 7).min(4);
     let left = (left & 7).min(4);
@@ -1311,6 +2132,7 @@ mod tests {
                 height: 64,
             },
             Av2Black444MvpProfile::current(),
+            false,
         );
 
         let partition_none_count = plan
