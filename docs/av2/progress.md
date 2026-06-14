@@ -24,20 +24,23 @@ synthesis wrappers, and cocotb/Yosys entry points remains shared.
 - `src/av2/tile.rs` contains the structured black 4:4:4 tile plan for the full
   8x8-through-64x64 geometry sweep. The current minimum viable profile disables
   SDP, extended partitions, IBC, loop tools, and CDF updates.
-- `src/av2/palette.rs` contains the first palette detector. The supported
-  palette subset is intentionally narrow: one 64x64 `yuv444p8` frame with two
-  luma colors, zero U/V, and the deterministic horizontal bar pattern generated
-  by `av2_luma_palette_bars`.
+- `src/av2/palette.rs` contains the first block-local luma palette detector.
+  The current subset works on visible 8x8 `yuv444p8` blocks, keeps up to eight
+  luma colors per block, and maps additional luma values to the nearest stored
+  color. AV2 v1.0.0 Section 5.20.5.3 and the current AVM branch only expose
+  luma palette syntax in `palette_mode_info()`, so chroma is not yet coded by
+  FrameForge AV2 and arbitrary color screenshots remain lossy.
 - `rtl/av2/ff_av2_encoder.sv` is a synthesizable AV2 top with the same
-  top-level handshake shape as the VVC encoder. It consumes planar 4:4:4 input
-  over `s_axis_*`, classifies the current frame as black or the first luma
-  palette pattern, and emits a generated OBU stream through `m_axis_*`.
-- `rtl/av2/palette/` contains the first standalone palette modules:
-  `ff_av2_input_classifier_444` and
-  `ff_av2_luma_palette_bars_symbolizer`.
-- `tb/av2/test_av2_encoder.py` drives the AV2 RTL input stream and compares the
-  RTL bitstream checksum against the software-generated bitstream through the
-  shared validation path.
+  top-level handshake shape as the VVC encoder. It consumes a visible 8x8 block
+  packet stream over `s_axis_*`: 64 Y samples, then 64 U samples, then 64 V
+  samples. That keeps the public testbench-facing interface compatible with the
+  VVC 4:4:4 packet shape while leaving AV2 superblock traversal internal to the
+  AV2 encoder.
+- `rtl/av2/palette/` contains standalone luma-palette modules:
+  `ff_av2_palette_analyzer_444` and `ff_av2_luma_palette_symbolizer`.
+- `tb/av2/test_av2_encoder.py` drives the AV2 RTL block-packet stream and
+  compares the RTL bitstream checksum against the software-generated bitstream
+  through the shared validation path.
 - Hard-coded AV2 bitstream blobs, traced entropy operation tables, and opaque
   entropy payload append hooks have been removed. Treat any new opaque AV2
   payload as a bug; future syntax must be generated from named,
@@ -100,15 +103,20 @@ make validate-set \
   VALIDATION_SET=av2-palette-luma-444 \
   VALIDATION_STOP_ON_FAIL=1 \
   VALIDATION_WITH_SYNTH=0
+
+# Local, when screenshot_640x360.png and the local manifest are present:
+make test-vectors TEST_VECTOR_SET=screenshot-sweep-444
+make validate-set \
+  CODEC=av2 \
+  VALIDATION_SET=screenshot-sweep-444 \
+  VALIDATION_STOP_ON_FAIL=1 \
+  VALIDATION_WITH_SYNTH=0
 ```
 
 ## Current Checks
 
-Last checked on 2026-06-13:
+Last checked on 2026-06-14:
 
-- `cargo test av2 -- --nocapture`: passed.
-- `make -B rtl-test CODEC=av2 DUT=av2-encoder RTL_VISIBLE_WIDTH=64
-  RTL_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=3`: passed.
 - `make validate CODEC=av2
   INPUT=verification/generated/test_vectors/av2_luma_palette_bars_64x64_1f_yuv444p8.yuv
   WIDTH=64 HEIGHT=64 FRAMES=1 FORMAT=yuv444p8 VALIDATE_SYNTH=0`: passed. Input,
@@ -116,26 +124,30 @@ Last checked on 2026-06-13:
   all had SHA-256
   `9b912726e1b5354820c67d65b71e380a5d7644ab0fa5e4fe523341ef47e460f2`.
   Software and RTL bitstream checksums matched at
-  `b63ef0fdff1273b8d24da8ddb210b8ea2c4df2a0cf8f2e303e0745024b8bc9f4`.
-  The generated FrameForge bitstream was 1962 bytes, or 3.8320 bits per luma
+  `01b1ad518fdae2bcd1328af9c567b37937fe87b17ba674b20e0c3fff0f1d3533`.
+  The generated FrameForge bitstream was 2248 bytes, or 4.3906 bits per luma
   pixel, and all reported PSNR values were infinite.
 - `make validate-set CODEC=av2 VALIDATION_SET=sweep-black-444
   VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0`: passed all 64 black
   4:4:4 geometries.
-- `make validate-set CODEC=av2 VALIDATION_SET=av2-palette-luma-444
-  VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0`: passed the first palette
-  smoke vector.
-- `make synth CODEC=av2`: passed Yosys synthesis for the structured black plus
-  first luma-palette path. The detailed baseline is recorded in
-  [synthesis.md](synthesis.md).
+- `make validate-set CODEC=av2 VALIDATION_SET=screenshot-sweep-444
+  VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0`: passed all 64 local
+  screenshot crops from 8x8 through 64x64. This is a SW/RTL/AVM plumbing and
+  luma-palette geometry check, not a lossless color claim; the current AV2 path
+  remains lossy on arbitrary screenshots.
+- `make synth CODEC=av2`: passed Yosys synthesis for the generalized
+  luma-palette path. The detailed baseline is recorded in
+  [synthesis.md](synthesis.md), and quality/bitrate measurements are recorded
+  in [quality-bitrate.md](quality-bitrate.md).
 
 ## Next Steps
 
-- Generalize palette detection beyond the deterministic 64x64 luma-bar smoke.
-- Add chroma palette and escape-value syntax so 4:4:4 palette can become
-  lossless for arbitrary input.
-- Replace the narrow frame classifier with a real TU/CU-oriented sample ingest
-  path as more AV2 block decisions are added.
+- Add an explicit chroma coding path for 4:4:4 input. The current AV2 branch
+  does not expose UV palette syntax, so this should be residual/transform-skip
+  style coding rather than a non-standard chroma palette header.
+- Continue expanding the block partition and luma-palette decisions while
+  keeping the shared top-level packet contract at visible 8x8 Y/U/V blocks
+  unless a codec-specific order is clearly cheaper.
 - Keep checksum, bitrate, and PSNR reporting in the shared validation path as
   new AV2 syntax is added.
 - Keep porting syntax decisions into RTL without byte-stream blobs or traced

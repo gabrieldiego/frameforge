@@ -94,16 +94,18 @@ def av2_rtl_input_stream(data):
     assert len(data) == expected_len
     area = width * height
     y_plane = data[:area]
+    u_plane = data[area : 2 * area]
+    v_plane = data[2 * area :]
     stream = bytearray()
-    # The AV2 top module accepts luma in 8x8 palette-block order to avoid
-    # synthesizing a full-frame luma buffer in the palette analyzer. Chroma
-    # planes follow in normal planar order and are drained by the analyzer.
+    # The AV2 top module accepts visible 8x8 block packets: Y, then U, then V.
+    # This keeps the interface aligned with the VVC 4:4:4 8x8-leaf packet shape
+    # while avoiding full-frame input buffers in the AV2 palette analyzer.
     for y0 in range(0, height, 8):
         for x0 in range(0, width, 8):
-            for local_y in range(8):
-                row_start = (y0 + local_y) * width + x0
-                stream.extend(y_plane[row_start : row_start + 8])
-    stream.extend(data[area:])
+            for plane in (y_plane, u_plane, v_plane):
+                for local_y in range(8):
+                    row_start = (y0 + local_y) * width + x0
+                    stream.extend(plane[row_start : row_start + 8])
     return bytes(stream)
 
 

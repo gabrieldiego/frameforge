@@ -473,13 +473,19 @@ For AV2, the same helper can prepare AVM:
 
 AV2 validation infrastructure is staged. The Rust and RTL AV2 paths now emit
 generated unmuxed OBU streams for the current black 4:4:4 geometry sweep and a
-first 64x64 two-color luma-palette smoke vector with zero chroma. The AV2
-entropy stream is generated from named syntax decisions rather than stored
-bitstream payloads, and the validation path compares software, RTL, and AVM
-reference reconstruction checksums. Use `VALIDATION_SET=sweep-black-444` for
-the black geometry sweep and `VALIDATION_SET=av2-palette-luma-444` for the
-first palette smoke. See [docs/av2/progress.md](docs/av2/progress.md) for the
-current AV2 checkpoint list.
+luma-palette 4:4:4 subset. The top-level RTL input contract uses the same
+visible 8x8 block packet shape as the VVC 4:4:4 path: 64 Y samples, then 64 U
+samples, then 64 V samples. Codec-specific block traversal remains internal to
+each encoder. The current AV2 v1.0.0/AVM path signals palette syntax for luma
+only, so arbitrary screenshots are still lossy until an explicit chroma coding
+path is added. The AV2 entropy stream is generated from named syntax decisions
+rather than stored bitstream payloads, and the validation path compares
+software, RTL, and AVM reference reconstruction checksums. Use
+`VALIDATION_SET=sweep-black-444` for the black geometry sweep,
+`VALIDATION_SET=av2-palette-luma-444` for the first lossless luma-palette
+smoke, and local `VALIDATION_SET=screenshot-sweep-444` when the local
+screenshot manifest is available. See [docs/av2/progress.md](docs/av2/progress.md)
+for the current AV2 checkpoint list.
 
 Prepare a decoder:
 

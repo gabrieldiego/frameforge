@@ -355,9 +355,10 @@ module ff_av2_encoder #(
   // to the visible frame edge, and generate syntax through the range coder.
   // No coded bitstream bytes are stored as blobs in the RTL.
   assign busy = (state_q != ST_IDLE);
-  // AV2 bring-up input order is luma in 8x8 palette-block order, followed by
-  // the chroma planes. The analyzer may stall between luma blocks while it
-  // derives the block-local palette syntax state.
+  // AV2 bring-up input order is a visible 8x8 block packet: 64 Y samples,
+  // 64 U samples, then 64 V samples. This mirrors the VVC 4:4:4 8x8-leaf
+  // packing at the interface while allowing the AV2 superblock walker to keep
+  // its own partition/leaf order internally.
   assign s_axis_ready =
     (state_q == ST_INPUT_READ) &&
     palette_analyzer_sample_ready_w &&

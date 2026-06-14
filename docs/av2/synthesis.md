@@ -86,6 +86,95 @@ integration shell is only useful to show expected growth from unsupported
 plumbing into real generated tile syntax; the shell was not a real encoder area
 estimate.
 
+## 2026-06-14 General Luma Palette + Block Packets
+
+Measured after replacing the narrow luma-bars classifier with the general
+8x8-block luma palette analyzer and changing the AV2 RTL input contract to the
+same visible 8x8 Y/U/V packet shape used by the VVC 4:4:4 path. The codec
+walkers remain independent internally; this only aligns the top-level
+testbench-facing packet shape.
+
+Configuration:
+
+- command: `make synth CODEC=av2`
+- DUT: `av2-encoder`
+- RTL top: `ff_av2_encoder`
+- board: `synth/boards/arty-z7-10.env`
+- clock metadata: `25 MHz`
+- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
+- memory limit: 3072 MiB
+- supported RTL input subset: 8-bit 4:4:4, up to 64x64, black frames, and
+  luma-palette 8x8 blocks with up to eight luma entries per block.
+
+Validation before synthesis:
+
+```sh
+make validate CODEC=av2 \
+  INPUT=verification/generated/test_vectors/av2_luma_palette_bars_64x64_1f_yuv444p8.yuv \
+  WIDTH=64 HEIGHT=64 FRAMES=1 FORMAT=yuv444p8 VALIDATE_SYNTH=0
+make test-vectors TEST_VECTOR_SET=screenshot-sweep-444
+make validate-set CODEC=av2 VALIDATION_SET=screenshot-sweep-444 VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+```
+
+Result:
+
+- Yosys synthesis passed in 304.8 seconds.
+- Peak child RSS observed by the synthesis runner was 1094.01 MiB.
+- Runtime exceeded the 300 second review threshold by 4.8 seconds, but stayed
+  inside the 600 second hard timeout and 3072 MiB memory cap.
+- Post-synthesis critical-path reporting completed in 96.9 seconds with peak
+  child RSS of 1326.54 MiB and reported topological path length 129.
+- The reported longest path starts in `palette_analyzer.block_palette_color_q`,
+  passes through `ff_av2_luma_palette_symbolizer` delta-bit calculation, and
+  reaches the range-coder `low_q` path.
+
+Flattened Xilinx-cell estimate from
+`yosys -p 'read_json synth/out/arty-z7-10/ff_av2_encoder/ff_av2_encoder.json; hierarchy -top ff_av2_encoder; flatten; stat -tech xilinx'`:
+
+| Metric | Count |
+|---|---:|
+| Cells | 79770 |
+| Estimated LCs | 33892 |
+| CARRY4 | 508 |
+| DSP48E1 | 11 |
+| FDCE | 18785 |
+| FDPE | 99 |
+| FDRE | 448 |
+| LUT1 | 553 |
+| LUT2 | 2549 |
+| LUT3 | 2732 |
+| LUT4 | 5757 |
+| LUT5 | 9481 |
+| LUT6 | 15922 |
+| MUXF7 | 3361 |
+| MUXF8 | 300 |
+| RAMB36E1 | 4 |
+
+Compared with the immediately preceding generalized luma-palette working run
+before the input-packet alignment, the topological path stayed at 129, main
+synthesis RSS was effectively flat, and critical-path reporting was about 8.9
+seconds faster. Main synthesis runtime increased by about 9.8 seconds.
+
+Compared with the current documented VVC top encoder 4:4:4 BDPCM baseline
+(`docs/vvc/synthesis.md`, June 11, 2026), this AV2 subset is smaller but less
+complete:
+
+| Metric | AV2 | VVC | AV2 / VVC |
+|---|---:|---:|---:|
+| Synthesis time | 304.8 s | 376.3 s | 81.0% |
+| Peak synthesis RSS | 1094.01 MiB | 1882.95 MiB | 58.1% |
+| Cells | 79770 | 118404 | 67.4% |
+| Estimated LCs | 33892 | 45381 | 74.7% |
+| Topological path length | 129 | 55 | 234.5% |
+
+The area comparison is encouraging only as a checkpoint, not as an efficiency
+claim, because the VVC encoder currently implements more coding tools. The AV2
+critical path is the clearer optimization target before adding much more syntax.
+Until AV2 reaches approximate feature parity with the current VVC screen-content
+subset, any AV2 top synthesis that exceeds the documented VVC top in cells,
+estimated LCs, memory, or runtime should be treated as a runaway-design warning
+and optimized before more syntax is added.
+
 ## Retired Bring-Up Measurements
 
 Temporary AV2 fixed-output emitters existed during validation plumbing bring-up.
