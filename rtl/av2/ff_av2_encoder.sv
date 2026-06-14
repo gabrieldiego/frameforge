@@ -31,7 +31,10 @@ module ff_av2_encoder #(
 );
 
   localparam int AV2_MAX_SEQUENCE_BYTES = 16;
-  localparam int AV2_MAX_TILE_BYTES = 4096;
+  // Current AV2 bring-up path supports one black 64x64 4:4:4 frame. The
+  // largest generated tile payload is under 3 KiB; revisit this bound when
+  // larger superblocks, non-black residuals, or multiple tiles are added.
+  localparam int AV2_MAX_TILE_BYTES = 3072;
 
   typedef enum logic [3:0] {
     ST_IDLE,
@@ -42,8 +45,12 @@ module ff_av2_encoder #(
     ST_LEAF,
     ST_FINISH_INIT,
     ST_FINISH_PUSH,
-    ST_CARRY,
-    ST_OUTPUT
+    ST_CARRY_READ,
+    ST_CARRY_WRITE,
+    ST_OUTPUT_PREP,
+    ST_OUTPUT_TILE_READ,
+    ST_OUTPUT_TILE_LOAD,
+    ST_OUTPUT_VALID
   } state_t;
 
   localparam logic [1:0] PARTITION_NONE = 2'd0;
@@ -55,8 +62,14 @@ module ff_av2_encoder #(
   state_t state_q;
   logic start_invalid_w;
   logic [15:0] precarry_mem_q [0:AV2_MAX_TILE_BYTES - 1];
-  logic [7:0] tile_mem_q [0:AV2_MAX_TILE_BYTES - 1];
   logic [7:0] seq_mem_q [0:AV2_MAX_SEQUENCE_BYTES - 1];
+  logic [15:0] precarry_read_addr_q;
+  logic [15:0] precarry_read_data_q;
+  logic precarry_write_valid_w;
+  logic [15:0] precarry_write_addr_w;
+  logic [15:0] precarry_write_data_w;
+  logic pending_push_valid_q;
+  logic [15:0] pending_push_word_q;
   logic [15:0] precarry_len_q;
   logic [15:0] tile_len_q;
   logic [15:0] seq_len_q;
@@ -98,7 +111,7 @@ module ff_av2_encoder #(
   integer finish_c_q;
   integer finish_s_q;
   logic [15:0] carry_q;
-  integer carry_index_q;
+  logic [15:0] carry_index_q;
   integer context_index_q;
 
   logic        op_valid_w;
@@ -143,10 +156,14 @@ module ff_av2_encoder #(
   logic [15:0] closed_leb_start_w;
   logic [15:0] closed_header_start_w;
   logic [15:0] total_stream_len_w;
+  logic [15:0] tile_payload_start_w;
   logic [15:0] tile_stream_index_w;
   logic [15:0] seq_stream_index_w;
   logic [15:0] closed_leb_index_w;
   logic [7:0] output_byte_w;
+  logic [7:0] output_byte_q;
+  logic output_last_q;
+  logic output_tile_payload_w;
   logic [15:0] carry_sum_w;
   logic leaf_fsc_symbol_w;
   logic [31:0] leaf_fsc_fh_w;
@@ -239,10 +256,12 @@ module ff_av2_encoder #(
   assign closed_leb_start_w = seq_end_index_w;
   assign closed_header_start_w = closed_leb_start_w + {14'd0, closed_leb_len_w};
   assign total_stream_len_w = closed_header_start_w + 16'd4 + tile_len_q;
+  assign tile_payload_start_w = closed_header_start_w + 16'd4;
   assign seq_stream_index_w = stream_index_q - 16'd4;
   assign closed_leb_index_w = stream_index_q - closed_leb_start_w;
-  assign tile_stream_index_w = stream_index_q - (closed_header_start_w + 16'd4);
-  assign carry_sum_w = carry_q + precarry_mem_q[carry_index_q];
+  assign tile_stream_index_w = stream_index_q - tile_payload_start_w;
+  assign output_tile_payload_w = (stream_index_q >= tile_payload_start_w);
+  assign carry_sum_w = carry_q + precarry_read_data_q;
   assign visible_rows_mi_w = visible_height[6:2];
   assign visible_cols_mi_w = visible_width[6:2];
   assign block_visible_w =
@@ -357,6 +376,51 @@ module ff_av2_encoder #(
   assign leaf_visible_txb_h_w =
     ((block_row_mi_q + block_h_mi_q) > visible_rows_mi_q) ?
       (visible_rows_mi_q - block_row_mi_q) : block_h_mi_q;
+
+  always @* begin
+    precarry_write_valid_w = 1'b0;
+    precarry_write_addr_w = precarry_len_q;
+    precarry_write_data_w = 16'd0;
+
+    if (!start && pending_push_valid_q) begin
+      precarry_write_valid_w = 1'b1;
+      precarry_write_addr_w = precarry_len_q;
+      precarry_write_data_w = pending_push_word_q;
+    end else if (!start) begin
+      case (state_q)
+        ST_PARTITION,
+        ST_LEAF: begin
+          if (op_valid_w && norm_push_count_w != 2'd0) begin
+            precarry_write_valid_w = 1'b1;
+            precarry_write_addr_w = precarry_len_q;
+            precarry_write_data_w = norm_push0_w;
+          end
+        end
+        ST_FINISH_PUSH: begin
+          if (finish_s_q > 0) begin
+            precarry_write_valid_w = 1'b1;
+            precarry_write_addr_w = precarry_len_q;
+            precarry_write_data_w = (finish_e_q >> (finish_c_q + 16)) & 16'hffff;
+          end
+        end
+        ST_CARRY_WRITE: begin
+          precarry_write_valid_w = 1'b1;
+          precarry_write_addr_w = carry_index_q;
+          precarry_write_data_w = {8'd0, carry_sum_w[7:0]};
+        end
+        default: begin
+          precarry_write_valid_w = 1'b0;
+        end
+      endcase
+    end
+  end
+
+  always_ff @(posedge clk) begin
+    precarry_read_data_q <= precarry_mem_q[precarry_read_addr_q];
+    if (precarry_write_valid_w) begin
+      precarry_mem_q[precarry_write_addr_w] <= precarry_write_data_w;
+    end
+  end
 
   always @* begin
     if (visible_width <= 16'd8) width_bits_w = 4'd3;
@@ -780,7 +844,7 @@ module ff_av2_encoder #(
     end else if (stream_index_q == closed_header_start_w + 16'd3) begin
       output_byte_w = 8'h00;
     end else begin
-      output_byte_w = tile_mem_q[tile_stream_index_w];
+      output_byte_w = 8'h00;
     end
   end
 
@@ -794,6 +858,9 @@ module ff_av2_encoder #(
       low_q <= 64'd0;
       rng_q <= 32'h8000;
       cnt_q <= -9;
+      precarry_read_addr_q <= 16'd0;
+      pending_push_valid_q <= 1'b0;
+      pending_push_word_q <= 16'd0;
       precarry_len_q <= 16'd0;
       tile_len_q <= 16'd0;
       seq_len_q <= 16'd0;
@@ -826,164 +893,175 @@ module ff_av2_encoder #(
       finish_c_q <= 0;
       finish_s_q <= 0;
       carry_q <= 16'd0;
-      carry_index_q <= 0;
+      carry_index_q <= 16'd0;
+      output_byte_q <= 8'd0;
+      output_last_q <= 1'b0;
       for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
         partition_above_q[context_index_q] <= 8'd0;
         partition_left_q[context_index_q] <= 8'd0;
       end
-    end else if (start) begin
-      input_error <= start_invalid_w;
-      if (!start_invalid_w && state_q == ST_IDLE) begin
-        state_q <= ST_SEQ_LOAD;
-        m_axis_valid <= 1'b0;
-        m_axis_last <= 1'b0;
-        width_q <= visible_width;
-        height_q <= visible_height;
-        width_bits_q <= width_bits_w;
-        height_bits_q <= height_bits_w;
-        seq_op_q <= 8'd0;
-        seq_bits_left_q <= 7'd0;
-        seq_value_q <= 64'd0;
-        seq_bit_pos_q <= 16'd0;
-        seq_len_q <= 16'd0;
-        seq_mem_q[0] <= 8'd0;
-        seq_mem_q[1] <= 8'd0;
-        seq_mem_q[2] <= 8'd0;
-        seq_mem_q[3] <= 8'd0;
-        seq_mem_q[4] <= 8'd0;
-        seq_mem_q[5] <= 8'd0;
-        seq_mem_q[6] <= 8'd0;
-        seq_mem_q[7] <= 8'd0;
-        seq_mem_q[8] <= 8'd0;
-        seq_mem_q[9] <= 8'd0;
-        seq_mem_q[10] <= 8'd0;
-        seq_mem_q[11] <= 8'd0;
-        seq_mem_q[12] <= 8'd0;
-        seq_mem_q[13] <= 8'd0;
-        seq_mem_q[14] <= 8'd0;
-        seq_mem_q[15] <= 8'd0;
-        low_q <= 64'd0;
-        rng_q <= 32'h8000;
-        cnt_q <= -9;
-        precarry_len_q <= 16'd0;
-        tile_len_q <= 16'd0;
-        stream_index_q <= 16'd0;
-        phase_q <= 2'd0;
-        step_q <= 4'd0;
-        txb_index_q <= 16'd0;
-        txb_width_q <= 16'd0;
-        txb_count_q <= 16'd0;
-        txb_local_row_q <= 5'd0;
-        txb_local_col_q <= 5'd0;
-        visible_rows_mi_q <= visible_rows_mi_w;
-        visible_cols_mi_q <= visible_cols_mi_w;
-        block_row_mi_q <= 5'd0;
-        block_col_mi_q <= 5'd0;
-        block_w_mi_q <= 5'd16;
-        block_h_mi_q <= 5'd16;
-        partition_q <= PARTITION_NONE;
-        partition_emit_step_q <= 1'b0;
-        stack_sp_q <= 5'd0;
-        for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
-          partition_above_q[context_index_q] <= 8'd0;
-          partition_left_q[context_index_q] <= 8'd0;
-        end
-      end
     end else begin
       input_error <= 1'b0;
-      case (state_q)
-        ST_IDLE: begin
+      if (start) begin
+        input_error <= start_invalid_w;
+        if (!start_invalid_w && state_q == ST_IDLE) begin
+          state_q <= ST_SEQ_LOAD;
           m_axis_valid <= 1'b0;
           m_axis_last <= 1'b0;
-        end
-        ST_SEQ_LOAD: begin
-          if (seq_op_q == 8'd18) begin
-            seq_len_q <= (seq_bit_pos_q + 16'd7) >> 3;
-            state_q <= ST_LOAD_BLOCK;
-          end else begin
-            seq_value_q <= seq_load_value_w;
-            seq_bits_left_q <= seq_load_bits_w;
-            state_q <= ST_SEQ_WRITE;
+          width_q <= visible_width;
+          height_q <= visible_height;
+          width_bits_q <= width_bits_w;
+          height_bits_q <= height_bits_w;
+          seq_op_q <= 8'd0;
+          seq_bits_left_q <= 7'd0;
+          seq_value_q <= 64'd0;
+          seq_bit_pos_q <= 16'd0;
+          seq_len_q <= 16'd0;
+          seq_mem_q[0] <= 8'd0;
+          seq_mem_q[1] <= 8'd0;
+          seq_mem_q[2] <= 8'd0;
+          seq_mem_q[3] <= 8'd0;
+          seq_mem_q[4] <= 8'd0;
+          seq_mem_q[5] <= 8'd0;
+          seq_mem_q[6] <= 8'd0;
+          seq_mem_q[7] <= 8'd0;
+          seq_mem_q[8] <= 8'd0;
+          seq_mem_q[9] <= 8'd0;
+          seq_mem_q[10] <= 8'd0;
+          seq_mem_q[11] <= 8'd0;
+          seq_mem_q[12] <= 8'd0;
+          seq_mem_q[13] <= 8'd0;
+          seq_mem_q[14] <= 8'd0;
+          seq_mem_q[15] <= 8'd0;
+          low_q <= 64'd0;
+          rng_q <= 32'h8000;
+          cnt_q <= -9;
+          precarry_read_addr_q <= 16'd0;
+          pending_push_valid_q <= 1'b0;
+          pending_push_word_q <= 16'd0;
+          precarry_len_q <= 16'd0;
+          tile_len_q <= 16'd0;
+          stream_index_q <= 16'd0;
+          phase_q <= 2'd0;
+          step_q <= 4'd0;
+          txb_index_q <= 16'd0;
+          txb_width_q <= 16'd0;
+          txb_count_q <= 16'd0;
+          txb_local_row_q <= 5'd0;
+          txb_local_col_q <= 5'd0;
+          visible_rows_mi_q <= visible_rows_mi_w;
+          visible_cols_mi_q <= visible_cols_mi_w;
+          block_row_mi_q <= 5'd0;
+          block_col_mi_q <= 5'd0;
+          block_w_mi_q <= 5'd16;
+          block_h_mi_q <= 5'd16;
+          partition_q <= PARTITION_NONE;
+          partition_emit_step_q <= 1'b0;
+          stack_sp_q <= 5'd0;
+          output_byte_q <= 8'd0;
+          output_last_q <= 1'b0;
+          for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
+            partition_above_q[context_index_q] <= 8'd0;
+            partition_left_q[context_index_q] <= 8'd0;
           end
         end
-        ST_SEQ_WRITE: begin
-          seq_mem_q[seq_bit_pos_q[15:3]][7 - seq_bit_pos_q[2:0]] <= seq_value_q[seq_bits_left_q - 7'd1];
-          seq_bit_pos_q <= seq_bit_pos_q + 16'd1;
-          if (seq_bits_left_q == 7'd1) begin
-            seq_bits_left_q <= 7'd0;
-            seq_op_q <= seq_op_q + 8'd1;
-            state_q <= ST_SEQ_LOAD;
-          end else begin
-            seq_bits_left_q <= seq_bits_left_q - 7'd1;
+      end else if (pending_push_valid_q) begin
+        precarry_len_q <= precarry_len_q + 16'd1;
+        pending_push_valid_q <= 1'b0;
+      end else begin
+        case (state_q)
+          ST_IDLE: begin
+            m_axis_valid <= 1'b0;
+            m_axis_last <= 1'b0;
           end
-        end
-        ST_LOAD_BLOCK: begin
-          if (!block_visible_w) begin
-            if (stack_sp_q != 5'd0) begin
-              block_row_mi_q <= stack_row_mi_q[stack_sp_q - 5'd1];
-              block_col_mi_q <= stack_col_mi_q[stack_sp_q - 5'd1];
-              block_w_mi_q <= stack_w_mi_q[stack_sp_q - 5'd1];
-              block_h_mi_q <= stack_h_mi_q[stack_sp_q - 5'd1];
-              stack_sp_q <= stack_sp_q - 5'd1;
+          ST_SEQ_LOAD: begin
+            if (seq_op_q == 8'd18) begin
+              seq_len_q <= (seq_bit_pos_q + 16'd7) >> 3;
+              state_q <= ST_LOAD_BLOCK;
             end else begin
-              state_q <= ST_FINISH_INIT;
+              seq_value_q <= seq_load_value_w;
+              seq_bits_left_q <= seq_load_bits_w;
+              state_q <= ST_SEQ_WRITE;
             end
-          end else begin
-            partition_q <= chosen_partition_w;
-            partition_emit_step_q <= 1'b0;
-            state_q <= ST_PARTITION;
           end
-        end
-        ST_PARTITION: begin
-          if (op_valid_w) begin
-            if (norm_push_count_w != 2'd0) begin
-              precarry_mem_q[precarry_len_q] <= norm_push0_w;
+          ST_SEQ_WRITE: begin
+            seq_mem_q[seq_bit_pos_q[15:3]][7 - seq_bit_pos_q[2:0]] <= seq_value_q[seq_bits_left_q - 7'd1];
+            seq_bit_pos_q <= seq_bit_pos_q + 16'd1;
+            if (seq_bits_left_q == 7'd1) begin
+              seq_bits_left_q <= 7'd0;
+              seq_op_q <= seq_op_q + 8'd1;
+              state_q <= ST_SEQ_LOAD;
+            end else begin
+              seq_bits_left_q <= seq_bits_left_q - 7'd1;
             end
-            if (norm_push_count_w == 2'd2) begin
-              precarry_mem_q[precarry_len_q + 16'd1] <= norm_push1_w;
-            end
-            precarry_len_q <= precarry_len_q + {14'd0, norm_push_count_w};
-            low_q <= norm_low_w;
-            rng_q <= norm_rng_w;
-            cnt_q <= norm_cnt_w;
-
-            if (partition_emit_do_split_w && partition_need_rect_w) begin
-              partition_emit_step_q <= 1'b1;
-            end else if (partition_q == PARTITION_NONE) begin
-              for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
-                if (context_index_q >= block_col_mi_q && context_index_q < (block_col_mi_q + block_w_mi_q)) begin
-                  partition_above_q[context_index_q] <= partition_update_above_w;
-                end
-                if (context_index_q >= block_row_mi_q && context_index_q < (block_row_mi_q + block_h_mi_q)) begin
-                  partition_left_q[context_index_q] <= partition_update_left_w;
-                end
+          end
+          ST_LOAD_BLOCK: begin
+            if (!block_visible_w) begin
+              if (stack_sp_q != 5'd0) begin
+                block_row_mi_q <= stack_row_mi_q[stack_sp_q - 5'd1];
+                block_col_mi_q <= stack_col_mi_q[stack_sp_q - 5'd1];
+                block_w_mi_q <= stack_w_mi_q[stack_sp_q - 5'd1];
+                block_h_mi_q <= stack_h_mi_q[stack_sp_q - 5'd1];
+                stack_sp_q <= stack_sp_q - 5'd1;
+              end else begin
+                state_q <= ST_FINISH_INIT;
               end
-              phase_q <= 2'd0;
-              step_q <= 4'd0;
-              txb_index_q <= 16'd0;
-              txb_local_row_q <= 5'd0;
-              txb_local_col_q <= 5'd0;
-              txb_width_q <= txb_width_w;
-              txb_count_q <= txb_count_w;
-              state_q <= ST_LEAF;
-            end else if (partition_q == PARTITION_HORZ) begin
-              stack_row_mi_q[stack_sp_q] <= block_row_mi_q + block_half_h_mi_w;
-              stack_col_mi_q[stack_sp_q] <= block_col_mi_q;
-              stack_w_mi_q[stack_sp_q] <= block_w_mi_q;
-              stack_h_mi_q[stack_sp_q] <= block_half_h_mi_w;
-              stack_sp_q <= stack_sp_q + 5'd1;
-              block_h_mi_q <= block_half_h_mi_w;
-              state_q <= ST_LOAD_BLOCK;
             end else begin
-              stack_row_mi_q[stack_sp_q] <= block_row_mi_q;
-              stack_col_mi_q[stack_sp_q] <= block_col_mi_q + block_half_w_mi_w;
-              stack_w_mi_q[stack_sp_q] <= block_half_w_mi_w;
-              stack_h_mi_q[stack_sp_q] <= block_h_mi_q;
-              stack_sp_q <= stack_sp_q + 5'd1;
-              block_w_mi_q <= block_half_w_mi_w;
-              state_q <= ST_LOAD_BLOCK;
+              partition_q <= chosen_partition_w;
+              partition_emit_step_q <= 1'b0;
+              state_q <= ST_PARTITION;
             end
-          end else if (partition_q == PARTITION_NONE) begin
+          end
+          ST_PARTITION: begin
+            if (op_valid_w) begin
+              if (norm_push_count_w != 2'd0) begin
+                precarry_len_q <= precarry_len_q + 16'd1;
+              end
+              if (norm_push_count_w == 2'd2) begin
+                pending_push_valid_q <= 1'b1;
+                pending_push_word_q <= norm_push1_w;
+              end
+              low_q <= norm_low_w;
+              rng_q <= norm_rng_w;
+              cnt_q <= norm_cnt_w;
+
+              if (partition_emit_do_split_w && partition_need_rect_w) begin
+                partition_emit_step_q <= 1'b1;
+              end else if (partition_q == PARTITION_NONE) begin
+                for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
+                  if (context_index_q >= block_col_mi_q && context_index_q < (block_col_mi_q + block_w_mi_q)) begin
+                    partition_above_q[context_index_q] <= partition_update_above_w;
+                  end
+                  if (context_index_q >= block_row_mi_q && context_index_q < (block_row_mi_q + block_h_mi_q)) begin
+                    partition_left_q[context_index_q] <= partition_update_left_w;
+                  end
+                end
+                phase_q <= 2'd0;
+                step_q <= 4'd0;
+                txb_index_q <= 16'd0;
+                txb_local_row_q <= 5'd0;
+                txb_local_col_q <= 5'd0;
+                txb_width_q <= txb_width_w;
+                txb_count_q <= txb_count_w;
+                state_q <= ST_LEAF;
+              end else if (partition_q == PARTITION_HORZ) begin
+                stack_row_mi_q[stack_sp_q] <= block_row_mi_q + block_half_h_mi_w;
+                stack_col_mi_q[stack_sp_q] <= block_col_mi_q;
+                stack_w_mi_q[stack_sp_q] <= block_w_mi_q;
+                stack_h_mi_q[stack_sp_q] <= block_half_h_mi_w;
+                stack_sp_q <= stack_sp_q + 5'd1;
+                block_h_mi_q <= block_half_h_mi_w;
+                state_q <= ST_LOAD_BLOCK;
+              end else begin
+                stack_row_mi_q[stack_sp_q] <= block_row_mi_q;
+                stack_col_mi_q[stack_sp_q] <= block_col_mi_q + block_half_w_mi_w;
+                stack_w_mi_q[stack_sp_q] <= block_half_w_mi_w;
+                stack_h_mi_q[stack_sp_q] <= block_h_mi_q;
+                stack_sp_q <= stack_sp_q + 5'd1;
+                block_w_mi_q <= block_half_w_mi_w;
+                state_q <= ST_LOAD_BLOCK;
+              end
+            end else if (partition_q == PARTITION_NONE) begin
             for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
               if (context_index_q >= block_col_mi_q && context_index_q < (block_col_mi_q + block_w_mi_q)) begin
                 partition_above_q[context_index_q] <= partition_update_above_w;
@@ -1018,145 +1096,173 @@ module ff_av2_encoder #(
             state_q <= ST_LOAD_BLOCK;
           end
         end
-        ST_LEAF: begin
-          if (op_valid_w) begin
-            if (norm_push_count_w != 2'd0) begin
-              precarry_mem_q[precarry_len_q] <= norm_push0_w;
-            end
-            if (norm_push_count_w == 2'd2) begin
-              precarry_mem_q[precarry_len_q + 16'd1] <= norm_push1_w;
-            end
-            precarry_len_q <= precarry_len_q + {14'd0, norm_push_count_w};
-            low_q <= norm_low_w;
-            rng_q <= norm_rng_w;
-            cnt_q <= norm_cnt_w;
-
-            if (op_last_w) begin
-              state_q <= ST_FINISH_INIT;
-            end else if (phase_q == 2'd0) begin
-              if (step_q == 4'd2 && !leaf_fsc_symbol_w) begin
-                step_q <= 4'd4;
-              end else if (step_q == 4'd5) begin
-                phase_q <= 2'd1;
-                step_q <= 4'd0;
-                txb_index_q <= 16'd0;
-                txb_local_row_q <= 5'd0;
-                txb_local_col_q <= 5'd0;
-              end else begin
-                step_q <= step_q + 4'd1;
+          ST_LEAF: begin
+            if (op_valid_w) begin
+              if (norm_push_count_w != 2'd0) begin
+                precarry_len_q <= precarry_len_q + 16'd1;
               end
-            end else if (phase_q == 2'd1) begin
-              if (step_q == 4'd8) begin
-                if (txb_index_q == (txb_count_q - 16'd1)) begin
-                  phase_q <= 2'd2;
+              if (norm_push_count_w == 2'd2) begin
+                pending_push_valid_q <= 1'b1;
+                pending_push_word_q <= norm_push1_w;
+              end
+              low_q <= norm_low_w;
+              rng_q <= norm_rng_w;
+              cnt_q <= norm_cnt_w;
+
+              if (op_last_w) begin
+                state_q <= ST_FINISH_INIT;
+              end else if (phase_q == 2'd0) begin
+                if (step_q == 4'd2 && !leaf_fsc_symbol_w) begin
+                  step_q <= 4'd4;
+                end else if (step_q == 4'd5) begin
+                  phase_q <= 2'd1;
                   step_q <= 4'd0;
                   txb_index_q <= 16'd0;
                   txb_local_row_q <= 5'd0;
                   txb_local_col_q <= 5'd0;
                 end else begin
-                  step_q <= 4'd0;
-                  txb_index_q <= txb_index_q + 16'd1;
-                  if (txb_local_col_q == (txb_width_q[4:0] - 5'd1)) begin
-                    txb_local_col_q <= 5'd0;
-                    txb_local_row_q <= txb_local_row_q + 5'd1;
-                  end else begin
-                    txb_local_col_q <= txb_local_col_q + 5'd1;
-                  end
+                  step_q <= step_q + 4'd1;
                 end
-              end else begin
-                step_q <= step_q + 4'd1;
-              end
-            end else begin
-              if (step_q == 4'd7) begin
-                if (txb_index_q == (txb_count_q - 16'd1)) begin
-                  if (phase_q == 2'd2) begin
-                    phase_q <= 2'd3;
+              end else if (phase_q == 2'd1) begin
+                if (step_q == 4'd8) begin
+                  if (txb_index_q == (txb_count_q - 16'd1)) begin
+                    phase_q <= 2'd2;
                     step_q <= 4'd0;
                     txb_index_q <= 16'd0;
-                  txb_local_row_q <= 5'd0;
-                  txb_local_col_q <= 5'd0;
+                    txb_local_row_q <= 5'd0;
+                    txb_local_col_q <= 5'd0;
                   end else begin
-                    if (stack_sp_q != 5'd0) begin
-                      block_row_mi_q <= stack_row_mi_q[stack_sp_q - 5'd1];
-                      block_col_mi_q <= stack_col_mi_q[stack_sp_q - 5'd1];
-                      block_w_mi_q <= stack_w_mi_q[stack_sp_q - 5'd1];
-                      block_h_mi_q <= stack_h_mi_q[stack_sp_q - 5'd1];
-                      stack_sp_q <= stack_sp_q - 5'd1;
-                      state_q <= ST_LOAD_BLOCK;
+                    step_q <= 4'd0;
+                    txb_index_q <= txb_index_q + 16'd1;
+                    if (txb_local_col_q == (txb_width_q[4:0] - 5'd1)) begin
+                      txb_local_col_q <= 5'd0;
+                      txb_local_row_q <= txb_local_row_q + 5'd1;
                     end else begin
-                      state_q <= ST_FINISH_INIT;
+                      txb_local_col_q <= txb_local_col_q + 5'd1;
                     end
                   end
                 end else begin
-                  step_q <= 4'd0;
-                  txb_index_q <= txb_index_q + 16'd1;
-                  if (txb_local_col_q == (txb_width_q[4:0] - 5'd1)) begin
-                    txb_local_col_q <= 5'd0;
-                    txb_local_row_q <= txb_local_row_q + 5'd1;
-                  end else begin
-                    txb_local_col_q <= txb_local_col_q + 5'd1;
-                  end
+                  step_q <= step_q + 4'd1;
                 end
               end else begin
-                step_q <= step_q + 4'd1;
+                if (step_q == 4'd7) begin
+                  if (txb_index_q == (txb_count_q - 16'd1)) begin
+                    if (phase_q == 2'd2) begin
+                      phase_q <= 2'd3;
+                      step_q <= 4'd0;
+                      txb_index_q <= 16'd0;
+                      txb_local_row_q <= 5'd0;
+                      txb_local_col_q <= 5'd0;
+                    end else begin
+                      if (stack_sp_q != 5'd0) begin
+                        block_row_mi_q <= stack_row_mi_q[stack_sp_q - 5'd1];
+                        block_col_mi_q <= stack_col_mi_q[stack_sp_q - 5'd1];
+                        block_w_mi_q <= stack_w_mi_q[stack_sp_q - 5'd1];
+                        block_h_mi_q <= stack_h_mi_q[stack_sp_q - 5'd1];
+                        stack_sp_q <= stack_sp_q - 5'd1;
+                        state_q <= ST_LOAD_BLOCK;
+                      end else begin
+                        state_q <= ST_FINISH_INIT;
+                      end
+                    end
+                  end else begin
+                    step_q <= 4'd0;
+                    txb_index_q <= txb_index_q + 16'd1;
+                    if (txb_local_col_q == (txb_width_q[4:0] - 5'd1)) begin
+                      txb_local_col_q <= 5'd0;
+                      txb_local_row_q <= txb_local_row_q + 5'd1;
+                    end else begin
+                      txb_local_col_q <= txb_local_col_q + 5'd1;
+                    end
+                  end
+                end else begin
+                  step_q <= step_q + 4'd1;
+                end
               end
             end
           end
-        end
-        ST_FINISH_INIT: begin
-          finish_e_q <= ((low_q + 64'h3fff) & ~64'h3fff) | 64'h4000;
-          finish_c_q <= cnt_q;
-          finish_s_q <= cnt_q + 10;
-          state_q <= ST_FINISH_PUSH;
-        end
-        ST_FINISH_PUSH: begin
-          if (finish_s_q > 0) begin
-            precarry_mem_q[precarry_len_q] <= (finish_e_q >> (finish_c_q + 16)) & 16'hffff;
-            precarry_len_q <= precarry_len_q + 16'd1;
-            if ((finish_c_q + 16) >= 64) begin
-              finish_e_q <= 64'd0;
-            end else if ((finish_c_q + 16) <= 0) begin
-              finish_e_q <= finish_e_q;
+          ST_FINISH_INIT: begin
+            finish_e_q <= ((low_q + 64'h3fff) & ~64'h3fff) | 64'h4000;
+            finish_c_q <= cnt_q;
+            finish_s_q <= cnt_q + 10;
+            state_q <= ST_FINISH_PUSH;
+          end
+          ST_FINISH_PUSH: begin
+            if (finish_s_q > 0) begin
+              precarry_len_q <= precarry_len_q + 16'd1;
+              if ((finish_c_q + 16) >= 64) begin
+                finish_e_q <= 64'd0;
+              end else if ((finish_c_q + 16) <= 0) begin
+                finish_e_q <= finish_e_q;
+              end else begin
+                finish_e_q <= finish_e_q & ((64'd1 << (finish_c_q + 16)) - 64'd1);
+              end
+              finish_c_q <= finish_c_q - 8;
+              finish_s_q <= finish_s_q - 8;
             end else begin
-              finish_e_q <= finish_e_q & ((64'd1 << (finish_c_q + 16)) - 64'd1);
+              carry_q <= 16'd0;
+              carry_index_q <= precarry_len_q - 16'd1;
+              precarry_read_addr_q <= precarry_len_q - 16'd1;
+              tile_len_q <= precarry_len_q;
+              state_q <= ST_CARRY_READ;
             end
-            finish_c_q <= finish_c_q - 8;
-            finish_s_q <= finish_s_q - 8;
-          end else begin
-            carry_q <= 16'd0;
-            carry_index_q <= precarry_len_q - 16'd1;
-            tile_len_q <= precarry_len_q;
-            state_q <= ST_CARRY;
           end
-        end
-        ST_CARRY: begin
-          carry_q <= carry_sum_w >> 8;
-          tile_mem_q[carry_index_q] <= carry_sum_w[7:0];
-          if (carry_index_q == 0) begin
-            stream_index_q <= 16'd0;
-            state_q <= ST_OUTPUT;
-          end else begin
-            carry_index_q <= carry_index_q - 1;
+          ST_CARRY_READ: begin
+            state_q <= ST_CARRY_WRITE;
           end
-        end
-        ST_OUTPUT: begin
-          if (!m_axis_valid || m_axis_ready) begin
-            m_axis_valid <= 1'b1;
-            m_axis_data <= output_byte_w;
-            m_axis_last <= (stream_index_q == (total_stream_len_w - 16'd1));
-            if (stream_index_q == (total_stream_len_w - 16'd1)) begin
-              if (m_axis_ready) begin
+          ST_CARRY_WRITE: begin
+            carry_q <= carry_sum_w >> 8;
+            if (carry_index_q == 0) begin
+              stream_index_q <= 16'd0;
+              state_q <= ST_OUTPUT_PREP;
+            end else begin
+              carry_index_q <= carry_index_q - 1;
+              precarry_read_addr_q <= carry_index_q - 16'd1;
+              state_q <= ST_CARRY_READ;
+            end
+          end
+          ST_OUTPUT_PREP: begin
+            m_axis_valid <= 1'b0;
+            if (output_tile_payload_w) begin
+              precarry_read_addr_q <= tile_stream_index_w;
+              state_q <= ST_OUTPUT_TILE_READ;
+            end else begin
+              output_byte_q <= output_byte_w;
+              output_last_q <= (stream_index_q == (total_stream_len_w - 16'd1));
+              state_q <= ST_OUTPUT_VALID;
+            end
+          end
+          ST_OUTPUT_TILE_READ: begin
+            state_q <= ST_OUTPUT_TILE_LOAD;
+          end
+          ST_OUTPUT_TILE_LOAD: begin
+            output_byte_q <= precarry_read_data_q[7:0];
+            output_last_q <= (stream_index_q == (total_stream_len_w - 16'd1));
+            state_q <= ST_OUTPUT_VALID;
+          end
+          ST_OUTPUT_VALID: begin
+            if (!m_axis_valid) begin
+              m_axis_valid <= 1'b1;
+              m_axis_data <= output_byte_q;
+              m_axis_last <= output_last_q;
+            end else if (m_axis_ready) begin
+              if (output_last_q) begin
+                m_axis_valid <= 1'b0;
+                m_axis_last <= 1'b0;
                 state_q <= ST_IDLE;
                 stream_index_q <= 16'd0;
+              end else begin
+                m_axis_valid <= 1'b0;
+                m_axis_last <= 1'b0;
+                stream_index_q <= stream_index_q + 16'd1;
+                state_q <= ST_OUTPUT_PREP;
               end
-            end else begin
-              stream_index_q <= stream_index_q + 16'd1;
             end
           end
-        end
-        default: state_q <= ST_IDLE;
+          default: state_q <= ST_IDLE;
       endcase
     end
+  end
   end
 
   wire _unused_inputs_w = &{

@@ -110,7 +110,8 @@ async def av2_encoder_emits_black_obu_stream(dut):
     observed = []
     trace_records = []
     completed = False
-    for _ in range(20000):
+    max_cycles = int(os.environ.get("FRAMEFORGE_RTL_AV2_MAX_CYCLES", "80000"))
+    for _ in range(max_cycles):
         await RisingEdge(dut.clk)
         await ReadOnly()
         state = signal_int(dut, "state_q")
