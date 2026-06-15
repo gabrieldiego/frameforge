@@ -242,8 +242,8 @@ module ff_av2_luma_palette_symbolizer (
   end
 
   always @* begin
-    // AV2 v1.0.0 decode_color_map_tokens(): identity_row_flag uses ctx=3 on
-    // row 0 and the previous row's identity flag on later rows.
+    // AV2 v1.0.0 Section 5.20.8.4 palette_tokens(): identity_row_flag uses
+    // ctx=3 on row 0 and the previous row's identity flag on later rows.
     case (identity_row_ctx)
       2'd0: begin
         identity_row_cdf0_w = 32'd10253;
@@ -281,7 +281,7 @@ module ff_av2_luma_palette_symbolizer (
     if (enable && phase == PHASE_PALETTE_HEADER) begin
       op_valid = 1'b1;
       if (step == 5'd0) begin
-        // AV2 v1.0.0 Sections 5.11.55 and 5.20.5.3: palette_y_mode flag.
+        // AV2 v1.0.0 Section 5.20.8.1 palette_mode_info(): has_palette_y.
         op_fl = 32'd2723;
         op_fh = 32'd0;
         op_fl_inc = 8;
@@ -302,9 +302,9 @@ module ff_av2_luma_palette_symbolizer (
           op_fh_inc = 0;
         end
       end else if (step < color_first_step_w) begin
-        // AV2 v1.0.0 write_palette_colors_y(): above/left cache entries are
-        // each accepted or declined. The MVP declines all cache colors so
-        // block-local palettes stay self-contained.
+        // AV2 v1.0.0 Section 5.20.8.1 palette_mode_info(): above/left cache
+        // entries are each accepted or declined. The MVP declines all cache
+        // colors so block-local palettes stay self-contained.
         op_literal = 1'b1;
         op_literal_value = 32'd0;
         op_literal_bits = 5'd1;
@@ -325,9 +325,9 @@ module ff_av2_luma_palette_symbolizer (
       end
     end else if (enable && phase == PHASE_PALETTE_MAP) begin
       if (step == 5'd0) begin
-        // AV2 v1.0.0 decode_color_map_tokens(): palette blocks smaller than
-        // 64x64 signal the color-map scan direction. The first MVP palette
-        // path uses horizontal scan order.
+        // AV2 v1.0.0 Section 5.20.8.4 palette_tokens(): palette blocks
+        // smaller than 64x64 signal color-map scan direction. The first MVP
+        // palette path uses horizontal scan order.
         op_valid = 1'b1;
         op_literal = 1'b1;
         op_literal_value = 32'd0;

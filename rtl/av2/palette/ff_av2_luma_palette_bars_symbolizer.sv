@@ -34,7 +34,7 @@ module ff_av2_luma_palette_bars_symbolizer (
       op_valid = 1'b1;
       case (step)
         4'd0: begin
-          // AV2 v1.0.0 Sections 5.11.55 and 5.20.5.3: palette_y_mode flag.
+          // AV2 v1.0.0 Section 5.20.8.1 palette_mode_info(): has_palette_y.
           op_fl = 32'd2723;
           op_fh = 32'd0;
           op_fl_inc = 8;

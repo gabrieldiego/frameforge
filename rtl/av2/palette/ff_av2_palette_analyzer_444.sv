@@ -17,6 +17,10 @@ module ff_av2_palette_analyzer_444 #(
   input  logic [4:0] query_block_col_mi,
   input  logic [5:0] query_row,
   input  logic [5:0] query_col,
+  input  logic       chroma_fetch_start,
+  input  logic       chroma_fetch_plane_v,
+  input  logic [4:0] chroma_fetch_txb_row_mi,
+  input  logic [4:0] chroma_fetch_txb_col_mi,
   output logic       done,
   output logic       unsupported,
   output logic       black_mode,
@@ -28,7 +32,10 @@ module ff_av2_palette_analyzer_444 #(
   output logic [2:0] query_left_index,
   output logic [2:0] query_top_index,
   output logic [2:0] query_top_left_index,
-  output logic [1:0] query_identity_row_flag
+  output logic [1:0] query_identity_row_flag,
+  output logic       chroma_fetch_done,
+  output logic [127:0] chroma_fetch_txb_samples,
+  output logic [31:0] chroma_fetch_predictor_samples
 );
 
   localparam logic [3:0] ST_IDLE = 4'd0;
@@ -95,6 +102,32 @@ module ff_av2_palette_analyzer_444 #(
   logic [7:0] block_sample_bit_offset_w;
   logic [7:0] block_sample_left_bit_offset_w;
   logic [7:0] block_sample_top_bit_offset_w;
+  logic fetch_active_q;
+  logic fetch_start_q;
+  logic fetch_plane_v_q;
+  logic [4:0] fetch_txb_row_mi_q;
+  logic [4:0] fetch_txb_col_mi_q;
+  logic [4:0] fetch_step_q;
+  logic fetch_read_pending_q;
+  logic fetch_read_is_pred_q;
+  logic [4:0] fetch_capture_step_q;
+  logic [11:0] fetch_read_addr_q;
+  logic [11:0] chroma_write_addr_w;
+  logic [11:0] chroma_read_addr_w;
+  logic chroma_write_u_w;
+  logic chroma_write_v_w;
+  logic [7:0] chroma_read_u_w;
+  logic [7:0] chroma_read_v_w;
+  logic [11:0] fetch_txb_read_addr_w;
+  logic [11:0] fetch_pred_read_addr_w;
+  logic [5:0] fetch_txb_block_id_w;
+  logic [5:0] fetch_txb_local_base_w;
+  logic [5:0] fetch_txb_local_index_w;
+  logic [5:0] fetch_pred_block_id_w;
+  logic [5:0] fetch_pred_local_index_w;
+  logic [5:0] fetch_pred_x_w;
+  logic [5:0] fetch_pred_y_w;
+  logic [5:0] fetch_above_pred_y_w;
   integer color_index_q;
   integer pack_index_q;
   integer block_index_q;
@@ -106,7 +139,7 @@ module ff_av2_palette_analyzer_444 #(
 
   // Palette analysis is block-local. The top-level input contract presents each
   // 8x8 block as 64 Y samples, 64 U samples, then 64 V samples. AV2 v1.0.0
-  // Section 5.20.5.3 signals palette syntax only for luma in this subset; the
+  // Sections 5.20.8.1 and 5.20.8.4 signal palette syntax only for luma; the
   // chroma samples are still consumed in the same block packet so the external
   // interface matches the VVC 4:4:4 8x8-leaf packing without a frame buffer.
   // AV2 8x8 palette leaves are addressed by 3-bit block row/column indices
@@ -130,6 +163,51 @@ module ff_av2_palette_analyzer_444 #(
   assign block_sample_top_bit_offset_w = {2'd0, block_sample_q - 6'd8} * 8'd3;
   assign query_above_block_id_w = query_block_id_w - 6'd8;
   assign query_left_block_id_w = query_block_id_w - 6'd1;
+  // AV2 v1.0.0 Section 5.20.7 residual syntax scans 4x4 TXBs. The query
+  // coordinates are MI units, so bit 0 selects the bottom/right 4x4 quadrant
+  // inside the current 8x8 packet: row offset 4*8 samples, column offset 4.
+  assign fetch_txb_block_id_w = {fetch_txb_row_mi_q[3:1], fetch_txb_col_mi_q[3:1]};
+  assign fetch_txb_local_base_w =
+    {fetch_txb_row_mi_q[0], 5'b00000} + {3'd0, fetch_txb_col_mi_q[0], 2'b00};
+  assign fetch_txb_local_index_w =
+    fetch_txb_local_base_w + {fetch_step_q[3:2], 3'b000} + {4'd0, fetch_step_q[1:0]};
+  assign fetch_above_pred_y_w = {fetch_txb_row_mi_q, 2'b00} - 6'd1;
+  assign chroma_write_addr_w = {block_id_q, block_chroma_sample_q[5:0]};
+  assign chroma_read_addr_w =
+    fetch_read_pending_q ? fetch_read_addr_q :
+    (fetch_step_q < 5'd16) ? fetch_txb_read_addr_w : fetch_pred_read_addr_w;
+  assign chroma_write_u_w =
+    (state_q == ST_DRAIN_CHROMA) && sample_fire && !block_chroma_sample_q[6];
+  assign chroma_write_v_w =
+    (state_q == ST_DRAIN_CHROMA) && sample_fire && block_chroma_sample_q[6];
+  assign fetch_txb_read_addr_w = {fetch_txb_block_id_w, fetch_txb_local_index_w};
+  assign fetch_pred_read_addr_w = {fetch_pred_block_id_w, fetch_pred_local_index_w};
+
+  ff_av2_chroma_sample_store chroma_sample_store (
+    .clk(clk),
+    .write_u_en(chroma_write_u_w),
+    .write_v_en(chroma_write_v_w),
+    .write_addr(chroma_write_addr_w),
+    .write_data(sample_u8_w),
+    .read_addr(chroma_read_addr_w),
+    .read_u_data(chroma_read_u_w),
+    .read_v_data(chroma_read_v_w)
+  );
+
+  always @* begin
+    if (fetch_txb_col_mi_q != 5'd0) begin
+      fetch_pred_x_w = {fetch_txb_col_mi_q, 2'b00} - 6'd1;
+      fetch_pred_y_w = {fetch_txb_row_mi_q, 2'b00} + {4'd0, fetch_step_q[1:0]};
+    end else if (fetch_txb_row_mi_q != 5'd0) begin
+      fetch_pred_x_w = 6'd0;
+      fetch_pred_y_w = fetch_above_pred_y_w;
+    end else begin
+      fetch_pred_x_w = 6'd0;
+      fetch_pred_y_w = 6'd0;
+    end
+    fetch_pred_block_id_w = {fetch_pred_y_w[5:3], fetch_pred_x_w[5:3]};
+    fetch_pred_local_index_w = {fetch_pred_y_w[2:0], fetch_pred_x_w[2:0]};
+  end
 
   always @* begin
     known_sample_w = 1'b0;
@@ -213,6 +291,19 @@ module ff_av2_palette_analyzer_444 #(
       sort_index_q <= 3'd0;
       black_ok_q <= 1'b0;
       palette_supported_q <= 1'b0;
+      fetch_active_q <= 1'b0;
+      fetch_start_q <= 1'b0;
+      fetch_plane_v_q <= 1'b0;
+      fetch_txb_row_mi_q <= 5'd0;
+      fetch_txb_col_mi_q <= 5'd0;
+      fetch_step_q <= 5'd0;
+      fetch_read_pending_q <= 1'b0;
+      fetch_read_is_pred_q <= 1'b0;
+      fetch_capture_step_q <= 5'd0;
+      fetch_read_addr_q <= 12'd0;
+      chroma_fetch_done <= 1'b0;
+      chroma_fetch_txb_samples <= 128'd0;
+      chroma_fetch_predictor_samples <= 32'd0;
       done <= 1'b0;
       unsupported <= 1'b0;
       black_mode <= 1'b0;
@@ -248,6 +339,11 @@ module ff_av2_palette_analyzer_444 #(
       sort_pass_q <= 4'd0;
       sort_index_q <= 3'd0;
       black_ok_q <= 1'b1;
+      fetch_active_q <= 1'b0;
+      fetch_start_q <= 1'b0;
+      fetch_step_q <= 5'd0;
+      fetch_read_pending_q <= 1'b0;
+      chroma_fetch_done <= 1'b0;
       palette_supported_q <=
         (SUPPORT_PALETTE_444 != 0) &&
         (SAMPLE_BITS == 8) &&
@@ -262,6 +358,59 @@ module ff_av2_palette_analyzer_444 #(
       black_mode <= 1'b0;
       luma_palette_mode <= 1'b0;
     end else begin
+      fetch_start_q <= chroma_fetch_start;
+      if (chroma_fetch_start && !fetch_start_q) begin
+        fetch_active_q <= 1'b1;
+        fetch_plane_v_q <= chroma_fetch_plane_v;
+        fetch_txb_row_mi_q <= chroma_fetch_txb_row_mi;
+        fetch_txb_col_mi_q <= chroma_fetch_txb_col_mi;
+        fetch_step_q <= 5'd0;
+        fetch_read_pending_q <= 1'b0;
+        chroma_fetch_done <= 1'b0;
+      end else if (fetch_active_q) begin
+        if (fetch_read_pending_q) begin
+          if (fetch_read_is_pred_q) begin
+            chroma_fetch_predictor_samples[(fetch_capture_step_q - 5'd16) * 8 +: 8] <=
+              fetch_plane_v_q ? chroma_read_v_w : chroma_read_u_w;
+          end else begin
+            chroma_fetch_txb_samples[fetch_capture_step_q * 8 +: 8] <=
+              fetch_plane_v_q ? chroma_read_v_w : chroma_read_u_w;
+          end
+          fetch_read_pending_q <= 1'b0;
+          if (fetch_capture_step_q == 5'd19) begin
+            fetch_active_q <= 1'b0;
+            chroma_fetch_done <= 1'b1;
+          end else begin
+            fetch_step_q <= fetch_capture_step_q + 5'd1;
+          end
+        end else if (fetch_step_q < 5'd16) begin
+          fetch_read_addr_q <= fetch_txb_read_addr_w;
+          fetch_capture_step_q <= fetch_step_q;
+          fetch_read_is_pred_q <= 1'b0;
+          fetch_read_pending_q <= 1'b1;
+        end else if (fetch_step_q < 5'd20) begin
+          if (fetch_txb_col_mi_q == 5'd0 && fetch_txb_row_mi_q == 5'd0) begin
+            chroma_fetch_predictor_samples[(fetch_step_q - 5'd16) * 8 +: 8] <= 8'd129;
+            if (fetch_step_q == 5'd19) begin
+              fetch_active_q <= 1'b0;
+              chroma_fetch_done <= 1'b1;
+            end else begin
+              fetch_step_q <= fetch_step_q + 5'd1;
+            end
+          end else begin
+            fetch_read_addr_q <= fetch_pred_read_addr_w;
+            fetch_capture_step_q <= fetch_step_q;
+            fetch_read_is_pred_q <= 1'b1;
+            fetch_read_pending_q <= 1'b1;
+          end
+        end else begin
+          fetch_active_q <= 1'b0;
+          chroma_fetch_done <= 1'b1;
+        end
+      end else if (!chroma_fetch_start) begin
+        chroma_fetch_done <= 1'b0;
+      end
+
       case (state_q)
         ST_IDLE: begin
         end

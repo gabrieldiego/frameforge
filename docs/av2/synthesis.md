@@ -175,6 +175,90 @@ subset, any AV2 top synthesis that exceeds the documented VVC top in cells,
 estimated LCs, memory, or runtime should be treated as a runaway-design warning
 and optimized before more syntax is added.
 
+## 2026-06-14 Luma Palette + Chroma BDPCM
+
+Measured after adding the 4:4:4 chroma horizontal-BDPCM path and moving the
+stored U/V sample window into `ff_av2_chroma_sample_store`. The store is kept as
+its own hierarchy so Yosys maps the two 4096x8 chroma sample planes into RAM
+instead of expanding them into a full-superblock combinational mux.
+
+Configuration:
+
+- command: `make synth CODEC=av2`
+- DUT: `av2-encoder`
+- RTL top: `ff_av2_encoder`
+- board: `synth/boards/arty-z7-10.env`
+- clock metadata: `25 MHz`
+- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
+- memory limit: 3072 MiB
+- supported RTL input subset: 8-bit 4:4:4, up to 64x64, black frames,
+  luma-palette 8x8 blocks with up to eight luma entries per block, and
+  horizontal-BDPCM chroma residuals.
+
+Validation before synthesis:
+
+```sh
+make rtl-test CODEC=av2 DUT=av2-encoder \
+  RTL_VISIBLE_WIDTH=8 RTL_VISIBLE_HEIGHT=8 \
+  RTL_CHROMA_FORMAT_IDC=3 RTL_SAMPLE_BITS=8 RTL_SOURCE_SAMPLE_BITS=8
+make validate CODEC=av2 \
+  INPUT=verification/generated/test_vectors/bdpcm_horizontal_8x8_1f_yuv444p8.yuv \
+  WIDTH=8 HEIGHT=8 FRAMES=1 FORMAT=yuv444p8 VALIDATE_SYNTH=0
+make validate-set CODEC=av2 \
+  VALIDATION_SET=bdpcm-444 \
+  VALIDATION_STOP_ON_FAIL=1 \
+  VALIDATION_WITH_SYNTH=0
+```
+
+Result:
+
+- Yosys synthesis passed in 316.6 seconds.
+- Peak child RSS observed by the synthesis runner was 1185.96 MiB.
+- Runtime exceeded the 300 second review threshold by 16.6 seconds, but stayed
+  inside the 600 second hard timeout and 3072 MiB memory cap.
+- Post-synthesis critical-path reporting completed in 101.5 seconds with peak
+  child RSS of 1283.70 MiB and reported topological path length 129.
+- The longest top-level path remains the existing luma-palette/range-coder
+  path. The isolated `ff_av2_chroma_sample_store` path length was 1.
+
+Flattened Xilinx-cell estimate from
+`yosys -p 'read_json synth/out/arty-z7-10/ff_av2_encoder/ff_av2_encoder.json; hierarchy -top ff_av2_encoder; flatten; stat -tech xilinx'`:
+
+| Metric | Count |
+|---|---:|
+| Cells | 89138 |
+| Estimated LCs | 37418 |
+| CARRY4 | 1276 |
+| DSP48E1 | 11 |
+| FDCE | 19882 |
+| FDPE | 103 |
+| FDRE | 448 |
+| LUT1 | 557 |
+| LUT2 | 4350 |
+| LUT3 | 3900 |
+| LUT4 | 5743 |
+| LUT5 | 9765 |
+| LUT6 | 18010 |
+| MUXF7 | 3633 |
+| MUXF8 | 715 |
+| RAMB36E1 | 6 |
+
+Delta from the immediately preceding generalized luma-palette baseline:
+
+| Metric | Previous | Current | Delta |
+|---|---:|---:|---:|
+| Synthesis time | 304.8 s | 316.6 s | +11.8 s |
+| Peak synthesis RSS | 1094.01 MiB | 1185.96 MiB | +91.95 MiB |
+| Cells | 79770 | 89138 | +9368 |
+| Estimated LCs | 33892 | 37418 | +3526 |
+| Topological path length | 129 | 129 | 0 |
+| RAMB36E1 | 4 | 6 | +2 |
+
+The first implementation briefly caused synthesis to time out because the
+analyzer exported U/V samples through wide combinational indexed arrays. The
+current baseline fixes that by fetching one 4x4 chroma TXB at a time from the
+RAM-backed chroma store before starting the BDPCM symbolizer.
+
 ## Retired Bring-Up Measurements
 
 Temporary AV2 fixed-output emitters existed during validation plumbing bring-up.

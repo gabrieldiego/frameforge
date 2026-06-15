@@ -47,7 +47,7 @@ endif
 
 ifeq ($(CODEC),av2)
 ifeq ($(DUT),av2-encoder)
-VERILOG_SOURCES := $(CODEC_RTL_DIR)/entropy/ff_av2_partition_cdf_lut.sv $(CODEC_RTL_DIR)/palette/ff_av2_palette_analyzer_444.sv $(CODEC_RTL_DIR)/palette/ff_av2_luma_palette_symbolizer.sv $(CODEC_RTL_DIR)/ff_av2_encoder.sv
+VERILOG_SOURCES := $(CODEC_RTL_DIR)/entropy/ff_av2_partition_cdf_lut.sv $(CODEC_RTL_DIR)/palette/ff_av2_chroma_sample_store.sv $(CODEC_RTL_DIR)/palette/ff_av2_palette_analyzer_444.sv $(CODEC_RTL_DIR)/palette/ff_av2_luma_palette_symbolizer.sv $(CODEC_RTL_DIR)/residual/ff_av2_chroma_bdpcm_symbolizer.sv $(CODEC_RTL_DIR)/ff_av2_encoder.sv
 TOPLEVEL := ff_av2_encoder
 COCOTB_TEST_MODULES := test_av2_encoder
 else

@@ -85,7 +85,7 @@ def av2_palette_reconstruction(data):
                         range(len(colors)), key=lambda index: abs(sample - colors[index])
                     )
                     recon_y[row_start + local_x] = colors[best_index]
-    return bytes(recon_y) + bytes(area * 2)
+    return bytes(recon_y) + data[area:]
 
 
 def av2_rtl_input_stream(data):
@@ -226,11 +226,11 @@ def av2_trace_spec(name):
     if name.startswith("tile.partition."):
         return "AV2 v1.0.0 Section 5.20.3.2 partition()"
     if name.startswith("tile.intra."):
-        return "AV2 v1.0.0 Section 5.20.5.3 intra_frame_mode_info()"
+        return "AV2 v1.0.0 Sections 5.20.5.5 and 5.20.5.6 intra mode syntax"
     if name.startswith("tile.palette."):
-        return "AV2 v1.0.0 Sections 5.11.55 and 5.20.5.3 palette syntax"
+        return "AV2 v1.0.0 Sections 5.20.8.1 and 5.20.8.4 palette syntax"
     if name.startswith("tile.coeff."):
-        return "AV2 v1.0.0 Sections 5.20.7.24 and 5.20.7.25 transform coefficient syntax"
+        return "AV2 v1.0.0 Sections 5.20.7.23, 5.20.7.24, and 5.20.7.27 residual coefficient syntax"
     return "AV2 v1.0.0 tile entropy syntax"
 
 

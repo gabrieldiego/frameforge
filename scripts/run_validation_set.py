@@ -106,7 +106,11 @@ def run_validation(path: Path, args: argparse.Namespace) -> ValidationResult:
     )
     log_path.write_text(process.stdout)
     if process.returncode == 0:
-        reason = "SW/REF checks passed" if args.sw_only else "SW/RTL/REF checks passed"
+        reason = (
+            "SW/REF checksum checks passed"
+            if args.sw_only
+            else "SW/RTL/REF checksum checks passed"
+        )
         return ValidationResult(
             path=path,
             status="PASS",

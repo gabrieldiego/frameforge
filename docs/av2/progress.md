@@ -33,7 +33,8 @@ synthesis wrappers, and cocotb/Yosys entry points remains shared.
   luma palette syntax in `palette_mode_info()`; AVM `av2_allow_palette()` also
   accepts `PLANE_TYPE_Y` only. FrameForge AV2 therefore must use an allowed
   residual, BDPCM, or IBC-style path for chroma rather than a private chroma
-  palette syntax, and arbitrary color screenshots remain lossy for now.
+  palette syntax. The current chroma path uses horizontal BDPCM plus lossless
+  `TX_4X4` coefficient coding.
 - `rtl/av2/ff_av2_encoder.sv` is a synthesizable AV2 top with the same
   top-level handshake shape as the VVC encoder. It consumes a visible 8x8 block
   packet stream over `s_axis_*`: 64 Y samples, then 64 U samples, then 64 V
@@ -41,7 +42,12 @@ synthesis wrappers, and cocotb/Yosys entry points remains shared.
   VVC 4:4:4 packet shape while leaving AV2 superblock traversal internal to the
   AV2 encoder.
 - `rtl/av2/palette/` contains standalone luma-palette modules:
-  `ff_av2_palette_analyzer_444` and `ff_av2_luma_palette_symbolizer`.
+  `ff_av2_palette_analyzer_444`, `ff_av2_chroma_sample_store`, and
+  `ff_av2_luma_palette_symbolizer`.
+- `rtl/av2/residual/ff_av2_chroma_bdpcm_symbolizer.sv` emits the first
+  reference-aligned chroma BDPCM coefficient syntax. The analyzer fetches each
+  4x4 chroma TXB through a small RAM-backed window before the symbolizer runs,
+  avoiding a full-superblock combinational U/V sample mux.
 - `tb/av2/test_av2_encoder.py` drives the AV2 RTL block-packet stream and
   compares the RTL bitstream checksum against the software-generated bitstream
   through the shared validation path.
@@ -154,20 +160,23 @@ Last checked on 2026-06-14:
 - `make validate-set CODEC=av2 VALIDATION_SET=sweep-black-444
   VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0`: passed all 64 black
   4:4:4 geometries.
-- Local screenshot crops from 8x8 through 64x64 are the next lossless 4:4:4
-  target. They are no longer counted as passing while chroma is uncoded; AV2
-  validation now requires the software reconstruction, REF decode of the
-  software bitstream, REF encoder reconstruction, and input checksums to agree.
-- `make synth CODEC=av2`: passed Yosys synthesis for the generalized
-  luma-palette path. The detailed baseline is recorded in
+- `make validate-set CODEC=av2 VALIDATION_SET=bdpcm-444
+  VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0`: passed all 64
+  horizontal-BDPCM 4:4:4 geometries with matching SW/RTL bitstreams and
+  lossless SW/RTL/REF reconstructions.
+- Local screenshot crops from 8x8 through 64x64 remain the next broader
+  lossless 4:4:4 target. Chroma now has a compliant lossless path, but luma
+  blocks with more than eight colors still need a residual, IBC, or escape-like
+  legal coding path.
+- `make synth CODEC=av2`: passed Yosys synthesis for the luma-palette plus
+  chroma-BDPCM path. The detailed baseline is recorded in
   [synthesis.md](synthesis.md), and quality/bitrate measurements are recorded
   in [quality-bitrate.md](quality-bitrate.md).
 
 ## Next Steps
 
-- Add an explicit chroma coding path for 4:4:4 input. The current AV2 branch
-  does not expose UV palette syntax, so this should be residual/transform-skip
-  style coding rather than a non-standard chroma palette header.
+- Add a legal lossless fallback for luma blocks that exceed the current
+  eight-entry palette subset.
 - Continue expanding the block partition and luma-palette decisions while
   keeping the shared top-level packet contract at visible 8x8 Y/U/V blocks
   unless a codec-specific order is clearly cheaper.
