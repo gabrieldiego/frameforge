@@ -16,6 +16,8 @@ pub(crate) struct Av2LumaPaletteBlock444 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Av2LumaPalette444 {
     blocks: Vec<Av2LumaPaletteBlock444>,
+    u_plane: Vec<u8>,
+    v_plane: Vec<u8>,
     reconstruction: Vec<u8>,
     width: usize,
     height: usize,
@@ -45,6 +47,19 @@ impl Av2LumaPalette444 {
 
     pub(crate) fn reconstruction(&self) -> &[u8] {
         &self.reconstruction
+    }
+
+    pub(crate) fn u_sample(&self, x: usize, y: usize) -> u8 {
+        self.chroma_sample(&self.u_plane, x, y)
+    }
+
+    pub(crate) fn v_sample(&self, x: usize, y: usize) -> u8 {
+        self.chroma_sample(&self.v_plane, x, y)
+    }
+
+    fn chroma_sample(&self, plane: &[u8], x: usize, y: usize) -> u8 {
+        assert!(x < self.width && y < self.height);
+        plane[y * self.width + x]
     }
 
     fn block_for_origin(&self, x0: usize, y0: usize) -> &Av2LumaPaletteBlock444 {
@@ -81,6 +96,8 @@ pub(crate) fn build_luma_palette_444(
 
     let plane_len = geometry.width * geometry.height;
     let y_plane = &frame[..plane_len];
+    let u_plane = &frame[plane_len..2 * plane_len];
+    let v_plane = &frame[2 * plane_len..3 * plane_len];
     let blocks_wide = geometry.width / AV2_LUMA_PALETTE_BLOCK_SIZE;
     let blocks_high = geometry.height / AV2_LUMA_PALETTE_BLOCK_SIZE;
     let mut blocks = Vec::with_capacity(blocks_wide * blocks_high);
@@ -110,9 +127,17 @@ pub(crate) fn build_luma_palette_444(
             blocks.push(block);
         }
     }
+    // AV2 v1.0.0 only permits palette_mode_info() on the luma plane in this
+    // branch of AVM. FrameForge therefore keeps luma palette-coded and carries
+    // U/V through a lossless chroma residual path. The model reconstruction is
+    // exact here; tile.rs is responsible for matching that with BDPCM symbols.
+    reconstruction[plane_len..2 * plane_len].copy_from_slice(u_plane);
+    reconstruction[2 * plane_len..3 * plane_len].copy_from_slice(v_plane);
 
     Ok(Av2LumaPalette444 {
         blocks,
+        u_plane: u_plane.to_vec(),
+        v_plane: v_plane.to_vec(),
         reconstruction,
         width: geometry.width,
         height: geometry.height,

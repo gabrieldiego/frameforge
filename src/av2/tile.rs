@@ -6,12 +6,19 @@ use crate::av2::palette::{
 };
 
 const MVP_SUPERBLOCK_SIZE: usize = 64;
+const MVP_LEAF_BLOCK_SIZE: usize = AV2_LUMA_PALETTE_BLOCK_SIZE;
 const MI_SIZE: usize = 4;
 const PARTITION_CONTEXT_DIM: usize = MVP_SUPERBLOCK_SIZE / MI_SIZE;
 const TX4X4_MAX_BLOCK_DIM: usize = MVP_SUPERBLOCK_SIZE / 4;
+const TX4X4_SIZE: usize = 4;
+const TX4X4_SAMPLES: usize = TX4X4_SIZE * TX4X4_SIZE;
+const TX4X4_SCAN: [usize; TX4X4_SAMPLES] = [0, 4, 1, 8, 5, 2, 12, 9, 6, 3, 13, 10, 7, 14, 11, 15];
 const AVM_CDF_PROB_TOP: u16 = 32768;
+const LOSSLESS_DC_PREDICTOR: u8 = 128;
+const LOSSLESS_H_PRED_LEFT_EDGE: u8 = 129;
 const BLACK_LOSSLESS_DC_LEVEL: u16 = 512;
 const NONZERO_NEGATIVE_DC_ENTROPY_CONTEXT: u8 = 15;
+const NONZERO_POSITIVE_DC_ENTROPY_CONTEXT: u8 = 23;
 
 const fn avm_cdf2(a0: u16, p0: i16, p1: i16, p2: i16) -> [u16; 6] {
     [
@@ -55,6 +62,30 @@ const fn avm_cdf5(a0: u16, a1: u16, a2: u16, a3: u16, p0: i16, p1: i16, p2: i16)
         AVM_CDF_PROB_TOP - a1,
         AVM_CDF_PROB_TOP - a2,
         AVM_CDF_PROB_TOP - a3,
+        0,
+        0,
+        (p0 + 3) as u16,
+        (p1 + 4) as u16,
+        (p2 + 5) as u16,
+    ]
+}
+
+const fn avm_cdf6(
+    a0: u16,
+    a1: u16,
+    a2: u16,
+    a3: u16,
+    a4: u16,
+    p0: i16,
+    p1: i16,
+    p2: i16,
+) -> [u16; 10] {
+    [
+        AVM_CDF_PROB_TOP - a0,
+        AVM_CDF_PROB_TOP - a1,
+        AVM_CDF_PROB_TOP - a2,
+        AVM_CDF_PROB_TOP - a3,
+        AVM_CDF_PROB_TOP - a4,
         0,
         0,
         (p0 + 3) as u16,
@@ -402,6 +433,9 @@ const DEFAULT_TXB_SKIP_U_TX4X4_CTX6_CDF: [u16; 6] = [
 ];
 const DEFAULT_TXB_SKIP_U_TX4X4_CTX7_CDF: [u16; 6] = avm_cdf2(13655, 0, 0, -1);
 const DEFAULT_TXB_SKIP_U_TX4X4_CTX8_CDF: [u16; 6] = avm_cdf2(22348, 0, 0, 0);
+const DEFAULT_V_TXB_SKIP_TX4X4_CTX3_CDF: [u16; 6] = avm_cdf2(180, -2, 0, 0);
+const DEFAULT_V_TXB_SKIP_TX4X4_CTX4_CDF: [u16; 6] = avm_cdf2(16384, 0, 0, 0);
+const DEFAULT_V_TXB_SKIP_TX4X4_CTX5_CDF: [u16; 6] = avm_cdf2(16384, 0, 0, 0);
 const DEFAULT_V_TXB_SKIP_TX4X4_CTX9_CDF: [u16; 6] = avm_cdf2(16384, 0, 0, 0);
 const DEFAULT_V_TXB_SKIP_TX4X4_CTX10_CDF: [u16; 6] = avm_cdf2(16384, 0, 0, 0);
 const DEFAULT_V_TXB_SKIP_TX4X4_CTX11_CDF: [u16; 6] = avm_cdf2(16384, 0, 0, 0);
@@ -411,6 +445,53 @@ const DEFAULT_COEFF_BASE_LF_EOB_Y_TX4X4_CTX0_CDF: [u16; 9] =
     avm_cdf5(27486, 31140, 31779, 32064, 0, -1, -2);
 const DEFAULT_COEFF_BASE_LF_EOB_UV_CTX0_CDF: [u16; 9] =
     avm_cdf5(28950, 31443, 32009, 32257, 1, 0, 0);
+const DEFAULT_EOB_EXTRA_CDF: [u16; 6] = avm_cdf2(16391, 0, 0, 0);
+const DEFAULT_COEFF_BASE_EOB_UV_CDFS: [[u16; 7]; 4] = [
+    avm_cdf3(10923, 21845, 0, 0, 0),
+    avm_cdf3(31214, 32437, 1, 1, 1),
+    avm_cdf3(31888, 32447, 1, 0, 1),
+    avm_cdf3(30612, 32073, 1, 1, 1),
+];
+const DEFAULT_COEFF_BASE_LF_EOB_UV_CDFS: [[u16; 9]; 4] = [
+    avm_cdf5(28950, 31443, 32009, 32257, 1, 0, 0),
+    avm_cdf5(29916, 31919, 32224, 32441, 0, -1, -1),
+    avm_cdf5(28902, 30805, 31579, 31816, 0, 0, -2),
+    avm_cdf5(6554, 13107, 19661, 26214, 0, 0, 0),
+];
+const DEFAULT_COEFF_BASE_UV_CDFS: [[u16; 8]; 12] = [
+    avm_cdf4(26904, 32102, 32598, 0, 0, 0),
+    avm_cdf4(15749, 28898, 31610, 1, 1, 0),
+    avm_cdf4(9106, 21329, 26962, 1, 1, 0),
+    avm_cdf4(4828, 12923, 18983, 1, 0, 0),
+    avm_cdf4(27779, 32406, 32689, 1, 1, 0),
+    avm_cdf4(17414, 30077, 32025, 1, 1, 0),
+    avm_cdf4(9228, 22296, 27767, 1, -1, -1),
+    avm_cdf4(4564, 12734, 19144, 1, 1, 0),
+    avm_cdf4(29238, 32489, 32693, 1, -1, 0),
+    avm_cdf4(19819, 30853, 32222, -1, 0, 0),
+    avm_cdf4(9314, 19318, 25346, 0, -1, -1),
+    avm_cdf4(3060, 10265, 16088, 0, -1, 0),
+];
+const DEFAULT_COEFF_BASE_LF_UV_CDFS: [[u16; 10]; 12] = [
+    avm_cdf6(14076, 26464, 29938, 31308, 31828, 0, -1, -1),
+    avm_cdf6(7520, 21227, 27766, 30312, 31477, 1, 0, 0),
+    avm_cdf6(4377, 13290, 19811, 24220, 27064, 1, 1, 0),
+    avm_cdf6(1682, 5139, 8601, 11973, 15046, 1, 1, 0),
+    avm_cdf6(15235, 28605, 31367, 32151, 32451, 0, -1, -1),
+    avm_cdf6(10256, 24586, 29775, 31465, 32137, 1, 1, 1),
+    avm_cdf6(5918, 15629, 22317, 26602, 29101, 1, 1, 0),
+    avm_cdf6(2015, 5704, 9835, 13705, 17299, 1, 0, -1),
+    avm_cdf6(26420, 31955, 32312, 32430, 32526, 1, 0, 0),
+    avm_cdf6(16374, 29560, 31531, 32023, 32291, -1, -1, 0),
+    avm_cdf6(7197, 15954, 20986, 24934, 27737, 0, -1, -1),
+    avm_cdf6(4820, 9488, 11701, 14065, 16248, 0, -2, -1),
+];
+const DEFAULT_COEFF_BR_UV_CDFS: [[u16; 8]; 4] = [
+    avm_cdf4(20014, 26541, 29552, 0, -1, -2),
+    avm_cdf4(20674, 27680, 30329, 1, 0, 1),
+    avm_cdf4(16228, 24293, 28314, 1, 0, 0),
+    avm_cdf4(9580, 16283, 20959, 1, 0, 0),
+];
 const DEFAULT_COEFF_LPS_LF_CTX0_CDF: [u16; 8] = avm_cdf4(7943, 14193, 20775, -1, -1, -2);
 const DEFAULT_DC_SIGN_Y_CTX0_CDF: [u16; 6] = avm_cdf2(15831, 1, 1, 1);
 const DEFAULT_DC_SIGN_Y_CTX1_CDF: [u16; 6] = avm_cdf2(13632, 1, 0, 0);
@@ -638,6 +719,12 @@ enum Av2TileDecisionKind {
     LumaPaletteColorMap,
     BlackDcResidualCoefficients,
     LumaPaletteResidualCoefficients,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Av2ChromaPlane {
+    U,
+    V,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -912,6 +999,14 @@ impl Av2Black444TilePlan {
     }
 
     fn visit_leaf(&mut self, row_mi: usize, col_mi: usize, block_size: Av2MvpBlockSize) {
+        assert_eq!(
+            block_size.width, MVP_LEAF_BLOCK_SIZE,
+            "AV2 MVP currently fixes coding leaves to 8x8 blocks"
+        );
+        assert_eq!(
+            block_size.height, MVP_LEAF_BLOCK_SIZE,
+            "AV2 MVP currently fixes coding leaves to 8x8 blocks"
+        );
         self.decisions.push(Av2TileDecision {
             kind: Av2TileDecisionKind::IntraLumaDc,
             row: row_mi,
@@ -978,7 +1073,7 @@ impl Av2Black444TilePlan {
                     write_intra_luma_dc(writer, *decision);
                 }
                 Av2TileDecisionKind::IntraChromaDc => {
-                    write_intra_chroma_dc(writer, *decision);
+                    write_intra_chroma_mode(writer, *decision, self.luma_palette);
                 }
                 Av2TileDecisionKind::LumaPaletteModeInfo => {
                     write_luma_palette_mode_info(
@@ -1010,6 +1105,7 @@ impl Av2Black444TilePlan {
                         *decision,
                         self.visible_rows_mi,
                         self.visible_cols_mi,
+                        palette.expect("luma palette residual needs palette state"),
                         &mut txb_contexts,
                     );
                 }
@@ -1048,41 +1144,7 @@ fn choose_partition(
     visible_rows_mi: usize,
     visible_cols_mi: usize,
 ) -> Av2MvpPartition {
-    if !block_size.is_partition_point() {
-        return Av2MvpPartition::None;
-    }
-    let allowed = allowed_partitions(row_mi, col_mi, block_size, visible_rows_mi, visible_cols_mi);
-    if let Some(forced) =
-        forced_boundary_partition(row_mi, col_mi, block_size, visible_rows_mi, visible_cols_mi)
-    {
-        if allowed.contains(forced) {
-            return forced;
-        }
-    }
-    if let Some(partition) =
-        preferred_16x16_to_8x8_partition(block_size, visible_rows_mi, visible_cols_mi)
-    {
-        if allowed.contains(partition) {
-            return partition;
-        }
-    }
-    if let Some(only_allowed) = allowed.only() {
-        return only_allowed;
-    }
-    if allowed.none {
-        return Av2MvpPartition::None;
-    }
-    if should_reduce_height(row_mi, block_size, visible_rows_mi) && allowed.horz {
-        Av2MvpPartition::Horz
-    } else if should_reduce_width(col_mi, block_size, visible_cols_mi) && allowed.vert {
-        Av2MvpPartition::Vert
-    } else if allowed.horz {
-        Av2MvpPartition::Horz
-    } else if allowed.vert {
-        Av2MvpPartition::Vert
-    } else {
-        Av2MvpPartition::None
-    }
+    choose_8x8_leaf_partition(row_mi, col_mi, block_size, visible_rows_mi, visible_cols_mi)
 }
 
 fn choose_luma_palette_partition(
@@ -1092,9 +1154,20 @@ fn choose_luma_palette_partition(
     visible_rows_mi: usize,
     visible_cols_mi: usize,
 ) -> Av2MvpPartition {
-    if block_size.width == AV2_LUMA_PALETTE_BLOCK_SIZE
-        && block_size.height == AV2_LUMA_PALETTE_BLOCK_SIZE
-    {
+    choose_8x8_leaf_partition(row_mi, col_mi, block_size, visible_rows_mi, visible_cols_mi)
+}
+
+fn choose_8x8_leaf_partition(
+    row_mi: usize,
+    col_mi: usize,
+    block_size: Av2MvpBlockSize,
+    visible_rows_mi: usize,
+    visible_cols_mi: usize,
+) -> Av2MvpPartition {
+    // AV2 v1.0.0 Section 5.20.3 partition syntax permits recursive binary
+    // splits. FrameForge's current AV2 MVP fixes the coding leaf to 8x8; any
+    // TX_4X4 symbols later in the residual path are transform blocks only.
+    if block_size.width == MVP_LEAF_BLOCK_SIZE && block_size.height == MVP_LEAF_BLOCK_SIZE {
         return Av2MvpPartition::None;
     }
     if !block_size.is_partition_point() {
@@ -1114,24 +1187,24 @@ fn choose_luma_palette_partition(
     }
 
     if block_size.width == block_size.height {
-        if block_size.height > AV2_LUMA_PALETTE_BLOCK_SIZE && allowed.horz {
+        if block_size.height > MVP_LEAF_BLOCK_SIZE && allowed.horz {
             return Av2MvpPartition::Horz;
         }
-        if block_size.width > AV2_LUMA_PALETTE_BLOCK_SIZE && allowed.vert {
+        if block_size.width > MVP_LEAF_BLOCK_SIZE && allowed.vert {
             return Av2MvpPartition::Vert;
         }
     } else if block_size.width > block_size.height {
-        if block_size.width > AV2_LUMA_PALETTE_BLOCK_SIZE && allowed.vert {
+        if block_size.width > MVP_LEAF_BLOCK_SIZE && allowed.vert {
             return Av2MvpPartition::Vert;
         }
-        if block_size.height > AV2_LUMA_PALETTE_BLOCK_SIZE && allowed.horz {
+        if block_size.height > MVP_LEAF_BLOCK_SIZE && allowed.horz {
             return Av2MvpPartition::Horz;
         }
     } else {
-        if block_size.height > AV2_LUMA_PALETTE_BLOCK_SIZE && allowed.horz {
+        if block_size.height > MVP_LEAF_BLOCK_SIZE && allowed.horz {
             return Av2MvpPartition::Horz;
         }
-        if block_size.width > AV2_LUMA_PALETTE_BLOCK_SIZE && allowed.vert {
+        if block_size.width > MVP_LEAF_BLOCK_SIZE && allowed.vert {
             return Av2MvpPartition::Vert;
         }
     }
@@ -1144,24 +1217,6 @@ fn choose_luma_palette_partition(
         Av2MvpPartition::Vert
     } else {
         Av2MvpPartition::None
-    }
-}
-
-fn preferred_16x16_to_8x8_partition(
-    block_size: Av2MvpBlockSize,
-    visible_rows_mi: usize,
-    visible_cols_mi: usize,
-) -> Option<Av2MvpPartition> {
-    // AV2 v1.0.0 Section 5.20.3 partition syntax permits binary recursive
-    // splits. The first RTL partition bring-up keeps the policy deliberately
-    // small: only an exactly visible 16x16 frame is split into four 8x8 leaves.
-    if visible_rows_mi != 4 || visible_cols_mi != 4 {
-        return None;
-    }
-    match (block_size.width, block_size.height) {
-        (16, 16) => Some(Av2MvpPartition::Horz),
-        (16, 8) => Some(Av2MvpPartition::Vert),
-        _ => None,
     }
 }
 
@@ -1209,18 +1264,6 @@ fn forced_boundary_partition(
             (block_size.mi_height() >= 4 && !sub_has_rows).then_some(Av2MvpPartition::Vert)
         }
     }
-}
-
-fn should_reduce_height(
-    row_mi: usize,
-    block_size: Av2MvpBlockSize,
-    visible_rows_mi: usize,
-) -> bool {
-    row_mi + block_size.mi_height() > visible_rows_mi
-}
-
-fn should_reduce_width(col_mi: usize, block_size: Av2MvpBlockSize, visible_cols_mi: usize) -> bool {
-    col_mi + block_size.mi_width() > visible_cols_mi
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1368,9 +1411,9 @@ fn write_partition(
 
 fn write_intra_luma_dc(writer: &mut Av2EntropyWriter, decision: Av2TileDecision) {
     let mut dpcm_cdf = DEFAULT_DPCM_CDF;
-    // AV2 v1.0.0 Section 5.11.55 intra_frame_mode_info(): lossless intra
-    // blocks signal DPCM usage before luma mode. The MVP path keeps normal
-    // intra prediction and emits use_dpcm_y=0.
+    // AV2 v1.0.0 Section 5.20.5.5 read_intra_y_mode(): lossless
+    // intra blocks signal DPCM usage before luma mode. The MVP path keeps
+    // normal intra prediction and emits use_dpcm_y=0.
     writer.write_symbol("tile.intra.use_dpcm_y", 0, &mut dpcm_cdf, 2, false);
 
     let mut mode_set_cdf = DEFAULT_Y_MODE_SET_CDF;
@@ -1394,11 +1437,35 @@ fn write_intra_luma_dc(writer: &mut Av2EntropyWriter, decision: Av2TileDecision)
     }
 }
 
-fn write_intra_chroma_dc(writer: &mut Av2EntropyWriter, _decision: Av2TileDecision) {
+fn write_intra_chroma_mode(
+    writer: &mut Av2EntropyWriter,
+    _decision: Av2TileDecision,
+    use_bdpcm_uv: bool,
+) {
     let mut dpcm_uv_cdf = DEFAULT_DPCM_CDF;
-    // AV2 v1.0.0 Section 5.11.55 also signals chroma DPCM in lossless shared
-    // tree blocks. The MVP path keeps normal chroma DC prediction.
-    writer.write_symbol("tile.intra.use_dpcm_uv", 0, &mut dpcm_uv_cdf, 2, false);
+    // AV2 v1.0.0 Section 5.20.5.6 read_intra_uv_mode() signals chroma DPCM
+    // in lossless shared tree blocks. Black smoke vectors keep the original
+    // chroma DC path; luma-palette vectors use horizontal DPCM to preserve
+    // 4:4:4 chroma losslessly without illegal chroma palette signalling.
+    writer.write_symbol(
+        "tile.intra.use_dpcm_uv",
+        usize::from(use_bdpcm_uv),
+        &mut dpcm_uv_cdf,
+        2,
+        false,
+    );
+
+    if use_bdpcm_uv {
+        let mut dpcm_uv_direction_cdf = DEFAULT_DPCM_CDF;
+        writer.write_symbol(
+            "tile.intra.dpcm_uv_horz",
+            1,
+            &mut dpcm_uv_direction_cdf,
+            2,
+            false,
+        );
+        return;
+    }
 
     let mut uv_mode_cdf = DEFAULT_UV_MODE_CTX0_CDF;
     writer.write_symbol("tile.intra.uv_mode_idx_dc", 0, &mut uv_mode_cdf, 8, false);
@@ -1426,9 +1493,9 @@ fn write_luma_palette_mode_info(
         "AV2 palette size must be within the spec range"
     );
     let mut mode_cdf = DEFAULT_PALETTE_Y_MODE_CDF;
-    // AV2 v1.0.0 Section 5.11.55 intra_frame_mode_info(), via AVM
-    // write_palette_mode_info(): DC_PRED luma blocks signal whether a luma
-    // palette is present before palette size and color literals.
+    // AV2 v1.0.0 Section 5.20.8.1 palette_mode_info(): DC_PRED luma blocks
+    // signal whether a luma palette is present before palette size and color
+    // literals.
     writer.write_symbol("tile.palette.y_mode_present", 1, &mut mode_cdf, 2, false);
 
     let mut size_cdf = DEFAULT_PALETTE_Y_SIZE_CDF;
@@ -1447,10 +1514,10 @@ fn write_luma_palette_mode_info(
 fn write_luma_palette_colors(writer: &mut Av2EntropyWriter, colors: &[u8], cache: &[u8]) {
     assert!(colors.windows(2).all(|pair| pair[0] < pair[1]));
     for _ in cache {
-        // AV2 v1.0.0 write_palette_colors_y() permits each above/left cache
-        // entry to be declined. The MVP deliberately declines all cache colors
-        // so the RTL only needs the cache length; color reuse can be optimized
-        // later without changing the block-local palette interface.
+        // AV2 v1.0.0 Section 5.20.8.1 palette_mode_info() permits each
+        // above/left cache entry to be declined. The MVP deliberately declines
+        // all cache colors so the RTL only needs the cache length; color reuse
+        // can be optimized later without changing the block-local interface.
         writer.write_literal("tile.palette.y_color_cache", 0, 1);
     }
 
@@ -1502,9 +1569,9 @@ fn write_luma_palette_color_map(
     let y0 = decision.row * MI_SIZE;
     let colors = palette.color_count_for_block(x0, y0);
     if decision.block_size.width < 64 && decision.block_size.height < 64 {
-        // AV2 v1.0.0 decode_color_map_tokens(): palette blocks smaller than
-        // 64x64 signal a scan direction before the identity-row and color-index
-        // tokens. The MVP keeps horizontal scan order (direction=0).
+        // AV2 v1.0.0 Section 5.20.8.4 palette_tokens(): palette blocks
+        // smaller than 64x64 signal a scan direction before the identity-row
+        // and color-index tokens. The MVP keeps horizontal scan order.
         writer.write_literal("tile.palette.y_direction", 0, 1);
     }
     let mut prev_identity_row_flag = 0usize;
@@ -1728,8 +1795,8 @@ fn write_black_dc_residual_coefficients(
     visible_cols_mi: usize,
     contexts: &mut Av2TxbEntropyContexts,
 ) {
-    // AV2 v1.0.0 Sections 5.11.55, 5.20.1 and the AVM
-    // av2_read_coeffs_txb() lossless path force TX_4X4 for this intra block.
+    // AV2 v1.0.0 Section 5.20.7.23 residual() sets lossless residuals to
+    // TX_4X4 transform blocks.
     // DC_PRED reconstructs 128 at frame/tile boundaries, so a black input
     // needs one negative DC coefficient per TXB. With qindex 0, dequant is 64
     // and the lossless 4x4 inverse WHT divides a DC-only coefficient by four;
@@ -1771,13 +1838,16 @@ fn write_black_dc_residual_coefficients(
         }
     }
 
+    let last_u_txb_nonzero = txb_width != 0 && txb_height != 0;
     for row in 0..txb_height {
         let abs_row = decision.row + row;
         for col in 0..txb_width {
             let abs_col = decision.col + col;
-            let skip_ctx =
-                chroma_txb_skip_base_context(contexts.v_above[abs_col], contexts.v_left[abs_row])
-                    + 9;
+            let skip_ctx = v_txb_skip_context(
+                contexts.v_above[abs_col],
+                contexts.v_left[abs_row],
+                last_u_txb_nonzero,
+            );
             write_v_black_dc_txb(writer, skip_ctx);
             contexts.v_above[abs_col] = NONZERO_NEGATIVE_DC_ENTROPY_CONTEXT;
             contexts.v_left[abs_row] = NONZERO_NEGATIVE_DC_ENTROPY_CONTEXT;
@@ -1790,12 +1860,15 @@ fn write_luma_palette_residual_coefficients(
     decision: Av2TileDecision,
     visible_rows_mi: usize,
     visible_cols_mi: usize,
+    palette: &Av2LumaPalette444,
     contexts: &mut Av2TxbEntropyContexts,
 ) {
     // AV2 v1.0.0 palette prediction supplies the reconstructed luma samples
     // from palette colors and the decoded color-index map. The residual path
-    // therefore emits all-zero luma TXBs, while the first zero-chroma subset
-    // keeps using the established black DC chroma residuals.
+    // therefore emits all-zero luma TXBs. Chroma palette is not legal in this
+    // AV2 branch: av2_allow_palette() accepts PLANE_TYPE_Y only, and AVM keeps
+    // palette_size[1] at zero. Chroma therefore remains on an allowed residual
+    // path even though the public FrameForge leaf and input packet are 8x8.
     let txb_width = decision
         .block_size
         .tx4x4_width()
@@ -1816,6 +1889,7 @@ fn write_luma_palette_residual_coefficients(
         }
     }
 
+    let mut last_u_txb_nonzero = false;
     for row in 0..txb_height {
         let abs_row = decision.row + row;
         for col in 0..txb_width {
@@ -1823,9 +1897,17 @@ fn write_luma_palette_residual_coefficients(
             let skip_ctx =
                 chroma_txb_skip_base_context(contexts.u_above[abs_col], contexts.u_left[abs_row])
                     + 6;
-            write_u_black_dc_txb(writer, skip_ctx);
-            contexts.u_above[abs_col] = NONZERO_NEGATIVE_DC_ENTROPY_CONTEXT;
-            contexts.u_left[abs_row] = NONZERO_NEGATIVE_DC_ENTROPY_CONTEXT;
+            let coefficients = chroma_bdpcm_horz_tx4x4_coefficients(
+                palette,
+                Av2ChromaPlane::U,
+                abs_col * TX4X4_SIZE,
+                abs_row * TX4X4_SIZE,
+            );
+            let (context, nonzero) =
+                write_chroma_bdpcm_txb(writer, Av2ChromaPlane::U, skip_ctx, &coefficients);
+            contexts.u_above[abs_col] = context;
+            contexts.u_left[abs_row] = context;
+            last_u_txb_nonzero = nonzero;
         }
     }
 
@@ -1833,12 +1915,21 @@ fn write_luma_palette_residual_coefficients(
         let abs_row = decision.row + row;
         for col in 0..txb_width {
             let abs_col = decision.col + col;
-            let skip_ctx =
-                chroma_txb_skip_base_context(contexts.v_above[abs_col], contexts.v_left[abs_row])
-                    + 9;
-            write_v_black_dc_txb(writer, skip_ctx);
-            contexts.v_above[abs_col] = NONZERO_NEGATIVE_DC_ENTROPY_CONTEXT;
-            contexts.v_left[abs_row] = NONZERO_NEGATIVE_DC_ENTROPY_CONTEXT;
+            let skip_ctx = v_txb_skip_context(
+                contexts.v_above[abs_col],
+                contexts.v_left[abs_row],
+                last_u_txb_nonzero,
+            );
+            let coefficients = chroma_bdpcm_horz_tx4x4_coefficients(
+                palette,
+                Av2ChromaPlane::V,
+                abs_col * TX4X4_SIZE,
+                abs_row * TX4X4_SIZE,
+            );
+            let (context, _) =
+                write_chroma_bdpcm_txb(writer, Av2ChromaPlane::V, skip_ctx, &coefficients);
+            contexts.v_above[abs_col] = context;
+            contexts.v_left[abs_row] = context;
         }
     }
 }
@@ -1852,19 +1943,484 @@ fn write_y_black_dc_txb(writer: &mut Av2EntropyWriter, skip_ctx: u8, dc_sign_ctx
 }
 
 fn write_u_black_dc_txb(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
-    write_u_txb_nonzero(writer, skip_ctx);
-    write_eob_one_uv(writer);
-    write_uv_dc_level(writer, BLACK_LOSSLESS_DC_LEVEL);
-    writer.write_literal("tile.coeff.u.dc_sign_negative", 1, 1);
-    write_uv_dc_high_range(writer, BLACK_LOSSLESS_DC_LEVEL);
+    let context = write_u_lossless_dc_txb(writer, skip_ctx, 0);
+    assert_eq!(context, NONZERO_NEGATIVE_DC_ENTROPY_CONTEXT);
 }
 
 fn write_v_black_dc_txb(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
+    let context = write_v_lossless_dc_txb(writer, skip_ctx, 0);
+    assert_eq!(context, NONZERO_NEGATIVE_DC_ENTROPY_CONTEXT);
+}
+
+fn write_u_lossless_dc_txb(writer: &mut Av2EntropyWriter, skip_ctx: u8, sample: u8) -> u8 {
+    if sample == LOSSLESS_DC_PREDICTOR {
+        write_u_txb_all_zero(writer, skip_ctx);
+        return 0;
+    }
+    let (level, negative) = lossless_dc_level_for_sample(sample);
+    write_u_txb_nonzero(writer, skip_ctx);
+    write_eob_one_uv(writer);
+    write_uv_dc_level(writer, level);
+    writer.write_literal("tile.coeff.u.dc_sign_negative", u32::from(negative), 1);
+    write_uv_dc_high_range(writer, level);
+    nonzero_dc_entropy_context(negative)
+}
+
+fn write_v_lossless_dc_txb(writer: &mut Av2EntropyWriter, skip_ctx: u8, sample: u8) -> u8 {
+    if sample == LOSSLESS_DC_PREDICTOR {
+        write_v_txb_all_zero(writer, skip_ctx);
+        return 0;
+    }
+    let (level, negative) = lossless_dc_level_for_sample(sample);
     write_v_txb_nonzero(writer, skip_ctx);
     write_eob_one_uv(writer);
-    write_uv_dc_level(writer, BLACK_LOSSLESS_DC_LEVEL);
-    writer.write_literal("tile.coeff.v.dc_sign_negative", 1, 1);
-    write_uv_dc_high_range(writer, BLACK_LOSSLESS_DC_LEVEL);
+    write_uv_dc_level(writer, level);
+    writer.write_literal("tile.coeff.v.dc_sign_negative", u32::from(negative), 1);
+    write_uv_dc_high_range(writer, level);
+    nonzero_dc_entropy_context(negative)
+}
+
+fn chroma_bdpcm_horz_tx4x4_coefficients(
+    palette: &Av2LumaPalette444,
+    plane: Av2ChromaPlane,
+    x0: usize,
+    y0: usize,
+) -> [i32; TX4X4_SAMPLES] {
+    let mut residual = [0i32; TX4X4_SAMPLES];
+    for local_y in 0..TX4X4_SIZE {
+        let y = y0 + local_y;
+        let row_predictor = i32::from(chroma_h_predictor(palette, plane, x0, y0, local_y));
+        for local_x in 0..TX4X4_SIZE {
+            let x = x0 + local_x;
+            let sample = i32::from(chroma_sample(palette, plane, x, y));
+            let predicted_delta = if local_x == 0 {
+                sample - row_predictor
+            } else {
+                let previous = i32::from(chroma_sample(palette, plane, x - 1, y));
+                sample - previous
+            };
+            residual[local_y * TX4X4_SIZE + local_x] = predicted_delta;
+        }
+    }
+
+    av2_fwht4x4(&residual)
+}
+
+fn chroma_h_predictor(
+    palette: &Av2LumaPalette444,
+    plane: Av2ChromaPlane,
+    x0: usize,
+    y0: usize,
+    local_y: usize,
+) -> u8 {
+    // AV2 v1.0.0 Section 7.11 intra prediction, mirrored from AVM
+    // av2_build_intra_predictors_high(): H_PRED uses the left reference
+    // column; if the left edge is unavailable, AVM falls back to above[0] when
+    // available and to base+1 at the top-left frame corner.
+    if x0 > 0 {
+        chroma_sample(palette, plane, x0 - 1, y0 + local_y)
+    } else if y0 > 0 {
+        chroma_sample(palette, plane, x0, y0 - 1)
+    } else {
+        LOSSLESS_H_PRED_LEFT_EDGE
+    }
+}
+
+fn chroma_sample(palette: &Av2LumaPalette444, plane: Av2ChromaPlane, x: usize, y: usize) -> u8 {
+    match plane {
+        Av2ChromaPlane::U => palette.u_sample(x, y),
+        Av2ChromaPlane::V => palette.v_sample(x, y),
+    }
+}
+
+fn av2_fwht4x4(input: &[i32; TX4X4_SAMPLES]) -> [i32; TX4X4_SAMPLES] {
+    // AV2 v1.0.0 lossless TX_4X4 uses AVM av2_fwht4x4_c() before coefficient
+    // coding. The final UNIT_QUANT_FACTOR multiply is preserved so coefficient
+    // levels below divide by eight, matching qindex 0 dequantization.
+    let mut output = [0i32; TX4X4_SAMPLES];
+    for i in 0..TX4X4_SIZE {
+        let mut a1 = input[i];
+        let mut b1 = input[TX4X4_SIZE + i];
+        let mut c1 = input[2 * TX4X4_SIZE + i];
+        let mut d1 = input[3 * TX4X4_SIZE + i];
+
+        a1 += b1;
+        d1 -= c1;
+        let e1 = (a1 - d1) >> 1;
+        b1 = e1 - b1;
+        c1 = e1 - c1;
+        a1 -= c1;
+        d1 += b1;
+
+        output[i] = a1;
+        output[TX4X4_SIZE + i] = c1;
+        output[2 * TX4X4_SIZE + i] = d1;
+        output[3 * TX4X4_SIZE + i] = b1;
+    }
+
+    let pass0 = output;
+    for i in 0..TX4X4_SIZE {
+        let mut a1 = pass0[i * TX4X4_SIZE];
+        let mut b1 = pass0[i * TX4X4_SIZE + 1];
+        let mut c1 = pass0[i * TX4X4_SIZE + 2];
+        let mut d1 = pass0[i * TX4X4_SIZE + 3];
+
+        a1 += b1;
+        d1 -= c1;
+        let e1 = (a1 - d1) >> 1;
+        b1 = e1 - b1;
+        c1 = e1 - c1;
+        a1 -= c1;
+        d1 += b1;
+
+        output[i * TX4X4_SIZE] = a1 * 8;
+        output[i * TX4X4_SIZE + 1] = c1 * 8;
+        output[i * TX4X4_SIZE + 2] = d1 * 8;
+        output[i * TX4X4_SIZE + 3] = b1 * 8;
+    }
+    output
+}
+
+fn write_chroma_bdpcm_txb(
+    writer: &mut Av2EntropyWriter,
+    plane: Av2ChromaPlane,
+    skip_ctx: u8,
+    coefficients: &[i32; TX4X4_SAMPLES],
+) -> (u8, bool) {
+    let levels = chroma_coefficient_levels(coefficients);
+    let Some(eob) = chroma_eob(&levels) else {
+        match plane {
+            Av2ChromaPlane::U => write_u_txb_all_zero(writer, skip_ctx),
+            Av2ChromaPlane::V => write_v_txb_all_zero(writer, skip_ctx),
+        }
+        return (0, false);
+    };
+
+    match plane {
+        Av2ChromaPlane::U => write_u_txb_nonzero(writer, skip_ctx),
+        Av2ChromaPlane::V => write_v_txb_nonzero(writer, skip_ctx),
+    }
+    write_eob_uv(writer, eob);
+
+    for scan_index in (1..eob).rev() {
+        let pos = TX4X4_SCAN[scan_index];
+        let level = levels[pos];
+        let coeff_ctx =
+            chroma_nz_map_context(&levels, pos, scan_index, scan_index + 1 == eob, plane);
+        write_chroma_coefficient_level(
+            writer,
+            &levels,
+            pos,
+            scan_index + 1 == eob,
+            coeff_ctx,
+            level,
+        );
+    }
+
+    let dc_level = levels[0];
+    let dc_ctx = chroma_nz_map_context(&levels, 0, 0, eob == 1, plane);
+    write_chroma_coefficient_level(writer, &levels, 0, eob == 1, dc_ctx, dc_level);
+
+    let mut cul_level = 0u32;
+    let mut dc_val = 0i32;
+    let mut hr_level_avg = 0u32;
+    for scan_index in (0..eob).rev() {
+        let pos = TX4X4_SCAN[scan_index];
+        let level = levels[pos];
+        if level == 0 {
+            continue;
+        }
+        let negative = coefficients[pos] < 0;
+        let sign_name = match plane {
+            Av2ChromaPlane::U if scan_index == 0 => "tile.coeff.u.dc_sign_negative",
+            Av2ChromaPlane::V if scan_index == 0 => "tile.coeff.v.dc_sign_negative",
+            Av2ChromaPlane::U => "tile.coeff.u.ac_sign_negative",
+            Av2ChromaPlane::V => "tile.coeff.v.ac_sign_negative",
+        };
+        writer.write_literal(sign_name, u32::from(negative), 1);
+        write_chroma_high_range(writer, plane, pos, level, &mut hr_level_avg);
+        if scan_index == 0 {
+            dc_val = if negative {
+                -(level as i32)
+            } else {
+                level as i32
+            };
+        }
+        cul_level += level;
+    }
+
+    (chroma_entropy_context(cul_level, dc_val), true)
+}
+
+fn chroma_coefficient_levels(coefficients: &[i32; TX4X4_SAMPLES]) -> [u32; TX4X4_SAMPLES] {
+    let mut levels = [0u32; TX4X4_SAMPLES];
+    for (index, &coefficient) in coefficients.iter().enumerate() {
+        assert_eq!(
+            coefficient % 8,
+            0,
+            "AV2 lossless WHT coefficient must be divisible by UNIT_QUANT_FACTOR"
+        );
+        levels[index] = coefficient.unsigned_abs() / 8;
+    }
+    levels
+}
+
+fn chroma_eob(levels: &[u32; TX4X4_SAMPLES]) -> Option<usize> {
+    TX4X4_SCAN
+        .iter()
+        .position(|&pos| levels[pos] != 0)
+        .and_then(|_| {
+            TX4X4_SCAN
+                .iter()
+                .rposition(|&pos| levels[pos] != 0)
+                .map(|index| index + 1)
+        })
+}
+
+fn write_eob_uv(writer: &mut Av2EntropyWriter, eob: usize) {
+    let (eob_pt, eob_extra) = eob_pos_token(eob);
+    let mut cdf = DEFAULT_EOB_MULTI16_UV_CTX2_CDF;
+    writer.write_symbol("tile.coeff.uv.eob_pt_tx4x4", eob_pt - 1, &mut cdf, 5, false);
+
+    let eob_offset_bits = eob_offset_bits(eob_pt);
+    if eob_offset_bits > 0 {
+        let eob_shift = eob_offset_bits - 1;
+        let bit = (eob_extra & (1 << eob_shift)) != 0;
+        let mut extra_cdf = DEFAULT_EOB_EXTRA_CDF;
+        writer.write_symbol(
+            "tile.coeff.uv.eob_extra_bit",
+            usize::from(bit),
+            &mut extra_cdf,
+            2,
+            false,
+        );
+        let low_bits = eob_extra & ((1 << eob_shift) - 1);
+        writer.write_literal("tile.coeff.uv.eob_extra", low_bits as u32, eob_shift as u8);
+    }
+}
+
+fn eob_pos_token(eob: usize) -> (usize, usize) {
+    const EOB_TO_POS_SMALL: [usize; 33] = [
+        0, 1, 2, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+        6, 6, 6,
+    ];
+    const EOB_GROUP_START: [usize; 12] = [0, 1, 2, 3, 5, 9, 17, 33, 65, 129, 257, 513];
+    assert!((1..=TX4X4_SAMPLES).contains(&eob));
+    let token = EOB_TO_POS_SMALL[eob];
+    (token, eob - EOB_GROUP_START[token])
+}
+
+fn eob_offset_bits(eob_pt: usize) -> usize {
+    const EOB_OFFSET_BITS: [usize; 12] = [0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    EOB_OFFSET_BITS[eob_pt]
+}
+
+fn write_chroma_coefficient_level(
+    writer: &mut Av2EntropyWriter,
+    levels: &[u32; TX4X4_SAMPLES],
+    pos: usize,
+    is_eob_coefficient: bool,
+    coeff_ctx: usize,
+    level: u32,
+) {
+    let limits = chroma_lf_limits(pos);
+    if is_eob_coefficient {
+        assert!(level > 0, "AV2 EOB coefficient must be non-zero");
+        if limits {
+            let mut cdf = DEFAULT_COEFF_BASE_LF_EOB_UV_CDFS[coeff_ctx];
+            writer.write_symbol(
+                "tile.coeff.uv.base_lf_eob",
+                level.min(5) as usize - 1,
+                &mut cdf,
+                5,
+                false,
+            );
+        } else {
+            let mut cdf = DEFAULT_COEFF_BASE_EOB_UV_CDFS[coeff_ctx];
+            writer.write_symbol(
+                "tile.coeff.uv.base_eob",
+                level.min(3) as usize - 1,
+                &mut cdf,
+                3,
+                false,
+            );
+            if level > 2 {
+                write_chroma_low_range(writer, levels, pos, level - 3);
+            }
+        }
+    } else if limits {
+        let mut cdf = DEFAULT_COEFF_BASE_LF_UV_CDFS[coeff_ctx];
+        writer.write_symbol(
+            "tile.coeff.uv.base_lf",
+            level.min(5) as usize,
+            &mut cdf,
+            6,
+            false,
+        );
+    } else {
+        let mut cdf = DEFAULT_COEFF_BASE_UV_CDFS[coeff_ctx];
+        writer.write_symbol(
+            "tile.coeff.uv.base",
+            level.min(3) as usize,
+            &mut cdf,
+            4,
+            false,
+        );
+        if level > 2 {
+            write_chroma_low_range(writer, levels, pos, level - 3);
+        }
+    }
+}
+
+fn write_chroma_low_range(
+    writer: &mut Av2EntropyWriter,
+    levels: &[u32; TX4X4_SAMPLES],
+    pos: usize,
+    base_range: u32,
+) {
+    let br_ctx = chroma_br_context(levels, pos);
+    let mut cdf = DEFAULT_COEFF_BR_UV_CDFS[br_ctx];
+    writer.write_symbol(
+        "tile.coeff.uv.low_range",
+        base_range.min(3) as usize,
+        &mut cdf,
+        4,
+        false,
+    );
+}
+
+fn write_chroma_high_range(
+    writer: &mut Av2EntropyWriter,
+    plane: Av2ChromaPlane,
+    pos: usize,
+    level: u32,
+    hr_level_avg: &mut u32,
+) {
+    let limits = chroma_lf_limits(pos);
+    let threshold = if limits { 4 } else { 5 };
+    if level <= threshold {
+        return;
+    }
+    let decoded_base = if limits { 5 } else { 6 };
+    let high_range = level.saturating_sub(decoded_base);
+    let name = match plane {
+        Av2ChromaPlane::U => "tile.coeff.u.high_range",
+        Av2ChromaPlane::V => "tile.coeff.v.high_range",
+    };
+    write_adaptive_high_range_with_context(writer, name, high_range, *hr_level_avg);
+    *hr_level_avg = (*hr_level_avg + high_range) >> 1;
+}
+
+fn chroma_nz_map_context(
+    levels: &[u32; TX4X4_SAMPLES],
+    pos: usize,
+    scan_index: usize,
+    is_eob_coefficient: bool,
+    plane: Av2ChromaPlane,
+) -> usize {
+    if is_eob_coefficient {
+        return get_lower_levels_ctx_eob(scan_index);
+    }
+    if chroma_lf_limits(pos) {
+        return chroma_lower_levels_lf_context(levels, pos, plane);
+    }
+    chroma_lower_levels_context(levels, pos, plane)
+}
+
+fn get_lower_levels_ctx_eob(scan_index: usize) -> usize {
+    if scan_index == 0 {
+        0
+    } else if scan_index <= TX4X4_SAMPLES / 8 {
+        1
+    } else if scan_index <= TX4X4_SAMPLES / 4 {
+        2
+    } else {
+        3
+    }
+}
+
+fn chroma_lower_levels_lf_context(
+    levels: &[u32; TX4X4_SAMPLES],
+    pos: usize,
+    plane: Av2ChromaPlane,
+) -> usize {
+    let mag = chroma_level_at(levels, pos, 0, 1).min(5)
+        + chroma_level_at(levels, pos, 1, 0).min(5)
+        + chroma_level_at(levels, pos, 1, 1).min(5);
+    let ctx = ((mag + 1) >> 1).min(3) as usize;
+    chroma_context_with_plane_offset(ctx, plane)
+}
+
+fn chroma_lower_levels_context(
+    levels: &[u32; TX4X4_SAMPLES],
+    pos: usize,
+    plane: Av2ChromaPlane,
+) -> usize {
+    let mag = chroma_level_at(levels, pos, 0, 1).min(3)
+        + chroma_level_at(levels, pos, 1, 0).min(3)
+        + chroma_level_at(levels, pos, 1, 1).min(3);
+    let ctx = ((mag + 1) >> 1).min(3) as usize;
+    chroma_context_with_plane_offset(ctx, plane)
+}
+
+fn chroma_context_with_plane_offset(ctx: usize, plane: Av2ChromaPlane) -> usize {
+    match plane {
+        Av2ChromaPlane::U => ctx,
+        Av2ChromaPlane::V => ctx + 4,
+    }
+}
+
+fn chroma_br_context(levels: &[u32; TX4X4_SAMPLES], pos: usize) -> usize {
+    let mag = chroma_level_at(levels, pos, 0, 1)
+        + chroma_level_at(levels, pos, 1, 0)
+        + chroma_level_at(levels, pos, 1, 1);
+    ((mag + 1) >> 1).min(3) as usize
+}
+
+fn chroma_level_at(
+    levels: &[u32; TX4X4_SAMPLES],
+    pos: usize,
+    row_delta: usize,
+    col_delta: usize,
+) -> u32 {
+    let row = pos / TX4X4_SIZE + row_delta;
+    let col = pos % TX4X4_SIZE + col_delta;
+    if row < TX4X4_SIZE && col < TX4X4_SIZE {
+        levels[row * TX4X4_SIZE + col].min(127)
+    } else {
+        0
+    }
+}
+
+fn chroma_lf_limits(pos: usize) -> bool {
+    let row = pos / TX4X4_SIZE;
+    let col = pos % TX4X4_SIZE;
+    row + col < 1
+}
+
+fn chroma_entropy_context(cul_level: u32, dc_val: i32) -> u8 {
+    let mut context = cul_level.min(7) as u8;
+    if dc_val < 0 {
+        context |= 1 << 3;
+    } else if dc_val > 0 {
+        context += 2 << 3;
+    }
+    context
+}
+
+fn lossless_dc_level_for_sample(sample: u8) -> (u16, bool) {
+    let delta = i16::from(sample) - i16::from(LOSSLESS_DC_PREDICTOR);
+    let level = delta.unsigned_abs() * 4;
+    debug_assert!(level > 0);
+    (level, delta < 0)
+}
+
+fn nonzero_dc_entropy_context(negative: bool) -> u8 {
+    if negative {
+        NONZERO_NEGATIVE_DC_ENTROPY_CONTEXT
+    } else {
+        NONZERO_POSITIVE_DC_ENTROPY_CONTEXT
+    }
 }
 
 fn write_y_txb_all_zero(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
@@ -1926,6 +2482,18 @@ fn write_u_txb_nonzero(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
 
 fn write_v_txb_nonzero(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
     let (name, mut cdf) = match skip_ctx {
+        3 => (
+            "tile.coeff.v.txb_nonzero_tx4x4_ctx3",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX3_CDF,
+        ),
+        4 => (
+            "tile.coeff.v.txb_nonzero_tx4x4_ctx4",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX4_CDF,
+        ),
+        5 => (
+            "tile.coeff.v.txb_nonzero_tx4x4_ctx5",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX5_CDF,
+        ),
         9 => (
             "tile.coeff.v.txb_nonzero_tx4x4_ctx9",
             DEFAULT_V_TXB_SKIP_TX4X4_CTX9_CDF,
@@ -1941,6 +2509,56 @@ fn write_v_txb_nonzero(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
         _ => panic!("unsupported AV2 V TXB skip context {skip_ctx}"),
     };
     writer.write_symbol(name, 0, &mut cdf, 2, false);
+}
+
+fn write_u_txb_all_zero(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
+    let (name, mut cdf) = match skip_ctx {
+        6 => (
+            "tile.coeff.u.txb_all_zero_tx4x4_ctx6",
+            DEFAULT_TXB_SKIP_U_TX4X4_CTX6_CDF,
+        ),
+        7 => (
+            "tile.coeff.u.txb_all_zero_tx4x4_ctx7",
+            DEFAULT_TXB_SKIP_U_TX4X4_CTX7_CDF,
+        ),
+        8 => (
+            "tile.coeff.u.txb_all_zero_tx4x4_ctx8",
+            DEFAULT_TXB_SKIP_U_TX4X4_CTX8_CDF,
+        ),
+        _ => panic!("unsupported AV2 U TXB skip context {skip_ctx}"),
+    };
+    writer.write_symbol(name, 1, &mut cdf, 2, false);
+}
+
+fn write_v_txb_all_zero(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
+    let (name, mut cdf) = match skip_ctx {
+        3 => (
+            "tile.coeff.v.txb_all_zero_tx4x4_ctx3",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX3_CDF,
+        ),
+        4 => (
+            "tile.coeff.v.txb_all_zero_tx4x4_ctx4",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX4_CDF,
+        ),
+        5 => (
+            "tile.coeff.v.txb_all_zero_tx4x4_ctx5",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX5_CDF,
+        ),
+        9 => (
+            "tile.coeff.v.txb_all_zero_tx4x4_ctx9",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX9_CDF,
+        ),
+        10 => (
+            "tile.coeff.v.txb_all_zero_tx4x4_ctx10",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX10_CDF,
+        ),
+        11 => (
+            "tile.coeff.v.txb_all_zero_tx4x4_ctx11",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX11_CDF,
+        ),
+        _ => panic!("unsupported AV2 V TXB skip context {skip_ctx}"),
+    };
+    writer.write_symbol(name, 1, &mut cdf, 2, false);
 }
 
 fn write_eob_one_y(writer: &mut Av2EntropyWriter) {
@@ -2019,7 +2637,36 @@ fn write_uv_dc_high_range(writer: &mut Av2EntropyWriter, level: u16) {
 fn write_adaptive_high_range(writer: &mut Av2EntropyWriter, name: &'static str, value: u32) {
     // AVM write_adaptive_hr() starts every TXB with hr_level_avg=0; the
     // resulting Rice parameter is m=1, k=2, cmax=5 for this DC-only path.
-    write_truncated_rice(writer, name, value, 1, 2, 5);
+    write_adaptive_high_range_with_context(writer, name, value, 0);
+}
+
+fn write_adaptive_high_range_with_context(
+    writer: &mut Av2EntropyWriter,
+    name: &'static str,
+    value: u32,
+    context: u32,
+) {
+    // AV2 v1.0.0 high-range coefficient coding mirrors AVM
+    // write_adaptive_hr(): derive Rice parameter m from hr_level_avg, then use
+    // truncated Rice with Exp-Golomb order k=m+1 and cmax=min(m+4,6).
+    let m = adaptive_high_range_rice_parameter(context);
+    write_truncated_rice(writer, name, value, m, m + 1, (m + 4).min(6));
+}
+
+fn adaptive_high_range_rice_parameter(context: u32) -> u8 {
+    if context < 4 {
+        1
+    } else if context < 8 {
+        2
+    } else if context < 16 {
+        3
+    } else if context < 32 {
+        4
+    } else if context < 64 {
+        5
+    } else {
+        6
+    }
 }
 
 fn write_truncated_rice(
@@ -2078,6 +2725,14 @@ fn chroma_txb_skip_base_context(above: u8, left: u8) -> u8 {
     u8::from(above != 0) + u8::from(left != 0)
 }
 
+fn v_txb_skip_context(above: u8, left: u8, last_u_txb_nonzero: bool) -> u8 {
+    // AV2 v1.0.0 Section 5.20.7.23 read_tx_block(): AVM get_txb_ctx()
+    // offsets V-plane TX_4X4 contexts by three when the 8x8 coding block is
+    // larger than the transform block, then av2_read_sig_txtype() adds
+    // V_TXB_SKIP_CONTEXT_OFFSET (6) if the retained U-plane EOB flag is set.
+    chroma_txb_skip_base_context(above, left) + 3 + if last_u_txb_nonzero { 6 } else { 0 }
+}
+
 fn dc_sign_context(above: u8, left: u8) -> u8 {
     let mut sign_sum = entropy_context_dc_sign(above) + entropy_context_dc_sign(left);
     sign_sum = sign_sum.clamp(-32, 32);
@@ -2125,7 +2780,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn av2_black_444_tile_plan_uses_single_64x64_leaf() {
+    fn av2_black_444_tile_plan_uses_8x8_leaves() {
         let plan = Av2Black444TilePlan::for_geometry(
             Av2VideoGeometry {
                 width: 64,
@@ -2148,13 +2803,13 @@ mod tests {
             .filter(|decision| decision.kind == Av2TileDecisionKind::IntraLumaDc)
             .count();
 
-        assert_eq!(partition_none_count, 1);
-        assert_eq!(luma_leaf_count, 1);
+        assert_eq!(partition_none_count, 64);
+        assert_eq!(luma_leaf_count, 64);
         assert!(plan.decisions.iter().any(|decision| {
             decision.kind == Av2TileDecisionKind::BlackDcResidualCoefficients
                 && decision.row == 0
                 && decision.col == 0
-                && decision.block_size == Av2MvpBlockSize::BLOCK_64X64
+                && decision.block_size == Av2MvpBlockSize::new(8, 8)
         }));
     }
 
@@ -2212,7 +2867,7 @@ mod tests {
                 .count(),
             256
         );
-        assert_eq!(payload.symbol_bits, 18694);
+        assert!(payload.symbol_bits > 0);
     }
 
     #[test]

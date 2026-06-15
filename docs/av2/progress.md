@@ -22,14 +22,18 @@ synthesis wrappers, and cocotb/Yosys entry points remains shared.
   following the AVM encoder side of the spec descriptors for arithmetic-coded
   literals and symbols.
 - `src/av2/tile.rs` contains the structured black 4:4:4 tile plan for the full
-  8x8-through-64x64 geometry sweep. The current minimum viable profile disables
-  SDP, extended partitions, IBC, loop tools, and CDF updates.
+  8x8-through-64x64 geometry sweep. The current minimum viable profile fixes
+  coding leaves at 8x8 and disables SDP, extended partitions, IBC, loop tools,
+  and CDF updates. Any `TX_4X4` symbols in this path are internal AV2
+  transform blocks, not public FrameForge input blocks.
 - `src/av2/palette.rs` contains the first block-local luma palette detector.
   The current subset works on visible 8x8 `yuv444p8` blocks, keeps up to eight
   luma colors per block, and maps additional luma values to the nearest stored
-  color. AV2 v1.0.0 Section 5.20.5.3 and the current AVM branch only expose
-  luma palette syntax in `palette_mode_info()`, so chroma is not yet coded by
-  FrameForge AV2 and arbitrary color screenshots remain lossy.
+  color. AV2 v1.0.0 Sections 5.20.8.1 and 5.20.8.4 only expose
+  luma palette syntax in `palette_mode_info()`; AVM `av2_allow_palette()` also
+  accepts `PLANE_TYPE_Y` only. FrameForge AV2 therefore must use an allowed
+  residual, BDPCM, or IBC-style path for chroma rather than a private chroma
+  palette syntax, and arbitrary color screenshots remain lossy for now.
 - `rtl/av2/ff_av2_encoder.sv` is a synthesizable AV2 top with the same
   top-level handshake shape as the VVC encoder. It consumes a visible 8x8 block
   packet stream over `s_axis_*`: 64 Y samples, then 64 U samples, then 64 V
@@ -45,6 +49,26 @@ synthesis wrappers, and cocotb/Yosys entry points remains shared.
   entropy payload append hooks have been removed. Treat any new opaque AV2
   payload as a bug; future syntax must be generated from named,
   spec-auditable decisions in both software and RTL.
+
+## Palette Compliance Notes
+
+- AV2 v1.0.0 Section 5.20.8.1 `palette_mode_info()` only signals
+  `has_palette_y`, `palette_size_y_minus_2`, and luma palette color values.
+  There is no U/V palette header syntax in the current reference-compatible
+  bitstream.
+- AV2 v1.0.0 Section 5.20.8.4 `palette_tokens()` only parses a luma color map
+  when `PlaneStart == 0 && PaletteSizeY`. There is no chroma palette color map
+  and no palette escape sample syntax.
+- AVM v1.0.0 mirrors this by accepting palette only for `PLANE_TYPE_Y` in
+  `av2_allow_palette()`, and by keeping `palette_size[1] == 0`.
+- Therefore a FrameForge AV2 PASS for arbitrary 4:4:4 screenshots cannot be
+  implemented as palette-only coding. The compliant lossless path must combine
+  8x8 luma palette where every luma sample is representable with at most eight
+  entries, plus another legal coding path for chroma and any over-limit luma
+  block.
+- AV2 v1.0.0 Section 5.20.7.23 `residual()` uses `TX_4X4` transform blocks in
+  lossless mode. These 4x4 units are transform blocks only; the FrameForge AV2
+  coding leaf and RTL input packet remain fixed at visible 8x8 Y/U/V blocks.
 
 ## Reference Tool Setup
 
@@ -130,11 +154,10 @@ Last checked on 2026-06-14:
 - `make validate-set CODEC=av2 VALIDATION_SET=sweep-black-444
   VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0`: passed all 64 black
   4:4:4 geometries.
-- `make validate-set CODEC=av2 VALIDATION_SET=screenshot-sweep-444
-  VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0`: passed all 64 local
-  screenshot crops from 8x8 through 64x64. This is a SW/RTL/AVM plumbing and
-  luma-palette geometry check, not a lossless color claim; the current AV2 path
-  remains lossy on arbitrary screenshots.
+- Local screenshot crops from 8x8 through 64x64 are the next lossless 4:4:4
+  target. They are no longer counted as passing while chroma is uncoded; AV2
+  validation now requires the software reconstruction, REF decode of the
+  software bitstream, REF encoder reconstruction, and input checksums to agree.
 - `make synth CODEC=av2`: passed Yosys synthesis for the generalized
   luma-palette path. The detailed baseline is recorded in
   [synthesis.md](synthesis.md), and quality/bitrate measurements are recorded

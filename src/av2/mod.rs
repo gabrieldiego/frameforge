@@ -311,14 +311,13 @@ fn validate_mvp_444_request(request: Av2EncodeRequest) -> Result<Av2VideoGeometr
         );
     }
     validate_fixed_black_444_geometry(request.geometry).ok_or_else(|| {
-        "AV2 MVP encoder only supports 8x8 through 64x64 yuv444p8 frames in 8-pixel steps"
-            .to_string()
+        "AV2 MVP encoder only supports yuv444p8 dimensions in 8-pixel steps".to_string()
     })
 }
 
 fn validate_fixed_black_444_geometry(geometry: Av2VideoGeometry) -> Option<Av2VideoGeometry> {
-    let supported = (8..=64).contains(&geometry.width)
-        && (8..=64).contains(&geometry.height)
+    let supported = geometry.width >= 8
+        && geometry.height >= 8
         && geometry.width % 8 == 0
         && geometry.height % 8 == 0;
     supported.then_some(geometry)
@@ -656,11 +655,11 @@ fn av2_spec_section_for_entropy_field(name: &str) -> &'static str {
     if name.starts_with("tile.partition.") {
         "AV2 v1.0.0 Section 5.20.3.2 partition()"
     } else if name.starts_with("tile.intra.") {
-        "AV2 v1.0.0 Section 5.20.5.3 intra_frame_mode_info()"
+        "AV2 v1.0.0 Sections 5.20.5.5 and 5.20.5.6 intra mode syntax"
     } else if name.starts_with("tile.palette.") {
-        "AV2 v1.0.0 Sections 5.11.55 and 5.20.5.3 palette syntax"
+        "AV2 v1.0.0 Sections 5.20.8.1 and 5.20.8.4 palette syntax"
     } else if name.starts_with("tile.coeff.") {
-        "AV2 v1.0.0 Sections 5.20.7.24 and 5.20.7.25 transform coefficient syntax"
+        "AV2 v1.0.0 Sections 5.20.7.23, 5.20.7.24, and 5.20.7.27 residual coefficient syntax"
     } else {
         "AV2 v1.0.0 tile entropy syntax"
     }
@@ -838,7 +837,7 @@ mod tests {
     }
 
     #[test]
-    fn av2_mvp_444_accepts_nonzero_chroma_as_lossy_luma_palette() {
+    fn av2_mvp_444_preserves_chroma_with_bdpcm_residuals() {
         let request = Av2EncodeRequest {
             params: Av2EncodeParams { frames: 1 },
             geometry: Av2VideoGeometry {
@@ -862,8 +861,7 @@ mod tests {
             output,
             av2_black_444_bitstream_for_geometry(request.geometry)
         );
-        assert_ne!(recon, input);
-        assert!(recon[y_plane_len..].iter().all(|&sample| sample == 0));
+        assert_eq!(recon, input);
     }
 
     #[test]

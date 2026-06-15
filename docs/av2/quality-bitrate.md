@@ -19,9 +19,10 @@ Current subset:
   samples, then 64 V samples.
 - Luma palette only, up to eight colors per 8x8 block. Additional luma values
   map to the nearest stored color.
-- Chroma is not yet coded by FrameForge AV2. Arbitrary color screenshots are
-  therefore expected to be lossy even when SW, RTL, and AVM decode checksums
-  agree.
+- AVM currently exposes palette coding only for `PLANE_TYPE_Y`; chroma palette
+  is not a valid reference-compatible path. Chroma is not yet coded by
+  FrameForge AV2, so arbitrary color screenshots are expected to be lossy even
+  when SW, RTL, and AVM decode checksums agree.
 
 Lossless luma-bars smoke:
 
@@ -42,7 +43,7 @@ software_internal_recon_psnr_vs_input_db: inf
 rtl_internal_recon_psnr_vs_input_db: inf
 ```
 
-Local screenshot crop geometry sweep:
+Local screenshot crop geometry sweep target:
 
 ```sh
 make test-vectors TEST_VECTOR_SET=screenshot-sweep-444
@@ -53,9 +54,12 @@ make validate-set CODEC=av2 \
 ```
 
 The local manifest `verification/test_vector_sets/local/screenshot-sweep-444.csv`
-uses deterministic pseudo-random crops from `screenshot_640x360.png`.
+uses deterministic pseudo-random crops from `screenshot_640x360.png`. These
+vectors are not counted as passing until chroma is coded losslessly; the AV2
+validation gate now fails if software, REF-decoded software, REF encode/decode,
+and input reconstruction checksums do not all match.
 
-Measured aggregate across all 64 geometries:
+Historical lossy luma-only aggregate across all 64 geometries:
 
 ```text
 software_bitstream_bits_per_luma_pixel_min: 4.3993
@@ -64,7 +68,7 @@ software_internal_recon_psnr_vs_input_db_min: 10.20
 software_internal_recon_psnr_vs_input_db_max: 24.32
 ```
 
-Measured 64x64 screenshot crop:
+Historical lossy 64x64 screenshot crop:
 
 ```text
 software_bitstream_sha256: 158769ecd0bebe166cee5d8044e6ea24ce05c5e1c5a03cbdad5828ba28c3a6d1
@@ -77,6 +81,5 @@ rtl_internal_recon_psnr_vs_input_db: 12.06
 
 The AVM reference decode of the FrameForge software bitstream matched the
 FrameForge software reconstruction on each crop, and RTL reconstruction matched
-software reconstruction. The AVM reference encode/decode of the original input
-remained lossless for these still images, as expected for the external reference
-path.
+software reconstruction. Because chroma was not yet coded, these measurements
+remain a debugging baseline rather than a passing lossless validation baseline.
