@@ -19,8 +19,8 @@ RTL_SOURCE_SAMPLE_BITS ?= $(RTL_SAMPLE_BITS)
 RTL_CHROMA_FORMAT_IDC ?= 1
 RTL_VISIBLE_WIDTH ?= 8
 RTL_VISIBLE_HEIGHT ?= 8
-RTL_MAX_VISIBLE_WIDTH ?= 64
-RTL_MAX_VISIBLE_HEIGHT ?= 64
+RTL_MAX_VISIBLE_WIDTH ?= 4096
+RTL_MAX_VISIBLE_HEIGHT ?= 4096
 RTL_CTU_SIZE ?= 64
 SYNTH_BOARD ?= synth/boards/arty-z7-10.env
 SYNTH_FILELIST ?=
@@ -70,12 +70,12 @@ help:
 	@printf '%s\n' '  make test-vectors [TEST_VECTOR_SET=smoke TEST_VECTOR_SET_DIR=verification/test_vector_sets TEST_VECTOR_DIR=verification/generated/test_vectors] - generate deterministic YUV test streams from a manifest'
 	@printf '%s\n' '  make validate-set [CODEC=vvc|av2 VALIDATION_SET=smoke VALIDATION_SET_DIR=verification/test_vector_sets VALIDATION_LIMIT=<n> VALIDATION_WITH_SYNTH=0|1 VALIDATION_STOP_ON_FAIL=0|1] - generate and run a named validation set; AV2 currently supports the black 4:4:4 sweep and a first 64x64 luma-palette smoke'
 	@printf '%s\n' '  make validate-smoke | validate-random-short | validate-sweep-420 | validate-sweep-444 | validate-motion-short | validate-all-short | validate-all-sweeps - direct validation set entry points'
-	@printf '%s\n' '  make validate INPUT=input_64x64_300f_30fps_yuv420p8.yuv [CODEC=vvc|av2 WIDTH=<w> HEIGHT=<h> FRAMES=<n> FORMAT=<fmt> INPUT_FORMAT=auto|png|raw-yuv RECON_FORMAT=codec|png|rgb24 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 VALIDATE_SW_ONLY=1 VALIDATE_SYNTH=1|0] - infer metadata from filename unless overridden; AV2 validation is staged for black 4:4:4 and the first 64x64 luma-palette smoke'
+	@printf '%s\n' '  make validate INPUT=input_64x64_300f_30fps_yuv420p8.yuv [CODEC=vvc|av2 WIDTH=<w> HEIGHT=<h> FRAMES=<n> FORMAT=<fmt> INPUT_FORMAT=auto|png|raw-yuv RECON_FORMAT=codec|png|rgb24 RTL_MAX_VISIBLE_WIDTH=4096 RTL_MAX_VISIBLE_HEIGHT=4096 VALIDATE_SW_ONLY=1 VALIDATE_SYNTH=1|0] - infer metadata from filename unless overridden; AV2 validation is staged for black 4:4:4 and the first 64x64 luma-palette smoke'
 	@printf '%s\n' '  make validate-decode BITSTREAM=out.vvc [CODEC=vvc|av2 DECODED=out.yuv]'
 	@printf '%s\n' '  make rtl-test [CODEC=vvc|av2] - run cocotb RTL tests'
 	@printf '%s\n' '  make rtl-test DUT=vvc-coding-tree-scheduler - run local coding-tree geometry/path selection test'
 	@printf '%s\n' '  make rtl-test DUT=vvc-cabac - run CABAC top test against SW dump'
-	@printf '%s\n' '  make rtl-test DUT=vvc-encoder [RTL_VISIBLE_WIDTH=<w> RTL_VISIBLE_HEIGHT=<h> RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64 RTL_CTU_SIZE=64 RTL_SAMPLE_BITS=8|10|12|16 RTL_SOURCE_SAMPLE_BITS=8|10|12|16 RTL_CHROMA_FORMAT_IDC=1|2|3] - run generated RTL/software VVC stream test'
+	@printf '%s\n' '  make rtl-test DUT=vvc-encoder [RTL_VISIBLE_WIDTH=<w> RTL_VISIBLE_HEIGHT=<h> RTL_MAX_VISIBLE_WIDTH=4096 RTL_MAX_VISIBLE_HEIGHT=4096 RTL_CTU_SIZE=64 RTL_SAMPLE_BITS=8|10|12|16 RTL_SOURCE_SAMPLE_BITS=8|10|12|16 RTL_CHROMA_FORMAT_IDC=1|2|3] - run generated RTL/software VVC stream test'
 	@printf '%s\n' '  make reference-vvc BITSTREAM=out.vvc [CODEC=vvc INPUT=in.yuv WIDTH=<w> HEIGHT=<h> FRAMES=1 BIT_DEPTH=8|10|12|16 CHROMA_FORMAT=420|422|444] - create real VVC using VTM'
 	@printf '%s\n' '  make reference-av2 BITSTREAM=out.av2 INPUT=in.yuv WIDTH=<w> HEIGHT=<h> FORMAT=yuv420p8|yuv444p8 [RECON=out.yuv FRAMES=1] - create AV2 reference output using AVM'
 	@printf '%s\n' '  make synth-env - install/detect optional local synthesis tools under .tools/'
@@ -164,7 +164,7 @@ validate-all-sweeps:
 	$(MAKE) validate-set VALIDATION_SET=all-sweeps
 
 validate:
-	@test -n "$(INPUT)" || { echo 'usage: make validate INPUT=path/to/input_64x64_1f_yuv420p8.yuv [WIDTH=<w> HEIGHT=<h> FRAMES=<n> FORMAT=<fmt> INPUT_FORMAT=auto|png|raw-yuv RECON_FORMAT=codec|png|rgb24 RTL_MAX_VISIBLE_WIDTH=64 RTL_MAX_VISIBLE_HEIGHT=64]'; exit 2; }
+	@test -n "$(INPUT)" || { echo 'usage: make validate INPUT=path/to/input_64x64_1f_yuv420p8.yuv [WIDTH=<w> HEIGHT=<h> FRAMES=<n> FORMAT=<fmt> INPUT_FORMAT=auto|png|raw-yuv RECON_FORMAT=codec|png|rgb24 RTL_MAX_VISIBLE_WIDTH=4096 RTL_MAX_VISIBLE_HEIGHT=4096]'; exit 2; }
 	python3 scripts/validate.py --codec "$(CODEC)" "$(INPUT)" $(if $(WIDTH),--width "$(WIDTH)") $(if $(HEIGHT),--height "$(HEIGHT)") --max-width "$(RTL_MAX_VISIBLE_WIDTH)" --max-height "$(RTL_MAX_VISIBLE_HEIGHT)" $(if $(FRAMES),--frames "$(FRAMES)") $(if $(FORMAT),--format "$(FORMAT)") $(if $(INPUT_FORMAT),--input-format "$(INPUT_FORMAT)") $(if $(RECON_FORMAT),--recon-format "$(RECON_FORMAT)") --synth-dut "$(VALIDATE_SYNTH_DUT)" $(if $(filter 0,$(VALIDATE_SYNTH)),--skip-synth) $(if $(filter 1,$(VALIDATE_SW_ONLY)),--sw-only)
 
 validate-decode:

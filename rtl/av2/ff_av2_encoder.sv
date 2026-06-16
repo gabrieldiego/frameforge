@@ -36,8 +36,11 @@ module ff_av2_encoder #(
 );
 
   localparam int AV2_MAX_SEQUENCE_BYTES = 16;
+  localparam int AV2_MAX_CLOSED_HEADER_BYTES = 8;
+  localparam int AV2_TILE_SIZE_BYTES = 4;
   typedef enum logic [4:0] {
     ST_IDLE,
+    ST_TILE_START,
     ST_INPUT_READ,
     ST_SEQ_LOAD,
     ST_SEQ_WRITE,
@@ -50,9 +53,12 @@ module ff_av2_encoder #(
     ST_CHROMA_FETCH,
     ST_CARRY_READ,
     ST_CARRY_WRITE,
+    ST_PAYLOAD_PREFIX,
+    ST_PAYLOAD_COPY_READ,
+    ST_PAYLOAD_COPY_WRITE,
     ST_OUTPUT_PREP,
-    ST_OUTPUT_TILE_READ,
-    ST_OUTPUT_TILE_LOAD,
+    ST_OUTPUT_PAYLOAD_READ,
+    ST_OUTPUT_PAYLOAD_LOAD,
     ST_OUTPUT_VALID
   } state_t;
 
@@ -71,6 +77,7 @@ module ff_av2_encoder #(
   state_t state_q;
   logic start_invalid_w;
   logic [15:0] precarry_mem_q [0:AV2_MAX_TILE_BYTES - 1];
+  logic [7:0] payload_mem_q [0:AV2_MAX_TILE_BYTES - 1];
   logic [7:0] seq_mem_q [0:AV2_MAX_SEQUENCE_BYTES - 1];
   logic [15:0] precarry_read_addr_q;
   logic [15:0] precarry_read_data_q;
@@ -81,12 +88,25 @@ module ff_av2_encoder #(
   logic [15:0] pending_push_word_q;
   logic [15:0] precarry_len_q;
   logic [15:0] tile_len_q;
+  logic [15:0] payload_len_q;
+  logic [15:0] payload_copy_index_q;
+  logic [1:0] payload_prefix_index_q;
   logic [15:0] seq_len_q;
   logic [15:0] stream_index_q;
   logic [15:0] width_q;
   logic [15:0] height_q;
-  logic [3:0] width_bits_q;
-  logic [3:0] height_bits_q;
+  logic [4:0] width_bits_q;
+  logic [4:0] height_bits_q;
+  logic [15:0] tile_cols_q;
+  logic [15:0] tile_rows_q;
+  logic [15:0] tile_count_q;
+  logic [15:0] tile_index_q;
+  logic [15:0] tile_col_q;
+  logic [15:0] tile_row_q;
+  logic [15:0] tile_width_q;
+  logic [15:0] tile_height_q;
+  logic [31:0] tile_input_index_q;
+  logic frame_palette_mode_q;
   logic [7:0] seq_op_q;
   logic [6:0] seq_bits_left_q;
   logic [63:0] seq_value_q;
@@ -168,8 +188,27 @@ module ff_av2_encoder #(
   integer norm_cnt_w;
   logic [63:0] seq_load_value_w;
   logic [6:0] seq_load_bits_w;
-  logic [3:0] width_bits_w;
-  logic [3:0] height_bits_w;
+  logic [4:0] width_bits_w;
+  logic [4:0] height_bits_w;
+  logic [15:0] tile_cols_w;
+  logic [15:0] tile_rows_w;
+  logic [15:0] tile_width_w;
+  logic [15:0] tile_height_w;
+  logic [31:0] tile_samples_w;
+  logic tile_input_last_w;
+  logic tile_is_last_w;
+  logic multi_tile_w;
+  logic [2:0] tile_log2_cols_w;
+  logic [2:0] tile_log2_rows_w;
+  logic [5:0] closed_header_bit_count_w;
+  logic [3:0] closed_header_len_w;
+  logic [63:0] closed_header_bits_w;
+  logic [7:0] closed_header_byte_w;
+  logic [2:0] closed_header_index_w;
+  logic [15:0] payload_prefix_value_w;
+  logic [7:0] payload_prefix_byte_w;
+  integer closed_bit_index_w;
+  integer closed_loop_index_w;
   logic [15:0] closed_len_w;
   logic [1:0] closed_leb_len_w;
   logic [15:0] seq_end_index_w;
@@ -178,6 +217,7 @@ module ff_av2_encoder #(
   logic [15:0] total_stream_len_w;
   logic [15:0] tile_payload_start_w;
   logic [15:0] tile_stream_index_w;
+  logic [15:0] closed_header_payload_index_w;
   logic [15:0] seq_stream_index_w;
   logic [15:0] closed_leb_index_w;
   logic [7:0] output_byte_w;
@@ -339,10 +379,10 @@ module ff_av2_encoder #(
     .rst_n(rst_n),
     .start(palette_analyzer_start_w),
     .sample_fire(input_sample_fire_w),
-    .visible_width(visible_width),
-    .visible_height(visible_height),
+    .visible_width(tile_width_q),
+    .visible_height(tile_height_q),
     .sample(s_axis_data),
-    .sample_last(s_axis_last),
+    .sample_last(tile_input_last_w),
     .sample_ready(palette_analyzer_sample_ready_w),
     .query_block_row_mi(block_row_mi_q),
     .query_block_col_mi(block_col_mi_q),
@@ -466,8 +506,9 @@ module ff_av2_encoder #(
     (visible_height == 16'd0) ||
     (visible_width[2:0] != 3'd0) ||
     (visible_height[2:0] != 3'd0);
-  assign palette_analyzer_start_w = start && (state_q == ST_IDLE) && !start_invalid_w;
+  assign palette_analyzer_start_w = (state_q == ST_TILE_START);
   assign input_sample_fire_w = (state_q == ST_INPUT_READ) && s_axis_valid && s_axis_ready;
+  assign tile_input_last_w = input_sample_fire_w && (tile_input_index_q == (tile_samples_w - 32'd1));
   assign palette_query_start_w = (state_q == ST_PALETTE_QUERY);
   assign chroma_fetch_start_w =
     (state_q == ST_CHROMA_FETCH) &&
@@ -502,7 +543,24 @@ module ff_av2_encoder #(
     (state_q == ST_INPUT_READ) &&
     palette_analyzer_sample_ready_w &&
     !palette_analyzer_done_w;
-  assign closed_len_w = 16'd4 + tile_len_q;
+  assign tile_cols_w = (visible_width + 16'd63) >> 6;
+  assign tile_rows_w = (visible_height + 16'd63) >> 6;
+  assign tile_width_w =
+    (tile_col_q == (tile_cols_q - 16'd1)) ?
+      (width_q - (tile_col_q << 6)) : 16'd64;
+  assign tile_height_w =
+    (tile_row_q == (tile_rows_q - 16'd1)) ?
+      (height_q - (tile_row_q << 6)) : 16'd64;
+  assign tile_samples_w = ({16'd0, tile_width_q} * {16'd0, tile_height_q}) * 32'd3;
+  assign tile_is_last_w = (tile_index_q == (tile_count_q - 16'd1));
+  assign multi_tile_w = (tile_count_q != 16'd1);
+  assign payload_prefix_value_w = tile_len_q - 16'd1;
+  assign payload_prefix_byte_w =
+    (payload_prefix_index_q == 2'd0) ? payload_prefix_value_w[7:0] :
+    (payload_prefix_index_q == 2'd1) ? payload_prefix_value_w[15:8] :
+    8'd0;
+
+  assign closed_len_w = {12'd0, closed_header_len_w} + 16'd1 + payload_len_q;
   // AV2 v1.0.0 Section 5.3 uses unsigned LEB128 for OBU payload lengths.
   // Lossless high-colour 64x64 4:4:4 tiles can exceed the two-byte LEB128
   // range, so keep the staged writer correct through the current 16-bit bound.
@@ -512,15 +570,18 @@ module ff_av2_encoder #(
   assign seq_end_index_w = 16'd4 + seq_len_q;
   assign closed_leb_start_w = seq_end_index_w;
   assign closed_header_start_w = closed_leb_start_w + {14'd0, closed_leb_len_w};
-  assign total_stream_len_w = closed_header_start_w + 16'd4 + tile_len_q;
-  assign tile_payload_start_w = closed_header_start_w + 16'd4;
+  assign total_stream_len_w =
+    closed_header_start_w + 16'd1 + {12'd0, closed_header_len_w} + payload_len_q;
+  assign tile_payload_start_w = closed_header_start_w + 16'd1 + {12'd0, closed_header_len_w};
   assign seq_stream_index_w = stream_index_q - 16'd4;
   assign closed_leb_index_w = stream_index_q - closed_leb_start_w;
   assign tile_stream_index_w = stream_index_q - tile_payload_start_w;
+  assign closed_header_payload_index_w = stream_index_q - closed_header_start_w - 16'd1;
+  assign closed_header_index_w = closed_header_payload_index_w[2:0];
   assign output_tile_payload_w = (stream_index_q >= tile_payload_start_w);
   assign carry_sum_w = carry_q + precarry_read_data_q;
-  assign visible_rows_mi_w = visible_height[6:2];
-  assign visible_cols_mi_w = visible_width[6:2];
+  assign visible_rows_mi_w = tile_height_q[6:2];
+  assign visible_cols_mi_w = tile_width_q[6:2];
   assign block_visible_w =
     (block_row_mi_q < visible_rows_mi_q) &&
     (block_col_mi_q < visible_cols_mi_q);
@@ -727,15 +788,128 @@ module ff_av2_encoder #(
   end
 
   always @* begin
-    if (visible_width <= 16'd8) width_bits_w = 4'd3;
-    else if (visible_width <= 16'd16) width_bits_w = 4'd4;
-    else if (visible_width <= 16'd32) width_bits_w = 4'd5;
-    else width_bits_w = 4'd6;
+    if (visible_width <= 16'd8) width_bits_w = 5'd3;
+    else if (visible_width <= 16'd16) width_bits_w = 5'd4;
+    else if (visible_width <= 16'd32) width_bits_w = 5'd5;
+    else if (visible_width <= 16'd64) width_bits_w = 5'd6;
+    else if (visible_width <= 16'd128) width_bits_w = 5'd7;
+    else if (visible_width <= 16'd256) width_bits_w = 5'd8;
+    else if (visible_width <= 16'd512) width_bits_w = 5'd9;
+    else if (visible_width <= 16'd1024) width_bits_w = 5'd10;
+    else if (visible_width <= 16'd2048) width_bits_w = 5'd11;
+    else if (visible_width <= 16'd4096) width_bits_w = 5'd12;
+    else if (visible_width <= 16'd8192) width_bits_w = 5'd13;
+    else if (visible_width <= 16'd16384) width_bits_w = 5'd14;
+    else if (visible_width <= 16'd32768) width_bits_w = 5'd15;
+    else width_bits_w = 5'd16;
 
-    if (visible_height <= 16'd8) height_bits_w = 4'd3;
-    else if (visible_height <= 16'd16) height_bits_w = 4'd4;
-    else if (visible_height <= 16'd32) height_bits_w = 4'd5;
-    else height_bits_w = 4'd6;
+    if (visible_height <= 16'd8) height_bits_w = 5'd3;
+    else if (visible_height <= 16'd16) height_bits_w = 5'd4;
+    else if (visible_height <= 16'd32) height_bits_w = 5'd5;
+    else if (visible_height <= 16'd64) height_bits_w = 5'd6;
+    else if (visible_height <= 16'd128) height_bits_w = 5'd7;
+    else if (visible_height <= 16'd256) height_bits_w = 5'd8;
+    else if (visible_height <= 16'd512) height_bits_w = 5'd9;
+    else if (visible_height <= 16'd1024) height_bits_w = 5'd10;
+    else if (visible_height <= 16'd2048) height_bits_w = 5'd11;
+    else if (visible_height <= 16'd4096) height_bits_w = 5'd12;
+    else if (visible_height <= 16'd8192) height_bits_w = 5'd13;
+    else if (visible_height <= 16'd16384) height_bits_w = 5'd14;
+    else if (visible_height <= 16'd32768) height_bits_w = 5'd15;
+    else height_bits_w = 5'd16;
+  end
+
+  always @* begin
+    tile_log2_cols_w = 3'd0;
+    if (tile_cols_q > 16'd1) tile_log2_cols_w = 3'd1;
+    if (tile_cols_q > 16'd2) tile_log2_cols_w = 3'd2;
+    if (tile_cols_q > 16'd4) tile_log2_cols_w = 3'd3;
+    if (tile_cols_q > 16'd8) tile_log2_cols_w = 3'd4;
+    if (tile_cols_q > 16'd16) tile_log2_cols_w = 3'd5;
+    if (tile_cols_q > 16'd32) tile_log2_cols_w = 3'd6;
+
+    tile_log2_rows_w = 3'd0;
+    if (tile_rows_q > 16'd1) tile_log2_rows_w = 3'd1;
+    if (tile_rows_q > 16'd2) tile_log2_rows_w = 3'd2;
+    if (tile_rows_q > 16'd4) tile_log2_rows_w = 3'd3;
+    if (tile_rows_q > 16'd8) tile_log2_rows_w = 3'd4;
+    if (tile_rows_q > 16'd16) tile_log2_rows_w = 3'd5;
+    if (tile_rows_q > 16'd32) tile_log2_rows_w = 3'd6;
+  end
+
+  always @* begin
+    closed_header_bits_w = 64'd0;
+    closed_bit_index_w = 0;
+
+    // AV2 v1.0.0 Sections 5.19 and 5.20.1: first tile group plus the
+    // minimum uncompressed header used by the MVP still-picture path.
+    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
+    closed_bit_index_w = closed_bit_index_w + 1;
+    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
+    closed_bit_index_w = closed_bit_index_w + 1;
+    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
+    closed_bit_index_w = closed_bit_index_w + 1;
+
+    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] =
+      frame_palette_mode_q;
+    closed_bit_index_w = closed_bit_index_w + 1;
+    if (frame_palette_mode_q) begin
+      // cur_frame_force_integer_mv = 0
+      closed_bit_index_w = closed_bit_index_w + 1;
+    end
+
+    // allow_intrabc = 0
+    closed_bit_index_w = closed_bit_index_w + 1;
+    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
+    closed_bit_index_w = closed_bit_index_w + 1;
+    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
+    closed_bit_index_w = closed_bit_index_w + 1;
+
+    // AV2 v1.0.0 write_tile_info_max_tile(): uniform_spacing_flag followed
+    // by one increment bit per log2 tile column/row above the Level 2.0
+    // minimum. The current 64x64-SB subset keeps min_log2 at zero.
+    for (closed_loop_index_w = 0; closed_loop_index_w < 6; closed_loop_index_w = closed_loop_index_w + 1) begin
+      if (closed_loop_index_w < tile_log2_cols_w) begin
+        closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
+        closed_bit_index_w = closed_bit_index_w + 1;
+      end
+    end
+    for (closed_loop_index_w = 0; closed_loop_index_w < 6; closed_loop_index_w = closed_loop_index_w + 1) begin
+      if (closed_loop_index_w < tile_log2_rows_w) begin
+        closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
+        closed_bit_index_w = closed_bit_index_w + 1;
+      end
+    end
+    if (multi_tile_w) begin
+      closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
+      closed_bit_index_w = closed_bit_index_w + 1;
+      closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
+      closed_bit_index_w = closed_bit_index_w + 1;
+    end
+
+    // quantization.base_qindex, segmentation.enabled, qmatrix, and
+    // reduced_tx_set_used are all zero in the MVP. For multi-tile single
+    // tile-group OBUs, tile_start_and_end_present_flag is also zero.
+    closed_bit_index_w = closed_bit_index_w + 12;
+    if (multi_tile_w) begin
+      closed_bit_index_w = closed_bit_index_w + 1;
+    end
+    if (closed_bit_index_w[2:0] != 3'd0) begin
+      closed_bit_index_w = closed_bit_index_w + (8 - closed_bit_index_w[2:0]);
+    end
+    closed_header_bit_count_w = closed_bit_index_w[5:0];
+    closed_header_len_w = closed_bit_index_w[5:3];
+
+    case (closed_header_index_w)
+      3'd0: closed_header_byte_w = closed_header_bits_w[63:56];
+      3'd1: closed_header_byte_w = closed_header_bits_w[55:48];
+      3'd2: closed_header_byte_w = closed_header_bits_w[47:40];
+      3'd3: closed_header_byte_w = closed_header_bits_w[39:32];
+      3'd4: closed_header_byte_w = closed_header_bits_w[31:24];
+      3'd5: closed_header_byte_w = closed_header_bits_w[23:16];
+      3'd6: closed_header_byte_w = closed_header_bits_w[15:8];
+      default: closed_header_byte_w = closed_header_bits_w[7:0];
+    endcase
   end
 
   always @* begin
@@ -1174,10 +1348,10 @@ module ff_av2_encoder #(
       8'd3: begin seq_load_value_w = 64'd0; seq_load_bits_w = 7'd5; end
       8'd4: begin seq_load_value_w = 64'd3; seq_load_bits_w = 7'd3; end
       8'd5: begin seq_load_value_w = 64'd2; seq_load_bits_w = 7'd3; end
-      8'd6: begin seq_load_value_w = {60'd0, width_bits_q - 4'd1}; seq_load_bits_w = 7'd4; end
-      8'd7: begin seq_load_value_w = {60'd0, height_bits_q - 4'd1}; seq_load_bits_w = 7'd4; end
-      8'd8: begin seq_load_value_w = {48'd0, width_q - 16'd1}; seq_load_bits_w = {3'd0, width_bits_q}; end
-      8'd9: begin seq_load_value_w = {48'd0, height_q - 16'd1}; seq_load_bits_w = {3'd0, height_bits_q}; end
+      8'd6: begin seq_load_value_w = {60'd0, width_bits_q[3:0] - 4'd1}; seq_load_bits_w = 7'd4; end
+      8'd7: begin seq_load_value_w = {60'd0, height_bits_q[3:0] - 4'd1}; seq_load_bits_w = 7'd4; end
+      8'd8: begin seq_load_value_w = {48'd0, width_q - 16'd1}; seq_load_bits_w = {2'd0, width_bits_q}; end
+      8'd9: begin seq_load_value_w = {48'd0, height_q - 16'd1}; seq_load_bits_w = {2'd0, height_bits_q}; end
       8'd10: begin seq_load_value_w = 64'd0; seq_load_bits_w = 7'd6; end
       8'd11: begin seq_load_value_w = 64'd0; seq_load_bits_w = 7'd2; end
       8'd12: begin seq_load_value_w = 64'd0; seq_load_bits_w = 7'd8; end
@@ -1224,12 +1398,8 @@ module ff_av2_encoder #(
       end
     end else if (stream_index_q == closed_header_start_w) begin
       output_byte_w = 8'h10;
-    end else if (stream_index_q == closed_header_start_w + 16'd1) begin
-      output_byte_w = palette_mode_q ? 8'hf3 : 8'he6;
-    end else if (stream_index_q == closed_header_start_w + 16'd2) begin
-      output_byte_w = 8'h00;
-    end else if (stream_index_q == closed_header_start_w + 16'd3) begin
-      output_byte_w = 8'h00;
+    end else if (stream_index_q < tile_payload_start_w) begin
+      output_byte_w = closed_header_byte_w;
     end else begin
       output_byte_w = 8'h00;
     end
@@ -1250,12 +1420,25 @@ module ff_av2_encoder #(
       pending_push_word_q <= 16'd0;
       precarry_len_q <= 16'd0;
       tile_len_q <= 16'd0;
+      payload_len_q <= 16'd0;
+      payload_copy_index_q <= 16'd0;
+      payload_prefix_index_q <= 2'd0;
       seq_len_q <= 16'd0;
       stream_index_q <= 16'd0;
       width_q <= 16'd0;
       height_q <= 16'd0;
-      width_bits_q <= 4'd0;
-      height_bits_q <= 4'd0;
+      width_bits_q <= 5'd0;
+      height_bits_q <= 5'd0;
+      tile_cols_q <= 16'd1;
+      tile_rows_q <= 16'd1;
+      tile_count_q <= 16'd1;
+      tile_index_q <= 16'd0;
+      tile_col_q <= 16'd0;
+      tile_row_q <= 16'd0;
+      tile_width_q <= 16'd64;
+      tile_height_q <= 16'd64;
+      tile_input_index_q <= 32'd0;
+      frame_palette_mode_q <= 1'b0;
       seq_op_q <= 8'd0;
       seq_bits_left_q <= 7'd0;
       seq_value_q <= 64'd0;
@@ -1315,6 +1498,9 @@ module ff_av2_encoder #(
           seq_value_q <= 64'd0;
           seq_bit_pos_q <= 16'd0;
           seq_len_q <= 16'd0;
+          payload_len_q <= 16'd0;
+          payload_copy_index_q <= 16'd0;
+          payload_prefix_index_q <= 2'd0;
           seq_mem_q[0] <= 8'd0;
           seq_mem_q[1] <= 8'd0;
           seq_mem_q[2] <= 8'd0;
@@ -1340,6 +1526,16 @@ module ff_av2_encoder #(
           precarry_len_q <= 16'd0;
           tile_len_q <= 16'd0;
           stream_index_q <= 16'd0;
+          tile_cols_q <= tile_cols_w;
+          tile_rows_q <= tile_rows_w;
+          tile_count_q <= tile_cols_w * tile_rows_w;
+          tile_index_q <= 16'd0;
+          tile_col_q <= 16'd0;
+          tile_row_q <= 16'd0;
+          tile_width_q <= (tile_cols_w == 16'd1) ? visible_width : 16'd64;
+          tile_height_q <= (tile_rows_w == 16'd1) ? visible_height : 16'd64;
+          tile_input_index_q <= 32'd0;
+          frame_palette_mode_q <= 1'b0;
           phase_q <= PHASE_INTRA;
           step_q <= 5'd0;
           palette_row_q <= 6'd0;
@@ -1363,16 +1559,7 @@ module ff_av2_encoder #(
           stack_sp_q <= 5'd0;
           output_byte_q <= 8'd0;
           output_last_q <= 1'b0;
-          for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
-            partition_above_q[context_index_q] <= 8'd0;
-            partition_left_q[context_index_q] <= 8'd0;
-            y_txb_above_q[context_index_q] <= 8'd0;
-            y_txb_left_q[context_index_q] <= 8'd0;
-            u_txb_above_q[context_index_q] <= 8'd0;
-            u_txb_left_q[context_index_q] <= 8'd0;
-            v_txb_above_q[context_index_q] <= 8'd0;
-            v_txb_left_q[context_index_q] <= 8'd0;
-          end
+          state_q <= ST_TILE_START;
         end
       end else if (pending_push_valid_q) begin
         precarry_len_q <= precarry_len_q + 16'd1;
@@ -1383,14 +1570,64 @@ module ff_av2_encoder #(
             m_axis_valid <= 1'b0;
             m_axis_last <= 1'b0;
           end
+          ST_TILE_START: begin
+            tile_input_index_q <= 32'd0;
+            state_q <= ST_INPUT_READ;
+          end
           ST_INPUT_READ: begin
+            if (input_sample_fire_w) begin
+              tile_input_index_q <= tile_input_index_q + 32'd1;
+              if (s_axis_last != (tile_is_last_w && tile_input_last_w)) begin
+                input_error <= 1'b1;
+                state_q <= ST_IDLE;
+              end
+            end
             if (palette_analyzer_done_w) begin
               if (palette_analyzer_unsupported_w) begin
                 input_error <= 1'b1;
                 state_q <= ST_IDLE;
               end else begin
                 palette_mode_q <= palette_analyzer_luma_mode_w;
-                state_q <= ST_SEQ_LOAD;
+                frame_palette_mode_q <= frame_palette_mode_q | palette_analyzer_luma_mode_w;
+                low_q <= 64'd0;
+                rng_q <= 32'h8000;
+                cnt_q <= -9;
+                precarry_read_addr_q <= 16'd0;
+                pending_push_valid_q <= 1'b0;
+                pending_push_word_q <= 16'd0;
+                precarry_len_q <= 16'd0;
+                tile_len_q <= 16'd0;
+                phase_q <= PHASE_INTRA;
+                step_q <= 5'd0;
+                palette_row_q <= 6'd0;
+                palette_col_q <= 6'd0;
+                palette_identity_row_ctx_q <= 2'd3;
+                txb_index_q <= 16'd0;
+                txb_width_q <= 16'd0;
+                txb_count_q <= 16'd0;
+                txb_local_row_q <= 5'd0;
+                txb_local_col_q <= 5'd0;
+                last_u_txb_nonzero_q <= 1'b0;
+                visible_rows_mi_q <= visible_rows_mi_w;
+                visible_cols_mi_q <= visible_cols_mi_w;
+                block_row_mi_q <= 5'd0;
+                block_col_mi_q <= 5'd0;
+                block_w_mi_q <= 5'd16;
+                block_h_mi_q <= 5'd16;
+                partition_q <= PARTITION_NONE;
+                partition_emit_step_q <= 1'b0;
+                stack_sp_q <= 5'd0;
+                for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
+                  partition_above_q[context_index_q] <= 8'd0;
+                  partition_left_q[context_index_q] <= 8'd0;
+                  y_txb_above_q[context_index_q] <= 8'd0;
+                  y_txb_left_q[context_index_q] <= 8'd0;
+                  u_txb_above_q[context_index_q] <= 8'd0;
+                  u_txb_left_q[context_index_q] <= 8'd0;
+                  v_txb_above_q[context_index_q] <= 8'd0;
+                  v_txb_left_q[context_index_q] <= 8'd0;
+                end
+                state_q <= (tile_index_q == 16'd0) ? ST_SEQ_LOAD : ST_LOAD_BLOCK;
               end
             end
           end
@@ -1728,30 +1965,85 @@ module ff_av2_encoder #(
           ST_CARRY_WRITE: begin
             carry_q <= carry_sum_w >> 8;
             if (carry_index_q == 0) begin
-              stream_index_q <= 16'd0;
-              state_q <= ST_OUTPUT_PREP;
+              payload_prefix_index_q <= 2'd0;
+              payload_copy_index_q <= 16'd0;
+              precarry_read_addr_q <= 16'd0;
+              state_q <= ST_PAYLOAD_PREFIX;
             end else begin
               carry_index_q <= carry_index_q - 1;
               precarry_read_addr_q <= carry_index_q - 16'd1;
               state_q <= ST_CARRY_READ;
             end
           end
+          ST_PAYLOAD_PREFIX: begin
+            if (!tile_is_last_w && payload_prefix_index_q != 2'd3) begin
+              payload_mem_q[payload_len_q + {14'd0, payload_prefix_index_q}] <= payload_prefix_byte_w;
+              payload_prefix_index_q <= payload_prefix_index_q + 2'd1;
+            end else if (!tile_is_last_w) begin
+              payload_mem_q[payload_len_q + 16'd3] <= payload_prefix_byte_w;
+              payload_len_q <= payload_len_q + 16'd4;
+              payload_copy_index_q <= 16'd0;
+              precarry_read_addr_q <= 16'd0;
+              state_q <= ST_PAYLOAD_COPY_READ;
+            end else begin
+              payload_copy_index_q <= 16'd0;
+              precarry_read_addr_q <= 16'd0;
+              state_q <= ST_PAYLOAD_COPY_READ;
+            end
+          end
+          ST_PAYLOAD_COPY_READ: begin
+            state_q <= ST_PAYLOAD_COPY_WRITE;
+          end
+          ST_PAYLOAD_COPY_WRITE: begin
+            payload_mem_q[payload_len_q + payload_copy_index_q] <= precarry_read_data_q[7:0];
+            if (payload_copy_index_q == (tile_len_q - 16'd1)) begin
+              payload_len_q <= payload_len_q + tile_len_q;
+              if (tile_is_last_w) begin
+                stream_index_q <= 16'd0;
+                state_q <= ST_OUTPUT_PREP;
+              end else begin
+                tile_index_q <= tile_index_q + 16'd1;
+                if (tile_col_q == (tile_cols_q - 16'd1)) begin
+                  tile_col_q <= 16'd0;
+                  tile_row_q <= tile_row_q + 16'd1;
+                end else begin
+                  tile_col_q <= tile_col_q + 16'd1;
+                end
+                if (tile_col_q == (tile_cols_q - 16'd1)) begin
+                  tile_width_q <= (tile_cols_q == 16'd1) ? width_q : 16'd64;
+                  tile_height_q <=
+                    ((tile_row_q + 16'd1) == (tile_rows_q - 16'd1)) ?
+                      (height_q - ((tile_row_q + 16'd1) << 6)) : 16'd64;
+                end else begin
+                  tile_width_q <=
+                    ((tile_col_q + 16'd1) == (tile_cols_q - 16'd1)) ?
+                      (width_q - ((tile_col_q + 16'd1) << 6)) : 16'd64;
+                  tile_height_q <= tile_height_q;
+                end
+                state_q <= ST_TILE_START;
+              end
+            end else begin
+              payload_copy_index_q <= payload_copy_index_q + 16'd1;
+              precarry_read_addr_q <= payload_copy_index_q + 16'd1;
+              state_q <= ST_PAYLOAD_COPY_READ;
+            end
+          end
           ST_OUTPUT_PREP: begin
             m_axis_valid <= 1'b0;
             if (output_tile_payload_w) begin
               precarry_read_addr_q <= tile_stream_index_w;
-              state_q <= ST_OUTPUT_TILE_READ;
+              state_q <= ST_OUTPUT_PAYLOAD_READ;
             end else begin
               output_byte_q <= output_byte_w;
               output_last_q <= (stream_index_q == (total_stream_len_w - 16'd1));
               state_q <= ST_OUTPUT_VALID;
             end
           end
-          ST_OUTPUT_TILE_READ: begin
-            state_q <= ST_OUTPUT_TILE_LOAD;
+          ST_OUTPUT_PAYLOAD_READ: begin
+            state_q <= ST_OUTPUT_PAYLOAD_LOAD;
           end
-          ST_OUTPUT_TILE_LOAD: begin
-            output_byte_q <= precarry_read_data_q[7:0];
+          ST_OUTPUT_PAYLOAD_LOAD: begin
+            output_byte_q <= payload_mem_q[tile_stream_index_w];
             output_last_q <= (stream_index_q == (total_stream_len_w - 16'd1));
             state_q <= ST_OUTPUT_VALID;
           end

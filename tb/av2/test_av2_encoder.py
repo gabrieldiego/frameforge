@@ -6,8 +6,8 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ReadOnly, RisingEdge
 
-AV2_STATE_PARTITION = 5
-AV2_STATE_LEAF = 6
+AV2_STATE_PARTITION = 6
+AV2_STATE_LEAF = 8
 AV2_PHASE_INTRA = 0
 AV2_PHASE_PALETTE_HEADER = 1
 AV2_PHASE_PALETTE_MAP = 2
@@ -69,15 +69,20 @@ def av2_rtl_input_stream(data):
     u_plane = data[area : 2 * area]
     v_plane = data[2 * area :]
     stream = bytearray()
-    # The AV2 top module accepts visible 8x8 block packets: Y, then U, then V.
-    # This keeps the interface aligned with the VVC 4:4:4 8x8-leaf packet shape
-    # while avoiding full-frame input buffers in the AV2 palette analyzer.
-    for y0 in range(0, height, 8):
-        for x0 in range(0, width, 8):
-            for plane in (y_plane, u_plane, v_plane):
-                for local_y in range(8):
-                    row_start = (y0 + local_y) * width + x0
-                    stream.extend(plane[row_start : row_start + 8])
+    # The AV2 top module accepts visible 8x8 block packets in 64x64
+    # superblock/tile order. Each packet is 64 Y samples, then 64 U samples,
+    # then 64 V samples. This avoids a full-frame input buffer in RTL while
+    # keeping the public block packet shape aligned with VVC 4:4:4.
+    for tile_y in range(0, height, 64):
+        tile_h = min(64, height - tile_y)
+        for tile_x in range(0, width, 64):
+            tile_w = min(64, width - tile_x)
+            for y0 in range(tile_y, tile_y + tile_h, 8):
+                for x0 in range(tile_x, tile_x + tile_w, 8):
+                    for plane in (y_plane, u_plane, v_plane):
+                        for local_y in range(8):
+                            row_start = (y0 + local_y) * width + x0
+                            stream.extend(plane[row_start : row_start + 8])
     return bytes(stream)
 
 

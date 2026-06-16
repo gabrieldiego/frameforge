@@ -9,7 +9,10 @@ mod tile;
 
 use palette::Av2LumaPalette444;
 use syntax::{Av2SyntaxPayload, Av2SyntaxWriter};
-use tile::{av2_black_444_tile_entropy_payload, av2_luma_palette_444_tile_entropy_payload};
+use tile::{
+    av2_black_444_tile_entropy_payload_for_region,
+    av2_luma_palette_444_tile_entropy_payload_for_region, Av2TileRegion,
+};
 
 pub const AV2_CODEC_NAME: &str = "av2";
 pub const AV2_BITSTREAM_EXTENSION: &str = "av2";
@@ -24,6 +27,18 @@ const AV2_CHROMA_FORMAT_444: u32 = 2;
 const AV2_BITDEPTH_INDEX_8BIT: u32 = 1;
 const AV2_DELTA_DCQUANT_MIN: i8 = -23;
 const AV2_MAX_MAX_IBC_DRL_BITS_MINUS_MIN_PLUS_ONE: u16 = 3;
+const AV2_MVP_SUPERBLOCK_SIZE: usize = 64;
+const AV2_TILE_SIZE_BYTES: usize = 4;
+const AV2_MIN_TILE_SIZE_BYTES: usize = 1;
+const AV2_MI_SIZE: usize = 4;
+const AV2_MIB_SIZE_LOG2_64X64: u8 = 4;
+const AV2_SEQ_MIB_SIZE_LOG2_64X64: u8 = 4;
+const AV2_MAX_TILE_WIDTH: usize = 4096;
+const AV2_MAX_TILE_AREA: usize = 4096 * 2304;
+const AV2_MAX_TILE_COLS: usize = 64;
+const AV2_MAX_TILE_ROWS: usize = 64;
+const AV2_TILE_WIDTH_SCALING_LEVEL_2_0_TIER_0: usize = 4;
+const AV2_TILE_AREA_SCALING_LEVEL_2_0_TIER_0: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Av2Black444MvpProfile {
@@ -93,6 +108,137 @@ enum Av2ObuType {
 pub struct Av2VideoGeometry {
     pub width: usize,
     pub height: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Av2TileLayout {
+    regions: Vec<Av2TileRegion>,
+    cols: usize,
+    rows: usize,
+    log2_cols: u8,
+    log2_rows: u8,
+    min_log2_cols: u8,
+    min_log2_rows: u8,
+    max_log2_cols: u8,
+    max_log2_rows: u8,
+}
+
+impl Av2TileLayout {
+    fn for_geometry(geometry: Av2VideoGeometry) -> Self {
+        let cols = geometry.width.div_ceil(AV2_MVP_SUPERBLOCK_SIZE);
+        let rows = geometry.height.div_ceil(AV2_MVP_SUPERBLOCK_SIZE);
+        let mut regions = Vec::with_capacity(cols * rows);
+        for tile_row in 0..rows {
+            let origin_y = tile_row * AV2_MVP_SUPERBLOCK_SIZE;
+            let height = (geometry.height - origin_y).min(AV2_MVP_SUPERBLOCK_SIZE);
+            for tile_col in 0..cols {
+                let origin_x = tile_col * AV2_MVP_SUPERBLOCK_SIZE;
+                let width = (geometry.width - origin_x).min(AV2_MVP_SUPERBLOCK_SIZE);
+                regions.push(Av2TileRegion {
+                    origin_x,
+                    origin_y,
+                    width,
+                    height,
+                });
+            }
+        }
+        let limits = Av2TileLimits::for_geometry(geometry);
+        let log2_cols = ceil_log2_usize(cols).max(limits.min_log2_cols);
+        let min_log2_rows = limits.min_log2.saturating_sub(log2_cols);
+        let log2_rows = ceil_log2_usize(rows).max(min_log2_rows);
+        assert!(
+            log2_cols <= limits.max_log2_cols,
+            "AV2 MVP tile columns exceed the Level 2.0 tile limit"
+        );
+        assert!(
+            log2_rows <= limits.max_log2_rows,
+            "AV2 MVP tile rows exceed the Level 2.0 tile limit"
+        );
+        Self {
+            regions,
+            cols,
+            rows,
+            log2_cols,
+            log2_rows,
+            min_log2_cols: limits.min_log2_cols,
+            min_log2_rows,
+            max_log2_cols: limits.max_log2_cols,
+            max_log2_rows: limits.max_log2_rows,
+        }
+    }
+
+    fn tile_count(&self) -> usize {
+        self.regions.len()
+    }
+
+    fn is_single_tile(&self) -> bool {
+        self.tile_count() == 1
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Av2TileLimits {
+    min_log2_cols: u8,
+    max_log2_cols: u8,
+    max_log2_rows: u8,
+    min_log2: u8,
+}
+
+impl Av2TileLimits {
+    fn for_geometry(geometry: Av2VideoGeometry) -> Self {
+        assert!(
+            AV2_SEQ_MIB_SIZE_LOG2_64X64 >= AV2_MIB_SIZE_LOG2_64X64
+                && AV2_SEQ_MIB_SIZE_LOG2_64X64 - AV2_MIB_SIZE_LOG2_64X64 <= 1,
+            "AV2 MVP only supports the AVM tile-limit scale used by 64x64 sequence superblocks"
+        );
+        let mi_cols = align_power_of_two(geometry.width, 3) / AV2_MI_SIZE;
+        let mi_rows = align_power_of_two(geometry.height, 3) / AV2_MI_SIZE;
+        let aligned_mi_cols = align_power_of_two(mi_cols, AV2_MIB_SIZE_LOG2_64X64 as usize);
+        let aligned_mi_rows = align_power_of_two(mi_rows, AV2_MIB_SIZE_LOG2_64X64 as usize);
+        let sb_cols = aligned_mi_cols >> AV2_MIB_SIZE_LOG2_64X64;
+        let sb_rows = aligned_mi_rows >> AV2_MIB_SIZE_LOG2_64X64;
+        let sb_size_log2 = AV2_MIB_SIZE_LOG2_64X64 + 2;
+        let max_width_sb =
+            (AV2_TILE_WIDTH_SCALING_LEVEL_2_0_TIER_0 * AV2_MAX_TILE_WIDTH) >> (sb_size_log2 + 2);
+        let max_area_sb = (AV2_TILE_AREA_SCALING_LEVEL_2_0_TIER_0 * AV2_MAX_TILE_AREA)
+            >> ((2 * sb_size_log2) + 2);
+        let min_log2_cols = tile_log2(max_width_sb, sb_cols);
+        let max_log2_cols = tile_log2(1, sb_cols.min(AV2_MAX_TILE_COLS));
+        let max_log2_rows = tile_log2(1, sb_rows.min(AV2_MAX_TILE_ROWS));
+        let min_log2 = tile_log2(max_area_sb, sb_cols * sb_rows).max(min_log2_cols);
+        Self {
+            min_log2_cols,
+            max_log2_cols,
+            max_log2_rows,
+            min_log2,
+        }
+    }
+}
+
+fn align_power_of_two(value: usize, power: usize) -> usize {
+    let alignment = 1usize << power;
+    (value + alignment - 1) & !(alignment - 1)
+}
+
+fn tile_log2(block_size: usize, target: usize) -> u8 {
+    assert!(block_size > 0);
+    assert!(target > 0);
+    let mut log2 = 0u8;
+    while (block_size << log2) < target {
+        log2 += 1;
+    }
+    log2
+}
+
+fn ceil_log2_usize(value: usize) -> u8 {
+    assert!(value > 0);
+    let mut bits = 0u8;
+    let mut threshold = 1usize;
+    while threshold < value {
+        threshold <<= 1;
+        bits += 1;
+    }
+    bits
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,10 +378,13 @@ fn av2_mvp_444_trace_jsonl_for_mode(
     geometry: Av2VideoGeometry,
     frame_mode: &Av2Mvp444FrameMode,
 ) -> Result<String, String> {
+    let tile_layout = Av2TileLayout::for_geometry(geometry);
     let sequence = av2_black_444_sequence_header_payload(geometry);
-    let closed_loop_header =
-        av2_mvp_444_closed_loop_key_header_payload(frame_mode.allow_screen_content_tools());
-    let entropy = av2_tile_entropy_payload_for_mode(geometry, frame_mode);
+    let closed_loop_header = av2_mvp_444_closed_loop_key_header_payload(
+        frame_mode.allow_screen_content_tools(),
+        &tile_layout,
+    );
+    let entropy = av2_tile_entropy_payloads_for_mode(&tile_layout, frame_mode);
     let mut lines = String::new();
 
     push_av2_trace_line(
@@ -278,8 +427,10 @@ fn av2_mvp_444_trace_jsonl_for_mode(
             field.bit_count,
         );
     }
-    for field in &entropy.fields {
-        push_av2_entropy_trace_line(&mut lines, field);
+    for (tile_index, entropy) in entropy.iter().enumerate() {
+        for field in &entropy.fields {
+            push_av2_entropy_trace_line(&mut lines, tile_index, field);
+        }
     }
     Ok(lines)
 }
@@ -475,20 +626,28 @@ fn write_fixed_black_444_sequence_tools(writer: &mut Av2SyntaxWriter) {
 
 #[cfg(test)]
 fn av2_black_444_closed_loop_key_header_payload() -> Av2SyntaxPayload {
-    av2_mvp_444_closed_loop_key_header_payload(false)
+    av2_mvp_444_closed_loop_key_header_payload(
+        false,
+        &Av2TileLayout::for_geometry(Av2VideoGeometry {
+            width: 64,
+            height: 64,
+        }),
+    )
 }
 
 fn av2_mvp_444_closed_loop_key_header_payload(
     allow_screen_content_tools: bool,
+    tile_layout: &Av2TileLayout,
 ) -> Av2SyntaxPayload {
     let profile = Av2Black444MvpProfile::current();
     let mut writer = Av2SyntaxWriter::new();
 
-    // AV2 v1.0.0 tile_group_obu() for a single-tile OBU_CLOSED_LOOP_KEY.
+    // AV2 v1.0.0 tile_group_obu() for an OBU_CLOSED_LOOP_KEY.
     // The uncompressed header follows AVM write_tilegroup_header() and
     // write_uncompressed_header(). The tile entropy payload is generated by
-    // the AV2 range writer below; the current MVP emits a 64x64 DC intra block
-    // with DC-only residual TXBs for a lossless black 4:4:4 frame.
+    // the AV2 range writer below. FrameForge fixes the current MVP to uniform
+    // 64x64 superblock tiles and 8x8 coding leaves; each tile resets the local
+    // syntax contexts so no prediction state crosses superblock boundaries.
     writer.write_flag("tile_group.first_tile_group_in_frame", true);
     writer.write_uvlc("uncompressed_header.cur_mfh_id", 0);
     writer.write_uvlc("uncompressed_header.seq_header_id", 0);
@@ -504,14 +663,67 @@ fn av2_mvp_444_closed_loop_key_header_payload(
         "uncompressed_header.disable_cdf_update",
         profile.disable_cdf_update,
     );
-    writer.write_flag("tile_info.uniform_spacing_flag", true);
+    write_mvp_tile_info(&mut writer, tile_layout);
     writer.write_literal("quantization.base_qindex", 0, 8);
     writer.write_flag("segmentation.enabled", false);
     writer.write_flag("quantization_matrix.using_qmatrix", false);
     writer.write_literal("uncompressed_header.reduced_tx_set_used", 0, 2);
+    if !tile_layout.is_single_tile() {
+        // AV2 v1.0.0 tile_group_obu(): a single tile group covering all tiles
+        // still emits tile_start_and_end_present_flag when tiles_log2 > 0.
+        // AVM write_tilegroup_header() packs this immediately after
+        // write_uncompressed_header(); the tile-group header byte count is
+        // rounded up only after this flag has been written.
+        writer.write_flag("tile_group.tile_start_and_end_present_flag", false);
+    }
     writer.byte_align_zero("tile_group.header_byte_alignment");
 
     writer.finish()
+}
+
+fn write_mvp_tile_info(writer: &mut Av2SyntaxWriter, tile_layout: &Av2TileLayout) {
+    writer.write_flag("tile_info.uniform_spacing_flag", true);
+    write_uniform_tile_log2(
+        writer,
+        "tile_info.increment_log2_cols",
+        "tile_info.stop_log2_cols",
+        tile_layout.min_log2_cols,
+        tile_layout.log2_cols,
+        tile_layout.max_log2_cols,
+    );
+    write_uniform_tile_log2(
+        writer,
+        "tile_info.increment_log2_rows",
+        "tile_info.stop_log2_rows",
+        tile_layout.min_log2_rows,
+        tile_layout.log2_rows,
+        tile_layout.max_log2_rows,
+    );
+    if !tile_layout.is_single_tile() {
+        writer.write_literal(
+            "tile_info.tile_size_bytes_minus1",
+            (AV2_TILE_SIZE_BYTES - 1) as u64,
+            2,
+        );
+    }
+}
+
+fn write_uniform_tile_log2(
+    writer: &mut Av2SyntaxWriter,
+    increment_name: &'static str,
+    stop_name: &'static str,
+    min_log2: u8,
+    target_log2: u8,
+    max_log2: u8,
+) {
+    assert!(min_log2 <= target_log2);
+    assert!(target_log2 <= max_log2);
+    for _ in min_log2..target_log2 {
+        writer.write_flag(increment_name, true);
+    }
+    if target_log2 < max_log2 {
+        writer.write_flag(stop_name, false);
+    }
 }
 
 #[cfg(test)]
@@ -523,34 +735,101 @@ fn av2_mvp_444_closed_loop_key_payload(
     geometry: Av2VideoGeometry,
     frame_mode: &Av2Mvp444FrameMode,
 ) -> Av2SyntaxPayload {
-    let mut payload =
-        av2_mvp_444_closed_loop_key_header_payload(frame_mode.allow_screen_content_tools());
-    let entropy = av2_tile_entropy_payload_for_mode(geometry, frame_mode);
+    let tile_layout = Av2TileLayout::for_geometry(geometry);
+    let mut payload = av2_mvp_444_closed_loop_key_header_payload(
+        frame_mode.allow_screen_content_tools(),
+        &tile_layout,
+    );
+    let tile_payload = av2_tile_group_payload_for_mode(&tile_layout, frame_mode);
     let bit_offset = payload.bytes.len() * 8;
     payload.fields.push(syntax::Av2SyntaxField {
         name: "tile_group.tile_entropy_payload",
         code: syntax::Av2SyntaxCode::TileEntropyPayload,
         bit_offset,
-        bit_count: entropy.bytes.len() * 8,
+        bit_count: tile_payload.len() * 8,
     });
-    payload.bytes.extend_from_slice(&entropy.bytes);
+    payload.bytes.extend_from_slice(&tile_payload);
     payload
 }
 
-fn av2_tile_entropy_payload_for_mode(
-    geometry: Av2VideoGeometry,
+fn av2_tile_group_payload_for_mode(
+    tile_layout: &Av2TileLayout,
+    frame_mode: &Av2Mvp444FrameMode,
+) -> Vec<u8> {
+    let tile_payloads = av2_tile_entropy_payloads_for_mode(tile_layout, frame_mode);
+    if tile_payloads.len() == 1 {
+        return tile_payloads[0].bytes.clone();
+    }
+
+    let mut out = Vec::new();
+    for (tile_index, payload) in tile_payloads.iter().enumerate() {
+        if tile_index + 1 != tile_payloads.len() {
+            write_tile_size_prefix(payload.bytes.len(), &mut out);
+        }
+        out.extend_from_slice(&payload.bytes);
+    }
+    out
+}
+
+fn av2_tile_entropy_payloads_for_mode(
+    tile_layout: &Av2TileLayout,
+    frame_mode: &Av2Mvp444FrameMode,
+) -> Vec<entropy::Av2EntropyPayload> {
+    tile_layout
+        .regions
+        .iter()
+        .map(|&region| av2_tile_entropy_payload_for_region(region, frame_mode))
+        .collect()
+}
+
+fn av2_tile_entropy_payload_for_region(
+    region: Av2TileRegion,
     frame_mode: &Av2Mvp444FrameMode,
 ) -> entropy::Av2EntropyPayload {
     match frame_mode {
         Av2Mvp444FrameMode::Black => {
-            av2_black_444_tile_entropy_payload(geometry, Av2Black444MvpProfile::current())
+            av2_black_444_tile_entropy_payload_for_region(region, Av2Black444MvpProfile::current())
         }
-        Av2Mvp444FrameMode::LumaPalette(palette) => av2_luma_palette_444_tile_entropy_payload(
-            geometry,
-            Av2Black444MvpProfile::current(),
-            palette,
-        ),
+        Av2Mvp444FrameMode::LumaPalette(palette) => {
+            if av2_luma_palette_region_is_black(palette, region) {
+                av2_black_444_tile_entropy_payload_for_region(
+                    region,
+                    Av2Black444MvpProfile::current(),
+                )
+            } else {
+                av2_luma_palette_444_tile_entropy_payload_for_region(
+                    region,
+                    Av2Black444MvpProfile::current(),
+                    palette,
+                )
+            }
+        }
     }
+}
+
+fn av2_luma_palette_region_is_black(palette: &Av2LumaPalette444, region: Av2TileRegion) -> bool {
+    for y in region.origin_y..(region.origin_y + region.height) {
+        for x in region.origin_x..(region.origin_x + region.width) {
+            if palette.y_sample(x, y) != 0
+                || palette.u_sample(x, y) != 0
+                || palette.v_sample(x, y) != 0
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn write_tile_size_prefix(tile_size: usize, out: &mut Vec<u8>) {
+    let stored = tile_size
+        .checked_sub(AV2_MIN_TILE_SIZE_BYTES)
+        .expect("AV2 tile payload must not be empty");
+    assert!(
+        stored <= u32::MAX as usize,
+        "AV2 MVP tile payload size prefix is limited to 32 bits"
+    );
+    out.extend_from_slice(&(stored as u32).to_le_bytes());
 }
 
 fn append_obu(out: &mut Vec<u8>, obu_type: Av2ObuType, payload: &Av2SyntaxPayload) {
@@ -602,9 +881,14 @@ fn push_av2_trace_line(
     ));
 }
 
-fn push_av2_entropy_trace_line(out: &mut String, field: &entropy::Av2EntropyField) {
+fn push_av2_entropy_trace_line(
+    out: &mut String,
+    tile_index: usize,
+    field: &entropy::Av2EntropyField,
+) {
     let mut line = format!(
-        "{{\"codec\":\"av2\",\"source\":\"software\",\"phase\":\"tile_entropy\",\"name\":\"{}\",\"spec\":\"{}\",\"code\":\"{}\",\"bit_offset\":{},\"bit_count\":{}",
+        "{{\"codec\":\"av2\",\"source\":\"software\",\"phase\":\"tile_entropy\",\"tile_index\":{},\"name\":\"{}\",\"spec\":\"{}\",\"code\":\"{}\",\"bit_offset\":{},\"bit_count\":{}",
+        tile_index,
         escape_json(field.name),
         escape_json(av2_spec_section_for_entropy_field(field.name)),
         escape_json(&format!("{:?}", field.code)),

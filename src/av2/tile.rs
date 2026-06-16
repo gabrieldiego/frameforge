@@ -820,9 +820,38 @@ struct Av2TileDecision {
     block_size: Av2MvpBlockSize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Av2TileRegion {
+    pub(crate) origin_x: usize,
+    pub(crate) origin_y: usize,
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+}
+
+impl Av2TileRegion {
+    #[cfg(test)]
+    pub(crate) fn root(geometry: Av2VideoGeometry) -> Self {
+        Self {
+            origin_x: 0,
+            origin_y: 0,
+            width: geometry.width,
+            height: geometry.height,
+        }
+    }
+
+    fn geometry(self) -> Av2VideoGeometry {
+        Av2VideoGeometry {
+            width: self.width,
+            height: self.height,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Av2Black444TilePlan {
     decisions: Vec<Av2TileDecision>,
+    origin_x: usize,
+    origin_y: usize,
     visible_rows_mi: usize,
     visible_cols_mi: usize,
     luma_palette: bool,
@@ -939,30 +968,38 @@ fn av2_palette_cache_from_neighbors(above: Option<&[u8]>, left: Option<&[u8]>) -
     cache
 }
 
+#[cfg(test)]
 pub(crate) fn av2_black_444_tile_entropy_payload(
     geometry: Av2VideoGeometry,
     profile: Av2Black444MvpProfile,
 ) -> Av2EntropyPayload {
-    let plan = Av2Black444TilePlan::for_geometry(geometry, profile, false);
+    av2_black_444_tile_entropy_payload_for_region(Av2TileRegion::root(geometry), profile)
+}
+
+pub(crate) fn av2_black_444_tile_entropy_payload_for_region(
+    region: Av2TileRegion,
+    profile: Av2Black444MvpProfile,
+) -> Av2EntropyPayload {
+    let plan = Av2Black444TilePlan::for_region(region, profile, false);
     let mut writer = Av2EntropyWriter::new();
     plan.write_entropy(&mut writer, None);
     writer.finish()
 }
 
-pub(crate) fn av2_luma_palette_444_tile_entropy_payload(
-    geometry: Av2VideoGeometry,
+pub(crate) fn av2_luma_palette_444_tile_entropy_payload_for_region(
+    region: Av2TileRegion,
     profile: Av2Black444MvpProfile,
     palette: &Av2LumaPalette444,
 ) -> Av2EntropyPayload {
-    let plan = Av2Black444TilePlan::for_geometry(geometry, profile, true);
+    let plan = Av2Black444TilePlan::for_region(region, profile, true);
     let mut writer = Av2EntropyWriter::new();
     plan.write_entropy(&mut writer, Some(palette));
     writer.finish()
 }
 
 impl Av2Black444TilePlan {
-    fn for_geometry(
-        geometry: Av2VideoGeometry,
+    fn for_region(
+        region: Av2TileRegion,
         profile: Av2Black444MvpProfile,
         luma_palette: bool,
     ) -> Self {
@@ -975,17 +1012,25 @@ impl Av2Black444TilePlan {
             "AV2 MVP tile plan expects fixed frame-initial CDFs"
         );
         assert!(
-            geometry.width <= MVP_SUPERBLOCK_SIZE && geometry.height <= MVP_SUPERBLOCK_SIZE,
-            "AV2 MVP tile plan currently covers one 64x64 superblock"
+            region.width <= MVP_SUPERBLOCK_SIZE && region.height <= MVP_SUPERBLOCK_SIZE,
+            "AV2 MVP tile plan covers one independently-coded 64x64 superblock tile"
         );
         assert!(
-            geometry.width % 8 == 0 && geometry.height % 8 == 0,
+            region.origin_x % MVP_SUPERBLOCK_SIZE == 0
+                && region.origin_y % MVP_SUPERBLOCK_SIZE == 0,
+            "AV2 MVP independent tiles are aligned to 64x64 superblock origins"
+        );
+        assert!(
+            region.width % 8 == 0 && region.height % 8 == 0,
             "AV2 MVP tile plan expects visible dimensions in 8-pixel units"
         );
+        let geometry = region.geometry();
         let visible_rows_mi = geometry.height / MI_SIZE;
         let visible_cols_mi = geometry.width / MI_SIZE;
         let mut plan = Self {
             decisions: Vec::new(),
+            origin_x: region.origin_x,
+            origin_y: region.origin_y,
             visible_rows_mi,
             visible_cols_mi,
             luma_palette,
@@ -1166,6 +1211,8 @@ impl Av2Black444TilePlan {
                         *decision,
                         palette.expect("luma palette decision needs palette state"),
                         &mut palette_cache_context,
+                        self.origin_x,
+                        self.origin_y,
                     );
                 }
                 Av2TileDecisionKind::LumaPaletteColorMap => {
@@ -1173,6 +1220,8 @@ impl Av2Black444TilePlan {
                         writer,
                         *decision,
                         palette.expect("luma palette decision needs palette state"),
+                        self.origin_x,
+                        self.origin_y,
                     );
                 }
                 Av2TileDecisionKind::BlackDcResidualCoefficients => {
@@ -1192,6 +1241,8 @@ impl Av2Black444TilePlan {
                         self.visible_cols_mi,
                         palette.expect("luma palette residual needs palette state"),
                         &mut txb_contexts,
+                        self.origin_x,
+                        self.origin_y,
                     );
                 }
             }
@@ -1561,6 +1612,8 @@ fn write_luma_palette_mode_info(
     decision: Av2TileDecision,
     palette: &Av2LumaPalette444,
     cache_context: &mut Av2PaletteColorCacheContext,
+    tile_origin_x: usize,
+    tile_origin_y: usize,
 ) {
     assert_eq!(
         decision.block_size.width, AV2_LUMA_PALETTE_BLOCK_SIZE,
@@ -1570,8 +1623,8 @@ fn write_luma_palette_mode_info(
         decision.block_size.height, AV2_LUMA_PALETTE_BLOCK_SIZE,
         "AV2 MVP palette leaves are currently coded as 8x8 blocks"
     );
-    let x0 = decision.col * MI_SIZE;
-    let y0 = decision.row * MI_SIZE;
+    let x0 = tile_origin_x + decision.col * MI_SIZE;
+    let y0 = tile_origin_y + decision.row * MI_SIZE;
     let colors = palette.colors_for_block(x0, y0);
     assert!(
         (AV2_LUMA_PALETTE_MIN_COLORS..=AV2_LUMA_PALETTE_MAX_COLORS).contains(&colors.len()),
@@ -1649,9 +1702,11 @@ fn write_luma_palette_color_map(
     writer: &mut Av2EntropyWriter,
     decision: Av2TileDecision,
     palette: &Av2LumaPalette444,
+    tile_origin_x: usize,
+    tile_origin_y: usize,
 ) {
-    let x0 = decision.col * MI_SIZE;
-    let y0 = decision.row * MI_SIZE;
+    let x0 = tile_origin_x + decision.col * MI_SIZE;
+    let y0 = tile_origin_y + decision.row * MI_SIZE;
     let colors = palette.color_count_for_block(x0, y0);
     if decision.block_size.width < 64 && decision.block_size.height < 64 {
         // AV2 v1.0.0 Section 5.20.8.4 palette_tokens(): palette blocks
@@ -1947,6 +2002,8 @@ fn write_luma_palette_residual_coefficients(
     visible_cols_mi: usize,
     palette: &Av2LumaPalette444,
     contexts: &mut Av2TxbEntropyContexts,
+    tile_origin_x: usize,
+    tile_origin_y: usize,
 ) {
     // AV2 v1.0.0 Sections 5.20.8.4 palette_tokens() and 5.20.7.27 coeffs():
     // palette supplies a luma predictor, not an escape-coded lossless sample
@@ -1973,8 +2030,8 @@ fn write_luma_palette_residual_coefficients(
             let dc_sign_ctx = dc_sign_context(contexts.y_above[abs_col], contexts.y_left[abs_row]);
             let coefficients = luma_palette_tx4x4_coefficients(
                 palette,
-                abs_col * TX4X4_SIZE,
-                abs_row * TX4X4_SIZE,
+                tile_origin_x + abs_col * TX4X4_SIZE,
+                tile_origin_y + abs_row * TX4X4_SIZE,
             );
             let (context, _) =
                 write_luma_palette_residual_txb(writer, skip_ctx, dc_sign_ctx, &coefficients);
@@ -1994,8 +2051,10 @@ fn write_luma_palette_residual_coefficients(
             let coefficients = chroma_bdpcm_horz_tx4x4_coefficients(
                 palette,
                 Av2ChromaPlane::U,
-                abs_col * TX4X4_SIZE,
-                abs_row * TX4X4_SIZE,
+                tile_origin_x + abs_col * TX4X4_SIZE,
+                tile_origin_y + abs_row * TX4X4_SIZE,
+                tile_origin_x,
+                tile_origin_y,
             );
             let (context, nonzero) =
                 write_chroma_bdpcm_txb(writer, Av2ChromaPlane::U, skip_ctx, &coefficients);
@@ -2017,8 +2076,10 @@ fn write_luma_palette_residual_coefficients(
             let coefficients = chroma_bdpcm_horz_tx4x4_coefficients(
                 palette,
                 Av2ChromaPlane::V,
-                abs_col * TX4X4_SIZE,
-                abs_row * TX4X4_SIZE,
+                tile_origin_x + abs_col * TX4X4_SIZE,
+                tile_origin_y + abs_row * TX4X4_SIZE,
+                tile_origin_x,
+                tile_origin_y,
             );
             let (context, _) =
                 write_chroma_bdpcm_txb(writer, Av2ChromaPlane::V, skip_ctx, &coefficients);
@@ -2098,11 +2159,21 @@ fn chroma_bdpcm_horz_tx4x4_coefficients(
     plane: Av2ChromaPlane,
     x0: usize,
     y0: usize,
+    tile_origin_x: usize,
+    tile_origin_y: usize,
 ) -> [i32; TX4X4_SAMPLES] {
     let mut residual = [0i32; TX4X4_SAMPLES];
     for local_y in 0..TX4X4_SIZE {
         let y = y0 + local_y;
-        let row_predictor = i32::from(chroma_h_predictor(palette, plane, x0, y0, local_y));
+        let row_predictor = i32::from(chroma_h_predictor(
+            palette,
+            plane,
+            x0,
+            y0,
+            local_y,
+            tile_origin_x,
+            tile_origin_y,
+        ));
         for local_x in 0..TX4X4_SIZE {
             let x = x0 + local_x;
             let sample = i32::from(chroma_sample(palette, plane, x, y));
@@ -2125,14 +2196,18 @@ fn chroma_h_predictor(
     x0: usize,
     y0: usize,
     local_y: usize,
+    tile_origin_x: usize,
+    tile_origin_y: usize,
 ) -> u8 {
     // AV2 v1.0.0 Section 7.11 intra prediction, mirrored from AVM
     // av2_build_intra_predictors_high(): H_PRED uses the left reference
     // column; if the left edge is unavailable, AVM falls back to above[0] when
-    // available and to base+1 at the top-left frame corner.
-    if x0 > 0 {
+    // available and to base+1 at the top-left tile/frame corner. Independent
+    // 64x64 superblock tiles must not borrow the left/top predictor from the
+    // previous tile even though the global frame coordinate is non-zero.
+    if x0 > tile_origin_x {
         chroma_sample(palette, plane, x0 - 1, y0 + local_y)
-    } else if y0 > 0 {
+    } else if y0 > tile_origin_y {
         chroma_sample(palette, plane, x0, y0 - 1)
     } else {
         LOSSLESS_H_PRED_LEFT_EDGE
@@ -3193,11 +3268,11 @@ mod tests {
 
     #[test]
     fn av2_black_444_tile_plan_uses_8x8_leaves() {
-        let plan = Av2Black444TilePlan::for_geometry(
-            Av2VideoGeometry {
+        let plan = Av2Black444TilePlan::for_region(
+            Av2TileRegion::root(Av2VideoGeometry {
                 width: 64,
                 height: 64,
-            },
+            }),
             Av2Black444MvpProfile::current(),
             false,
         );

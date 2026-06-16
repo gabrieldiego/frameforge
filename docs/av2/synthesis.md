@@ -356,6 +356,39 @@ the current lossless path stores the Y/U/V sample planes and a larger staged
 tile payload. The staged carry buffer remains a known optimization target once
 the next functional blocks are in place.
 
+## 2026-06-16 Luma Palette + Lossless Residual (Regression Check)
+
+The latest full-top AV2 run after this change-set was attempted to establish a
+fresh synthesis checkpoint. The same DUT and board as above were used.
+
+Configuration:
+
+- command: `make synth CODEC=av2 SYNTH_YOSYS_QUIET=0`
+- DUT: `av2-encoder`
+- RTL top: `ff_av2_encoder`
+- board: `synth/boards/arty-z7-10.env`
+- clock metadata: `25 MHz`
+- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
+- memory limit: 3072 MiB
+- supported RTL input subset: 8-bit 4:4:4, up to 64x64, black frames,
+  full luma palette flow with luma residual coding and horizontal BDPCM chroma.
+
+Result:
+
+- Yosys synthesis did not complete and hit the 600 second timeout.
+- Final log shows the command stalled in `PROC_ARST` (`ff_av2_encoder.sv`) at
+  8.5. Executing `PROC_ARST` pass.
+- No `ff_av2_encoder.json`, `ff_av2_encoder.post_synth.v`, `critical_path.log`,
+  or updated critical-path report were produced.
+- No new area or timing measurements are available for this configuration.
+
+The previous documented baseline immediately prior to this attempt (`2026-06-15`
+run) completed in 188.4 seconds with 1134.36 MiB peak RSS and the area/timing
+results in the table above. This attempt regressed to a non-zero
+`make`/exit status (124) because runtime exceeded the 600 second hard stop; treat
+this as a regression indicator and optimization target (likely `PROC_ARST` growth in
+the top-level encoder process normalization path).
+
 ## Retired Bring-Up Measurements
 
 Temporary AV2 fixed-output emitters existed during validation plumbing bring-up.
