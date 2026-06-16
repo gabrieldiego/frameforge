@@ -119,6 +119,47 @@ validation and synthesis checkpoints.
 - [ ] Add one end-to-end “screen scene” baseline (single source screenshot crop run)
   that records bits, bpp, and PSNR/inf-lossless status.
 
+## Feature Set to Implement Across Cycles
+
+Use this as the recurring feature checklist for each active development cycle:
+
+- **Codec syntax support**
+  - Palette predictor refinements (luma-only per current AV2 spec shape)
+  - Residual path coverage for all 8x8 leaves (palette residual + BDPCM variants)
+  - Additional predictor modes with strict fallback ordering
+  - Intra prediction mode expansion for screen content (where AVM-compatible)
+  - Block-tree and partition decision support
+  - Optional entropy/range-coder context/state updates once correctness is stable
+  - Chroma-robust fallback policy (no silent failures on non-palette blocks)
+  - Screen-aware coding-tool tuning hooks
+
+- **Format and input coverage**
+  - 4:4:4 arbitrary-color full-frame/screenshot cases
+  - Multi-CTU geometry support with deterministic ordering
+  - Partial-CTU edge cases and non-tile-aligned crops
+  - Deterministic seed/replay support for pseudo-random screen crop generation
+
+- **Validation and quality**
+  - SW/RTL/REF checksum parity under every new syntax path
+  - Bits-per-sample/bpp tracking in `quality-bitrate` baseline docs
+  - Regression-set-specific failure taxonomy (palette miss, residual miss, context miss)
+  - Screenshot-based smoke + full sweeps as the recurring regression gate
+
+- **Synthesis and implementation**
+  - Timing cleanup on the active critical path
+  - Register/FF/LUT carry reduction where behavior permits
+  - ROM/RAM reuse and staging reduction in sample windows
+  - Removal of temporary test-only plumbing and debug-only branches
+
+- **Tooling and docs**
+  - Section-linked implementation comments for new syntax in both SW/RTL
+  - Test-vector manifest growth for each new operating point
+  - Explicitly documented synthesis and quality deltas per milestone
+  - Clear PASS/FAIL definitions for each feature gate
+
+When a cycle is planned, pick 2–3 items from this list and bind them to:
+one SW change, one RTL change, one validation set, and one synthesis baseline.
+
 ## Acceptance for each milestone
 
 - **Functional**: all relevant AV2 validation sets passed with strict checksum parity.
@@ -126,4 +167,3 @@ validation and synthesis checkpoints.
   no silent error paths.
 - **Synthesis**: completion under budget and deltas documented.
 - **Spec alignment**: syntax decisions mapped to AV2 section references in source comments/docs.
-
