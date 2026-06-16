@@ -6,6 +6,8 @@ infrastructure into a real encoder. Codec-specific work belongs under
 infrastructure such as test-vector generation, PSNR/bitrate reporting,
 synthesis wrappers, and cocotb/Yosys entry points remains shared.
 
+See the [AV2 roadmap](roadmap.md) for the next planned milestones.
+
 ## Current State
 
 - `CODEC=av2` is accepted by the shared script codec registry.
