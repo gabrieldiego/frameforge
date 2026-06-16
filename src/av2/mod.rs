@@ -865,7 +865,7 @@ mod tests {
     }
 
     #[test]
-    fn av2_mvp_444_maps_over_limit_luma_colors_lossily() {
+    fn av2_mvp_444_preserves_over_limit_luma_colors_with_lossless_residual() {
         let request = Av2EncodeRequest {
             params: Av2EncodeParams { frames: 1 },
             geometry: Av2VideoGeometry {
@@ -886,23 +886,18 @@ mod tests {
         let result =
             av2_encode_fixed_black_444(&mut source, &mut output, Some(&mut recon), request);
 
-        result.expect("over-limit luma colors should be encoded lossily");
-        assert_ne!(recon, input);
-        for block_y in (0..AV2_FIXED_BLACK_444_HEIGHT).step_by(8) {
-            for block_x in (0..AV2_FIXED_BLACK_444_WIDTH).step_by(8) {
-                let mut colors = Vec::new();
-                for local_y in 0..8 {
-                    for local_x in 0..8 {
-                        let sample = recon
-                            [(block_y + local_y) * AV2_FIXED_BLACK_444_WIDTH + block_x + local_x];
-                        if !colors.contains(&sample) {
-                            colors.push(sample);
-                        }
-                    }
-                }
-                assert!(colors.len() <= 8);
-            }
-        }
+        result.expect("over-limit luma colors should encode through lossless residuals");
+        assert_ne!(
+            output,
+            av2_black_444_bitstream_for_geometry(request.geometry)
+        );
+        assert_eq!(recon, input);
+        let trace = av2_mvp_444_trace_jsonl_for_frame(&input, request)
+            .expect("AV2 trace should be emitted");
+        assert!(
+            trace.contains("tile.coeff.y.txb_nonzero_tx4x4_ctx"),
+            "over-limit luma palette blocks must emit lossless luma coefficient residuals"
+        );
         assert!(recon[y_plane_len..].iter().all(|&sample| sample == 0));
     }
 

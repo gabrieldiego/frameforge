@@ -1,14 +1,18 @@
 `timescale 1ns/1ps
 
-module ff_av2_chroma_bdpcm_symbolizer (
+module ff_av2_chroma_bdpcm_symbolizer #(
+  parameter int LUMA_PALETTE_RESIDUAL = 0
+) (
   input  logic        clk,
   input  logic        rst_n,
   input  logic        enable,
   input  logic        advance,
   input  logic        plane_v,
   input  logic [3:0]  skip_ctx,
+  input  logic [1:0]  dc_sign_ctx,
   input  logic [127:0] txb_samples,
   input  logic [31:0] predictor_samples,
+  input  logic [127:0] predictor_txb_samples,
   output logic        op_valid,
   output logic        op_literal,
   output logic [31:0] op_literal_value,
@@ -31,6 +35,8 @@ module ff_av2_chroma_bdpcm_symbolizer (
   localparam logic [3:0] TABLE_BASE = 4'd6;
   localparam logic [3:0] TABLE_BASE_LF = 4'd7;
   localparam logic [3:0] TABLE_BR = 4'd8;
+  localparam logic [3:0] TABLE_BR_LF = 4'd9;
+  localparam logic [3:0] TABLE_DC_SIGN = 4'd10;
 
   localparam logic [4:0] EMIT_SKIP = 5'd0;
   localparam logic [4:0] EMIT_EOB = 5'd1;
@@ -55,7 +61,7 @@ module ff_av2_chroma_bdpcm_symbolizer (
   logic active_q;
   logic [4:0] emit_state_q;
   logic [3:0] scan_q;
-  logic [3:0] eob_q;
+  logic [4:0] eob_q;
   logic [3:0] eob_pt_q;
   logic [3:0] eob_extra_q;
   logic [2:0] eob_offset_bits_q;
@@ -64,10 +70,11 @@ module ff_av2_chroma_bdpcm_symbolizer (
   logic txb_nonzero_q;
   logic plane_v_q;
   logic [3:0] skip_ctx_q;
+  logic [1:0] dc_sign_ctx_q;
   logic [15:0] level_q [0:15];
   logic coeff_negative_q [0:15];
-  logic [3:0] coeff_ctx_q [0:15];
-  logic [3:0] br_ctx_q [0:15];
+  logic [4:0] coeff_ctx_q [0:15];
+  logic [4:0] br_ctx_q [0:15];
   logic [15:0] hr_avg_q;
 
   logic signed [15:0] residual_w [0:15];
@@ -78,14 +85,14 @@ module ff_av2_chroma_bdpcm_symbolizer (
   logic [15:0] abs_coeff_w;
   logic [15:0] cul_level_w;
   logic signed [15:0] dc_value_w;
-  logic [3:0] eob_pre_w;
+  logic [4:0] eob_pre_w;
   logic [3:0] eob_pt_pre_w;
   logic [3:0] eob_extra_pre_w;
   logic [2:0] eob_offset_bits_pre_w;
   logic [2:0] eob_shift_pre_w;
   logic [7:0] entropy_context_pre_w;
-  logic [3:0] coeff_ctx_pre_w [0:15];
-  logic [3:0] br_ctx_pre_w [0:15];
+  logic [4:0] coeff_ctx_pre_w [0:15];
+  logic [4:0] br_ctx_pre_w [0:15];
 
   logic [3:0] coeff_pos_w;
   logic [15:0] current_level_w;
@@ -105,7 +112,7 @@ module ff_av2_chroma_bdpcm_symbolizer (
   logic has_lower_nonzero_w;
 
   logic [3:0] table_w;
-  logic [3:0] table_ctx_w;
+  logic [4:0] table_ctx_w;
   logic [3:0] symbol_w;
   logic [4:0] nsymbs_w;
   logic op_done_w;
@@ -130,7 +137,13 @@ module ff_av2_chroma_bdpcm_symbolizer (
 
   always @* begin
     for (sample_index_w = 0; sample_index_w < 16; sample_index_w = sample_index_w + 1) begin
-      if (sample_index_w[1:0] == 2'd0) begin
+      if (LUMA_PALETTE_RESIDUAL != 0) begin
+        // AV2 v1.0.0 Sections 5.20.8.4 and 5.20.7.27: palette provides the
+        // luma predictor; coeffs() then carries original_y - predictor_y.
+        residual_w[sample_index_w] =
+          $signed({1'b0, txb_samples[sample_index_w * 8 +: 8]}) -
+          $signed({1'b0, predictor_txb_samples[sample_index_w * 8 +: 8]});
+      end else if (sample_index_w[1:0] == 2'd0) begin
         residual_w[sample_index_w] =
           $signed({1'b0, txb_samples[sample_index_w * 8 +: 8]}) -
           $signed({1'b0, predictor_samples[sample_index_w[3:2] * 8 +: 8]});
@@ -181,7 +194,7 @@ module ff_av2_chroma_bdpcm_symbolizer (
       coeff_w[sample_index_w * 4 + 3] = b1_w <<< 3;
     end
 
-    eob_pre_w = 4'd0;
+    eob_pre_w = 5'd0;
     cul_level_w = 16'd0;
     dc_value_w = 16'sd0;
     for (sample_index_w = 0; sample_index_w < 16; sample_index_w = sample_index_w + 1) begin
@@ -197,7 +210,10 @@ module ff_av2_chroma_bdpcm_symbolizer (
 
     for (scan_index_w = 0; scan_index_w < 16; scan_index_w = scan_index_w + 1) begin
       if (level_pre_w[TX4X4_SCAN_PACK[(scan_index_w * 4) +: 4]] != 16'd0) begin
-        eob_pre_w = scan_index_w[3:0] + 4'd1;
+        // AV2 v1.0.0 Section 5.20.7.27 coeffs(): a TX_4X4 end-of-block
+        // value can be 16. AVM's tokenization treats EOB as a value in
+        // 1..TX4X4_SAMPLES, so the RTL must keep one more bit than scan_q.
+        eob_pre_w = {1'b0, scan_index_w[3:0]} + 5'd1;
       end
     end
 
@@ -219,19 +235,19 @@ module ff_av2_chroma_bdpcm_symbolizer (
       entropy_context_pre_w = ((cul_level_w > 16'd7) ? 8'd7 : {4'd0, cul_level_w[3:0]}) + 8'd16;
     end
 
-    if (eob_pre_w <= 4'd2) eob_pt_pre_w = eob_pre_w;
-    else if (eob_pre_w <= 4'd4) eob_pt_pre_w = 4'd3;
-    else if (eob_pre_w <= 4'd8) eob_pt_pre_w = 4'd4;
+    if (eob_pre_w <= 5'd2) eob_pt_pre_w = eob_pre_w[3:0];
+    else if (eob_pre_w <= 5'd4) eob_pt_pre_w = 4'd3;
+    else if (eob_pre_w <= 5'd8) eob_pt_pre_w = 4'd4;
     else eob_pt_pre_w = 4'd5;
 
     if (eob_pt_pre_w == 4'd3) begin
-      eob_extra_pre_w = eob_pre_w - 4'd3;
+      eob_extra_pre_w = eob_pre_w - 5'd3;
       eob_offset_bits_pre_w = 3'd1;
     end else if (eob_pt_pre_w == 4'd4) begin
-      eob_extra_pre_w = eob_pre_w - 4'd5;
+      eob_extra_pre_w = eob_pre_w - 5'd5;
       eob_offset_bits_pre_w = 3'd2;
     end else if (eob_pt_pre_w == 4'd5) begin
-      eob_extra_pre_w = eob_pre_w - 4'd9;
+      eob_extra_pre_w = eob_pre_w - 5'd9;
       eob_offset_bits_pre_w = 3'd3;
     end else begin
       eob_extra_pre_w = 4'd0;
@@ -243,7 +259,59 @@ module ff_av2_chroma_bdpcm_symbolizer (
       row_w = sample_index_w >> 2;
       col_w = sample_index_w & 3;
       mag_w = 0;
-      if (sample_index_w == 0) begin
+      if (LUMA_PALETTE_RESIDUAL != 0 && (row_w + col_w) < 4) begin
+        // AV2 v1.0.0 Section 5.20.7.27, LF lower-level luma context:
+        // AVM get_nz_mag_lf() uses five forward neighbors for luma.
+        if (row_w + 1 < 4) begin
+          mag_w = mag_w + ((level_pre_w[sample_index_w + 4] > 16'd5) ? 5 : level_pre_w[sample_index_w + 4]);
+        end
+        if (col_w + 1 < 4) begin
+          mag_w = mag_w + ((level_pre_w[sample_index_w + 1] > 16'd5) ? 5 : level_pre_w[sample_index_w + 1]);
+        end
+        if (row_w + 1 < 4 && col_w + 1 < 4) begin
+          mag_w = mag_w + ((level_pre_w[sample_index_w + 5] > 16'd5) ? 5 : level_pre_w[sample_index_w + 5]);
+        end
+        if (col_w + 2 < 4) begin
+          mag_w = mag_w + ((level_pre_w[sample_index_w + 2] > 16'd5) ? 5 : level_pre_w[sample_index_w + 2]);
+        end
+        if (row_w + 2 < 4) begin
+          mag_w = mag_w + ((level_pre_w[sample_index_w + 8] > 16'd5) ? 5 : level_pre_w[sample_index_w + 8]);
+        end
+        if (sample_index_w == 0) begin
+          coeff_ctx_pre_w[sample_index_w] = (((mag_w + 1) >> 1) > 8) ? 4'd8 : ((mag_w + 1) >> 1);
+        end else if ((row_w + col_w) < 2) begin
+          coeff_ctx_pre_w[sample_index_w] =
+            ((((mag_w + 1) >> 1) > 6) ? 4'd6 : ((mag_w + 1) >> 1)) + 4'd9;
+        end else begin
+          coeff_ctx_pre_w[sample_index_w] =
+            ((((mag_w + 1) >> 1) > 4) ? 5'd4 : ((mag_w + 1) >> 1)) + 5'd16;
+        end
+      end else if (LUMA_PALETTE_RESIDUAL != 0) begin
+        // AV2 v1.0.0 Section 5.20.7.27, regular luma lower-level context.
+        if (sample_index_w == 0) begin
+          coeff_ctx_pre_w[sample_index_w] = 4'd0;
+        end else begin
+          if (row_w + 1 < 4) begin
+            mag_w = mag_w + ((level_pre_w[sample_index_w + 4] > 16'd3) ? 3 : level_pre_w[sample_index_w + 4]);
+          end
+          if (col_w + 1 < 4) begin
+            mag_w = mag_w + ((level_pre_w[sample_index_w + 1] > 16'd3) ? 3 : level_pre_w[sample_index_w + 1]);
+          end
+          if (row_w + 1 < 4 && col_w + 1 < 4) begin
+            mag_w = mag_w + ((level_pre_w[sample_index_w + 5] > 16'd3) ? 3 : level_pre_w[sample_index_w + 5]);
+          end
+          if (col_w + 2 < 4) begin
+            mag_w = mag_w + ((level_pre_w[sample_index_w + 2] > 16'd3) ? 3 : level_pre_w[sample_index_w + 2]);
+          end
+          if (row_w + 2 < 4) begin
+            mag_w = mag_w + ((level_pre_w[sample_index_w + 8] > 16'd3) ? 3 : level_pre_w[sample_index_w + 8]);
+          end
+          coeff_ctx_pre_w[sample_index_w] = (((mag_w + 1) >> 1) > 4) ? 4'd4 : ((mag_w + 1) >> 1);
+          if ((row_w + col_w) >= 6) begin
+            coeff_ctx_pre_w[sample_index_w] = coeff_ctx_pre_w[sample_index_w] + 4'd5;
+          end
+        end
+      end else if (sample_index_w == 0) begin
         // AV2 v1.0.0 Section 5.20.7.27, LF lower-level chroma context.
         if (row_w + 1 < 4) begin
           mag_w = mag_w + ((level_pre_w[sample_index_w + 4] > 16'd5) ? 5 : level_pre_w[sample_index_w + 4]);
@@ -266,22 +334,31 @@ module ff_av2_chroma_bdpcm_symbolizer (
           mag_w = mag_w + ((level_pre_w[sample_index_w + 5] > 16'd3) ? 3 : level_pre_w[sample_index_w + 5]);
         end
       end
-      coeff_ctx_pre_w[sample_index_w] = ((mag_w + 1) >> 1) > 3 ? 4'd3 : ((mag_w + 1) >> 1);
-      if (plane_v) begin
-        coeff_ctx_pre_w[sample_index_w] = coeff_ctx_pre_w[sample_index_w] + 4'd4;
+      if (LUMA_PALETTE_RESIDUAL == 0) begin
+        coeff_ctx_pre_w[sample_index_w] = ((mag_w + 1) >> 1) > 3 ? 4'd3 : ((mag_w + 1) >> 1);
+        if (plane_v) begin
+          coeff_ctx_pre_w[sample_index_w] = coeff_ctx_pre_w[sample_index_w] + 4'd4;
+        end
       end
 
       mag_w = 0;
       if (row_w + 1 < 4) begin
-        mag_w = mag_w + level_pre_w[sample_index_w + 4];
+        mag_w = mag_w + ((LUMA_PALETTE_RESIDUAL != 0 && level_pre_w[sample_index_w + 4] > 16'd5) ? 5 : level_pre_w[sample_index_w + 4]);
       end
       if (col_w + 1 < 4) begin
-        mag_w = mag_w + level_pre_w[sample_index_w + 1];
+        mag_w = mag_w + ((LUMA_PALETTE_RESIDUAL != 0 && level_pre_w[sample_index_w + 1] > 16'd5) ? 5 : level_pre_w[sample_index_w + 1]);
       end
       if (row_w + 1 < 4 && col_w + 1 < 4) begin
-        mag_w = mag_w + level_pre_w[sample_index_w + 5];
+        mag_w = mag_w + ((LUMA_PALETTE_RESIDUAL != 0 && level_pre_w[sample_index_w + 5] > 16'd5) ? 5 : level_pre_w[sample_index_w + 5]);
       end
-      br_ctx_pre_w[sample_index_w] = ((mag_w + 1) >> 1) > 3 ? 4'd3 : ((mag_w + 1) >> 1);
+      if (LUMA_PALETTE_RESIDUAL != 0) begin
+        br_ctx_pre_w[sample_index_w] = ((mag_w + 1) >> 1) > 6 ? 4'd6 : ((mag_w + 1) >> 1);
+        if ((row_w + col_w) < 4 && sample_index_w != 0) begin
+          br_ctx_pre_w[sample_index_w] = br_ctx_pre_w[sample_index_w] + 4'd7;
+        end
+      end else begin
+        br_ctx_pre_w[sample_index_w] = ((mag_w + 1) >> 1) > 3 ? 4'd3 : ((mag_w + 1) >> 1);
+      end
     end
   end
 
@@ -289,11 +366,22 @@ module ff_av2_chroma_bdpcm_symbolizer (
     coeff_pos_w = TX4X4_SCAN_PACK[(scan_q * 4) +: 4];
     current_level_w = level_q[coeff_pos_w];
     current_negative_w = coeff_negative_q[coeff_pos_w];
-    current_base_lf_w = (coeff_pos_w == 4'd0);
-    current_high_range_w =
-      (coeff_pos_w == 4'd0) ? (current_level_w > 16'd4) : (current_level_w > 16'd5);
-    current_high_value_w =
-      (coeff_pos_w == 4'd0) ? (current_level_w - 16'd5) : (current_level_w - 16'd6);
+    current_base_lf_w =
+      (LUMA_PALETTE_RESIDUAL != 0) ?
+        (((coeff_pos_w >> 2) + (coeff_pos_w & 4'd3)) < 4) :
+        (coeff_pos_w == 4'd0);
+    if (LUMA_PALETTE_RESIDUAL != 0 && current_base_lf_w) begin
+      current_high_range_w = (current_level_w > 16'd7);
+      current_high_value_w = current_level_w - 16'd8;
+    end else if (LUMA_PALETTE_RESIDUAL != 0) begin
+      current_high_range_w = (current_level_w > 16'd5);
+      current_high_value_w = current_level_w - 16'd6;
+    end else begin
+      current_high_range_w =
+        (coeff_pos_w == 4'd0) ? (current_level_w > 16'd4) : (current_level_w > 16'd5);
+      current_high_value_w =
+        (coeff_pos_w == 4'd0) ? (current_level_w - 16'd5) : (current_level_w - 16'd6);
+    end
 
     if (hr_avg_q < 16'd4) hr_m_w = 3'd1;
     else if (hr_avg_q < 16'd8) hr_m_w = 3'd2;
@@ -339,7 +427,7 @@ module ff_av2_chroma_bdpcm_symbolizer (
     op_literal_value = 32'd0;
     op_literal_bits = 5'd0;
     table_w = TABLE_NONE;
-    table_ctx_w = 4'd0;
+    table_ctx_w = 5'd0;
     symbol_w = 4'd0;
     nsymbs_w = 5'd0;
     op_done_w = 1'b0;
@@ -375,7 +463,7 @@ module ff_av2_chroma_bdpcm_symbolizer (
         EMIT_BASE_SCAN: begin
           if (scan_q != 4'd0 && scan_q < eob_q) begin
             op_valid = 1'b1;
-            if (scan_q + 4'd1 == eob_q) begin
+            if (({1'b0, scan_q} + 5'd1) == eob_q) begin
               if (current_base_lf_w) begin
                 table_w = TABLE_BASE_LF_EOB;
                 symbol_w = (current_level_w > 16'd5) ? 4'd4 : (current_level_w[3:0] - 4'd1);
@@ -403,14 +491,18 @@ module ff_av2_chroma_bdpcm_symbolizer (
         end
         EMIT_BR: begin
           op_valid = 1'b1;
-          table_w = TABLE_BR;
+          table_w = (LUMA_PALETTE_RESIDUAL != 0 && current_base_lf_w) ? TABLE_BR_LF : TABLE_BR;
           table_ctx_w = br_ctx_q[coeff_pos_w];
-          symbol_w = ((current_level_w - 16'd3) > 16'd3) ? 4'd3 : (current_level_w[3:0] - 4'd3);
+          if (LUMA_PALETTE_RESIDUAL != 0 && current_base_lf_w) begin
+            symbol_w = ((current_level_w - 16'd5) > 16'd3) ? 4'd3 : (current_level_w[3:0] - 4'd5);
+          end else begin
+            symbol_w = ((current_level_w - 16'd3) > 16'd3) ? 4'd3 : (current_level_w[3:0] - 4'd3);
+          end
           nsymbs_w = 5'd4;
         end
         EMIT_DC_BASE: begin
           op_valid = 1'b1;
-          if (eob_q == 4'd1) begin
+          if (eob_q == 5'd1) begin
             table_w = TABLE_BASE_LF_EOB;
             table_ctx_w = 4'd0;
             symbol_w = (level_q[0] > 16'd5) ? 4'd4 : (level_q[0][3:0] - 4'd1);
@@ -425,9 +517,17 @@ module ff_av2_chroma_bdpcm_symbolizer (
         EMIT_SIGN_SCAN: begin
           if (scan_q < eob_q && current_level_w != 16'd0) begin
             op_valid = 1'b1;
-            op_literal = 1'b1;
-            op_literal_value = {31'd0, current_negative_w};
-            op_literal_bits = 5'd1;
+            if (LUMA_PALETTE_RESIDUAL != 0 && scan_q == 4'd0) begin
+              // AV2 v1.0.0 Section 5.20.7.27 uses dc_sign context for luma DC.
+              table_w = TABLE_DC_SIGN;
+              table_ctx_w = {2'd0, dc_sign_ctx_q};
+              symbol_w = {3'd0, current_negative_w};
+              nsymbs_w = 5'd2;
+            end else begin
+              op_literal = 1'b1;
+              op_literal_value = {31'd0, current_negative_w};
+              op_literal_bits = 5'd1;
+            end
             op_done_w = !has_lower_nonzero_w && !current_high_range_w;
           end
         end
@@ -484,82 +584,206 @@ module ff_av2_chroma_bdpcm_symbolizer (
     cdf4_w = 32'd0;
     case (table_w)
       TABLE_SKIP: begin
-        case (table_ctx_w)
-          4'd3: cdf0_w = 32'd32588;
-          4'd4: cdf0_w = 32'd16384;
-          4'd5: cdf0_w = 32'd16384;
-          4'd6: cdf0_w = 32'd23870;
-          4'd7: cdf0_w = 32'd19113;
-          4'd8: cdf0_w = 32'd10420;
-          4'd9: cdf0_w = 32'd16384;
-          4'd10: cdf0_w = 32'd16384;
-          4'd11: cdf0_w = 32'd16384;
-          default: cdf0_w = 32'd16384;
-        endcase
+        if (LUMA_PALETTE_RESIDUAL != 0) begin
+          case (table_ctx_w)
+            4'd1: cdf0_w = 32'd31669;
+            4'd2: cdf0_w = 32'd30006;
+            4'd3: cdf0_w = 32'd24824;
+            4'd4: cdf0_w = 32'd16538;
+            4'd5: cdf0_w = 32'd3692;
+            default: cdf0_w = 32'd16384;
+          endcase
+        end else begin
+          case (table_ctx_w)
+            4'd3: cdf0_w = 32'd32588;
+            4'd4: cdf0_w = 32'd16384;
+            4'd5: cdf0_w = 32'd16384;
+            4'd6: cdf0_w = 32'd23870;
+            4'd7: cdf0_w = 32'd19113;
+            4'd8: cdf0_w = 32'd10420;
+            4'd9: cdf0_w = 32'd16384;
+            4'd10: cdf0_w = 32'd16384;
+            4'd11: cdf0_w = 32'd16384;
+            default: cdf0_w = 32'd16384;
+          endcase
+        end
       end
       TABLE_EOB: begin
-        cdf0_w = 32'd24768;
-        cdf1_w = 32'd22402;
-        cdf2_w = 32'd18302;
-        cdf3_w = 32'd13199;
+        if (LUMA_PALETTE_RESIDUAL != 0) begin
+          cdf0_w = 32'd30822;
+          cdf1_w = 32'd29709;
+          cdf2_w = 32'd25934;
+          cdf3_w = 32'd17645;
+        end else begin
+          cdf0_w = 32'd24768;
+          cdf1_w = 32'd22402;
+          cdf2_w = 32'd18302;
+          cdf3_w = 32'd13199;
+        end
       end
       TABLE_EOB_EXTRA: begin
         cdf0_w = 32'd16377;
       end
       TABLE_BASE_EOB: begin
-        case (table_ctx_w)
-          4'd0: begin cdf0_w = 32'd21845; cdf1_w = 32'd10923; end
-          4'd1: begin cdf0_w = 32'd1554; cdf1_w = 32'd331; end
-          4'd2: begin cdf0_w = 32'd880; cdf1_w = 32'd321; end
-          default: begin cdf0_w = 32'd2156; cdf1_w = 32'd695; end
-        endcase
+        if (LUMA_PALETTE_RESIDUAL != 0) begin
+          case (table_ctx_w)
+            4'd0,
+            4'd1,
+            4'd2: begin cdf0_w = 32'd21845; cdf1_w = 32'd10923; end
+            default: begin cdf0_w = 32'd7293; cdf1_w = 32'd2979; end
+          endcase
+        end else begin
+          case (table_ctx_w)
+            4'd0: begin cdf0_w = 32'd21845; cdf1_w = 32'd10923; end
+            4'd1: begin cdf0_w = 32'd1554; cdf1_w = 32'd331; end
+            4'd2: begin cdf0_w = 32'd880; cdf1_w = 32'd321; end
+            default: begin cdf0_w = 32'd2156; cdf1_w = 32'd695; end
+          endcase
+        end
       end
       TABLE_BASE_LF_EOB: begin
-        case (table_ctx_w)
-          4'd0: begin cdf0_w = 32'd3818; cdf1_w = 32'd1325; cdf2_w = 32'd759; cdf3_w = 32'd511; end
-          4'd1: begin cdf0_w = 32'd2852; cdf1_w = 32'd849; cdf2_w = 32'd544; cdf3_w = 32'd327; end
-          4'd2: begin cdf0_w = 32'd3866; cdf1_w = 32'd1963; cdf2_w = 32'd1189; cdf3_w = 32'd952; end
-          default: begin cdf0_w = 32'd26214; cdf1_w = 32'd19661; cdf2_w = 32'd13107; cdf3_w = 32'd6554; end
-        endcase
+        if (LUMA_PALETTE_RESIDUAL != 0) begin
+          case (table_ctx_w)
+            4'd0: begin cdf0_w = 32'd5282; cdf1_w = 32'd1628; cdf2_w = 32'd989; cdf3_w = 32'd704; end
+            4'd1: begin cdf0_w = 32'd4505; cdf1_w = 32'd1626; cdf2_w = 32'd955; cdf3_w = 32'd711; end
+            4'd2: begin cdf0_w = 32'd5190; cdf1_w = 32'd2363; cdf2_w = 32'd1566; cdf3_w = 32'd1320; end
+            default: begin cdf0_w = 32'd2968; cdf1_w = 32'd623; cdf2_w = 32'd179; cdf3_w = 32'd103; end
+          endcase
+        end else begin
+          case (table_ctx_w)
+            4'd0: begin cdf0_w = 32'd3818; cdf1_w = 32'd1325; cdf2_w = 32'd759; cdf3_w = 32'd511; end
+            4'd1: begin cdf0_w = 32'd2852; cdf1_w = 32'd849; cdf2_w = 32'd544; cdf3_w = 32'd327; end
+            4'd2: begin cdf0_w = 32'd3866; cdf1_w = 32'd1963; cdf2_w = 32'd1189; cdf3_w = 32'd952; end
+            default: begin cdf0_w = 32'd26214; cdf1_w = 32'd19661; cdf2_w = 32'd13107; cdf3_w = 32'd6554; end
+          endcase
+        end
       end
       TABLE_BASE: begin
-        case (table_ctx_w)
-          4'd0: begin cdf0_w = 32'd5864; cdf1_w = 32'd666; cdf2_w = 32'd170; end
-          4'd1: begin cdf0_w = 32'd17019; cdf1_w = 32'd3870; cdf2_w = 32'd1158; end
-          4'd2: begin cdf0_w = 32'd23662; cdf1_w = 32'd11439; cdf2_w = 32'd5806; end
-          4'd3: begin cdf0_w = 32'd27940; cdf1_w = 32'd19845; cdf2_w = 32'd13785; end
-          4'd4: begin cdf0_w = 32'd4989; cdf1_w = 32'd362; cdf2_w = 32'd79; end
-          4'd5: begin cdf0_w = 32'd15354; cdf1_w = 32'd2691; cdf2_w = 32'd743; end
-          4'd6: begin cdf0_w = 32'd23540; cdf1_w = 32'd10472; cdf2_w = 32'd5001; end
-          4'd7: begin cdf0_w = 32'd28204; cdf1_w = 32'd20034; cdf2_w = 32'd13624; end
-          4'd8: begin cdf0_w = 32'd3530; cdf1_w = 32'd279; cdf2_w = 32'd75; end
-          4'd9: begin cdf0_w = 32'd12949; cdf1_w = 32'd1915; cdf2_w = 32'd546; end
-          4'd10: begin cdf0_w = 32'd23454; cdf1_w = 32'd13450; cdf2_w = 32'd7422; end
-          default: begin cdf0_w = 32'd29708; cdf1_w = 32'd22503; cdf2_w = 32'd16680; end
-        endcase
+        if (LUMA_PALETTE_RESIDUAL != 0) begin
+          case (table_ctx_w)
+            4'd0: begin cdf0_w = 32'd20408; cdf1_w = 32'd6376; cdf2_w = 32'd2825; end
+            4'd1: begin cdf0_w = 32'd25522; cdf1_w = 32'd13272; cdf2_w = 32'd6238; end
+            4'd2: begin cdf0_w = 32'd28760; cdf1_w = 32'd20163; cdf2_w = 32'd13840; end
+            4'd3: begin cdf0_w = 32'd29620; cdf1_w = 32'd23375; cdf2_w = 32'd17868; end
+            4'd4: begin cdf0_w = 32'd30225; cdf1_w = 32'd25242; cdf2_w = 32'd20747; end
+            4'd5,
+            4'd6,
+            4'd7,
+            4'd8,
+            4'd9,
+            4'd10,
+            4'd11,
+            4'd12,
+            4'd13,
+            4'd14: begin cdf0_w = 32'd24576; cdf1_w = 32'd16384; cdf2_w = 32'd8192; end
+            4'd15: begin cdf0_w = 32'd4754; cdf1_w = 32'd1234; cdf2_w = 32'd708; end
+            5'd16: begin cdf0_w = 32'd19633; cdf1_w = 32'd9281; cdf2_w = 32'd4169; end
+            5'd17: begin cdf0_w = 32'd25719; cdf1_w = 32'd17400; cdf2_w = 32'd12000; end
+            5'd18: begin cdf0_w = 32'd29659; cdf1_w = 32'd24714; cdf2_w = 32'd20385; end
+            default: begin cdf0_w = 32'd24576; cdf1_w = 32'd16384; cdf2_w = 32'd8192; end
+          endcase
+        end else begin
+          case (table_ctx_w)
+            4'd0: begin cdf0_w = 32'd5864; cdf1_w = 32'd666; cdf2_w = 32'd170; end
+            4'd1: begin cdf0_w = 32'd17019; cdf1_w = 32'd3870; cdf2_w = 32'd1158; end
+            4'd2: begin cdf0_w = 32'd23662; cdf1_w = 32'd11439; cdf2_w = 32'd5806; end
+            4'd3: begin cdf0_w = 32'd27940; cdf1_w = 32'd19845; cdf2_w = 32'd13785; end
+            4'd4: begin cdf0_w = 32'd4989; cdf1_w = 32'd362; cdf2_w = 32'd79; end
+            4'd5: begin cdf0_w = 32'd15354; cdf1_w = 32'd2691; cdf2_w = 32'd743; end
+            4'd6: begin cdf0_w = 32'd23540; cdf1_w = 32'd10472; cdf2_w = 32'd5001; end
+            4'd7: begin cdf0_w = 32'd28204; cdf1_w = 32'd20034; cdf2_w = 32'd13624; end
+            4'd8: begin cdf0_w = 32'd3530; cdf1_w = 32'd279; cdf2_w = 32'd75; end
+            4'd9: begin cdf0_w = 32'd12949; cdf1_w = 32'd1915; cdf2_w = 32'd546; end
+            4'd10: begin cdf0_w = 32'd23454; cdf1_w = 32'd13450; cdf2_w = 32'd7422; end
+            default: begin cdf0_w = 32'd29708; cdf1_w = 32'd22503; cdf2_w = 32'd16680; end
+          endcase
+        end
       end
       TABLE_BASE_LF: begin
-        case (table_ctx_w)
-          4'd0: begin cdf0_w = 32'd18692; cdf1_w = 32'd6304; cdf2_w = 32'd2830; cdf3_w = 32'd1460; cdf4_w = 32'd940; end
-          4'd1: begin cdf0_w = 32'd25248; cdf1_w = 32'd11541; cdf2_w = 32'd5002; cdf3_w = 32'd2456; cdf4_w = 32'd1291; end
-          4'd2: begin cdf0_w = 32'd28391; cdf1_w = 32'd19478; cdf2_w = 32'd12957; cdf3_w = 32'd8548; cdf4_w = 32'd5704; end
-          4'd3: begin cdf0_w = 32'd31086; cdf1_w = 32'd27629; cdf2_w = 32'd24167; cdf3_w = 32'd20795; cdf4_w = 32'd17722; end
-          4'd4: begin cdf0_w = 32'd17533; cdf1_w = 32'd4163; cdf2_w = 32'd1401; cdf3_w = 32'd617; cdf4_w = 32'd317; end
-          4'd5: begin cdf0_w = 32'd22512; cdf1_w = 32'd8182; cdf2_w = 32'd2993; cdf3_w = 32'd1303; cdf4_w = 32'd631; end
-          4'd6: begin cdf0_w = 32'd26850; cdf1_w = 32'd17139; cdf2_w = 32'd10451; cdf3_w = 32'd6166; cdf4_w = 32'd3667; end
-          4'd7: begin cdf0_w = 32'd30753; cdf1_w = 32'd27064; cdf2_w = 32'd22933; cdf3_w = 32'd19063; cdf4_w = 32'd15469; end
-          4'd8: begin cdf0_w = 32'd6348; cdf1_w = 32'd813; cdf2_w = 32'd456; cdf3_w = 32'd338; cdf4_w = 32'd242; end
-          4'd9: begin cdf0_w = 32'd16394; cdf1_w = 32'd3208; cdf2_w = 32'd1237; cdf3_w = 32'd745; cdf4_w = 32'd477; end
-          4'd10: begin cdf0_w = 32'd25571; cdf1_w = 32'd16814; cdf2_w = 32'd11782; cdf3_w = 32'd7834; cdf4_w = 32'd5031; end
-          default: begin cdf0_w = 32'd27948; cdf1_w = 32'd23280; cdf2_w = 32'd21067; cdf3_w = 32'd18703; cdf4_w = 32'd16520; end
-        endcase
+        if (LUMA_PALETTE_RESIDUAL != 0) begin
+          case (table_ctx_w)
+            4'd0: begin cdf0_w = 32'd27307; cdf1_w = 32'd21845; cdf2_w = 32'd16384; cdf3_w = 32'd10923; cdf4_w = 32'd5461; end
+            4'd1: begin cdf0_w = 32'd30940; cdf1_w = 32'd15917; cdf2_w = 32'd8756; cdf3_w = 32'd4119; cdf4_w = 32'd2346; end
+            4'd2: begin cdf0_w = 32'd25845; cdf1_w = 32'd16752; cdf2_w = 32'd11062; cdf3_w = 32'd5619; cdf4_w = 32'd3332; end
+            4'd3: begin cdf0_w = 32'd27278; cdf1_w = 32'd23948; cdf2_w = 32'd16954; cdf3_w = 32'd12524; cdf4_w = 32'd8747; end
+            4'd4: begin cdf0_w = 32'd29736; cdf1_w = 32'd24738; cdf2_w = 32'd19681; cdf3_w = 32'd15306; cdf4_w = 32'd11027; end
+            4'd5: begin cdf0_w = 32'd30507; cdf1_w = 32'd26350; cdf2_w = 32'd23609; cdf3_w = 32'd20795; cdf4_w = 32'd17177; end
+            4'd6: begin cdf0_w = 32'd30468; cdf1_w = 32'd27481; cdf2_w = 32'd24221; cdf3_w = 32'd20625; cdf4_w = 32'd16931; end
+            4'd7: begin cdf0_w = 32'd31070; cdf1_w = 32'd27571; cdf2_w = 32'd24493; cdf3_w = 32'd21319; cdf4_w = 32'd20556; end
+            4'd8: begin cdf0_w = 32'd32180; cdf1_w = 32'd29862; cdf2_w = 32'd28576; cdf3_w = 32'd26770; cdf4_w = 32'd25678; end
+            4'd9: begin cdf0_w = 32'd20014; cdf1_w = 32'd3758; cdf2_w = 32'd1229; cdf3_w = 32'd632; cdf4_w = 32'd245; end
+            4'd10: begin cdf0_w = 32'd24794; cdf1_w = 32'd9456; cdf2_w = 32'd4025; cdf3_w = 32'd1581; cdf4_w = 32'd639; end
+            4'd11: begin cdf0_w = 32'd26764; cdf1_w = 32'd15015; cdf2_w = 32'd7279; cdf3_w = 32'd3862; cdf4_w = 32'd2076; end
+            4'd12: begin cdf0_w = 32'd27450; cdf1_w = 32'd19862; cdf2_w = 32'd11937; cdf3_w = 32'd6920; cdf4_w = 32'd3857; end
+            4'd13: begin cdf0_w = 32'd29431; cdf1_w = 32'd22607; cdf2_w = 32'd16355; cdf3_w = 32'd11865; cdf4_w = 32'd8039; end
+            4'd14: begin cdf0_w = 32'd30136; cdf1_w = 32'd24512; cdf2_w = 32'd19379; cdf3_w = 32'd14419; cdf4_w = 32'd10711; end
+            4'd15: begin cdf0_w = 32'd31121; cdf1_w = 32'd27787; cdf2_w = 32'd24750; cdf3_w = 32'd22055; cdf4_w = 32'd19838; end
+            5'd16: begin cdf0_w = 32'd15310; cdf1_w = 32'd2897; cdf2_w = 32'd768; cdf3_w = 32'd222; cdf4_w = 32'd66; end
+            5'd17: begin cdf0_w = 32'd22256; cdf1_w = 32'd8265; cdf2_w = 32'd3122; cdf3_w = 32'd1239; cdf4_w = 32'd550; end
+            5'd18: begin cdf0_w = 32'd26259; cdf1_w = 32'd15332; cdf2_w = 32'd8706; cdf3_w = 32'd4470; cdf4_w = 32'd2329; end
+            5'd19: begin cdf0_w = 32'd28434; cdf1_w = 32'd19925; cdf2_w = 32'd13129; cdf3_w = 32'd7961; cdf4_w = 32'd4959; end
+            default: begin cdf0_w = 32'd30005; cdf1_w = 32'd24826; cdf2_w = 32'd20217; cdf3_w = 32'd15895; cdf4_w = 32'd12193; end
+          endcase
+        end else begin
+          case (table_ctx_w)
+            4'd0: begin cdf0_w = 32'd18692; cdf1_w = 32'd6304; cdf2_w = 32'd2830; cdf3_w = 32'd1460; cdf4_w = 32'd940; end
+            4'd1: begin cdf0_w = 32'd25248; cdf1_w = 32'd11541; cdf2_w = 32'd5002; cdf3_w = 32'd2456; cdf4_w = 32'd1291; end
+            4'd2: begin cdf0_w = 32'd28391; cdf1_w = 32'd19478; cdf2_w = 32'd12957; cdf3_w = 32'd8548; cdf4_w = 32'd5704; end
+            4'd3: begin cdf0_w = 32'd31086; cdf1_w = 32'd27629; cdf2_w = 32'd24167; cdf3_w = 32'd20795; cdf4_w = 32'd17722; end
+            4'd4: begin cdf0_w = 32'd17533; cdf1_w = 32'd4163; cdf2_w = 32'd1401; cdf3_w = 32'd617; cdf4_w = 32'd317; end
+            4'd5: begin cdf0_w = 32'd22512; cdf1_w = 32'd8182; cdf2_w = 32'd2993; cdf3_w = 32'd1303; cdf4_w = 32'd631; end
+            4'd6: begin cdf0_w = 32'd26850; cdf1_w = 32'd17139; cdf2_w = 32'd10451; cdf3_w = 32'd6166; cdf4_w = 32'd3667; end
+            4'd7: begin cdf0_w = 32'd30753; cdf1_w = 32'd27064; cdf2_w = 32'd22933; cdf3_w = 32'd19063; cdf4_w = 32'd15469; end
+            4'd8: begin cdf0_w = 32'd6348; cdf1_w = 32'd813; cdf2_w = 32'd456; cdf3_w = 32'd338; cdf4_w = 32'd242; end
+            4'd9: begin cdf0_w = 32'd16394; cdf1_w = 32'd3208; cdf2_w = 32'd1237; cdf3_w = 32'd745; cdf4_w = 32'd477; end
+            4'd10: begin cdf0_w = 32'd25571; cdf1_w = 32'd16814; cdf2_w = 32'd11782; cdf3_w = 32'd7834; cdf4_w = 32'd5031; end
+            default: begin cdf0_w = 32'd27948; cdf1_w = 32'd23280; cdf2_w = 32'd21067; cdf3_w = 32'd18703; cdf4_w = 32'd16520; end
+          endcase
+        end
       end
       TABLE_BR: begin
+        if (LUMA_PALETTE_RESIDUAL != 0) begin
+          case (table_ctx_w)
+            4'd0: begin cdf0_w = 32'd10463; cdf1_w = 32'd4025; cdf2_w = 32'd2423; end
+            4'd1: begin cdf0_w = 32'd10105; cdf1_w = 32'd2820; cdf2_w = 32'd1448; end
+            4'd2: begin cdf0_w = 32'd12992; cdf1_w = 32'd4110; cdf2_w = 32'd2333; end
+            4'd3: begin cdf0_w = 32'd17332; cdf1_w = 32'd7455; cdf2_w = 32'd4587; end
+            4'd4: begin cdf0_w = 32'd21554; cdf1_w = 32'd12097; cdf2_w = 32'd7914; end
+            4'd5: begin cdf0_w = 32'd24220; cdf1_w = 32'd15786; cdf2_w = 32'd11002; end
+            default: begin cdf0_w = 32'd27039; cdf1_w = 32'd20775; cdf2_w = 32'd15592; end
+          endcase
+        end else begin
+          case (table_ctx_w)
+            4'd0: begin cdf0_w = 32'd12754; cdf1_w = 32'd6227; cdf2_w = 32'd3216; end
+            4'd1: begin cdf0_w = 32'd12094; cdf1_w = 32'd5088; cdf2_w = 32'd2439; end
+            4'd2: begin cdf0_w = 32'd16540; cdf1_w = 32'd8475; cdf2_w = 32'd4454; end
+            default: begin cdf0_w = 32'd23188; cdf1_w = 32'd16485; cdf2_w = 32'd11809; end
+          endcase
+        end
+      end
+      TABLE_BR_LF: begin
         case (table_ctx_w)
-          4'd0: begin cdf0_w = 32'd12754; cdf1_w = 32'd6227; cdf2_w = 32'd3216; end
-          4'd1: begin cdf0_w = 32'd12094; cdf1_w = 32'd5088; cdf2_w = 32'd2439; end
-          4'd2: begin cdf0_w = 32'd16540; cdf1_w = 32'd8475; cdf2_w = 32'd4454; end
-          default: begin cdf0_w = 32'd23188; cdf1_w = 32'd16485; cdf2_w = 32'd11809; end
+          4'd0: begin cdf0_w = 32'd24825; cdf1_w = 32'd18575; cdf2_w = 32'd11993; end
+          4'd1: begin cdf0_w = 32'd18471; cdf1_w = 32'd10368; cdf2_w = 32'd6530; end
+          4'd2: begin cdf0_w = 32'd22211; cdf1_w = 32'd14085; cdf2_w = 32'd10218; end
+          4'd3: begin cdf0_w = 32'd24479; cdf1_w = 32'd16700; cdf2_w = 32'd14314; end
+          4'd4: begin cdf0_w = 32'd27510; cdf1_w = 32'd22038; cdf2_w = 32'd19059; end
+          4'd5: begin cdf0_w = 32'd28835; cdf1_w = 32'd24602; cdf2_w = 32'd22088; end
+          4'd6: begin cdf0_w = 32'd30303; cdf1_w = 32'd27443; cdf2_w = 32'd26143; end
+          4'd7: begin cdf0_w = 32'd21903; cdf1_w = 32'd16338; cdf2_w = 32'd13077; end
+          4'd8: begin cdf0_w = 32'd18197; cdf1_w = 32'd10035; cdf2_w = 32'd6662; end
+          4'd9: begin cdf0_w = 32'd18696; cdf1_w = 32'd9747; cdf2_w = 32'd6797; end
+          4'd10: begin cdf0_w = 32'd21210; cdf1_w = 32'd12515; cdf2_w = 32'd9533; end
+          4'd11: begin cdf0_w = 32'd24165; cdf1_w = 32'd16568; cdf2_w = 32'd13302; end
+          4'd12: begin cdf0_w = 32'd26127; cdf1_w = 32'd19682; cdf2_w = 32'd16156; end
+          default: begin cdf0_w = 32'd28528; cdf1_w = 32'd23725; cdf2_w = 32'd20822; end
+        endcase
+      end
+      TABLE_DC_SIGN: begin
+        case (table_ctx_w)
+          4'd0: cdf0_w = 32'd16937;
+          4'd1: cdf0_w = 32'd19136;
+          default: cdf0_w = 32'd13727;
         endcase
       end
       default: begin
@@ -641,7 +865,7 @@ module ff_av2_chroma_bdpcm_symbolizer (
       active_q <= 1'b0;
       emit_state_q <= EMIT_SKIP;
       scan_q <= 4'd15;
-      eob_q <= 4'd0;
+      eob_q <= 5'd0;
       eob_pt_q <= 4'd0;
       eob_extra_q <= 4'd0;
       eob_offset_bits_q <= 3'd0;
@@ -650,12 +874,13 @@ module ff_av2_chroma_bdpcm_symbolizer (
       txb_nonzero_q <= 1'b0;
       plane_v_q <= 1'b0;
       skip_ctx_q <= 4'd0;
+      dc_sign_ctx_q <= 2'd0;
       hr_avg_q <= 16'd0;
       for (sample_index_w = 0; sample_index_w < 16; sample_index_w = sample_index_w + 1) begin
         level_q[sample_index_w] <= 16'd0;
         coeff_negative_q[sample_index_w] <= 1'b0;
-        coeff_ctx_q[sample_index_w] <= 4'd0;
-        br_ctx_q[sample_index_w] <= 4'd0;
+        coeff_ctx_q[sample_index_w] <= 5'd0;
+        br_ctx_q[sample_index_w] <= 5'd0;
       end
     end else if (!enable) begin
       active_q <= 1'b0;
@@ -672,9 +897,10 @@ module ff_av2_chroma_bdpcm_symbolizer (
       eob_offset_bits_q <= eob_offset_bits_pre_w;
       eob_shift_q <= eob_shift_pre_w;
       entropy_context_q <= entropy_context_pre_w;
-      txb_nonzero_q <= (eob_pre_w != 4'd0);
+      txb_nonzero_q <= (eob_pre_w != 5'd0);
       plane_v_q <= plane_v;
       skip_ctx_q <= skip_ctx;
+      dc_sign_ctx_q <= dc_sign_ctx;
       hr_avg_q <= 16'd0;
       for (sample_index_w = 0; sample_index_w < 16; sample_index_w = sample_index_w + 1) begin
         level_q[sample_index_w] <= level_pre_w[sample_index_w];
@@ -716,7 +942,12 @@ module ff_av2_chroma_bdpcm_symbolizer (
             emit_state_q <= EMIT_DC_BASE;
           end else if (scan_q >= eob_q) begin
             scan_q <= scan_q - 4'd1;
-          end else if (op_valid && advance && coeff_pos_w != 4'd0 && current_level_w > 16'd2) begin
+          end else if (
+            op_valid && advance &&
+            ((LUMA_PALETTE_RESIDUAL != 0 && current_base_lf_w && current_level_w > 16'd4) ||
+             (LUMA_PALETTE_RESIDUAL != 0 && !current_base_lf_w && current_level_w > 16'd2) ||
+             (LUMA_PALETTE_RESIDUAL == 0 && coeff_pos_w != 4'd0 && current_level_w > 16'd2))
+          ) begin
             emit_state_q <= EMIT_BR;
           end else if (op_valid && advance) begin
             if (scan_q == 4'd1) begin
@@ -726,16 +957,27 @@ module ff_av2_chroma_bdpcm_symbolizer (
           end
         end
         EMIT_BR: begin
-          emit_state_q <= EMIT_BASE_SCAN;
-          if (scan_q == 4'd1) begin
-            emit_state_q <= EMIT_DC_BASE;
+          if (scan_q == 4'd0) begin
+            emit_state_q <= EMIT_SIGN_SCAN;
+            scan_q <= 4'd15;
+            hr_avg_q <= 16'd0;
+          end else begin
+            emit_state_q <= EMIT_BASE_SCAN;
+            if (scan_q == 4'd1) begin
+              emit_state_q <= EMIT_DC_BASE;
+            end
+            scan_q <= scan_q - 4'd1;
           end
-          scan_q <= scan_q - 4'd1;
         end
         EMIT_DC_BASE: begin
-          emit_state_q <= EMIT_SIGN_SCAN;
-          scan_q <= 4'd15;
-          hr_avg_q <= 16'd0;
+          if (LUMA_PALETTE_RESIDUAL != 0 && level_q[0] > 16'd4) begin
+            emit_state_q <= EMIT_BR;
+            scan_q <= 4'd0;
+          end else begin
+            emit_state_q <= EMIT_SIGN_SCAN;
+            scan_q <= 4'd15;
+            hr_avg_q <= 16'd0;
+          end
         end
         EMIT_SIGN_SCAN: begin
           if (scan_q >= eob_q || current_level_w == 16'd0) begin

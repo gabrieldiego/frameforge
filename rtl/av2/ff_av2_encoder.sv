@@ -8,7 +8,11 @@ module ff_av2_encoder #(
   parameter int CTU_SIZE = 64,
   parameter int SAMPLE_BITS = 8,
   parameter int SOURCE_SAMPLE_BITS = SAMPLE_BITS,
-  parameter int SUPPORT_PALETTE_444 = 1
+  parameter int SUPPORT_PALETTE_444 = 1,
+  // TODO(av2): replace this staged carry/tile buffer with a streaming carry
+  // resolver. Lossless high-colour 64x64 4:4:4 vectors need about 20 KiB
+  // today, while larger future pictures must not scale this buffer by frame.
+  parameter int AV2_MAX_TILE_BYTES = 32768
 ) (
   input  logic       clk,
   input  logic       rst_n,
@@ -32,18 +36,14 @@ module ff_av2_encoder #(
 );
 
   localparam int AV2_MAX_SEQUENCE_BYTES = 16;
-  // TODO(av2): stream carry bytes instead of keeping the complete tile payload
-  // in this staged buffer. High-color 64x64 palette vectors currently need
-  // more than the original black-frame bound.
-  localparam int AV2_MAX_TILE_BYTES = 8192;
-
-  typedef enum logic [3:0] {
+  typedef enum logic [4:0] {
     ST_IDLE,
     ST_INPUT_READ,
     ST_SEQ_LOAD,
     ST_SEQ_WRITE,
     ST_LOAD_BLOCK,
     ST_PARTITION,
+    ST_PALETTE_QUERY,
     ST_LEAF,
     ST_FINISH_INIT,
     ST_FINISH_PUSH,
@@ -126,6 +126,8 @@ module ff_av2_encoder #(
   logic [15:0] carry_q;
   logic [15:0] carry_index_q;
   integer context_index_q;
+  logic [7:0] y_txb_above_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
+  logic [7:0] y_txb_left_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
   logic [7:0] u_txb_above_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
   logic [7:0] u_txb_left_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
   logic [7:0] v_txb_above_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
@@ -196,6 +198,8 @@ module ff_av2_encoder #(
   logic palette_analyzer_unsupported_w;
   logic palette_analyzer_black_w;
   logic palette_analyzer_luma_mode_w;
+  logic palette_query_start_w;
+  logic palette_query_done_w;
   logic [3:0] palette_size_w;
   logic [4:0] palette_cache_size_w;
   logic [63:0] palette_colors_w;
@@ -219,9 +223,31 @@ module ff_av2_encoder #(
   logic [31:0] v_txb_nonzero_fh_w;
   logic [31:0] y_dc_sign_fl_w;
   logic chroma_fetch_start_w;
+  logic luma_fetch_start_w;
   logic chroma_fetch_done_w;
+  logic luma_fetch_done_w;
   logic [127:0] chroma_fetch_txb_samples_w;
   logic [31:0] chroma_fetch_predictor_samples_w;
+  logic [127:0] luma_fetch_txb_samples_w;
+  logic [127:0] luma_fetch_predictor_samples_w;
+  logic [3:0] luma_residual_skip_ctx_w;
+  logic [1:0] luma_residual_dc_sign_ctx_w;
+  logic [2:0] luma_residual_top_level_w;
+  logic [2:0] luma_residual_left_level_w;
+  logic signed [3:0] luma_residual_top_sign_w;
+  logic signed [3:0] luma_residual_left_sign_w;
+  logic signed [5:0] luma_residual_sign_sum_w;
+  logic luma_residual_op_valid_w;
+  logic luma_residual_op_literal_w;
+  logic [31:0] luma_residual_op_literal_value_w;
+  logic [4:0] luma_residual_op_literal_bits_w;
+  logic [31:0] luma_residual_op_fl_w;
+  logic [31:0] luma_residual_op_fh_w;
+  integer luma_residual_op_fl_inc_w;
+  integer luma_residual_op_fh_inc_w;
+  logic luma_residual_advance_w;
+  logic luma_residual_txb_done_w;
+  logic [7:0] luma_residual_entropy_context_w;
   logic [3:0] chroma_bdpcm_skip_ctx_w;
   logic chroma_bdpcm_op_valid_w;
   logic chroma_bdpcm_op_literal_w;
@@ -322,14 +348,19 @@ module ff_av2_encoder #(
     .query_block_col_mi(block_col_mi_q),
     .query_row(palette_row_q),
     .query_col(palette_col_q),
+    .query_start(palette_query_start_w),
     .chroma_fetch_start(chroma_fetch_start_w),
     .chroma_fetch_plane_v(phase_q == PHASE_V_COEFF),
     .chroma_fetch_txb_row_mi(txb_row_w[4:0]),
     .chroma_fetch_txb_col_mi(txb_col_w[4:0]),
+    .luma_fetch_start(luma_fetch_start_w),
+    .luma_fetch_txb_row_mi(txb_row_w[4:0]),
+    .luma_fetch_txb_col_mi(txb_col_w[4:0]),
     .done(palette_analyzer_done_w),
     .unsupported(palette_analyzer_unsupported_w),
     .black_mode(palette_analyzer_black_w),
     .luma_palette_mode(palette_analyzer_luma_mode_w),
+    .query_done(palette_query_done_w),
     .palette_size(palette_size_w),
     .palette_cache_size(palette_cache_size_w),
     .palette_colors(palette_colors_w),
@@ -340,7 +371,10 @@ module ff_av2_encoder #(
     .query_identity_row_flag(palette_identity_row_flag_w),
     .chroma_fetch_done(chroma_fetch_done_w),
     .chroma_fetch_txb_samples(chroma_fetch_txb_samples_w),
-    .chroma_fetch_predictor_samples(chroma_fetch_predictor_samples_w)
+    .chroma_fetch_predictor_samples(chroma_fetch_predictor_samples_w),
+    .luma_fetch_done(luma_fetch_done_w),
+    .luma_fetch_txb_samples(luma_fetch_txb_samples_w),
+    .luma_fetch_predictor_samples(luma_fetch_predictor_samples_w)
   );
 
   ff_av2_luma_palette_symbolizer luma_palette_symbolizer (
@@ -370,7 +404,37 @@ module ff_av2_encoder #(
     .map_token_required(palette_map_token_required_w)
   );
 
-  ff_av2_chroma_bdpcm_symbolizer chroma_bdpcm_symbolizer (
+  ff_av2_chroma_bdpcm_symbolizer #(
+    .LUMA_PALETTE_RESIDUAL(1)
+  ) luma_palette_residual_symbolizer (
+    .clk(clk),
+    .rst_n(rst_n),
+    .enable(palette_mode_q &&
+            (state_q == ST_LEAF) &&
+            (phase_q == PHASE_Y_COEFF)),
+    .advance(luma_residual_advance_w),
+    .plane_v(1'b0),
+    .skip_ctx(luma_residual_skip_ctx_w),
+    .dc_sign_ctx(luma_residual_dc_sign_ctx_w),
+    .txb_samples(luma_fetch_txb_samples_w),
+    .predictor_samples(32'd0),
+    .predictor_txb_samples(luma_fetch_predictor_samples_w),
+    .op_valid(luma_residual_op_valid_w),
+    .op_literal(luma_residual_op_literal_w),
+    .op_literal_value(luma_residual_op_literal_value_w),
+    .op_literal_bits(luma_residual_op_literal_bits_w),
+    .op_fl(luma_residual_op_fl_w),
+    .op_fh(luma_residual_op_fh_w),
+    .op_fl_inc(luma_residual_op_fl_inc_w),
+    .op_fh_inc(luma_residual_op_fh_inc_w),
+    .txb_done(luma_residual_txb_done_w),
+    .txb_nonzero(),
+    .entropy_context(luma_residual_entropy_context_w)
+  );
+
+  ff_av2_chroma_bdpcm_symbolizer #(
+    .LUMA_PALETTE_RESIDUAL(0)
+  ) chroma_bdpcm_symbolizer (
     .clk(clk),
     .rst_n(rst_n),
     .enable(palette_mode_q &&
@@ -379,8 +443,10 @@ module ff_av2_encoder #(
     .advance(chroma_bdpcm_advance_w),
     .plane_v(phase_q == PHASE_V_COEFF),
     .skip_ctx(chroma_bdpcm_skip_ctx_w),
+    .dc_sign_ctx(2'd0),
     .txb_samples(chroma_fetch_txb_samples_w),
     .predictor_samples(chroma_fetch_predictor_samples_w),
+    .predictor_txb_samples(128'd0),
     .op_valid(chroma_bdpcm_op_valid_w),
     .op_literal(chroma_bdpcm_op_literal_w),
     .op_literal_value(chroma_bdpcm_op_literal_value_w),
@@ -402,7 +468,20 @@ module ff_av2_encoder #(
     (visible_height[2:0] != 3'd0);
   assign palette_analyzer_start_w = start && (state_q == ST_IDLE) && !start_invalid_w;
   assign input_sample_fire_w = (state_q == ST_INPUT_READ) && s_axis_valid && s_axis_ready;
-  assign chroma_fetch_start_w = (state_q == ST_CHROMA_FETCH);
+  assign palette_query_start_w = (state_q == ST_PALETTE_QUERY);
+  assign chroma_fetch_start_w =
+    (state_q == ST_CHROMA_FETCH) &&
+    (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF);
+  assign luma_fetch_start_w =
+    (state_q == ST_CHROMA_FETCH) &&
+    (phase_q == PHASE_Y_COEFF);
+  assign luma_residual_advance_w =
+    !start &&
+    !pending_push_valid_q &&
+    (state_q == ST_LEAF) &&
+    palette_mode_q &&
+    (phase_q == PHASE_Y_COEFF) &&
+    luma_residual_op_valid_w;
   assign chroma_bdpcm_advance_w =
     !start &&
     !pending_push_valid_q &&
@@ -424,7 +503,12 @@ module ff_av2_encoder #(
     palette_analyzer_sample_ready_w &&
     !palette_analyzer_done_w;
   assign closed_len_w = 16'd4 + tile_len_q;
-  assign closed_leb_len_w = (closed_len_w >= 16'd128) ? 2'd2 : 2'd1;
+  // AV2 v1.0.0 Section 5.3 uses unsigned LEB128 for OBU payload lengths.
+  // Lossless high-colour 64x64 4:4:4 tiles can exceed the two-byte LEB128
+  // range, so keep the staged writer correct through the current 16-bit bound.
+  assign closed_leb_len_w =
+    (closed_len_w >= 16'd16384) ? 2'd3 :
+    (closed_len_w >= 16'd128) ? 2'd2 : 2'd1;
   assign seq_end_index_w = 16'd4 + seq_len_q;
   assign closed_leb_start_w = seq_end_index_w;
   assign closed_header_start_w = closed_leb_start_w + {14'd0, closed_leb_len_w};
@@ -551,6 +635,36 @@ module ff_av2_encoder #(
   assign txb_count_w = {11'd0, leaf_visible_txb_w_w} * {11'd0, leaf_visible_txb_h_w};
   assign txb_row_w = {11'd0, block_row_mi_q + txb_local_row_q};
   assign txb_col_w = {11'd0, block_col_mi_q + txb_local_col_q};
+  assign luma_residual_top_level_w =
+    ((y_txb_above_q[txb_col_w[4:0]] & 8'd7) > 8'd4) ?
+      3'd4 : y_txb_above_q[txb_col_w[4:0]][2:0];
+  assign luma_residual_left_level_w =
+    ((y_txb_left_q[txb_row_w[4:0]] & 8'd7) > 8'd4) ?
+      3'd4 : y_txb_left_q[txb_row_w[4:0]][2:0];
+  assign luma_residual_skip_ctx_w =
+    (luma_residual_top_level_w == 3'd0 && luma_residual_left_level_w == 3'd0) ? 4'd1 :
+    ((luma_residual_top_level_w == 3'd0 && luma_residual_left_level_w <= 3'd2) ||
+     (luma_residual_left_level_w == 3'd0 && luma_residual_top_level_w <= 3'd2) ||
+     (luma_residual_top_level_w == 3'd1 && luma_residual_left_level_w == 3'd1)) ? 4'd2 :
+    ((luma_residual_top_level_w == 3'd0) ||
+     (luma_residual_left_level_w == 3'd0) ||
+     (luma_residual_top_level_w == 3'd1 && luma_residual_left_level_w >= 3'd2 && luma_residual_left_level_w <= 3'd3) ||
+     (luma_residual_left_level_w == 3'd1 && luma_residual_top_level_w >= 3'd2 && luma_residual_top_level_w <= 3'd3) ||
+     (luma_residual_top_level_w == 3'd2 && luma_residual_left_level_w == 3'd2)) ? 4'd3 :
+    (((luma_residual_top_level_w >= 3'd1 && luma_residual_top_level_w <= 3'd2) && luma_residual_left_level_w == 3'd4) ||
+     ((luma_residual_left_level_w >= 3'd1 && luma_residual_left_level_w <= 3'd2) && luma_residual_top_level_w == 3'd4) ||
+     ((luma_residual_top_level_w >= 3'd2 && luma_residual_top_level_w <= 3'd3) &&
+      (luma_residual_left_level_w >= 3'd2 && luma_residual_left_level_w <= 3'd3))) ? 4'd4 : 4'd5;
+  assign luma_residual_top_sign_w =
+    (y_txb_above_q[txb_col_w[4:0]][4:3] == 2'd1) ? -4'sd1 :
+    (y_txb_above_q[txb_col_w[4:0]][4:3] == 2'd2) ? 4'sd1 : 4'sd0;
+  assign luma_residual_left_sign_w =
+    (y_txb_left_q[txb_row_w[4:0]][4:3] == 2'd1) ? -4'sd1 :
+    (y_txb_left_q[txb_row_w[4:0]][4:3] == 2'd2) ? 4'sd1 : 4'sd0;
+  assign luma_residual_sign_sum_w = luma_residual_top_sign_w + luma_residual_left_sign_w;
+  assign luma_residual_dc_sign_ctx_w =
+    (luma_residual_sign_sum_w < 0) ? 2'd1 :
+    (luma_residual_sign_sum_w > 0) ? 2'd2 : 2'd0;
   assign chroma_bdpcm_skip_ctx_w =
     (phase_q == PHASE_V_COEFF) ?
       (4'd3 +
@@ -900,38 +1014,36 @@ module ff_av2_encoder #(
         op_fl_inc_w = palette_op_fl_inc_w;
         op_fh_inc_w = palette_op_fh_inc_w;
       end else if (phase_q == PHASE_Y_COEFF) begin
-        case (step_q)
-          4'd0: begin
-            // AV2 v1.0.0 Section 5.20.7.27 coeffs(): black residual
-            // emits txb_skip=0 with a DC coefficient; palette residual emits
-            // txb_skip=1 because the palette map reconstructs luma exactly.
-            if (palette_mode_q) begin
-              op_fl_w = 32'd31669;
-              op_fh_w = 32'd0;
-              op_fl_inc_w = 8;
-              op_fh_inc_w = 0;
-            end else begin
+        if (palette_mode_q) begin
+          op_valid_w = luma_residual_op_valid_w;
+          op_literal_w = luma_residual_op_literal_w;
+          op_literal_value_w = luma_residual_op_literal_value_w;
+          op_literal_bits_w = luma_residual_op_literal_bits_w;
+          op_fl_w = luma_residual_op_fl_w;
+          op_fh_w = luma_residual_op_fh_w;
+          op_fl_inc_w = luma_residual_op_fl_inc_w;
+          op_fh_inc_w = luma_residual_op_fh_inc_w;
+        end else begin
+          case (step_q)
+            4'd0: begin
               op_fh_w = y_txb_nonzero_fh_w;
               op_fh_inc_w = 8;
             end
-          end
-          4'd1: begin op_fh_w = 32'd30822; op_fh_inc_w = 12; end
-          4'd2: begin op_fl_w = 32'd704; op_fh_w = 32'd0; op_fl_inc_w = 3; op_fh_inc_w = 0; end
-          4'd3: begin op_fl_w = 32'd11993; op_fh_w = 32'd0; op_fl_inc_w = 4; op_fh_inc_w = 0; end
-          4'd4: begin
-            op_fl_w = y_dc_sign_fl_w;
-            op_fh_w = 32'd0;
-            op_fl_inc_w = 8;
-            op_fh_inc_w = 0;
-          end
-          4'd5: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd5; end
-          4'd6: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd6; end
-          4'd7: begin op_literal_w = 1'b1; op_literal_value_w = 32'd249; op_literal_bits_w = 5'd8; end
-          4'd8: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd1; end
-          default: op_valid_w = 1'b0;
-        endcase
-        if (palette_mode_q && step_q != 5'd0) begin
-          op_valid_w = 1'b0;
+            4'd1: begin op_fh_w = 32'd30822; op_fh_inc_w = 12; end
+            4'd2: begin op_fl_w = 32'd704; op_fh_w = 32'd0; op_fl_inc_w = 3; op_fh_inc_w = 0; end
+            4'd3: begin op_fl_w = 32'd11993; op_fh_w = 32'd0; op_fl_inc_w = 4; op_fh_inc_w = 0; end
+            4'd4: begin
+              op_fl_w = y_dc_sign_fl_w;
+              op_fh_w = 32'd0;
+              op_fl_inc_w = 8;
+              op_fh_inc_w = 0;
+            end
+            4'd5: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd5; end
+            4'd6: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd6; end
+            4'd7: begin op_literal_w = 1'b1; op_literal_value_w = 32'd249; op_literal_bits_w = 5'd8; end
+            4'd8: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd1; end
+            default: op_valid_w = 1'b0;
+          endcase
         end
       end else if (palette_mode_q) begin
         op_valid_w = chroma_bdpcm_op_valid_w;
@@ -1099,12 +1211,16 @@ module ff_av2_encoder #(
     end else if (stream_index_q < seq_end_index_w) begin
       output_byte_w = seq_mem_q[seq_stream_index_w];
     end else if (stream_index_q < closed_header_start_w) begin
-      if (closed_leb_index_w == 16'd0 && closed_leb_len_w == 2'd2) begin
+      if (closed_leb_index_w == 16'd0 && closed_leb_len_w != 2'd1) begin
         output_byte_w = closed_len_w[6:0] | 8'h80;
       end else if (closed_leb_index_w == 16'd0) begin
         output_byte_w = closed_len_w[7:0];
-      end else begin
+      end else if (closed_leb_index_w == 16'd1 && closed_leb_len_w == 2'd3) begin
+        output_byte_w = {1'b0, closed_len_w[13:7]} | 8'h80;
+      end else if (closed_leb_index_w == 16'd1) begin
         output_byte_w = {1'b0, closed_len_w[13:7]};
+      end else begin
+        output_byte_w = {6'd0, closed_len_w[15:14]};
       end
     end else if (stream_index_q == closed_header_start_w) begin
       output_byte_w = 8'h10;
@@ -1175,6 +1291,8 @@ module ff_av2_encoder #(
       for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
         partition_above_q[context_index_q] <= 8'd0;
         partition_left_q[context_index_q] <= 8'd0;
+        y_txb_above_q[context_index_q] <= 8'd0;
+        y_txb_left_q[context_index_q] <= 8'd0;
         u_txb_above_q[context_index_q] <= 8'd0;
         u_txb_left_q[context_index_q] <= 8'd0;
         v_txb_above_q[context_index_q] <= 8'd0;
@@ -1248,6 +1366,8 @@ module ff_av2_encoder #(
           for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
             partition_above_q[context_index_q] <= 8'd0;
             partition_left_q[context_index_q] <= 8'd0;
+            y_txb_above_q[context_index_q] <= 8'd0;
+            y_txb_left_q[context_index_q] <= 8'd0;
             u_txb_above_q[context_index_q] <= 8'd0;
             u_txb_left_q[context_index_q] <= 8'd0;
             v_txb_above_q[context_index_q] <= 8'd0;
@@ -1347,7 +1467,7 @@ module ff_av2_encoder #(
                 last_u_txb_nonzero_q <= 1'b0;
                 txb_width_q <= txb_width_w;
                 txb_count_q <= txb_count_w;
-                state_q <= ST_LEAF;
+                state_q <= palette_mode_q ? ST_PALETTE_QUERY : ST_LEAF;
               end else if (partition_q == PARTITION_HORZ) begin
                 stack_row_mi_q[stack_sp_q] <= block_row_mi_q + block_half_h_mi_w;
                 stack_col_mi_q[stack_sp_q] <= block_col_mi_q;
@@ -1385,7 +1505,7 @@ module ff_av2_encoder #(
               last_u_txb_nonzero_q <= 1'b0;
               txb_width_q <= txb_width_w;
               txb_count_q <= txb_count_w;
-              state_q <= ST_LEAF;
+              state_q <= palette_mode_q ? ST_PALETTE_QUERY : ST_LEAF;
             end else if (partition_q == PARTITION_HORZ) begin
               stack_row_mi_q[stack_sp_q] <= block_row_mi_q + block_half_h_mi_w;
               stack_col_mi_q[stack_sp_q] <= block_col_mi_q;
@@ -1402,6 +1522,11 @@ module ff_av2_encoder #(
               stack_sp_q <= stack_sp_q + 5'd1;
               block_w_mi_q <= block_half_w_mi_w;
               state_q <= ST_LOAD_BLOCK;
+            end
+          end
+          ST_PALETTE_QUERY: begin
+            if (!palette_mode_q || palette_query_done_w) begin
+              state_q <= ST_LEAF;
             end
           end
           ST_LEAF: begin
@@ -1458,6 +1583,7 @@ module ff_av2_encoder #(
                     txb_index_q <= 16'd0;
                     txb_local_row_q <= 5'd0;
                     txb_local_col_q <= 5'd0;
+                    state_q <= ST_CHROMA_FETCH;
                   end else begin
                     palette_row_q <= palette_row_q + 6'd1;
                     palette_col_q <= 6'd0;
@@ -1472,13 +1598,18 @@ module ff_av2_encoder #(
                   txb_index_q <= 16'd0;
                   txb_local_row_q <= 5'd0;
                   txb_local_col_q <= 5'd0;
+                  state_q <= ST_CHROMA_FETCH;
                 end else begin
                   palette_row_q <= palette_row_q + 6'd1;
                   palette_col_q <= 6'd0;
                   step_q <= 5'd1;
                 end
               end else if (phase_q == PHASE_Y_COEFF) begin
-                if ((palette_mode_q && step_q == 5'd0) || (!palette_mode_q && step_q == 5'd8)) begin
+                if ((palette_mode_q && luma_residual_txb_done_w) || (!palette_mode_q && step_q == 5'd8)) begin
+                  if (palette_mode_q) begin
+                    y_txb_above_q[txb_col_w[4:0]] <= luma_residual_entropy_context_w;
+                    y_txb_left_q[txb_row_w[4:0]] <= luma_residual_entropy_context_w;
+                  end
                   if (txb_index_q == (txb_count_q - 16'd1)) begin
                     phase_q <= PHASE_U_COEFF;
                     step_q <= 5'd0;
@@ -1497,6 +1628,9 @@ module ff_av2_encoder #(
                       txb_local_row_q <= txb_local_row_q + 5'd1;
                     end else begin
                       txb_local_col_q <= txb_local_col_q + 5'd1;
+                    end
+                    if (palette_mode_q) begin
+                      state_q <= ST_CHROMA_FETCH;
                     end
                   end
                 end else begin
@@ -1556,7 +1690,8 @@ module ff_av2_encoder #(
             end
           end
           ST_CHROMA_FETCH: begin
-            if (chroma_fetch_done_w) begin
+            if ((phase_q == PHASE_Y_COEFF && luma_fetch_done_w) ||
+                ((phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF) && chroma_fetch_done_w)) begin
               step_q <= 5'd0;
               state_q <= ST_LEAF;
             end

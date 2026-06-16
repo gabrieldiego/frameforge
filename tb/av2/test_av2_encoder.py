@@ -54,38 +54,10 @@ def av2_palette_reconstruction(data):
     width, height = rtl_geometry()
     expected_len = width * height * 3
     assert len(data) == expected_len
-    if all(sample == 0 for sample in data):
-        return data
-    if width % 8 != 0 or height % 8 != 0:
-        return bytes(expected_len)
-
-    area = width * height
-    y_plane = data[:area]
-    recon_y = bytearray(area)
-    for y0 in range(0, height, 8):
-        for x0 in range(0, width, 8):
-            colors = []
-            for local_y in range(8):
-                row_start = (y0 + local_y) * width + x0
-                for sample in y_plane[row_start : row_start + 8]:
-                    if sample not in colors and len(colors) < 8:
-                        colors.append(sample)
-            target = 2 if len(colors) <= 2 else 4 if len(colors) <= 4 else 8
-            candidate = 0
-            while len(colors) < target:
-                if candidate not in colors:
-                    colors.append(candidate)
-                candidate += 1
-            colors.sort()
-
-            for local_y in range(8):
-                row_start = (y0 + local_y) * width + x0
-                for local_x, sample in enumerate(y_plane[row_start : row_start + 8]):
-                    best_index = min(
-                        range(len(colors)), key=lambda index: abs(sample - colors[index])
-                    )
-                    recon_y[row_start + local_x] = colors[best_index]
-    return bytes(recon_y) + data[area:]
+    # AV2 luma palette only predicts the luma plane. The current RTL then emits
+    # lossless luma coefficients plus lossless chroma BDPCM, so the internal
+    # reconstruction is the input frame once the residual path is enabled.
+    return data
 
 
 def av2_rtl_input_stream(data):
@@ -268,13 +240,16 @@ async def av2_encoder_emits_obu_stream(dut):
     observed = []
     trace_records = []
     completed = False
-    max_cycles = int(os.environ.get("FRAMEFORGE_RTL_AV2_MAX_CYCLES", "80000"))
+    width, height = rtl_geometry()
+    default_max_cycles = max(80000, width * height * 3 * 32 + 20000)
+    max_cycles = int(os.environ.get("FRAMEFORGE_RTL_AV2_MAX_CYCLES", str(default_max_cycles)))
     for _ in range(max_cycles):
         await RisingEdge(dut.clk)
         await ReadOnly()
         state = signal_int(dut, "state_q")
         op_valid = signal_int(dut, "op_valid_w")
-        if state == AV2_STATE_PARTITION or (state == AV2_STATE_LEAF and op_valid == 1):
+        op_consumed = op_valid == 1 and signal_int(dut, "pending_push_valid_q") == 0
+        if state in (AV2_STATE_PARTITION, AV2_STATE_LEAF) and op_consumed:
             phase = signal_int(dut, "phase_q")
             step = signal_int(dut, "step_q")
             partition_emit_do_split = signal_int(dut, "partition_emit_do_split_w") == 1
@@ -339,6 +314,56 @@ async def av2_encoder_emits_obu_stream(dut):
                 "fl_inc": signal_int(dut, "op_fl_inc_w"),
                 "fh_inc": signal_int(dut, "op_fh_inc_w"),
             }
+            if phase == AV2_PHASE_Y_COEFF and palette_mode:
+                coeff_pos = handle_int(dut.luma_palette_residual_symbolizer.coeff_pos_w)
+                record.update(
+                    {
+                        "luma_residual_emit_state": handle_int(
+                            dut.luma_palette_residual_symbolizer.emit_state_q
+                        ),
+                        "luma_residual_scan": handle_int(
+                            dut.luma_palette_residual_symbolizer.scan_q
+                        ),
+                        "luma_residual_coeff_pos": coeff_pos,
+                        "luma_residual_level": handle_int(
+                            dut.luma_palette_residual_symbolizer.level_q[coeff_pos]
+                        ),
+                        "luma_residual_coeff_ctx": handle_int(
+                            dut.luma_palette_residual_symbolizer.coeff_ctx_q[coeff_pos]
+                        ),
+                        "luma_residual_br_ctx": handle_int(
+                            dut.luma_palette_residual_symbolizer.br_ctx_q[coeff_pos]
+                        ),
+                    }
+                )
+            if phase in (AV2_PHASE_U_COEFF, AV2_PHASE_V_COEFF) and palette_mode:
+                coeff_pos = handle_int(dut.chroma_bdpcm_symbolizer.coeff_pos_w)
+                record.update(
+                    {
+                        "chroma_residual_emit_state": handle_int(
+                            dut.chroma_bdpcm_symbolizer.emit_state_q
+                        ),
+                        "chroma_residual_scan": handle_int(
+                            dut.chroma_bdpcm_symbolizer.scan_q
+                        ),
+                        "chroma_residual_coeff_pos": coeff_pos,
+                        "chroma_residual_level": handle_int(
+                            dut.chroma_bdpcm_symbolizer.level_q[coeff_pos]
+                        ),
+                        "chroma_residual_hr_avg": handle_int(
+                            dut.chroma_bdpcm_symbolizer.hr_avg_q
+                        ),
+                        "chroma_residual_hr_m": handle_int(
+                            dut.chroma_bdpcm_symbolizer.hr_m_w
+                        ),
+                        "chroma_residual_high_value": handle_int(
+                            dut.chroma_bdpcm_symbolizer.current_high_value_w
+                        ),
+                        "chroma_residual_hr_q": handle_int(
+                            dut.chroma_bdpcm_symbolizer.hr_q_w
+                        ),
+                    }
+                )
             trace_records.append(record)
         if int(dut.input_error.value) == 1:
             details = {

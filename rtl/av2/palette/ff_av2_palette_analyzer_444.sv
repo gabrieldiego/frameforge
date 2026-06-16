@@ -17,14 +17,19 @@ module ff_av2_palette_analyzer_444 #(
   input  logic [4:0] query_block_col_mi,
   input  logic [5:0] query_row,
   input  logic [5:0] query_col,
+  input  logic       query_start,
   input  logic       chroma_fetch_start,
   input  logic       chroma_fetch_plane_v,
   input  logic [4:0] chroma_fetch_txb_row_mi,
   input  logic [4:0] chroma_fetch_txb_col_mi,
+  input  logic       luma_fetch_start,
+  input  logic [4:0] luma_fetch_txb_row_mi,
+  input  logic [4:0] luma_fetch_txb_col_mi,
   output logic       done,
   output logic       unsupported,
   output logic       black_mode,
   output logic       luma_palette_mode,
+  output logic       query_done,
   output logic [3:0] palette_size,
   output logic [4:0] palette_cache_size,
   output logic [63:0] palette_colors,
@@ -35,7 +40,10 @@ module ff_av2_palette_analyzer_444 #(
   output logic [1:0] query_identity_row_flag,
   output logic       chroma_fetch_done,
   output logic [127:0] chroma_fetch_txb_samples,
-  output logic [31:0] chroma_fetch_predictor_samples
+  output logic [31:0] chroma_fetch_predictor_samples,
+  output logic       luma_fetch_done,
+  output logic [127:0] luma_fetch_txb_samples,
+  output logic [127:0] luma_fetch_predictor_samples
 );
 
   localparam logic [3:0] ST_IDLE = 4'd0;
@@ -69,12 +77,22 @@ module ff_av2_palette_analyzer_444 #(
   logic palette_supported_q;
 
   logic [7:0] block_luma_sample_q [0:63];
+  logic [191:0] current_palette_index_q;
   logic [191:0] block_palette_index_q [0:63];
   logic [7:0] palette_color_q [0:7];
-  logic [7:0] block_palette_color_q [0:63][0:7];
+  logic [63:0] block_palette_colors_q [0:63];
   logic [3:0] block_palette_size_q [0:63];
+  logic [4:0] block_palette_cache_size_q [0:63];
+  logic [7:0] current_row_same_left_q;
+  logic [7:0] current_row_same_above_q;
   logic [7:0] row_same_left_q [0:63];
   logic [7:0] row_same_above_q [0:63];
+  logic [191:0] query_palette_index_q;
+  logic [63:0] query_palette_colors_q;
+  logic [3:0] query_palette_size_q;
+  logic [4:0] query_palette_cache_size_q;
+  logic [7:0] query_row_same_left_q;
+  logic [7:0] query_row_same_above_q;
 
   logic known_sample_w;
   logic candidate_known_w;
@@ -89,8 +107,6 @@ module ff_av2_palette_analyzer_444 #(
   logic black_sample_ok_w;
   logic black_next_w;
   logic [5:0] query_block_id_w;
-  logic [5:0] query_above_block_id_w;
-  logic [5:0] query_left_block_id_w;
   logic [5:0] query_local_index_w;
   logic [5:0] query_left_local_index_w;
   logic [5:0] query_top_local_index_w;
@@ -104,25 +120,49 @@ module ff_av2_palette_analyzer_444 #(
   logic [7:0] block_sample_top_bit_offset_w;
   logic fetch_active_q;
   logic fetch_start_q;
+  logic query_start_q;
+  logic query_active_q;
+  logic [5:0] query_load_block_id_q;
+  logic luma_fetch_start_q;
+  logic luma_fetch_active_q;
   logic fetch_plane_v_q;
   logic [4:0] fetch_txb_row_mi_q;
   logic [4:0] fetch_txb_col_mi_q;
+  logic [4:0] luma_fetch_txb_row_mi_q;
+  logic [4:0] luma_fetch_txb_col_mi_q;
   logic [4:0] fetch_step_q;
+  logic [4:0] luma_fetch_step_q;
   logic fetch_read_pending_q;
   logic fetch_read_is_pred_q;
   logic [4:0] fetch_capture_step_q;
+  logic luma_fetch_read_pending_q;
+  logic [4:0] luma_fetch_capture_step_q;
   logic [11:0] fetch_read_addr_q;
+  logic [11:0] sample_store_write_addr_w;
+  logic [11:0] sample_store_read_addr_w;
   logic [11:0] chroma_write_addr_w;
   logic [11:0] chroma_read_addr_w;
+  logic luma_write_w;
   logic chroma_write_u_w;
   logic chroma_write_v_w;
+  logic [7:0] luma_read_y_w;
   logic [7:0] chroma_read_u_w;
   logic [7:0] chroma_read_v_w;
   logic [11:0] fetch_txb_read_addr_w;
   logic [11:0] fetch_pred_read_addr_w;
+  logic [11:0] luma_fetch_read_addr_w;
   logic [5:0] fetch_txb_block_id_w;
   logic [5:0] fetch_txb_local_base_w;
   logic [5:0] fetch_txb_local_index_w;
+  logic [5:0] luma_fetch_txb_block_id_w;
+  logic [5:0] luma_fetch_txb_local_base_w;
+  logic [5:0] luma_fetch_local_index_w;
+  logic [5:0] luma_fetch_capture_local_index_w;
+  logic [7:0] luma_fetch_capture_palette_bit_offset_w;
+  logic [2:0] luma_fetch_capture_palette_index_w;
+  logic [7:0] luma_fetch_predictor_sample_w;
+  logic [63:0] palette_colors_pack_w;
+  logic [4:0] block_palette_cache_size_w;
   logic [5:0] fetch_pred_block_id_w;
   logic [5:0] fetch_pred_local_index_w;
   logic [5:0] fetch_pred_x_w;
@@ -161,8 +201,16 @@ module ff_av2_palette_analyzer_444 #(
   assign block_sample_bit_offset_w = {2'd0, block_sample_q} * 8'd3;
   assign block_sample_left_bit_offset_w = {2'd0, block_sample_q - 6'd1} * 8'd3;
   assign block_sample_top_bit_offset_w = {2'd0, block_sample_q - 6'd8} * 8'd3;
-  assign query_above_block_id_w = query_block_id_w - 6'd8;
-  assign query_left_block_id_w = query_block_id_w - 6'd1;
+  assign palette_colors_pack_w = {
+    palette_color_q[7],
+    palette_color_q[6],
+    palette_color_q[5],
+    palette_color_q[4],
+    palette_color_q[3],
+    palette_color_q[2],
+    palette_color_q[1],
+    palette_color_q[0]
+  };
   // AV2 v1.0.0 Section 5.20.7 residual syntax scans 4x4 TXBs. The query
   // coordinates are MI units, so bit 0 selects the bottom/right 4x4 quadrant
   // inside the current 8x8 packet: row offset 4*8 samples, column offset 4.
@@ -173,9 +221,28 @@ module ff_av2_palette_analyzer_444 #(
     fetch_txb_local_base_w + {fetch_step_q[3:2], 3'b000} + {4'd0, fetch_step_q[1:0]};
   assign fetch_above_pred_y_w = {fetch_txb_row_mi_q, 2'b00} - 6'd1;
   assign chroma_write_addr_w = {block_id_q, block_chroma_sample_q[5:0]};
+  assign luma_fetch_txb_block_id_w = {luma_fetch_txb_row_mi_q[3:1], luma_fetch_txb_col_mi_q[3:1]};
+  assign luma_fetch_txb_local_base_w =
+    {luma_fetch_txb_row_mi_q[0], 5'b00000} + {3'd0, luma_fetch_txb_col_mi_q[0], 2'b00};
   assign chroma_read_addr_w =
     fetch_read_pending_q ? fetch_read_addr_q :
     (fetch_step_q < 5'd16) ? fetch_txb_read_addr_w : fetch_pred_read_addr_w;
+  assign luma_fetch_local_index_w =
+    luma_fetch_txb_local_base_w +
+    {luma_fetch_step_q[3:2], 3'b000} +
+    {4'd0, luma_fetch_step_q[1:0]};
+  assign luma_fetch_capture_local_index_w =
+    luma_fetch_txb_local_base_w +
+    {luma_fetch_capture_step_q[3:2], 3'b000} +
+    {4'd0, luma_fetch_capture_step_q[1:0]};
+  assign luma_fetch_capture_palette_bit_offset_w =
+    {2'd0, luma_fetch_capture_local_index_w} + {1'd0, luma_fetch_capture_local_index_w, 1'b0};
+  assign luma_fetch_capture_palette_index_w =
+    query_palette_index_q[luma_fetch_capture_palette_bit_offset_w +: 3];
+  assign luma_fetch_read_addr_w = {luma_fetch_txb_block_id_w, luma_fetch_local_index_w};
+  assign sample_store_write_addr_w = luma_write_w ? {block_id_q, block_sample_q} : chroma_write_addr_w;
+  assign sample_store_read_addr_w = luma_fetch_active_q ? luma_fetch_read_addr_w : chroma_read_addr_w;
+  assign luma_write_w = (state_q == ST_READ) && sample_fire;
   assign chroma_write_u_w =
     (state_q == ST_DRAIN_CHROMA) && sample_fire && !block_chroma_sample_q[6];
   assign chroma_write_v_w =
@@ -185,11 +252,13 @@ module ff_av2_palette_analyzer_444 #(
 
   ff_av2_chroma_sample_store chroma_sample_store (
     .clk(clk),
+    .write_y_en(luma_write_w),
     .write_u_en(chroma_write_u_w),
     .write_v_en(chroma_write_v_w),
-    .write_addr(chroma_write_addr_w),
+    .write_addr(sample_store_write_addr_w),
     .write_data(sample_u8_w),
-    .read_addr(chroma_read_addr_w),
+    .read_addr(sample_store_read_addr_w),
+    .read_y_data(luma_read_y_w),
     .read_u_data(chroma_read_u_w),
     .read_v_data(chroma_read_v_w)
   );
@@ -248,25 +317,44 @@ module ff_av2_palette_analyzer_444 #(
   end
 
   always @* begin
+    block_palette_cache_size_w = 5'd0;
+    if (block_id_q[5:3] != 3'd0) begin
+      block_palette_cache_size_w =
+        block_palette_cache_size_w + {1'd0, block_palette_size_q[block_id_q - 6'd8]};
+    end
+    if (block_id_q[2:0] != 3'd0) begin
+      block_palette_cache_size_w =
+        block_palette_cache_size_w + {1'd0, block_palette_size_q[block_id_q - 6'd1]};
+    end
+  end
+
+  always @* begin
+    case (luma_fetch_capture_palette_index_w)
+      3'd0: luma_fetch_predictor_sample_w = query_palette_colors_q[7:0];
+      3'd1: luma_fetch_predictor_sample_w = query_palette_colors_q[15:8];
+      3'd2: luma_fetch_predictor_sample_w = query_palette_colors_q[23:16];
+      3'd3: luma_fetch_predictor_sample_w = query_palette_colors_q[31:24];
+      3'd4: luma_fetch_predictor_sample_w = query_palette_colors_q[39:32];
+      3'd5: luma_fetch_predictor_sample_w = query_palette_colors_q[47:40];
+      3'd6: luma_fetch_predictor_sample_w = query_palette_colors_q[55:48];
+      default: luma_fetch_predictor_sample_w = query_palette_colors_q[63:56];
+    endcase
+  end
+
+  always @* begin
     for (pack_index_q = 0; pack_index_q < 8; pack_index_q = pack_index_q + 1) begin
       palette_colors[pack_index_q * 8 +: 8] =
-        block_palette_color_q[query_block_id_w][pack_index_q];
+        query_palette_colors_q[pack_index_q * 8 +: 8];
     end
-    palette_size = block_palette_size_q[query_block_id_w];
-    palette_cache_size = 5'd0;
-    if (query_block_id_w[5:3] != 3'd0) begin
-      palette_cache_size = palette_cache_size + {1'd0, block_palette_size_q[query_above_block_id_w]};
-    end
-    if (query_block_id_w[2:0] != 3'd0) begin
-      palette_cache_size = palette_cache_size + {1'd0, block_palette_size_q[query_left_block_id_w]};
-    end
-    query_index = block_palette_index_q[query_block_id_w][query_bit_offset_w +: 3];
-    query_left_index = block_palette_index_q[query_block_id_w][query_left_bit_offset_w +: 3];
-    query_top_index = block_palette_index_q[query_block_id_w][query_top_bit_offset_w +: 3];
-    query_top_left_index = block_palette_index_q[query_block_id_w][query_top_left_bit_offset_w +: 3];
-    if (query_row[2:0] != 3'd0 && row_same_above_q[query_block_id_w][query_row[2:0]]) begin
+    palette_size = query_palette_size_q;
+    palette_cache_size = query_palette_cache_size_q;
+    query_index = query_palette_index_q[query_bit_offset_w +: 3];
+    query_left_index = query_palette_index_q[query_left_bit_offset_w +: 3];
+    query_top_index = query_palette_index_q[query_top_bit_offset_w +: 3];
+    query_top_left_index = query_palette_index_q[query_top_left_bit_offset_w +: 3];
+    if (query_row[2:0] != 3'd0 && query_row_same_above_q[query_row[2:0]]) begin
       query_identity_row_flag = 2'd2;
-    end else if (row_same_left_q[query_block_id_w][query_row[2:0]]) begin
+    end else if (query_row_same_left_q[query_row[2:0]]) begin
       query_identity_row_flag = 2'd1;
     end else begin
       query_identity_row_flag = 2'd0;
@@ -293,36 +381,44 @@ module ff_av2_palette_analyzer_444 #(
       palette_supported_q <= 1'b0;
       fetch_active_q <= 1'b0;
       fetch_start_q <= 1'b0;
+      query_start_q <= 1'b0;
+      query_active_q <= 1'b0;
+      query_load_block_id_q <= 6'd0;
+      luma_fetch_start_q <= 1'b0;
+      luma_fetch_active_q <= 1'b0;
       fetch_plane_v_q <= 1'b0;
       fetch_txb_row_mi_q <= 5'd0;
       fetch_txb_col_mi_q <= 5'd0;
+      luma_fetch_txb_row_mi_q <= 5'd0;
+      luma_fetch_txb_col_mi_q <= 5'd0;
       fetch_step_q <= 5'd0;
+      luma_fetch_step_q <= 5'd0;
       fetch_read_pending_q <= 1'b0;
       fetch_read_is_pred_q <= 1'b0;
       fetch_capture_step_q <= 5'd0;
+      luma_fetch_read_pending_q <= 1'b0;
+      luma_fetch_capture_step_q <= 5'd0;
       fetch_read_addr_q <= 12'd0;
       chroma_fetch_done <= 1'b0;
       chroma_fetch_txb_samples <= 128'd0;
       chroma_fetch_predictor_samples <= 32'd0;
+      luma_fetch_done <= 1'b0;
+      luma_fetch_txb_samples <= 128'd0;
+      luma_fetch_predictor_samples <= 128'd0;
+      query_done <= 1'b0;
+      current_palette_index_q <= 192'd0;
+      current_row_same_left_q <= 8'd0;
+      current_row_same_above_q <= 8'd0;
+      query_palette_index_q <= 192'd0;
+      query_palette_colors_q <= 64'd0;
+      query_palette_size_q <= 4'd2;
+      query_palette_cache_size_q <= 5'd0;
+      query_row_same_left_q <= 8'd0;
+      query_row_same_above_q <= 8'd0;
       done <= 1'b0;
       unsupported <= 1'b0;
       black_mode <= 1'b0;
       luma_palette_mode <= 1'b0;
-      for (block_index_q = 0; block_index_q < 64; block_index_q = block_index_q + 1) begin
-        block_luma_sample_q[block_index_q] <= 8'd0;
-      end
-      for (color_index_q = 0; color_index_q < 8; color_index_q = color_index_q + 1) begin
-        palette_color_q[color_index_q] <= 8'd0;
-      end
-      for (block_index_q = 0; block_index_q < 64; block_index_q = block_index_q + 1) begin
-        block_palette_index_q[block_index_q] <= 192'd0;
-        block_palette_size_q[block_index_q] <= 4'd2;
-        row_same_left_q[block_index_q] <= 8'd0;
-        row_same_above_q[block_index_q] <= 8'd0;
-        for (color_index_q = 0; color_index_q < 8; color_index_q = color_index_q + 1) begin
-          block_palette_color_q[block_index_q][color_index_q] <= 8'd0;
-        end
-      end
     end else if (start) begin
       state_q <= ST_READ;
       area_q <= {16'd0, visible_width} * {16'd0, visible_height};
@@ -341,9 +437,20 @@ module ff_av2_palette_analyzer_444 #(
       black_ok_q <= 1'b1;
       fetch_active_q <= 1'b0;
       fetch_start_q <= 1'b0;
+      query_start_q <= 1'b0;
+      query_active_q <= 1'b0;
+      luma_fetch_start_q <= 1'b0;
+      luma_fetch_active_q <= 1'b0;
       fetch_step_q <= 5'd0;
+      luma_fetch_step_q <= 5'd0;
       fetch_read_pending_q <= 1'b0;
+      luma_fetch_read_pending_q <= 1'b0;
       chroma_fetch_done <= 1'b0;
+      luma_fetch_done <= 1'b0;
+      query_done <= 1'b0;
+      current_palette_index_q <= 192'd0;
+      current_row_same_left_q <= 8'd0;
+      current_row_same_above_q <= 8'd0;
       palette_supported_q <=
         (SUPPORT_PALETTE_444 != 0) &&
         (SAMPLE_BITS == 8) &&
@@ -358,6 +465,52 @@ module ff_av2_palette_analyzer_444 #(
       black_mode <= 1'b0;
       luma_palette_mode <= 1'b0;
     end else begin
+      query_start_q <= query_start;
+      if (query_start && !query_start_q) begin
+        query_active_q <= 1'b1;
+        query_load_block_id_q <= query_block_id_w;
+        query_done <= 1'b0;
+      end else if (query_active_q) begin
+        query_palette_index_q <= block_palette_index_q[query_load_block_id_q];
+        query_palette_colors_q <= block_palette_colors_q[query_load_block_id_q];
+        query_palette_size_q <= block_palette_size_q[query_load_block_id_q];
+        query_palette_cache_size_q <= block_palette_cache_size_q[query_load_block_id_q];
+        query_row_same_left_q <= row_same_left_q[query_load_block_id_q];
+        query_row_same_above_q <= row_same_above_q[query_load_block_id_q];
+        query_active_q <= 1'b0;
+        query_done <= 1'b1;
+      end else if (!query_start) begin
+        query_done <= 1'b0;
+      end
+
+      luma_fetch_start_q <= luma_fetch_start;
+      if (luma_fetch_start && !luma_fetch_start_q) begin
+        luma_fetch_active_q <= 1'b1;
+        luma_fetch_txb_row_mi_q <= luma_fetch_txb_row_mi;
+        luma_fetch_txb_col_mi_q <= luma_fetch_txb_col_mi;
+        luma_fetch_step_q <= 5'd0;
+        luma_fetch_read_pending_q <= 1'b0;
+        luma_fetch_done <= 1'b0;
+      end else if (luma_fetch_active_q) begin
+        if (luma_fetch_read_pending_q) begin
+          luma_fetch_txb_samples[luma_fetch_capture_step_q * 8 +: 8] <= luma_read_y_w;
+          luma_fetch_predictor_samples[luma_fetch_capture_step_q * 8 +: 8] <=
+            luma_fetch_predictor_sample_w;
+          luma_fetch_read_pending_q <= 1'b0;
+          if (luma_fetch_capture_step_q == 5'd15) begin
+            luma_fetch_active_q <= 1'b0;
+            luma_fetch_done <= 1'b1;
+          end else begin
+            luma_fetch_step_q <= luma_fetch_capture_step_q + 5'd1;
+          end
+        end else begin
+          luma_fetch_capture_step_q <= luma_fetch_step_q;
+          luma_fetch_read_pending_q <= 1'b1;
+        end
+      end else if (!luma_fetch_start) begin
+        luma_fetch_done <= 1'b0;
+      end
+
       fetch_start_q <= chroma_fetch_start;
       if (chroma_fetch_start && !fetch_start_q) begin
         fetch_active_q <= 1'b1;
@@ -438,6 +591,9 @@ module ff_av2_palette_analyzer_444 #(
           target_palette_size_q <= 4'd2;
           sort_pass_q <= 4'd0;
           sort_index_q <= 3'd0;
+          current_palette_index_q <= 192'd0;
+          current_row_same_left_q <= 8'd0;
+          current_row_same_above_q <= 8'd0;
           for (color_index_q = 0; color_index_q < 8; color_index_q = color_index_q + 1) begin
             palette_color_q[color_index_q] <= 8'd0;
           end
@@ -493,22 +649,21 @@ module ff_av2_palette_analyzer_444 #(
         end
         ST_STORE_COLORS: begin
           block_palette_size_q[block_id_q] <= target_palette_size_q;
-          for (color_index_q = 0; color_index_q < 8; color_index_q = color_index_q + 1) begin
-            block_palette_color_q[block_id_q][color_index_q] <= palette_color_q[color_index_q];
-          end
+          block_palette_cache_size_q[block_id_q] <= block_palette_cache_size_w;
+          block_palette_colors_q[block_id_q] <= palette_colors_pack_w;
           block_sample_q <= 6'd0;
           state_q <= ST_MAP;
         end
         ST_MAP: begin
-          block_palette_index_q[block_id_q][block_sample_bit_offset_w +: 3] <= nearest_index_w;
+          current_palette_index_q[block_sample_bit_offset_w +: 3] <= nearest_index_w;
           if (block_sample_q[2:0] == 3'd0) begin
-            row_same_left_q[block_id_q][block_sample_q[5:3]] <= 1'b1;
-            row_same_above_q[block_id_q][block_sample_q[5:3]] <= (block_sample_q[5:3] != 3'd0);
-          end else if (nearest_index_w != block_palette_index_q[block_id_q][block_sample_left_bit_offset_w +: 3]) begin
-            row_same_left_q[block_id_q][block_sample_q[5:3]] <= 1'b0;
+            current_row_same_left_q[block_sample_q[5:3]] <= 1'b1;
+            current_row_same_above_q[block_sample_q[5:3]] <= (block_sample_q[5:3] != 3'd0);
+          end else if (nearest_index_w != current_palette_index_q[block_sample_left_bit_offset_w +: 3]) begin
+            current_row_same_left_q[block_sample_q[5:3]] <= 1'b0;
           end
-          if (block_sample_q[5:3] != 3'd0 && nearest_index_w != block_palette_index_q[block_id_q][block_sample_top_bit_offset_w +: 3]) begin
-            row_same_above_q[block_id_q][block_sample_q[5:3]] <= 1'b0;
+          if (block_sample_q[5:3] != 3'd0 && nearest_index_w != current_palette_index_q[block_sample_top_bit_offset_w +: 3]) begin
+            current_row_same_above_q[block_sample_q[5:3]] <= 1'b0;
           end
           if (block_sample_q == 6'd63) begin
             state_q <= ST_NEXT_BLOCK;
@@ -517,6 +672,9 @@ module ff_av2_palette_analyzer_444 #(
           end
         end
         ST_NEXT_BLOCK: begin
+          block_palette_index_q[block_id_q] <= current_palette_index_q;
+          row_same_left_q[block_id_q] <= current_row_same_left_q;
+          row_same_above_q[block_id_q] <= current_row_same_above_q;
           block_chroma_sample_q <= 7'd0;
           state_q <= ST_DRAIN_CHROMA;
         end

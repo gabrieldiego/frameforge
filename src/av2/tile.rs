@@ -421,7 +421,9 @@ const DEFAULT_TXB_SKIP_Y_TX4X4_CTX1_CDF: [u16; 6] = [
     4,
     5,
 ];
+const DEFAULT_TXB_SKIP_Y_TX4X4_CTX2_CDF: [u16; 6] = avm_cdf2(2762, 0, -1, 0);
 const DEFAULT_TXB_SKIP_Y_TX4X4_CTX3_CDF: [u16; 6] = avm_cdf2(7944, -1, 0, -1);
+const DEFAULT_TXB_SKIP_Y_TX4X4_CTX4_CDF: [u16; 6] = avm_cdf2(16230, 0, -1, -1);
 const DEFAULT_TXB_SKIP_Y_TX4X4_CTX5_CDF: [u16; 6] = avm_cdf2(29076, -1, -1, -1);
 const DEFAULT_TXB_SKIP_U_TX4X4_CTX6_CDF: [u16; 6] = [
     AVM_CDF_PROB_TOP - 8898,
@@ -443,6 +445,18 @@ const DEFAULT_EOB_MULTI16_Y_CTX0_CDF: [u16; 9] = avm_cdf5(1946, 3059, 6834, 1512
 const DEFAULT_EOB_MULTI16_UV_CTX2_CDF: [u16; 9] = avm_cdf5(8000, 10366, 14466, 19569, -1, -1, -1);
 const DEFAULT_COEFF_BASE_LF_EOB_Y_TX4X4_CTX0_CDF: [u16; 9] =
     avm_cdf5(27486, 31140, 31779, 32064, 0, -1, -2);
+const DEFAULT_COEFF_BASE_EOB_Y_CDFS: [[u16; 7]; 4] = [
+    avm_cdf3(10923, 21845, 0, 0, 0),
+    avm_cdf3(10923, 21845, 0, 0, 0),
+    avm_cdf3(10923, 21845, 0, 0, 0),
+    avm_cdf3(25475, 29789, 1, 0, 0),
+];
+const DEFAULT_COEFF_BASE_LF_EOB_Y_CDFS: [[u16; 9]; 4] = [
+    avm_cdf5(27486, 31140, 31779, 32064, 0, -1, -2),
+    avm_cdf5(28263, 31142, 31813, 32057, 0, -1, -1),
+    avm_cdf5(27578, 30405, 31202, 31448, 0, -1, -1),
+    avm_cdf5(29800, 32145, 32589, 32665, 1, 1, 1),
+];
 const DEFAULT_COEFF_BASE_LF_EOB_UV_CTX0_CDF: [u16; 9] =
     avm_cdf5(28950, 31443, 32009, 32257, 1, 0, 0);
 const DEFAULT_EOB_EXTRA_CDF: [u16; 6] = avm_cdf2(16391, 0, 0, 0);
@@ -486,15 +500,86 @@ const DEFAULT_COEFF_BASE_LF_UV_CDFS: [[u16; 10]; 12] = [
     avm_cdf6(7197, 15954, 20986, 24934, 27737, 0, -1, -1),
     avm_cdf6(4820, 9488, 11701, 14065, 16248, 0, -2, -1),
 ];
+const DEFAULT_COEFF_BASE_Y_CDFS: [[u16; 8]; 20] = [
+    avm_cdf4(12360, 26392, 29943, -1, 0, -1),
+    avm_cdf4(7246, 19496, 26530, 1, 0, 0),
+    avm_cdf4(4008, 12605, 18928, 1, 1, 1),
+    avm_cdf4(3148, 9393, 14900, 1, 1, 1),
+    avm_cdf4(2543, 7526, 12021, 1, 1, 1),
+    avm_cdf4(8192, 16384, 24576, 0, 0, 0),
+    avm_cdf4(8192, 16384, 24576, 0, 0, 0),
+    avm_cdf4(8192, 16384, 24576, 0, 0, 0),
+    avm_cdf4(8192, 16384, 24576, 0, 0, 0),
+    avm_cdf4(8192, 16384, 24576, 0, 0, 0),
+    avm_cdf4(8192, 16384, 24576, 0, 0, 0),
+    avm_cdf4(8192, 16384, 24576, 0, 0, 0),
+    avm_cdf4(8192, 16384, 24576, 0, 0, 0),
+    avm_cdf4(8192, 16384, 24576, 0, 0, 0),
+    avm_cdf4(8192, 16384, 24576, 0, 0, 0),
+    avm_cdf4(28014, 31534, 32060, 0, -1, 0),
+    avm_cdf4(13135, 23487, 28599, 0, 0, 0),
+    avm_cdf4(7049, 15368, 20768, 1, 1, 1),
+    avm_cdf4(3109, 8054, 12383, 1, 0, 0),
+    avm_cdf4(8192, 16384, 24576, 0, 0, 0),
+];
+const DEFAULT_COEFF_BASE_LF_Y_CDFS: [[u16; 10]; 21] = [
+    avm_cdf6(5461, 10923, 16384, 21845, 27307, 0, 0, 0),
+    avm_cdf6(1828, 16851, 24012, 28649, 30422, -1, 1, 1),
+    avm_cdf6(6923, 16016, 21706, 27149, 29436, 0, 0, 1),
+    avm_cdf6(5490, 8820, 15814, 20244, 24021, 1, 1, -2),
+    avm_cdf6(3032, 8030, 13087, 17462, 21741, 0, 0, 0),
+    avm_cdf6(2261, 6418, 9159, 11973, 15591, 1, 0, 1),
+    avm_cdf6(2300, 5287, 8547, 12143, 15837, 1, 1, 0),
+    avm_cdf6(1698, 5197, 8275, 11449, 12212, 0, 1, 1),
+    avm_cdf6(588, 2906, 4192, 5998, 7090, 1, 1, 1),
+    avm_cdf6(12754, 29010, 31539, 32136, 32523, 1, 0, 0),
+    avm_cdf6(7974, 23312, 28743, 31187, 32129, 1, 0, 1),
+    avm_cdf6(6004, 17753, 25489, 28906, 30692, 1, 0, 1),
+    avm_cdf6(5318, 12906, 20831, 25848, 28911, 1, 1, 1),
+    avm_cdf6(3337, 10161, 16413, 20903, 24729, 1, 1, 1),
+    avm_cdf6(2632, 8256, 13389, 18349, 22057, 1, 1, 1),
+    avm_cdf6(1647, 4981, 8018, 10713, 12930, 1, 0, 1),
+    avm_cdf6(17458, 29871, 32000, 32546, 32702, 1, 1, 1),
+    avm_cdf6(10512, 24503, 29646, 31529, 32218, 1, 1, 1),
+    avm_cdf6(6509, 17436, 24062, 28298, 30439, 1, 1, 1),
+    avm_cdf6(4334, 12843, 19639, 24807, 27809, 1, 1, 0),
+    avm_cdf6(2763, 7942, 12551, 16873, 20575, 1, 1, 1),
+];
 const DEFAULT_COEFF_BR_UV_CDFS: [[u16; 8]; 4] = [
     avm_cdf4(20014, 26541, 29552, 0, -1, -2),
     avm_cdf4(20674, 27680, 30329, 1, 0, 1),
     avm_cdf4(16228, 24293, 28314, 1, 0, 0),
     avm_cdf4(9580, 16283, 20959, 1, 0, 0),
 ];
+const DEFAULT_COEFF_BR_Y_CDFS: [[u16; 8]; 7] = [
+    avm_cdf4(22305, 28743, 30345, 0, -1, -1),
+    avm_cdf4(22663, 29948, 31320, 1, 0, 1),
+    avm_cdf4(19776, 28658, 30435, 1, 0, 1),
+    avm_cdf4(15436, 25313, 28181, 1, 0, 1),
+    avm_cdf4(11214, 20671, 24854, 1, 0, 1),
+    avm_cdf4(8548, 16982, 21766, 1, 0, 1),
+    avm_cdf4(5729, 11993, 17176, 1, 0, 1),
+];
+const DEFAULT_COEFF_BR_LF_Y_CDFS: [[u16; 8]; 14] = [
+    avm_cdf4(7943, 14193, 20775, -1, -1, -2),
+    avm_cdf4(14297, 22400, 26238, 1, 1, -1),
+    avm_cdf4(10557, 18683, 22550, 1, 1, 0),
+    avm_cdf4(8289, 16068, 18454, 1, 1, -2),
+    avm_cdf4(5258, 10730, 13709, 1, 1, 0),
+    avm_cdf4(3933, 8166, 10680, 1, 1, 0),
+    avm_cdf4(2465, 5325, 6625, 1, 1, 0),
+    avm_cdf4(10865, 16430, 19691, 0, -1, -1),
+    avm_cdf4(14571, 22733, 26106, 0, 1, 0),
+    avm_cdf4(14072, 23021, 25971, 1, 0, 0),
+    avm_cdf4(11558, 20253, 23235, 1, 0, 1),
+    avm_cdf4(8603, 16200, 19466, 1, 1, 1),
+    avm_cdf4(6641, 13086, 16612, 1, 0, 1),
+    avm_cdf4(4240, 9043, 11946, 1, 1, 1),
+];
 const DEFAULT_COEFF_LPS_LF_CTX0_CDF: [u16; 8] = avm_cdf4(7943, 14193, 20775, -1, -1, -2);
 const DEFAULT_DC_SIGN_Y_CTX0_CDF: [u16; 6] = avm_cdf2(15831, 1, 1, 1);
 const DEFAULT_DC_SIGN_Y_CTX1_CDF: [u16; 6] = avm_cdf2(13632, 1, 0, 0);
+const DEFAULT_DC_SIGN_Y_CTX2_CDF: [u16; 6] = avm_cdf2(19041, 1, 0, 0);
 const DEFAULT_PALETTE_Y_MODE_CDF: [u16; 6] = avm_cdf2(30045, -2, -2, -2);
 const DEFAULT_PALETTE_Y_SIZE_CDF: [u16; 11] =
     avm_cdf7(8779, 15095, 20777, 24903, 27923, 30403, -1, -1, -2);
@@ -1863,12 +1948,14 @@ fn write_luma_palette_residual_coefficients(
     palette: &Av2LumaPalette444,
     contexts: &mut Av2TxbEntropyContexts,
 ) {
-    // AV2 v1.0.0 palette prediction supplies the reconstructed luma samples
-    // from palette colors and the decoded color-index map. The residual path
-    // therefore emits all-zero luma TXBs. Chroma palette is not legal in this
-    // AV2 branch: av2_allow_palette() accepts PLANE_TYPE_Y only, and AVM keeps
-    // palette_size[1] at zero. Chroma therefore remains on an allowed residual
-    // path even though the public FrameForge leaf and input packet are 8x8.
+    // AV2 v1.0.0 Sections 5.20.8.4 palette_tokens() and 5.20.7.27 coeffs():
+    // palette supplies a luma predictor, not an escape-coded lossless sample
+    // stream. Blocks with more than eight luma values therefore need normal
+    // lossless TX_4X4 coefficients for original_y - palette_prediction_y.
+    // Chroma palette is not legal in this AV2 branch: av2_allow_palette()
+    // accepts PLANE_TYPE_Y only, and AVM keeps palette_size[1] at zero. Chroma
+    // therefore remains on an allowed DPCM residual path even though the public
+    // FrameForge leaf and input packet are 8x8.
     let txb_width = decision
         .block_size
         .tx4x4_width()
@@ -1883,9 +1970,16 @@ fn write_luma_palette_residual_coefficients(
             let abs_col = decision.col + col;
             let skip_ctx =
                 luma_txb_skip_context(contexts.y_above[abs_col], contexts.y_left[abs_row]);
-            write_y_txb_all_zero(writer, skip_ctx);
-            contexts.y_above[abs_col] = 0;
-            contexts.y_left[abs_row] = 0;
+            let dc_sign_ctx = dc_sign_context(contexts.y_above[abs_col], contexts.y_left[abs_row]);
+            let coefficients = luma_palette_tx4x4_coefficients(
+                palette,
+                abs_col * TX4X4_SIZE,
+                abs_row * TX4X4_SIZE,
+            );
+            let (context, _) =
+                write_luma_palette_residual_txb(writer, skip_ctx, dc_sign_ctx, &coefficients);
+            contexts.y_above[abs_col] = context;
+            contexts.y_left[abs_row] = context;
         }
     }
 
@@ -1978,6 +2072,25 @@ fn write_v_lossless_dc_txb(writer: &mut Av2EntropyWriter, skip_ctx: u8, sample: 
     writer.write_literal("tile.coeff.v.dc_sign_negative", u32::from(negative), 1);
     write_uv_dc_high_range(writer, level);
     nonzero_dc_entropy_context(negative)
+}
+
+fn luma_palette_tx4x4_coefficients(
+    palette: &Av2LumaPalette444,
+    x0: usize,
+    y0: usize,
+) -> [i32; TX4X4_SAMPLES] {
+    let mut residual = [0i32; TX4X4_SAMPLES];
+    for local_y in 0..TX4X4_SIZE {
+        let y = y0 + local_y;
+        for local_x in 0..TX4X4_SIZE {
+            let x = x0 + local_x;
+            let original = i32::from(palette.y_sample(x, y));
+            let predicted = i32::from(palette.luma_prediction_sample(x, y));
+            residual[local_y * TX4X4_SIZE + local_x] = original - predicted;
+        }
+    }
+
+    av2_fwht4x4(&residual)
 }
 
 fn chroma_bdpcm_horz_tx4x4_coefficients(
@@ -2081,14 +2194,74 @@ fn av2_fwht4x4(input: &[i32; TX4X4_SAMPLES]) -> [i32; TX4X4_SAMPLES] {
     output
 }
 
+fn write_luma_palette_residual_txb(
+    writer: &mut Av2EntropyWriter,
+    skip_ctx: u8,
+    dc_sign_ctx: u8,
+    coefficients: &[i32; TX4X4_SAMPLES],
+) -> (u8, bool) {
+    let levels = lossless_coefficient_levels(coefficients);
+    let Some(eob) = tx4x4_eob(&levels) else {
+        write_y_txb_all_zero(writer, skip_ctx);
+        return (0, false);
+    };
+
+    write_y_txb_nonzero(writer, skip_ctx);
+    write_eob_y(writer, eob);
+
+    for scan_index in (1..eob).rev() {
+        let pos = TX4X4_SCAN[scan_index];
+        let level = levels[pos];
+        let coeff_ctx = luma_nz_map_context(&levels, pos, scan_index, scan_index + 1 == eob);
+        write_luma_coefficient_level(
+            writer,
+            &levels,
+            pos,
+            scan_index + 1 == eob,
+            coeff_ctx,
+            level,
+        );
+    }
+
+    let dc_level = levels[0];
+    let dc_ctx = luma_nz_map_context(&levels, 0, 0, eob == 1);
+    write_luma_coefficient_level(writer, &levels, 0, eob == 1, dc_ctx, dc_level);
+
+    let mut cul_level = 0u32;
+    let mut dc_val = 0i32;
+    let mut hr_level_avg = 0u32;
+    for scan_index in (0..eob).rev() {
+        let pos = TX4X4_SCAN[scan_index];
+        let level = levels[pos];
+        if level == 0 {
+            continue;
+        }
+        let negative = coefficients[pos] < 0;
+        if scan_index == 0 {
+            write_y_dc_sign(writer, negative, dc_sign_ctx);
+            dc_val = if negative {
+                -(level as i32)
+            } else {
+                level as i32
+            };
+        } else {
+            writer.write_literal("tile.coeff.y.ac_sign_negative", u32::from(negative), 1);
+        }
+        write_luma_high_range(writer, pos, level, &mut hr_level_avg);
+        cul_level += level;
+    }
+
+    (lossless_entropy_context(cul_level, dc_val), true)
+}
+
 fn write_chroma_bdpcm_txb(
     writer: &mut Av2EntropyWriter,
     plane: Av2ChromaPlane,
     skip_ctx: u8,
     coefficients: &[i32; TX4X4_SAMPLES],
 ) -> (u8, bool) {
-    let levels = chroma_coefficient_levels(coefficients);
-    let Some(eob) = chroma_eob(&levels) else {
+    let levels = lossless_coefficient_levels(coefficients);
+    let Some(eob) = tx4x4_eob(&levels) else {
         match plane {
             Av2ChromaPlane::U => write_u_txb_all_zero(writer, skip_ctx),
             Av2ChromaPlane::V => write_v_txb_all_zero(writer, skip_ctx),
@@ -2149,10 +2322,10 @@ fn write_chroma_bdpcm_txb(
         cul_level += level;
     }
 
-    (chroma_entropy_context(cul_level, dc_val), true)
+    (lossless_entropy_context(cul_level, dc_val), true)
 }
 
-fn chroma_coefficient_levels(coefficients: &[i32; TX4X4_SAMPLES]) -> [u32; TX4X4_SAMPLES] {
+fn lossless_coefficient_levels(coefficients: &[i32; TX4X4_SAMPLES]) -> [u32; TX4X4_SAMPLES] {
     let mut levels = [0u32; TX4X4_SAMPLES];
     for (index, &coefficient) in coefficients.iter().enumerate() {
         assert_eq!(
@@ -2165,7 +2338,7 @@ fn chroma_coefficient_levels(coefficients: &[i32; TX4X4_SAMPLES]) -> [u32; TX4X4
     levels
 }
 
-fn chroma_eob(levels: &[u32; TX4X4_SAMPLES]) -> Option<usize> {
+fn tx4x4_eob(levels: &[u32; TX4X4_SAMPLES]) -> Option<usize> {
     TX4X4_SCAN
         .iter()
         .position(|&pos| levels[pos] != 0)
@@ -2175,6 +2348,28 @@ fn chroma_eob(levels: &[u32; TX4X4_SAMPLES]) -> Option<usize> {
                 .rposition(|&pos| levels[pos] != 0)
                 .map(|index| index + 1)
         })
+}
+
+fn write_eob_y(writer: &mut Av2EntropyWriter, eob: usize) {
+    let (eob_pt, eob_extra) = eob_pos_token(eob);
+    let mut cdf = DEFAULT_EOB_MULTI16_Y_CTX0_CDF;
+    writer.write_symbol("tile.coeff.y.eob_pt_tx4x4", eob_pt - 1, &mut cdf, 5, false);
+
+    let eob_offset_bits = eob_offset_bits(eob_pt);
+    if eob_offset_bits > 0 {
+        let eob_shift = eob_offset_bits - 1;
+        let bit = (eob_extra & (1 << eob_shift)) != 0;
+        let mut extra_cdf = DEFAULT_EOB_EXTRA_CDF;
+        writer.write_symbol(
+            "tile.coeff.y.eob_extra_bit",
+            usize::from(bit),
+            &mut extra_cdf,
+            2,
+            false,
+        );
+        let low_bits = eob_extra & ((1 << eob_shift) - 1);
+        writer.write_literal("tile.coeff.y.eob_extra", low_bits as u32, eob_shift as u8);
+    }
 }
 
 fn write_eob_uv(writer: &mut Av2EntropyWriter, eob: usize) {
@@ -2272,6 +2467,99 @@ fn write_chroma_coefficient_level(
     }
 }
 
+fn write_luma_coefficient_level(
+    writer: &mut Av2EntropyWriter,
+    levels: &[u32; TX4X4_SAMPLES],
+    pos: usize,
+    is_eob_coefficient: bool,
+    coeff_ctx: usize,
+    level: u32,
+) {
+    let limits = luma_lf_limits(pos);
+    if is_eob_coefficient {
+        assert!(level > 0, "AV2 EOB coefficient must be non-zero");
+        if limits {
+            let mut cdf = DEFAULT_COEFF_BASE_LF_EOB_Y_CDFS[coeff_ctx];
+            writer.write_symbol(
+                "tile.coeff.y.base_lf_eob",
+                level.min(5) as usize - 1,
+                &mut cdf,
+                5,
+                false,
+            );
+            if level > 4 {
+                write_luma_low_range(writer, levels, pos, true, level - 5);
+            }
+        } else {
+            let mut cdf = DEFAULT_COEFF_BASE_EOB_Y_CDFS[coeff_ctx];
+            writer.write_symbol(
+                "tile.coeff.y.base_eob",
+                level.min(3) as usize - 1,
+                &mut cdf,
+                3,
+                false,
+            );
+            if level > 2 {
+                write_luma_low_range(writer, levels, pos, false, level - 3);
+            }
+        }
+    } else if limits {
+        let mut cdf = DEFAULT_COEFF_BASE_LF_Y_CDFS[coeff_ctx];
+        writer.write_symbol(
+            "tile.coeff.y.base_lf",
+            level.min(5) as usize,
+            &mut cdf,
+            6,
+            false,
+        );
+        if level > 4 {
+            write_luma_low_range(writer, levels, pos, true, level - 5);
+        }
+    } else {
+        let mut cdf = DEFAULT_COEFF_BASE_Y_CDFS[coeff_ctx];
+        writer.write_symbol(
+            "tile.coeff.y.base",
+            level.min(3) as usize,
+            &mut cdf,
+            4,
+            false,
+        );
+        if level > 2 {
+            write_luma_low_range(writer, levels, pos, false, level - 3);
+        }
+    }
+}
+
+fn write_luma_low_range(
+    writer: &mut Av2EntropyWriter,
+    levels: &[u32; TX4X4_SAMPLES],
+    pos: usize,
+    lf: bool,
+    base_range: u32,
+) {
+    if lf {
+        let br_ctx = luma_br_lf_context(levels, pos);
+        let mut cdf = DEFAULT_COEFF_BR_LF_Y_CDFS[br_ctx];
+        writer.write_symbol(
+            "tile.coeff.y.low_range_lf",
+            base_range.min(3) as usize,
+            &mut cdf,
+            4,
+            false,
+        );
+    } else {
+        let br_ctx = luma_br_context(levels, pos);
+        let mut cdf = DEFAULT_COEFF_BR_Y_CDFS[br_ctx];
+        writer.write_symbol(
+            "tile.coeff.y.low_range",
+            base_range.min(3) as usize,
+            &mut cdf,
+            4,
+            false,
+        );
+    }
+}
+
 fn write_chroma_low_range(
     writer: &mut Av2EntropyWriter,
     levels: &[u32; TX4X4_SAMPLES],
@@ -2287,6 +2575,28 @@ fn write_chroma_low_range(
         4,
         false,
     );
+}
+
+fn write_luma_high_range(
+    writer: &mut Av2EntropyWriter,
+    pos: usize,
+    level: u32,
+    hr_level_avg: &mut u32,
+) {
+    let limits = luma_lf_limits(pos);
+    let threshold = if limits { 7 } else { 5 };
+    if level <= threshold {
+        return;
+    }
+    let decoded_base = threshold + 1;
+    let high_range = level.saturating_sub(decoded_base);
+    write_adaptive_high_range_with_context(
+        writer,
+        "tile.coeff.y.high_range",
+        high_range,
+        *hr_level_avg,
+    );
+    *hr_level_avg = (*hr_level_avg + high_range) >> 1;
 }
 
 fn write_chroma_high_range(
@@ -2327,6 +2637,21 @@ fn chroma_nz_map_context(
     chroma_lower_levels_context(levels, pos, plane)
 }
 
+fn luma_nz_map_context(
+    levels: &[u32; TX4X4_SAMPLES],
+    pos: usize,
+    scan_index: usize,
+    is_eob_coefficient: bool,
+) -> usize {
+    if is_eob_coefficient {
+        return get_lower_levels_ctx_eob(scan_index);
+    }
+    if luma_lf_limits(pos) {
+        return luma_lower_levels_lf_context(levels, pos);
+    }
+    luma_lower_levels_context(levels, pos)
+}
+
 fn get_lower_levels_ctx_eob(scan_index: usize) -> usize {
     if scan_index == 0 {
         0
@@ -2339,14 +2664,53 @@ fn get_lower_levels_ctx_eob(scan_index: usize) -> usize {
     }
 }
 
+fn luma_lower_levels_lf_context(levels: &[u32; TX4X4_SAMPLES], pos: usize) -> usize {
+    let mag = tx4x4_level_at(levels, pos, 0, 1).min(5)
+        + tx4x4_level_at(levels, pos, 1, 0).min(5)
+        + tx4x4_level_at(levels, pos, 1, 1).min(5)
+        + tx4x4_level_at(levels, pos, 0, 2).min(5)
+        + tx4x4_level_at(levels, pos, 2, 0).min(5);
+    let row = pos / TX4X4_SIZE;
+    let col = pos % TX4X4_SIZE;
+    let ctx = (mag + 1) >> 1;
+    if pos == 0 {
+        return ctx.min(8) as usize;
+    }
+    if row + col < 2 {
+        return ctx.min(6) as usize + 9;
+    }
+    ctx.min(4) as usize + 16
+}
+
+fn luma_lower_levels_context(levels: &[u32; TX4X4_SAMPLES], pos: usize) -> usize {
+    if pos == 0 {
+        return 0;
+    }
+    let mag = tx4x4_level_at(levels, pos, 0, 1).min(3)
+        + tx4x4_level_at(levels, pos, 1, 0).min(3)
+        + tx4x4_level_at(levels, pos, 1, 1).min(3)
+        + tx4x4_level_at(levels, pos, 0, 2).min(3)
+        + tx4x4_level_at(levels, pos, 2, 0).min(3);
+    let row = pos / TX4X4_SIZE;
+    let col = pos % TX4X4_SIZE;
+    let ctx = ((mag + 1) >> 1).min(4) as usize;
+    if row + col < 6 {
+        ctx
+    } else if row + col < 8 {
+        ctx + 5
+    } else {
+        ctx + 10
+    }
+}
+
 fn chroma_lower_levels_lf_context(
     levels: &[u32; TX4X4_SAMPLES],
     pos: usize,
     plane: Av2ChromaPlane,
 ) -> usize {
-    let mag = chroma_level_at(levels, pos, 0, 1).min(5)
-        + chroma_level_at(levels, pos, 1, 0).min(5)
-        + chroma_level_at(levels, pos, 1, 1).min(5);
+    let mag = tx4x4_level_at(levels, pos, 0, 1).min(5)
+        + tx4x4_level_at(levels, pos, 1, 0).min(5)
+        + tx4x4_level_at(levels, pos, 1, 1).min(5);
     let ctx = ((mag + 1) >> 1).min(3) as usize;
     chroma_context_with_plane_offset(ctx, plane)
 }
@@ -2356,9 +2720,9 @@ fn chroma_lower_levels_context(
     pos: usize,
     plane: Av2ChromaPlane,
 ) -> usize {
-    let mag = chroma_level_at(levels, pos, 0, 1).min(3)
-        + chroma_level_at(levels, pos, 1, 0).min(3)
-        + chroma_level_at(levels, pos, 1, 1).min(3);
+    let mag = tx4x4_level_at(levels, pos, 0, 1).min(3)
+        + tx4x4_level_at(levels, pos, 1, 0).min(3)
+        + tx4x4_level_at(levels, pos, 1, 1).min(3);
     let ctx = ((mag + 1) >> 1).min(3) as usize;
     chroma_context_with_plane_offset(ctx, plane)
 }
@@ -2371,13 +2735,32 @@ fn chroma_context_with_plane_offset(ctx: usize, plane: Av2ChromaPlane) -> usize 
 }
 
 fn chroma_br_context(levels: &[u32; TX4X4_SAMPLES], pos: usize) -> usize {
-    let mag = chroma_level_at(levels, pos, 0, 1)
-        + chroma_level_at(levels, pos, 1, 0)
-        + chroma_level_at(levels, pos, 1, 1);
+    let mag = tx4x4_level_at(levels, pos, 0, 1)
+        + tx4x4_level_at(levels, pos, 1, 0)
+        + tx4x4_level_at(levels, pos, 1, 1);
     ((mag + 1) >> 1).min(3) as usize
 }
 
-fn chroma_level_at(
+fn luma_br_lf_context(levels: &[u32; TX4X4_SAMPLES], pos: usize) -> usize {
+    let mag = tx4x4_level_at(levels, pos, 0, 1).min(5)
+        + tx4x4_level_at(levels, pos, 1, 0).min(5)
+        + tx4x4_level_at(levels, pos, 1, 1).min(5);
+    let mag = ((mag + 1) >> 1).min(6) as usize;
+    if pos == 0 {
+        mag
+    } else {
+        mag + 7
+    }
+}
+
+fn luma_br_context(levels: &[u32; TX4X4_SAMPLES], pos: usize) -> usize {
+    let mag = tx4x4_level_at(levels, pos, 0, 1).min(5)
+        + tx4x4_level_at(levels, pos, 1, 0).min(5)
+        + tx4x4_level_at(levels, pos, 1, 1).min(5);
+    ((mag + 1) >> 1).min(6) as usize
+}
+
+fn tx4x4_level_at(
     levels: &[u32; TX4X4_SAMPLES],
     pos: usize,
     row_delta: usize,
@@ -2398,7 +2781,13 @@ fn chroma_lf_limits(pos: usize) -> bool {
     row + col < 1
 }
 
-fn chroma_entropy_context(cul_level: u32, dc_val: i32) -> u8 {
+fn luma_lf_limits(pos: usize) -> bool {
+    let row = pos / TX4X4_SIZE;
+    let col = pos % TX4X4_SIZE;
+    row + col < 4
+}
+
+fn lossless_entropy_context(cul_level: u32, dc_val: i32) -> u8 {
     let mut context = cul_level.min(7) as u8;
     if dc_val < 0 {
         context |= 1 << 3;
@@ -2429,9 +2818,17 @@ fn write_y_txb_all_zero(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
             "tile.coeff.y.txb_all_zero_tx4x4_ctx1",
             DEFAULT_TXB_SKIP_Y_TX4X4_CTX1_CDF,
         ),
+        2 => (
+            "tile.coeff.y.txb_all_zero_tx4x4_ctx2",
+            DEFAULT_TXB_SKIP_Y_TX4X4_CTX2_CDF,
+        ),
         3 => (
             "tile.coeff.y.txb_all_zero_tx4x4_ctx3",
             DEFAULT_TXB_SKIP_Y_TX4X4_CTX3_CDF,
+        ),
+        4 => (
+            "tile.coeff.y.txb_all_zero_tx4x4_ctx4",
+            DEFAULT_TXB_SKIP_Y_TX4X4_CTX4_CDF,
         ),
         5 => (
             "tile.coeff.y.txb_all_zero_tx4x4_ctx5",
@@ -2448,9 +2845,17 @@ fn write_y_txb_nonzero(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
             "tile.coeff.y.txb_nonzero_tx4x4_ctx1",
             DEFAULT_TXB_SKIP_Y_TX4X4_CTX1_CDF,
         ),
+        2 => (
+            "tile.coeff.y.txb_nonzero_tx4x4_ctx2",
+            DEFAULT_TXB_SKIP_Y_TX4X4_CTX2_CDF,
+        ),
         3 => (
             "tile.coeff.y.txb_nonzero_tx4x4_ctx3",
             DEFAULT_TXB_SKIP_Y_TX4X4_CTX3_CDF,
+        ),
+        4 => (
+            "tile.coeff.y.txb_nonzero_tx4x4_ctx4",
+            DEFAULT_TXB_SKIP_Y_TX4X4_CTX4_CDF,
         ),
         5 => (
             "tile.coeff.y.txb_nonzero_tx4x4_ctx5",
@@ -2562,8 +2967,7 @@ fn write_v_txb_all_zero(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
 }
 
 fn write_eob_one_y(writer: &mut Av2EntropyWriter) {
-    let mut cdf = DEFAULT_EOB_MULTI16_Y_CTX0_CDF;
-    writer.write_symbol("tile.coeff.y.eob_pt_tx4x4_eob1", 0, &mut cdf, 5, false);
+    write_eob_y(writer, 1);
 }
 
 fn write_eob_one_uv(writer: &mut Av2EntropyWriter) {
@@ -2608,6 +3012,10 @@ fn write_uv_dc_level(writer: &mut Av2EntropyWriter, level: u16) {
 }
 
 fn write_y_negative_dc_sign(writer: &mut Av2EntropyWriter, dc_sign_ctx: u8) {
+    write_y_dc_sign(writer, true, dc_sign_ctx);
+}
+
+fn write_y_dc_sign(writer: &mut Av2EntropyWriter, negative: bool, dc_sign_ctx: u8) {
     let (name, mut cdf) = match dc_sign_ctx {
         0 => (
             "tile.coeff.y.dc_sign_negative_ctx0",
@@ -2617,9 +3025,13 @@ fn write_y_negative_dc_sign(writer: &mut Av2EntropyWriter, dc_sign_ctx: u8) {
             "tile.coeff.y.dc_sign_negative_ctx1",
             DEFAULT_DC_SIGN_Y_CTX1_CDF,
         ),
+        2 => (
+            "tile.coeff.y.dc_sign_negative_ctx2",
+            DEFAULT_DC_SIGN_Y_CTX2_CDF,
+        ),
         _ => panic!("unsupported AV2 luma DC sign context {dc_sign_ctx}"),
     };
-    writer.write_symbol(name, 1, &mut cdf, 2, false);
+    writer.write_symbol(name, usize::from(negative), &mut cdf, 2, false);
 }
 
 fn write_y_dc_high_range(writer: &mut Av2EntropyWriter, level: u16) {
@@ -2911,5 +3323,18 @@ mod tests {
             .iter()
             .any(|field| field.name == "tile.partition.do_split"));
         assert!(payload.symbol_bits > 0);
+    }
+
+    #[test]
+    fn av2_chroma_eob_supports_last_tx4x4_scan_position() {
+        let mut levels = [0u32; TX4X4_SAMPLES];
+        levels[*TX4X4_SCAN.last().expect("TX_4X4 scan is non-empty")] = 1;
+
+        // AV2 v1.0.0 Section 5.20.7.27 coeffs(), mirrored by AVM coefficient
+        // coding, permits EOB values up to the transform sample count. A
+        // nonzero final scan coefficient must therefore signal eob=16, not
+        // wrap to txb_skip=1 in narrower RTL state.
+        assert_eq!(tx4x4_eob(&levels), Some(TX4X4_SAMPLES));
+        assert_eq!(eob_pos_token(TX4X4_SAMPLES), (5, 7));
     }
 }

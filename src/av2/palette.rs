@@ -16,6 +16,8 @@ pub(crate) struct Av2LumaPaletteBlock444 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Av2LumaPalette444 {
     blocks: Vec<Av2LumaPaletteBlock444>,
+    y_plane: Vec<u8>,
+    luma_prediction: Vec<u8>,
     u_plane: Vec<u8>,
     v_plane: Vec<u8>,
     reconstruction: Vec<u8>,
@@ -45,6 +47,14 @@ impl Av2LumaPalette444 {
         block.indices[local_y * AV2_LUMA_PALETTE_BLOCK_SIZE + local_x]
     }
 
+    pub(crate) fn y_sample(&self, x: usize, y: usize) -> u8 {
+        self.luma_sample(&self.y_plane, x, y)
+    }
+
+    pub(crate) fn luma_prediction_sample(&self, x: usize, y: usize) -> u8 {
+        self.luma_sample(&self.luma_prediction, x, y)
+    }
+
     pub(crate) fn reconstruction(&self) -> &[u8] {
         &self.reconstruction
     }
@@ -55,6 +65,11 @@ impl Av2LumaPalette444 {
 
     pub(crate) fn v_sample(&self, x: usize, y: usize) -> u8 {
         self.chroma_sample(&self.v_plane, x, y)
+    }
+
+    fn luma_sample(&self, plane: &[u8], x: usize, y: usize) -> u8 {
+        assert!(x < self.width && y < self.height);
+        plane[y * self.width + x]
     }
 
     fn chroma_sample(&self, plane: &[u8], x: usize, y: usize) -> u8 {
@@ -101,7 +116,7 @@ pub(crate) fn build_luma_palette_444(
     let blocks_wide = geometry.width / AV2_LUMA_PALETTE_BLOCK_SIZE;
     let blocks_high = geometry.height / AV2_LUMA_PALETTE_BLOCK_SIZE;
     let mut blocks = Vec::with_capacity(blocks_wide * blocks_high);
-    let mut reconstruction = vec![0; expected_len];
+    let mut luma_prediction = vec![0; plane_len];
 
     for block_y in 0..blocks_high {
         for block_x in 0..blocks_wide {
@@ -120,22 +135,23 @@ pub(crate) fn build_luma_palette_444(
                 for local_x in 0..AV2_LUMA_PALETTE_BLOCK_SIZE {
                     let local_index = local_y * AV2_LUMA_PALETTE_BLOCK_SIZE + local_x;
                     let dst_index = (y0 + local_y) * geometry.width + x0 + local_x;
-                    reconstruction[dst_index] =
+                    luma_prediction[dst_index] =
                         block.colors[usize::from(block.indices[local_index])];
                 }
             }
             blocks.push(block);
         }
     }
-    // AV2 v1.0.0 only permits palette_mode_info() on the luma plane in this
-    // branch of AVM. FrameForge therefore keeps luma palette-coded and carries
-    // U/V through a lossless chroma residual path. The model reconstruction is
-    // exact here; tile.rs is responsible for matching that with BDPCM symbols.
-    reconstruction[plane_len..2 * plane_len].copy_from_slice(u_plane);
-    reconstruction[2 * plane_len..3 * plane_len].copy_from_slice(v_plane);
+    // AV2 v1.0.0 palette_mode_info() codes a luma predictor and then the
+    // residual coefficient path corrects any samples that are not represented
+    // exactly by the palette. Keep both the predictor and final reconstruction
+    // explicit so high-color screen blocks cannot silently become lossy.
+    let reconstruction = frame.to_vec();
 
     Ok(Av2LumaPalette444 {
         blocks,
+        y_plane: y_plane.to_vec(),
+        luma_prediction,
         u_plane: u_plane.to_vec(),
         v_plane: v_plane.to_vec(),
         reconstruction,

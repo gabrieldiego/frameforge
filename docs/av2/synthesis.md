@@ -259,6 +259,103 @@ analyzer exported U/V samples through wide combinational indexed arrays. The
 current baseline fixes that by fetching one 4x4 chroma TXB at a time from the
 RAM-backed chroma store before starting the BDPCM symbolizer.
 
+## 2026-06-15 Luma Palette + Lossless Residual
+
+Measured after adding the luma residual path for palette-predicted blocks.
+Luma is still signalled through AV2 palette syntax, but the palette predictor
+is followed by lossless `TX_4X4` coefficient syntax so blocks with more than
+eight luma colors reconstruct exactly. Chroma remains horizontal BDPCM with
+lossless coefficient coding.
+
+This pass also replaced the analyzer's wide per-cycle dynamic palette query
+with a one-leaf metadata cache. The top encoder now loads the current 8x8
+leaf's palette colors, indices, row flags, and cache size before entering
+`ST_LEAF`. That trades a few block RAMs for a much smaller live combinational
+query path.
+
+Configuration:
+
+- command: `make synth CODEC=av2`
+- DUT: `av2-encoder`
+- RTL top: `ff_av2_encoder`
+- board: `synth/boards/arty-z7-10.env`
+- clock metadata: `25 MHz`
+- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
+- memory limit: 3072 MiB
+- supported RTL input subset: 8-bit 4:4:4, up to 64x64, black frames,
+  luma-palette 8x8 predictors with lossless luma residuals, and
+  horizontal-BDPCM chroma residuals.
+
+Validation before synthesis:
+
+```sh
+make validate CODEC=av2 \
+  INPUT=verification/generated/test_vectors/palette_escape_8x8_1f_yuv444p8.yuv \
+  WIDTH=8 HEIGHT=8 FRAMES=1 FORMAT=yuv444p8 VALIDATE_SYNTH=0
+make validate CODEC=av2 \
+  INPUT=verification/generated/test_vectors/palette_escape_64x64_1f_yuv444p8.yuv \
+  WIDTH=64 HEIGHT=64 FRAMES=1 FORMAT=yuv444p8 VALIDATE_SYNTH=0
+make validate-set CODEC=av2 \
+  VALIDATION_SET=palette-escape-444 \
+  VALIDATION_STOP_ON_FAIL=1 \
+  VALIDATION_WITH_SYNTH=0
+```
+
+Result:
+
+- Yosys synthesis passed in 188.4 seconds.
+- Peak child RSS observed by the synthesis runner was 1134.36 MiB.
+- Runtime stayed below the 300 second review threshold and inside the 600
+  second hard timeout and 3072 MiB memory cap.
+- Post-synthesis critical-path reporting completed in 24.8 seconds with peak
+  child RSS of 1134.36 MiB and reported topological path length 126.
+- The longest top-level path starts in
+  `palette_analyzer.query_palette_colors_q`, passes through
+  `ff_av2_luma_palette_symbolizer` palette-delta bit calculation, and reaches
+  the range-coder `low_q` path.
+- Isolated `ff_av2_palette_analyzer_444` synthesis now passes in 89.3 seconds
+  with peak RSS 564.67 MiB. Before the metadata-cache rewrite, the same
+  isolated analyzer timed out at 240 seconds.
+
+Flattened Xilinx-cell estimate from
+`yosys -p 'read_json synth/out/arty-z7-10/ff_av2_encoder/ff_av2_encoder.json; hierarchy -top ff_av2_encoder; flatten; stat -tech xilinx'`:
+
+| Metric | Count |
+|---|---:|
+| Cells | 56106 |
+| Estimated LCs | 18635 |
+| CARRY4 | 2165 |
+| DSP48E1 | 11 |
+| FDCE | 3216 |
+| FDPE | 44 |
+| FDRE | 18880 |
+| LUT1 | 505 |
+| LUT2 | 5403 |
+| LUT3 | 3726 |
+| LUT4 | 2143 |
+| LUT5 | 2217 |
+| LUT6 | 10549 |
+| MUXF7 | 2186 |
+| MUXF8 | 601 |
+| RAMB36E1 | 19 |
+
+Delta from the immediately preceding luma-palette plus chroma-BDPCM baseline:
+
+| Metric | Previous | Current | Delta |
+|---|---:|---:|---:|
+| Synthesis time | 316.6 s | 188.4 s | -128.2 s |
+| Peak synthesis RSS | 1185.96 MiB | 1134.36 MiB | -51.60 MiB |
+| Cells | 89138 | 56106 | -33032 |
+| Estimated LCs | 37418 | 18635 | -18783 |
+| Topological path length | 129 | 126 | -3 |
+| RAMB36E1 | 6 | 19 | +13 |
+
+The area reduction comes from removing the analyzer's wide dynamic block
+palette query from the active symbolizer path. The RAM increase is expected:
+the current lossless path stores the Y/U/V sample planes and a larger staged
+tile payload. The staged carry buffer remains a known optimization target once
+the next functional blocks are in place.
+
 ## Retired Bring-Up Measurements
 
 Temporary AV2 fixed-output emitters existed during validation plumbing bring-up.

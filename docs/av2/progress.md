@@ -27,9 +27,11 @@ synthesis wrappers, and cocotb/Yosys entry points remains shared.
   and CDF updates. Any `TX_4X4` symbols in this path are internal AV2
   transform blocks, not public FrameForge input blocks.
 - `src/av2/palette.rs` contains the first block-local luma palette detector.
-  The current subset works on visible 8x8 `yuv444p8` blocks, keeps up to eight
-  luma colors per block, and maps additional luma values to the nearest stored
-  color. AV2 v1.0.0 Sections 5.20.8.1 and 5.20.8.4 only expose
+  The current subset works on visible 8x8 `yuv444p8` blocks and keeps up to
+  eight luma colors per block as the palette predictor. Additional luma detail
+  is carried by the lossless residual path, so high-color luma blocks no longer
+  rely on nearest-color reconstruction. AV2 v1.0.0 Sections 5.20.8.1 and
+  5.20.8.4 only expose
   luma palette syntax in `palette_mode_info()`; AVM `av2_allow_palette()` also
   accepts `PLANE_TYPE_Y` only. FrameForge AV2 therefore must use an allowed
   residual, BDPCM, or IBC-style path for chroma rather than a private chroma
@@ -45,9 +47,10 @@ synthesis wrappers, and cocotb/Yosys entry points remains shared.
   `ff_av2_palette_analyzer_444`, `ff_av2_chroma_sample_store`, and
   `ff_av2_luma_palette_symbolizer`.
 - `rtl/av2/residual/ff_av2_chroma_bdpcm_symbolizer.sv` emits the first
-  reference-aligned chroma BDPCM coefficient syntax. The analyzer fetches each
-  4x4 chroma TXB through a small RAM-backed window before the symbolizer runs,
-  avoiding a full-superblock combinational U/V sample mux.
+  reference-aligned lossless coefficient syntax for chroma BDPCM and for the
+  luma residual that follows palette prediction. The analyzer fetches each 4x4
+  TXB through a RAM-backed sample window before the symbolizer runs, avoiding a
+  full-superblock combinational sample mux.
 - `tb/av2/test_av2_encoder.py` drives the AV2 RTL block-packet stream and
   compares the RTL bitstream checksum against the software-generated bitstream
   through the shared validation path.
@@ -68,10 +71,10 @@ synthesis wrappers, and cocotb/Yosys entry points remains shared.
 - AVM v1.0.0 mirrors this by accepting palette only for `PLANE_TYPE_Y` in
   `av2_allow_palette()`, and by keeping `palette_size[1] == 0`.
 - Therefore a FrameForge AV2 PASS for arbitrary 4:4:4 screenshots cannot be
-  implemented as palette-only coding. The compliant lossless path must combine
-  8x8 luma palette where every luma sample is representable with at most eight
-  entries, plus another legal coding path for chroma and any over-limit luma
-  block.
+  implemented as palette-only coding. The current compliant lossless path
+  combines 8x8 luma palette prediction, lossless luma residual coefficient
+  coding for any palette prediction error, and horizontal-BDPCM chroma
+  residuals.
 - AV2 v1.0.0 Section 5.20.7.23 `residual()` uses `TX_4X4` transform blocks in
   lossless mode. These 4x4 units are transform blocks only; the FrameForge AV2
   coding leaf and RTL input packet remain fixed at visible 8x8 Y/U/V blocks.
@@ -145,7 +148,7 @@ make validate-set \
 
 ## Current Checks
 
-Last checked on 2026-06-14:
+Last checked on 2026-06-15:
 
 - `make validate CODEC=av2
   INPUT=verification/generated/test_vectors/av2_luma_palette_bars_64x64_1f_yuv444p8.yuv
@@ -164,19 +167,26 @@ Last checked on 2026-06-14:
   VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0`: passed all 64
   horizontal-BDPCM 4:4:4 geometries with matching SW/RTL bitstreams and
   lossless SW/RTL/REF reconstructions.
-- Local screenshot crops from 8x8 through 64x64 remain the next broader
-  lossless 4:4:4 target. Chroma now has a compliant lossless path, but luma
-  blocks with more than eight colors still need a residual, IBC, or escape-like
-  legal coding path.
+- `make validate-set CODEC=av2 VALIDATION_SET=palette-escape-444
+  VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0`: passed all 64 high-color
+  generated 4:4:4 geometries with matching SW/RTL bitstreams and lossless
+  SW/RTL/REF reconstructions. The representative 64x64 vector generated a
+  19937-byte FrameForge bitstream at 38.9395 bits per luma pixel; all reported
+  PSNR values were infinite.
 - `make synth CODEC=av2`: passed Yosys synthesis for the luma-palette plus
-  chroma-BDPCM path. The detailed baseline is recorded in
+  lossless residual path. The detailed baseline is recorded in
   [synthesis.md](synthesis.md), and quality/bitrate measurements are recorded
   in [quality-bitrate.md](quality-bitrate.md).
 
 ## Next Steps
 
-- Add a legal lossless fallback for luma blocks that exceed the current
-  eight-entry palette subset.
+- Validate the local screenshot crop set again as a real screen-content
+  workload now that the generated high-color sweep is lossless.
+- Optimize the current luma-palette symbolizer path; synthesis reports the
+  palette delta-bit calculation through the range coder as the current
+  topological critical path.
+- Replace the staged tile carry buffer with a streaming carry resolver after
+  the next functional blocks are in place.
 - Continue expanding the block partition and luma-palette decisions while
   keeping the shared top-level packet contract at visible 8x8 Y/U/V blocks
   unless a codec-specific order is clearly cheaper.
