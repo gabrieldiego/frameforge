@@ -22,3 +22,8 @@ Useful variables:
 Quality and bitrate validation baselines are recorded in
 `docs/vvc/quality-bitrate.md`. Synthesis process notes remain in
 `docs/synthesis.md`, with VVC synthesis baselines in `docs/vvc/synthesis.md`.
+
+`make validate-set` emits an aggregated markdown report; each case now includes
+`bitrate_delta` as the difference in bits-per-luma-pixel between the software
+stream and the compare stream (RTL stream when present, otherwise reference stream)
+to make throughput/quality regressions easy to spot.

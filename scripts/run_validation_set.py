@@ -7,6 +7,7 @@ import argparse
 import os
 import subprocess
 import sys
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +26,7 @@ class ValidationResult:
     status: str
     reason: str
     log_path: Path
+    bitrate_delta: str = "n/a"
 
 
 def main() -> int:
@@ -54,22 +56,42 @@ def main() -> int:
         print(f"[{index:03d}/{len(vector_paths):03d}] {path.name}", flush=True)
         result = run_validation(path, args)
         results.append(result)
-        print(f"  {result.status}: {result.reason}", flush=True)
+        print(
+            f"  {result.status}: {result.reason} "
+            f"(bitrate delta: {result.bitrate_delta})",
+            flush=True,
+        )
         if result.status != "PASS" and args.stop_on_fail:
             break
 
+    passed = [result for result in results if result.status == "PASS"]
+    bitrates = [extract_bpp_delta(result.bitrate_delta) for result in passed]
+    comparable = [value for value in bitrates if value is not None]
+
     print()
     print(f"FrameForge validation set: {args.set}")
-    print("| # | vector | result | reason | log |")
-    print("|---:|---|---|---|---|")
+    print("| # | vector | result | bitrate_delta | reason | log |")
+    print("|---:|---|---|---:|---|---|")
     for index, result in enumerate(results, start=1):
-        rel_log = result.log_path.resolve().relative_to(REPO_ROOT)
+        resolved_log = result.log_path.resolve()
+        try:
+            rel_log = resolved_log.relative_to(REPO_ROOT)
+        except ValueError:
+            rel_log = resolved_log
         print(
-            f"| {index} | {result.path.name} | {result.status} | "
+            f"| {index} | {result.path.name} | {result.status} | {result.bitrate_delta} | "
             f"{markdown_escape(result.reason)} | {rel_log} |"
         )
 
     failed = [result for result in results if result.status != "PASS"]
+    if comparable:
+        avg_delta = sum(comparable) / len(comparable)
+        min_delta = min(comparable)
+        max_delta = max(comparable)
+        print(
+            f"\nSet bitrate summary (software vs compare stream, bpp): "
+            f"avg={avg_delta:.4f} min={min_delta:.4f} max={max_delta:.4f}"
+        )
     if failed:
         print(f"\nFAIL: {len(failed)} of {len(results)} validation case(s) failed", file=sys.stderr)
         return 1
@@ -105,6 +127,7 @@ def run_validation(path: Path, args: argparse.Namespace) -> ValidationResult:
         text=True,
     )
     log_path.write_text(process.stdout)
+    bitrate_delta = extract_bitrate_delta(process.stdout, args.codec_config.name)
     if process.returncode == 0:
         reason = (
             "SW/REF checksum checks passed"
@@ -116,12 +139,14 @@ def run_validation(path: Path, args: argparse.Namespace) -> ValidationResult:
             status="PASS",
             reason=reason,
             log_path=log_path,
+            bitrate_delta=bitrate_delta,
         )
     return ValidationResult(
         path=path,
         status="FAIL",
         reason=extract_failure_reason(process.stdout),
         log_path=log_path,
+        bitrate_delta=bitrate_delta,
     )
 
 
@@ -137,6 +162,53 @@ def extract_failure_reason(output: str) -> str:
 
 def markdown_escape(value: str) -> str:
     return value.replace("|", "\\|")
+
+
+def extract_bitrate_delta(output: str, codec: str) -> str:
+    metrics = parse_bitrate_metrics(output)
+    software_bpp = metrics.get("software_bitstream")
+    if software_bpp is None:
+        return "n/a"
+
+    compare = None
+    compare_order = (
+        ("ref_bitstream", "rtl_bitstream") if codec == "av2" else ("rtl_bitstream", "ref_bitstream")
+    )
+    for candidate in compare_order:
+        if candidate in metrics:
+            compare = candidate
+            break
+
+    if compare is None:
+        return "n/a"
+    compare_bpp = metrics[compare]
+    delta = compare_bpp - software_bpp
+    if software_bpp == 0:
+        return "n/a"
+    pct = (delta / software_bpp) * 100.0
+    return f"{delta:+.4f} ({pct:+.2f}%)"
+
+
+def extract_bpp_delta(text: str) -> float | None:
+    if text == "n/a":
+        return None
+    match = re.match(r"(?P<delta>[+-]?[0-9]+(?:\.[0-9]+)?)", text)
+    if not match:
+        return None
+    return float(match.group("delta"))
+
+
+def parse_bitrate_metrics(output: str) -> dict[str, float]:
+    bpp_pattern = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s+([a-z0-9_]+)_bits_per_luma_pixel\s*$")
+    metrics: dict[str, float] = {}
+    for line in output.splitlines():
+        match = bpp_pattern.match(line.strip())
+        if not match:
+            continue
+        value = float(match.group(1))
+        label = match.group(2)
+        metrics[label] = value
+    return metrics
 
 
 if __name__ == "__main__":
