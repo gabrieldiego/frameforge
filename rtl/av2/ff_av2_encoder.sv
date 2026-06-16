@@ -1405,7 +1405,7 @@ module ff_av2_encoder #(
     end
   end
 
-  always_ff @(posedge clk or negedge rst_n) begin
+  always_ff @(posedge clk) begin
     if (!rst_n) begin
       input_error <= 1'b0;
       state_q <= ST_IDLE;

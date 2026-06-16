@@ -389,6 +389,89 @@ results in the table above. This attempt regressed to a non-zero
 this as a regression indicator and optimization target (likely `PROC_ARST` growth in
 the top-level encoder process normalization path).
 
+## 2026-06-16 Screenshot Sweeps + Multi-CTU (Regression + Synthesis)
+
+Validation and synthesis were rerun after the prior timeout-reverting change,
+using the full local AV2 screenshot geometry set and multi-CTU set.
+
+Validation configuration:
+
+```sh
+make validate-set CODEC=av2 \
+  VALIDATION_SET=screenshot-sweep-444 \
+  VALIDATION_STOP_ON_FAIL=1 \
+  VALIDATION_WITH_SYNTH=0
+make validate-set CODEC=av2 \
+  VALIDATION_SET=screenshot-multictu-444 \
+  VALIDATION_STOP_ON_FAIL=1 \
+  VALIDATION_WITH_SYNTH=0
+```
+
+Result:
+
+- `screenshot-sweep-444`: OK (64/64)
+- `screenshot-multictu-444`: OK (10/10)
+
+Synthesis configuration:
+
+- command: `make synth CODEC=av2 SYNTH_YOSYS_QUIET=0`
+- DUT: `av2-encoder`
+- RTL top: `ff_av2_encoder`
+- board: `synth/boards/arty-z7-10.env`
+- clock metadata: `25 MHz`
+- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
+- memory limit: 3072 MiB
+
+Result:
+
+- Yosys synthesis passed in 229.6 seconds.
+- Peak child RSS observed by the synthesis runner was 1129.09 MiB.
+- Runtime stayed below the 300 second review threshold.
+- Post-synthesis critical-path reporting completed in 26.0 seconds with peak
+  memory 1129.09 MiB and topological path length 126.
+- The longest topological path is still in `ff_av2_encoder` (`palette_analyzer`
+  to palette delta bit-calculation logic) with a path length of 126.
+
+Flattened Xilinx-cell estimate from
+`yosys -p 'read_json synth/out/arty-z7-10/ff_av2_encoder/ff_av2_encoder.json; hierarchy -top ff_av2_encoder; flatten; stat -tech xilinx'`:
+
+| Metric | Count |
+|---|---:|
+| Cells | 61852 |
+| Estimated LCs | 22002 |
+| CARRY4 | 2532 |
+| DSP48E1 | 15 |
+| FDCE | 1857 |
+| FDPE | 10 |
+| FDRE | 20096 |
+| LUT1 | 517 |
+| LUT2 | 5699 |
+| LUT3 | 4829 |
+| LUT4 | 2197 |
+| LUT5 | 2267 |
+| LUT6 | 12709 |
+| MUXF7 | 2437 |
+| MUXF8 | 635 |
+| RAMB36E1 | 19 |
+| RAM32M | 4 |
+| RAM64M | 1536 |
+
+Delta from the previous documented `2026-06-15` synthesis baseline (188.4 seconds,
+1134.36 MiB, 56106 cells, 18635 LCs, path length 126):
+
+| Metric | Previous | Current | Delta |
+|---|---:|---:|---:|
+| Synthesis time | 188.4 s | 229.6 s | +41.2 s |
+| Peak synthesis RSS | 1134.36 MiB | 1129.09 MiB | -5.27 MiB |
+| Cells | 56106 | 61852 | +5746 |
+| Estimated LCs | 18635 | 22002 | +3367 |
+| Topological path length | 126 | 126 | 0 |
+| RAMB36E1 | 19 | 19 | 0 |
+
+Area increased because the full-screen 64x64 + multi-CTU regression profile kept the
+full luma-palette symbolizer chain active and did not introduce further partitioning
+or sharing optimizations.
+
 ## Retired Bring-Up Measurements
 
 Temporary AV2 fixed-output emitters existed during validation plumbing bring-up.
