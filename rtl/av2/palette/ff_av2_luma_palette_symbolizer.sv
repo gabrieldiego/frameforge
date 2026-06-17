@@ -43,12 +43,20 @@ module ff_av2_luma_palette_symbolizer (
   logic [31:0] identity_row_cdf1_w;
   logic [2:0] color_ctx_w;
   logic [2:0] color_token_w;
-  logic [2:0] color_order_w [0:7];
-  logic color_status_w [0:7];
-  integer color_count_w;
-  integer write_index_w;
+  logic [2:0] color_priority0_w;
+  logic [2:0] color_priority1_w;
+  logic [2:0] color_priority2_w;
+  logic [1:0] color_priority_count_w;
+  logic color_priority0_valid_w;
+  logic color_priority1_valid_w;
+  logic color_priority2_valid_w;
+  logic color_priority0_match_w;
+  logic color_priority1_match_w;
+  logic color_priority2_match_w;
+  logic scan_is_priority_w;
+  logic [2:0] color_non_priority_before_w;
   integer scan_index_w;
-  integer cdf_symbol_w;
+  logic [2:0] cdf_symbol_w;
   logic [31:0] cdf_w [0:7];
   logic [4:0] prob_inc_w [0:7];
 
@@ -91,75 +99,87 @@ module ff_av2_luma_palette_symbolizer (
   end
 
   always @* begin
-    for (scan_index_w = 0; scan_index_w < 8; scan_index_w = scan_index_w + 1) begin
-      color_order_w[scan_index_w] = scan_index_w[2:0];
-      color_status_w[scan_index_w] = 1'b0;
-    end
-    color_count_w = 0;
     color_ctx_w = 3'd0;
+    color_priority0_w = 3'd0;
+    color_priority1_w = 3'd0;
+    color_priority2_w = 3'd0;
+    color_priority_count_w = 2'd0;
+    color_priority0_valid_w = 1'b0;
+    color_priority1_valid_w = 1'b0;
+    color_priority2_valid_w = 1'b0;
 
     if (row > 6'd0 && col > 6'd0) begin
       if (left_index == top_left_index && left_index == top_index) begin
         color_ctx_w = 3'd4;
-        color_order_w[0] = left_index;
-        color_status_w[left_index] = 1'b1;
-        color_count_w = 1;
+        color_priority0_w = left_index;
+        color_priority_count_w = 2'd1;
+        color_priority0_valid_w = 1'b1;
       end else if (left_index == top_index) begin
         color_ctx_w = 3'd3;
-        color_order_w[0] = left_index;
-        color_status_w[left_index] = 1'b1;
-        color_order_w[1] = top_left_index;
-        color_status_w[top_left_index] = 1'b1;
-        color_count_w = 2;
+        color_priority0_w = left_index;
+        color_priority1_w = top_left_index;
+        color_priority_count_w = 2'd2;
+        color_priority0_valid_w = 1'b1;
+        color_priority1_valid_w = 1'b1;
       end else if (left_index == top_left_index) begin
         color_ctx_w = 3'd2;
-        color_order_w[0] = left_index;
-        color_status_w[left_index] = 1'b1;
-        color_order_w[1] = top_index;
-        color_status_w[top_index] = 1'b1;
-        color_count_w = 2;
+        color_priority0_w = left_index;
+        color_priority1_w = top_index;
+        color_priority_count_w = 2'd2;
+        color_priority0_valid_w = 1'b1;
+        color_priority1_valid_w = 1'b1;
       end else if (top_left_index == top_index) begin
         color_ctx_w = 3'd2;
-        color_order_w[0] = top_index;
-        color_status_w[top_index] = 1'b1;
-        color_order_w[1] = left_index;
-        color_status_w[left_index] = 1'b1;
-        color_count_w = 2;
+        color_priority0_w = top_index;
+        color_priority1_w = left_index;
+        color_priority_count_w = 2'd2;
+        color_priority0_valid_w = 1'b1;
+        color_priority1_valid_w = 1'b1;
       end else begin
         color_ctx_w = 3'd1;
-        color_order_w[0] = left_index;
-        color_status_w[left_index] = 1'b1;
-        color_order_w[1] = top_index;
-        color_status_w[top_index] = 1'b1;
-        color_order_w[2] = top_left_index;
-        color_status_w[top_left_index] = 1'b1;
-        color_count_w = 3;
+        color_priority0_w = left_index;
+        color_priority1_w = top_index;
+        color_priority2_w = top_left_index;
+        color_priority_count_w = 2'd3;
+        color_priority0_valid_w = 1'b1;
+        color_priority1_valid_w = 1'b1;
+        color_priority2_valid_w = 1'b1;
       end
     end else if (row > 6'd0 || col > 6'd0) begin
       color_ctx_w = 3'd0;
       if (col == 6'd0) begin
-        color_order_w[0] = top_index;
-        color_status_w[top_index] = 1'b1;
+        color_priority0_w = top_index;
       end else begin
-        color_order_w[0] = left_index;
-        color_status_w[left_index] = 1'b1;
+        color_priority0_w = left_index;
       end
-      color_count_w = 1;
+      color_priority_count_w = 2'd1;
+      color_priority0_valid_w = 1'b1;
     end
 
-    write_index_w = color_count_w;
+    color_priority0_match_w = color_priority0_valid_w && (current_index == color_priority0_w);
+    color_priority1_match_w = color_priority1_valid_w && (current_index == color_priority1_w);
+    color_priority2_match_w = color_priority2_valid_w && (current_index == color_priority2_w);
+    color_non_priority_before_w = 3'd0;
     for (scan_index_w = 0; scan_index_w < 8; scan_index_w = scan_index_w + 1) begin
-      if (scan_index_w < palette_size && !color_status_w[scan_index_w]) begin
-        color_order_w[write_index_w] = scan_index_w[2:0];
-        write_index_w = write_index_w + 1;
+      scan_is_priority_w =
+        (color_priority0_valid_w && scan_index_w[2:0] == color_priority0_w) ||
+        (color_priority1_valid_w && scan_index_w[2:0] == color_priority1_w) ||
+        (color_priority2_valid_w && scan_index_w[2:0] == color_priority2_w);
+      if ((scan_index_w < current_index) &&
+          (scan_index_w < palette_size) &&
+          !scan_is_priority_w) begin
+        color_non_priority_before_w = color_non_priority_before_w + 3'd1;
       end
     end
 
-    color_token_w = 3'd0;
-    for (scan_index_w = 0; scan_index_w < 8; scan_index_w = scan_index_w + 1) begin
-      if (scan_index_w < palette_size && color_order_w[scan_index_w] == current_index) begin
-        color_token_w = scan_index_w[2:0];
-      end
+    if (color_priority0_match_w) begin
+      color_token_w = 3'd0;
+    end else if (color_priority1_match_w) begin
+      color_token_w = 3'd1;
+    end else if (color_priority2_match_w) begin
+      color_token_w = 3'd2;
+    end else begin
+      color_token_w = {1'b0, color_priority_count_w} + color_non_priority_before_w;
     end
   end
 
