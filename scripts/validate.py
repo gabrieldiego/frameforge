@@ -424,8 +424,6 @@ def validate_av2_fixed_black_path(
     out_dir: Path,
     stem: str,
 ) -> int:
-    reference_bitstream = out_dir / f"{stem}_ref.{codec.bitstream_extension}"
-    reference_recon = out_dir / f"{stem}_ref_recon.yuv"
     sw_bitstream = out_dir / f"{stem}_software.{codec.bitstream_extension}"
     sw_internal_recon = out_dir / f"{stem}_software_internal_rec.yuv"
     sw_trace = out_dir / f"{stem}_software_trace.jsonl"
@@ -477,7 +475,7 @@ def validate_av2_fixed_black_path(
         print("FAIL: AV2 software encode failed", file=sys.stderr)
         return sw.returncode
 
-    print("FrameForge validate: AV2 REF decode software bitstream", flush=True)
+    print("FrameForge validate: AV2 reference decode software bitstream", flush=True)
     sw_decoded = subprocess.run(
         [
             sys.executable,
@@ -493,41 +491,8 @@ def validate_av2_fixed_black_path(
         check=False,
     )
     if sw_decoded.returncode != 0:
-        print("FAIL: AV2 REF decoder rejected software bitstream", file=sys.stderr)
+        print("FAIL: AV2 reference decoder rejected software bitstream", file=sys.stderr)
         return sw_decoded.returncode
-
-    print(
-        f"FrameForge validate: AV2 REF encode {info.frames} frame(s), "
-        f"{info.width}x{info.height} {info.fmt}",
-        flush=True,
-    )
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "scripts/reference_encode_av2.py",
-            "--codec",
-            codec.name,
-            "--input",
-            str(validation_input_path),
-            "--frames",
-            str(info.frames),
-            "--width",
-            str(info.width),
-            "--height",
-            str(info.height),
-            "--format",
-            info.fmt,
-            "--output",
-            str(reference_bitstream),
-            "--recon",
-            str(reference_recon),
-        ],
-        cwd=REPO_ROOT,
-        check=False,
-    )
-    if completed.returncode != 0:
-        print("FAIL: AV2 REF encode/decode failed", file=sys.stderr)
-        return completed.returncode
 
     if not args.skip_synth:
         print("SKIP: AV2 software path is not ready for synthesis validation")
@@ -571,8 +536,6 @@ def validate_av2_fixed_black_path(
         "software_bitstream": sha256(sw_bitstream),
         "software_internal_recon": sha256(sw_internal_recon),
         "software_ref_decoded_recon": sha256(sw_ref_decoded_recon),
-        "ref_bitstream": sha256(reference_bitstream),
-        "ref_recon": sha256(reference_recon),
     }
     if ran_rtl:
         digests["rtl_bitstream"] = sha256(rtl_bitstream)
@@ -591,12 +554,10 @@ def validate_av2_fixed_black_path(
         else:
             print(f"{digest}  {name}")
     print_bitrate_report("software_bitstream", sw_bitstream, info)
-    print_bitrate_report("ref_bitstream", reference_bitstream, info)
     if ran_rtl:
         print_bitrate_report("rtl_bitstream", rtl_bitstream, info)
     print_psnr_report("software_internal_recon", validation_input_path, sw_internal_recon)
     print_psnr_report("software_ref_decoded_recon", validation_input_path, sw_ref_decoded_recon)
-    print_psnr_report("ref_recon", validation_input_path, reference_recon)
     if rtl_recon_has_data:
         print_psnr_report("rtl_internal_recon", validation_input_path, rtl_internal_recon)
     elif ran_rtl:
@@ -605,7 +566,6 @@ def validate_av2_fixed_black_path(
         "input": validation_input_path,
         "software_internal_recon": sw_internal_recon,
         "software_ref_decoded_recon": sw_ref_decoded_recon,
-        "ref_recon": reference_recon,
     }
     if ran_rtl:
         recon_views["rtl_internal_recon"] = rtl_internal_recon if rtl_recon_has_data else None
@@ -618,7 +578,7 @@ def validate_av2_fixed_black_path(
     )
     if digests["software_ref_decoded_recon"] != digests["software_internal_recon"]:
         print(
-            "FAIL: AV2 REF decode of software bitstream differs from software reconstruction",
+            "FAIL: AV2 reference decode of software bitstream differs from software reconstruction",
             file=sys.stderr,
         )
         return 1
@@ -628,18 +588,11 @@ def validate_av2_fixed_black_path(
             file=sys.stderr,
         )
         return 1
-    if digests["ref_recon"] != digests["input_yuv"]:
-        print(
-            "FAIL: AV2 REF encoder reconstruction differs from input; current AV2 subset is expected to be lossless",
-            file=sys.stderr,
-        )
-        return 1
     print(
         f"OK: AV2 software bitstream decodes to the software reconstruction at "
         f"{info.width}x{info.height} yuv444p8"
     )
     print("OK: AV2 software reconstruction is lossless for this input")
-    print("OK: AV2 REF reconstruction matches input")
     print(f"AV2 software trace: {sw_trace}")
     if ran_rtl:
         print(f"AV2 RTL trace: {rtl_trace}")

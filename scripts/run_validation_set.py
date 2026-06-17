@@ -130,9 +130,9 @@ def run_validation(path: Path, args: argparse.Namespace) -> ValidationResult:
     bitrate_delta = extract_bitrate_delta(process.stdout, args.codec_config.name)
     if process.returncode == 0:
         reason = (
-            "SW/REF checksum checks passed"
+            "SW/reference-decoder checksum checks passed"
             if args.sw_only
-            else "SW/RTL/REF checksum checks passed"
+            else "SW/RTL/reference-decoder checksum checks passed"
         )
         return ValidationResult(
             path=path,
@@ -171,9 +171,7 @@ def extract_bitrate_delta(output: str, codec: str) -> str:
         return "n/a"
 
     compare = None
-    compare_order = (
-        ("ref_bitstream", "rtl_bitstream") if codec == "av2" else ("rtl_bitstream", "ref_bitstream")
-    )
+    compare_order = ("rtl_bitstream", "ref_bitstream")
     for candidate in compare_order:
         if candidate in metrics:
             compare = candidate
