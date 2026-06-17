@@ -333,13 +333,13 @@ async def av2_encoder_emits_obu_stream(dut):
                 "palette_cache_size": palette_cache_size,
                 "op_phase": phase,
                 "op_step": step,
-                "literal": signal_int(dut, "op_literal_w"),
-                "literal_value": signal_int(dut, "op_literal_value_w"),
-                "literal_bits": signal_int(dut, "op_literal_bits_w"),
-                "fl": signal_int(dut, "op_fl_w"),
-                "fh": signal_int(dut, "op_fh_w"),
-                "fl_inc": signal_int(dut, "op_fl_inc_w"),
-                "fh_inc": signal_int(dut, "op_fh_inc_w"),
+                "literal": handle_int(dut.entropy_coder.op_literal_w),
+                "literal_value": handle_int(dut.entropy_coder.op_literal_value_w),
+                "literal_bits": handle_int(dut.entropy_coder.op_literal_bits_w),
+                "fl": handle_int(dut.entropy_coder.op_fl_w),
+                "fh": handle_int(dut.entropy_coder.op_fh_w),
+                "fl_inc": handle_int(dut.entropy_coder.op_fl_inc_w),
+                "fh_inc": handle_int(dut.entropy_coder.op_fh_inc_w),
             }
             if phase == AV2_PHASE_Y_COEFF and palette_mode:
                 coeff_pos = handle_int(dut.luma_palette_residual_symbolizer.coeff_pos_w)

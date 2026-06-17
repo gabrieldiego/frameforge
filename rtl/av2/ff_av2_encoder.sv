@@ -165,31 +165,7 @@ module ff_av2_encoder #(
   logic last_u_txb_nonzero_q;
 
   logic        op_valid_w;
-  logic        op_literal_w;
-  logic [31:0] op_literal_value_w;
-  logic [4:0]  op_literal_bits_w;
-  logic [31:0] op_fl_w;
-  logic [31:0] op_fh_w;
-  integer      op_fl_inc_w;
-  integer      op_fh_inc_w;
   logic        op_last_w;
-
-  logic [63:0] raw_low_w;
-  logic [31:0] raw_rng_w;
-  integer raw_bypass_bits_w;
-  logic [31:0] rr_w;
-  integer pp_fl_w;
-  integer pp_fh_w;
-  logic [31:0] scaled_u_w;
-  logic [31:0] scaled_v_w;
-  integer ilog_rng_w;
-  integer norm_c_w;
-  integer norm_d_w;
-  integer norm_s_w;
-  integer norm_c_after_w;
-  integer norm_s_after_w;
-  logic [63:0] norm_mask_w;
-  logic [63:0] norm_low_work_w;
   logic [1:0] norm_push_count_w;
   logic [15:0] norm_push0_w;
   logic [15:0] norm_push1_w;
@@ -274,8 +250,8 @@ module ff_av2_encoder #(
   logic [4:0] palette_op_literal_bits_w;
   logic [31:0] palette_op_fl_w;
   logic [31:0] palette_op_fh_w;
-  integer palette_op_fl_inc_w;
-  integer palette_op_fh_inc_w;
+  logic [4:0] palette_op_fl_inc_w;
+  logic [4:0] palette_op_fh_inc_w;
   logic palette_header_last_step_w;
   logic palette_map_token_required_w;
   logic [31:0] y_txb_nonzero_fh_w;
@@ -303,8 +279,8 @@ module ff_av2_encoder #(
   logic [4:0] luma_residual_op_literal_bits_w;
   logic [31:0] luma_residual_op_fl_w;
   logic [31:0] luma_residual_op_fh_w;
-  integer luma_residual_op_fl_inc_w;
-  integer luma_residual_op_fh_inc_w;
+  logic [4:0] luma_residual_op_fl_inc_w;
+  logic [4:0] luma_residual_op_fh_inc_w;
   logic luma_residual_advance_w;
   logic luma_residual_txb_done_w;
   logic [7:0] luma_residual_entropy_context_w;
@@ -315,8 +291,8 @@ module ff_av2_encoder #(
   logic [4:0] chroma_bdpcm_op_literal_bits_w;
   logic [31:0] chroma_bdpcm_op_fl_w;
   logic [31:0] chroma_bdpcm_op_fh_w;
-  integer chroma_bdpcm_op_fl_inc_w;
-  integer chroma_bdpcm_op_fh_inc_w;
+  logic [4:0] chroma_bdpcm_op_fl_inc_w;
+  logic [4:0] chroma_bdpcm_op_fh_inc_w;
   logic chroma_bdpcm_advance_w;
   logic chroma_bdpcm_txb_done_w;
   logic chroma_bdpcm_txb_nonzero_w;
@@ -536,6 +512,69 @@ module ff_av2_encoder #(
     .txb_done(chroma_bdpcm_txb_done_w),
     .txb_nonzero(chroma_bdpcm_txb_nonzero_w),
     .entropy_context(chroma_bdpcm_entropy_context_w)
+  );
+
+  ff_av2_entropy_coder entropy_coder (
+    .partition_active(state_q == ST_PARTITION),
+    .leaf_active(state_q == ST_LEAF),
+    .low(low_q),
+    .rng(rng_q),
+    .cnt(cnt_q),
+    .phase(phase_q),
+    .step(step_q),
+    .partition(partition_q),
+    .partition_emit_do_split(partition_emit_do_split_w),
+    .partition_emit_rect(partition_emit_rect_w),
+    .partition_do_cdf0(partition_do_cdf0_w),
+    .partition_rect_cdf0(partition_rect_cdf0_w),
+    .ibc_use_left_copy(ibc_use_left_copy_w),
+    .intrabc_ctx(intrabc_ctx_w),
+    .intrabc_skip_ctx(intrabc_skip_ctx_w),
+    .leaf_luma_mode(leaf_luma_mode_q),
+    .leaf_fsc_symbol(leaf_fsc_symbol_w),
+    .leaf_fsc_fh(leaf_fsc_fh_w),
+    .palette_mode(palette_mode_q),
+    .leaf_luma_palette(leaf_luma_palette_w),
+    .palette_op_valid(palette_op_valid_w),
+    .palette_op_literal(palette_op_literal_w),
+    .palette_op_literal_value(palette_op_literal_value_w),
+    .palette_op_literal_bits(palette_op_literal_bits_w),
+    .palette_op_fl(palette_op_fl_w),
+    .palette_op_fh(palette_op_fh_w),
+    .palette_op_fl_inc(palette_op_fl_inc_w),
+    .palette_op_fh_inc(palette_op_fh_inc_w),
+    .luma_residual_op_valid(luma_residual_op_valid_w),
+    .luma_residual_op_literal(luma_residual_op_literal_w),
+    .luma_residual_op_literal_value(luma_residual_op_literal_value_w),
+    .luma_residual_op_literal_bits(luma_residual_op_literal_bits_w),
+    .luma_residual_op_fl(luma_residual_op_fl_w),
+    .luma_residual_op_fh(luma_residual_op_fh_w),
+    .luma_residual_op_fl_inc(luma_residual_op_fl_inc_w),
+    .luma_residual_op_fh_inc(luma_residual_op_fh_inc_w),
+    .chroma_bdpcm_op_valid(chroma_bdpcm_op_valid_w),
+    .chroma_bdpcm_op_literal(chroma_bdpcm_op_literal_w),
+    .chroma_bdpcm_op_literal_value(chroma_bdpcm_op_literal_value_w),
+    .chroma_bdpcm_op_literal_bits(chroma_bdpcm_op_literal_bits_w),
+    .chroma_bdpcm_op_fl(chroma_bdpcm_op_fl_w),
+    .chroma_bdpcm_op_fh(chroma_bdpcm_op_fh_w),
+    .chroma_bdpcm_op_fl_inc(chroma_bdpcm_op_fl_inc_w),
+    .chroma_bdpcm_op_fh_inc(chroma_bdpcm_op_fh_inc_w),
+    .y_txb_nonzero_fh(y_txb_nonzero_fh_w),
+    .u_txb_nonzero_fh(u_txb_nonzero_fh_w),
+    .v_txb_nonzero_fh(v_txb_nonzero_fh_w),
+    .y_dc_sign_fl(y_dc_sign_fl_w),
+    .txb_index(txb_index_q),
+    .txb_count(txb_count_q),
+    .chroma_bdpcm_txb_done(chroma_bdpcm_txb_done_w),
+    .stack_empty(stack_sp_q == 5'd0),
+    .op_valid(op_valid_w),
+    .op_last(op_last_w),
+    .norm_push_count(norm_push_count_w),
+    .norm_push0(norm_push0_w),
+    .norm_push1(norm_push1_w),
+    .norm_low(norm_low_w),
+    .norm_rng(norm_rng_w),
+    .norm_cnt(norm_cnt_w)
   );
 
   assign start_invalid_w =
@@ -1150,317 +1189,6 @@ module ff_av2_encoder #(
       v_txb_nonzero_fh_w = 32'd16384;
       y_dc_sign_fl_w = 32'd19136;
     end
-  end
-
-  always @* begin
-    op_valid_w = 1'b0;
-    op_literal_w = 1'b0;
-    op_literal_value_w = 32'd0;
-    op_literal_bits_w = 5'd0;
-    op_fl_w = 32'd32768;
-    op_fh_w = 32'd0;
-    op_fl_inc_w = 0;
-    op_fh_inc_w = 0;
-    op_last_w = 1'b0;
-
-    if (state_q == ST_PARTITION) begin
-      if (partition_emit_do_split_w) begin
-        // AV2 v1.0.0 Section 5.20.3.2 partition(): do_split is present only
-        // when PARTITION_NONE is allowed at the current block.
-        op_valid_w = 1'b1;
-        if (partition_q == PARTITION_NONE) begin
-          op_fh_w = partition_do_cdf0_w;
-          op_fh_inc_w = 8;
-        end else begin
-          op_fl_w = partition_do_cdf0_w;
-          op_fh_w = 32'd0;
-          op_fl_inc_w = 8;
-          op_fh_inc_w = 0;
-        end
-      end else if (partition_emit_rect_w) begin
-        // AV2 v1.0.0 Section 5.20.3.2 partition(): rect_type selects
-        // vertical when coded as symbol 1; symbol 0 selects horizontal.
-        op_valid_w = 1'b1;
-        if (partition_q == PARTITION_VERT) begin
-          op_fl_w = partition_rect_cdf0_w;
-          op_fh_w = 32'd0;
-          op_fl_inc_w = 8;
-          op_fh_inc_w = 0;
-        end else begin
-          op_fh_w = partition_rect_cdf0_w;
-          op_fh_inc_w = 8;
-        end
-      end
-    end else if (state_q == ST_LEAF) begin
-      op_valid_w = 1'b1;
-      if (phase_q == PHASE_INTRABC) begin
-        case (step_q)
-          5'd0: begin
-            // AV2 v1.0.0 read_intra_frame_mode_info(): use_intrabc is
-            // signaled before normal intra mode syntax when allow_intrabc=1.
-            if (ibc_use_left_copy_w) begin
-              case (intrabc_ctx_w)
-                2'd0: op_fl_w = 32'd683;
-                2'd1: op_fl_w = 32'd17596;
-                default: op_fl_w = 32'd28265;
-              endcase
-              op_fh_w = 32'd0;
-              op_fl_inc_w = 8;
-              op_fh_inc_w = 0;
-            end else begin
-              case (intrabc_ctx_w)
-                2'd0: op_fh_w = 32'd683;
-                2'd1: op_fh_w = 32'd17596;
-                default: op_fh_w = 32'd28265;
-              endcase
-              op_fh_inc_w = 8;
-            end
-          end
-          5'd1: begin
-            case (intrabc_skip_ctx_w)
-              2'd0: op_fl_w = 32'd6903;
-              2'd1: op_fl_w = 32'd18452;
-              default: op_fl_w = 32'd28170;
-            endcase
-            op_fh_w = 32'd0;
-            op_fl_inc_w = 8;
-            op_fh_inc_w = 0;
-          end
-          5'd2: begin
-            // AV2 v1.0.0 write_intrabc_info(): intrabc_mode=1 selects a
-            // default reference block vector. The widened sequence profile
-            // lets DRL index 3 address the immediate-left 8x8 block.
-            op_fl_w = 32'd2775;
-            op_fh_w = 32'd0;
-            op_fl_inc_w = 8;
-            op_fh_inc_w = 0;
-          end
-          5'd3,
-          5'd4,
-          5'd5: begin
-            op_literal_w = 1'b1;
-            op_literal_value_w = 32'd1;
-            op_literal_bits_w = 5'd1;
-          end
-          default: op_valid_w = 1'b0;
-        endcase
-      end else if (phase_q == PHASE_INTRA) begin
-        case (step_q)
-          4'd0: begin op_fh_w = 32'd16384; op_fh_inc_w = 8; end
-          4'd1: begin op_fh_w = 32'd3905; op_fh_inc_w = 12; end
-          4'd2: begin
-            // AV2 v1.0.0 Sections 5.20.5.5 and 5.20.5.6:
-            // read_intra_luma_mode() calls get_y_intra_mode_set(). With
-            // non-directional neighbors, DC_PRED, V_PRED, and H_PRED are
-            // symbols 0, 5, and 6 in mode set 0.
-            if (leaf_luma_mode_q == LUMA_MODE_V) begin
-              op_fl_w = 32'd6363;
-              op_fh_w = 32'd5113;
-              op_fl_inc_w = 6;
-              op_fh_inc_w = 4;
-            end else if (leaf_luma_mode_q == LUMA_MODE_H) begin
-              op_fl_w = 32'd5113;
-              op_fh_w = 32'd3908;
-              op_fl_inc_w = 4;
-              op_fh_inc_w = 2;
-            end else begin
-              op_fh_w = 32'd17593;
-              op_fh_inc_w = 14;
-            end
-          end
-          4'd3: begin
-            if (leaf_fsc_symbol_w) begin
-              op_fh_w = leaf_fsc_fh_w;
-              op_fh_inc_w = 8;
-            end else begin
-              op_valid_w = 1'b0;
-            end
-          end
-          4'd4: begin
-            // AV2 v1.0.0 Section 5.20.5.6 read_intra_uv_mode():
-            // palette-coded luma leaves keep chroma lossless through
-            // horizontal BDPCM because AV2 palette syntax is luma-only.
-            if (palette_mode_q) begin
-              op_fl_w = 32'd16384;
-              op_fh_w = 32'd0;
-              op_fl_inc_w = 8;
-              op_fh_inc_w = 0;
-            end else begin
-              op_fh_w = 32'd16384;
-              op_fh_inc_w = 8;
-            end
-          end
-          4'd5: begin
-            if (palette_mode_q) begin
-              op_fl_w = 32'd16384;
-              op_fh_w = 32'd0;
-              op_fl_inc_w = 8;
-              op_fh_inc_w = 0;
-            end else begin
-              op_fh_w = 32'd23405;
-              op_fh_inc_w = 14;
-            end
-          end
-          default: op_valid_w = 1'b0;
-        endcase
-      end else if (leaf_luma_palette_w && (phase_q == PHASE_PALETTE_HEADER || phase_q == PHASE_PALETTE_MAP)) begin
-        op_valid_w = palette_op_valid_w;
-        op_literal_w = palette_op_literal_w;
-        op_literal_value_w = palette_op_literal_value_w;
-        op_literal_bits_w = palette_op_literal_bits_w;
-        op_fl_w = palette_op_fl_w;
-        op_fh_w = palette_op_fh_w;
-        op_fl_inc_w = palette_op_fl_inc_w;
-        op_fh_inc_w = palette_op_fh_inc_w;
-      end else if (phase_q == PHASE_Y_COEFF) begin
-        if (palette_mode_q) begin
-          op_valid_w = luma_residual_op_valid_w;
-          op_literal_w = luma_residual_op_literal_w;
-          op_literal_value_w = luma_residual_op_literal_value_w;
-          op_literal_bits_w = luma_residual_op_literal_bits_w;
-          op_fl_w = luma_residual_op_fl_w;
-          op_fh_w = luma_residual_op_fh_w;
-          op_fl_inc_w = luma_residual_op_fl_inc_w;
-          op_fh_inc_w = luma_residual_op_fh_inc_w;
-        end else begin
-          case (step_q)
-            4'd0: begin
-              op_fh_w = y_txb_nonzero_fh_w;
-              op_fh_inc_w = 8;
-            end
-            4'd1: begin op_fh_w = 32'd30822; op_fh_inc_w = 12; end
-            4'd2: begin op_fl_w = 32'd704; op_fh_w = 32'd0; op_fl_inc_w = 3; op_fh_inc_w = 0; end
-            4'd3: begin op_fl_w = 32'd11993; op_fh_w = 32'd0; op_fl_inc_w = 4; op_fh_inc_w = 0; end
-            4'd4: begin
-              op_fl_w = y_dc_sign_fl_w;
-              op_fh_w = 32'd0;
-              op_fl_inc_w = 8;
-              op_fh_inc_w = 0;
-            end
-            4'd5: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd5; end
-            4'd6: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd6; end
-            4'd7: begin op_literal_w = 1'b1; op_literal_value_w = 32'd249; op_literal_bits_w = 5'd8; end
-            4'd8: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd1; end
-            default: op_valid_w = 1'b0;
-          endcase
-        end
-      end else if (palette_mode_q) begin
-        op_valid_w = chroma_bdpcm_op_valid_w;
-        op_literal_w = chroma_bdpcm_op_literal_w;
-        op_literal_value_w = chroma_bdpcm_op_literal_value_w;
-        op_literal_bits_w = chroma_bdpcm_op_literal_bits_w;
-        op_fl_w = chroma_bdpcm_op_fl_w;
-        op_fh_w = chroma_bdpcm_op_fh_w;
-        op_fl_inc_w = chroma_bdpcm_op_fl_inc_w;
-        op_fh_inc_w = chroma_bdpcm_op_fh_inc_w;
-      end else begin
-        case (step_q)
-          4'd0: begin
-            // AV2 v1.0.0 Section 5.20.7.27 coeffs(): txb_skip=0 for
-            // an internal black lossless DC-only chroma TX_4X4 transform.
-            if (phase_q == PHASE_U_COEFF) begin
-              op_fh_w = u_txb_nonzero_fh_w;
-            end else begin
-              op_fh_w = v_txb_nonzero_fh_w;
-            end
-            op_fh_inc_w = 8;
-          end
-          4'd1: begin op_fh_w = 32'd24768; op_fh_inc_w = 12; end
-          4'd2: begin op_fl_w = 32'd511; op_fh_w = 32'd0; op_fl_inc_w = 3; op_fh_inc_w = 0; end
-          4'd3: begin op_literal_w = 1'b1; op_literal_value_w = 32'd1; op_literal_bits_w = 5'd1; end
-          4'd4: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd5; end
-          4'd5: begin op_literal_w = 1'b1; op_literal_value_w = 32'd0; op_literal_bits_w = 5'd6; end
-          4'd6: begin op_literal_w = 1'b1; op_literal_value_w = 32'd250; op_literal_bits_w = 5'd8; end
-          4'd7: begin op_literal_w = 1'b1; op_literal_value_w = 32'd1; op_literal_bits_w = 5'd1; end
-          default: op_valid_w = 1'b0;
-        endcase
-      end
-    end
-    op_last_w = (state_q == ST_LEAF) &&
-                (phase_q == PHASE_V_COEFF) &&
-                (txb_index_q == (txb_count_q - 16'd1)) &&
-                ((palette_mode_q && chroma_bdpcm_txb_done_w) || (!palette_mode_q && step_q == 7'd7)) &&
-                (stack_sp_q == 5'd0);
-  end
-
-  always @* begin
-    rr_w = rng_q >> 8;
-    pp_fl_w = (((op_fl_w >> 7) << 4) + op_fl_inc_w);
-    pp_fh_w = (((op_fh_w >> 7) << 4) + op_fh_inc_w);
-    scaled_u_w = (((rr_w * pp_fl_w[31:0]) >> 7) << 3);
-    scaled_v_w = (((rr_w * pp_fh_w[31:0]) >> 7) << 3);
-
-    if (op_literal_w) begin
-      raw_low_w = (low_q << op_literal_bits_w) + (rng_q * op_literal_value_w);
-      raw_rng_w = rng_q;
-      raw_bypass_bits_w = op_literal_bits_w;
-    end else if (op_fl_w < 32'd32768) begin
-      raw_low_w = low_q + (rng_q - scaled_u_w);
-      raw_rng_w = scaled_u_w - scaled_v_w;
-      raw_bypass_bits_w = 0;
-    end else begin
-      raw_low_w = low_q;
-      raw_rng_w = rng_q - scaled_v_w;
-      raw_bypass_bits_w = 0;
-    end
-
-    if (raw_rng_w[15]) ilog_rng_w = 16;
-    else if (raw_rng_w[14]) ilog_rng_w = 15;
-    else if (raw_rng_w[13]) ilog_rng_w = 14;
-    else if (raw_rng_w[12]) ilog_rng_w = 13;
-    else if (raw_rng_w[11]) ilog_rng_w = 12;
-    else if (raw_rng_w[10]) ilog_rng_w = 11;
-    else if (raw_rng_w[9]) ilog_rng_w = 10;
-    else if (raw_rng_w[8]) ilog_rng_w = 9;
-    else if (raw_rng_w[7]) ilog_rng_w = 8;
-    else if (raw_rng_w[6]) ilog_rng_w = 7;
-    else if (raw_rng_w[5]) ilog_rng_w = 6;
-    else if (raw_rng_w[4]) ilog_rng_w = 5;
-    else if (raw_rng_w[3]) ilog_rng_w = 4;
-    else if (raw_rng_w[2]) ilog_rng_w = 3;
-    else if (raw_rng_w[1]) ilog_rng_w = 2;
-    else ilog_rng_w = 1;
-
-    norm_c_w = cnt_q;
-    if (raw_bypass_bits_w > 0) begin
-      norm_c_w = cnt_q + raw_bypass_bits_w;
-      norm_d_w = 0;
-    end else begin
-      norm_d_w = 16 - ilog_rng_w;
-    end
-    norm_s_w = norm_c_w + norm_d_w;
-    norm_low_work_w = raw_low_w;
-    norm_c_after_w = norm_c_w;
-    norm_s_after_w = norm_s_w;
-    norm_push_count_w = 2'd0;
-    norm_push0_w = 16'd0;
-    norm_push1_w = 16'd0;
-    norm_mask_w = 64'd0;
-
-    if (norm_s_w >= 0) begin
-      norm_c_after_w = norm_c_w + 16;
-      if (norm_c_after_w >= 64) norm_mask_w = 64'hffff_ffff_ffff_ffff;
-      else if (norm_c_after_w <= 0) norm_mask_w = 64'd0;
-      else norm_mask_w = (64'd1 << norm_c_after_w) - 64'd1;
-
-      if (norm_s_w >= 8) begin
-        norm_push0_w = (norm_low_work_w >> norm_c_after_w) & 16'hffff;
-        norm_low_work_w = norm_low_work_w & norm_mask_w;
-        norm_c_after_w = norm_c_after_w - 8;
-        norm_mask_w = norm_mask_w >> 8;
-        norm_push1_w = (norm_low_work_w >> norm_c_after_w) & 16'hffff;
-        norm_push_count_w = 2'd2;
-      end else begin
-        norm_push0_w = (norm_low_work_w >> norm_c_after_w) & 16'hffff;
-        norm_push_count_w = 2'd1;
-      end
-      norm_s_after_w = norm_c_after_w + norm_d_w - 24;
-      norm_low_work_w = norm_low_work_w & norm_mask_w;
-    end
-
-    norm_low_w = norm_low_work_w << norm_d_w;
-    norm_rng_w = raw_rng_w << norm_d_w;
-    norm_cnt_w = norm_s_after_w;
   end
 
   always @* begin

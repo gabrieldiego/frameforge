@@ -19,8 +19,8 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   output logic [4:0]  op_literal_bits,
   output logic [31:0] op_fl,
   output logic [31:0] op_fh,
-  output integer      op_fl_inc,
-  output integer      op_fh_inc,
+  output logic [4:0]  op_fl_inc,
+  output logic [4:0]  op_fh_inc,
   output logic        txb_done,
   output logic        txb_nonzero,
   output logic [7:0]  entropy_context
@@ -394,22 +394,24 @@ module ff_av2_chroma_bdpcm_symbolizer #(
     hr_q_w = current_high_value_w >> hr_m_w;
     hr_exp_value_w = current_high_value_w - ({12'd0, hr_cmax_w} << hr_m_w);
     hr_x_w = hr_exp_value_w + (16'd1 << hr_k_w);
-    if (hr_x_w[15]) hr_length_w = 5'd16;
-    else if (hr_x_w[14]) hr_length_w = 5'd15;
-    else if (hr_x_w[13]) hr_length_w = 5'd14;
-    else if (hr_x_w[12]) hr_length_w = 5'd13;
-    else if (hr_x_w[11]) hr_length_w = 5'd12;
-    else if (hr_x_w[10]) hr_length_w = 5'd11;
-    else if (hr_x_w[9]) hr_length_w = 5'd10;
-    else if (hr_x_w[8]) hr_length_w = 5'd9;
-    else if (hr_x_w[7]) hr_length_w = 5'd8;
-    else if (hr_x_w[6]) hr_length_w = 5'd7;
-    else if (hr_x_w[5]) hr_length_w = 5'd6;
-    else if (hr_x_w[4]) hr_length_w = 5'd5;
-    else if (hr_x_w[3]) hr_length_w = 5'd4;
-    else if (hr_x_w[2]) hr_length_w = 5'd3;
-    else if (hr_x_w[1]) hr_length_w = 5'd2;
-    else hr_length_w = 5'd1;
+    casez (hr_x_w)
+      16'b1???_????_????_????: hr_length_w = 5'd16;
+      16'b01??_????_????_????: hr_length_w = 5'd15;
+      16'b001?_????_????_????: hr_length_w = 5'd14;
+      16'b0001_????_????_????: hr_length_w = 5'd13;
+      16'b0000_1???_????_????: hr_length_w = 5'd12;
+      16'b0000_01??_????_????: hr_length_w = 5'd11;
+      16'b0000_001?_????_????: hr_length_w = 5'd10;
+      16'b0000_0001_????_????: hr_length_w = 5'd9;
+      16'b0000_0000_1???_????: hr_length_w = 5'd8;
+      16'b0000_0000_01??_????: hr_length_w = 5'd7;
+      16'b0000_0000_001?_????: hr_length_w = 5'd6;
+      16'b0000_0000_0001_????: hr_length_w = 5'd5;
+      16'b0000_0000_0000_1???: hr_length_w = 5'd4;
+      16'b0000_0000_0000_01??: hr_length_w = 5'd3;
+      16'b0000_0000_0000_001?: hr_length_w = 5'd2;
+      default: hr_length_w = 5'd1;
+    endcase
     hr_prefix_bits_w = hr_length_w - 5'd1 - {2'd0, hr_k_w};
     hr_low_mask_w = (32'd1 << hr_m_w) - 32'd1;
     has_lower_nonzero_w = 1'b0;

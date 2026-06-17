@@ -21,8 +21,8 @@ module ff_av2_luma_palette_symbolizer (
   output logic [4:0]  op_literal_bits,
   output logic [31:0] op_fl,
   output logic [31:0] op_fh,
-  output integer     op_fl_inc,
-  output integer     op_fh_inc,
+  output logic [4:0] op_fl_inc,
+  output logic [4:0] op_fh_inc,
   output logic       header_last_step,
   output logic       map_token_required
 );
@@ -51,7 +51,7 @@ module ff_av2_luma_palette_symbolizer (
   integer scan_index_w;
   integer cdf_symbol_w;
   logic [31:0] cdf_w [0:7];
-  integer prob_inc_w [0:7];
+  logic [4:0] prob_inc_w [0:7];
 
   always @* begin
     for (scan_index_w = 0; scan_index_w < 8; scan_index_w = scan_index_w + 1) begin
