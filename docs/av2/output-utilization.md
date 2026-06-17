@@ -18,19 +18,19 @@ Metric definitions:
 - `cycles/bit`: `total_cycles / rtl_bitstream_bits`.
 - `cycles/input pixel`: `total_cycles / (width * height * frames)`.
 
-## 2026-06-17 Luma Palette Token Ordering
+## 2026-06-17 Parallel Luma Palette Token Count
 
-Measured after replacing the AV2 luma palette symbolizer's temporary
-eight-entry color-order/status arrays with direct neighbor-priority token
-generation. This is a synthesis cleanup only; it does not change output
-scheduling or encoded AV2 bitstreams.
+Measured after replacing the AV2 luma palette symbolizer's serial unrolled
+non-priority-color count with explicit per-index masks and pairwise sums.
+This is a synthesis/timing cleanup only; it does not change output scheduling
+or encoded AV2 bitstreams.
 
 Baseline and current sources:
 
-- Baseline Git SHA: `6c7ec6f9938788f89f9755c6eccdbb2142fec39c`
-- Current validated source Git SHA: `50244062149c2de2216098735676af4fd653c177`
-- Baseline mode: signed 8-bit range-coder count and finalization arithmetic.
-- Current mode: direct luma palette neighbor-priority token ordering.
+- Baseline Git SHA: `50244062149c2de2216098735676af4fd653c177`
+- Current validated source Git SHA: `db00d97a03e6e39ae40be1355f4ff56aba79acb3`
+- Baseline mode: direct luma palette neighbor-priority token ordering.
+- Current mode: parallel luma palette non-priority token count tree.
 - Delta columns compare against the baseline checkpoint above.
 
 Validation commands:

@@ -8,19 +8,19 @@ Older bring-up and intermediate optimization checkpoints are intentionally kept
 out of this report so the document remains focused on the current validated
 baseline and its immediate delta. Use git history for retired measurements.
 
-## 2026-06-17 Luma Palette Token Ordering
+## 2026-06-17 Parallel Luma Palette Token Count
 
-Measured after replacing the AV2 luma palette symbolizer's temporary
-eight-entry color-order/status arrays with direct neighbor-priority token
-generation. This is a synthesis cleanup only; encoded AV2 bitstreams and
-output scheduling are unchanged.
+Measured after replacing the AV2 luma palette symbolizer's serial unrolled
+non-priority-color count with explicit per-index masks and pairwise sums. This
+is a synthesis/timing cleanup only; encoded AV2 bitstreams and output
+scheduling are unchanged.
 
 Baseline and current sources:
 
-- Baseline Git SHA: `6c7ec6f9938788f89f9755c6eccdbb2142fec39c`
-- Current validated source Git SHA: `50244062149c2de2216098735676af4fd653c177`
-- Baseline mode: signed 8-bit range-coder count and finalization arithmetic.
-- Current mode: direct luma palette neighbor-priority token ordering.
+- Baseline Git SHA: `50244062149c2de2216098735676af4fd653c177`
+- Current validated source Git SHA: `db00d97a03e6e39ae40be1355f4ff56aba79acb3`
+- Baseline mode: direct luma palette neighbor-priority token ordering.
+- Current mode: parallel luma palette non-priority token count tree.
 - Delta columns compare against the previous documented AV2 top-synthesis
   baseline for the same DUT and board.
 
@@ -58,16 +58,16 @@ Synthesis configuration:
 
 Synthesis result:
 
-- Yosys synthesis passed in 266.9 seconds.
-- Peak child RSS observed by the synthesis runner was 1358.22 MiB.
-- Runtime stayed 33.1 seconds below the 300 second review threshold and inside
+- Yosys synthesis passed in 266.7 seconds.
+- Peak child RSS observed by the synthesis runner was 1388.66 MiB.
+- Runtime stayed 33.3 seconds below the 300 second review threshold and inside
   the 600 second hard timeout and 3072 MiB memory limit.
-- Post-synthesis flattened-cell reporting completed in 5.3 seconds.
-- Post-synthesis critical-path reporting completed in 42.2 seconds with peak
-  memory 1358.22 MiB and topological path length 73.
-- The longest top-level path still starts at `palette_row_q`, runs through
-  palette analyzer neighbor lookup, luma palette token generation, entropy op
-  muxing, and range-coder normalization toward `low_q`.
+- Post-synthesis flattened-cell reporting completed in 5.4 seconds.
+- Post-synthesis critical-path reporting completed in 42.7 seconds with peak
+  memory 1388.66 MiB and topological path length 69.
+- The longest top-level path now starts at `frame_palette_mode_q`, runs through
+  `ff_av2_bitstream_headers` closed-header bit assembly and output-byte
+  selection, then reaches `output_byte_q`.
 - The isolated `ff_av2_chroma_sample_store` path length remains 1.
 
 Flattened Xilinx-cell estimate from
@@ -75,22 +75,22 @@ Flattened Xilinx-cell estimate from
 
 | Metric | Count |
 |---|---:|
-| Cells | 82595 |
-| Estimated LCs | 26561 |
-| CARRY4 | 2571 |
+| Cells | 83101 |
+| Estimated LCs | 26674 |
+| CARRY4 | 2566 |
 | DSP48E1 | 15 |
 | FDCE | 4923 |
 | FDPE | 24 |
 | FDRE | 28403 |
 | FDSE | 14 |
-| LUT1 | 422 |
-| LUT2 | 6841 |
-| LUT3 | 4555 |
-| LUT4 | 2380 |
-| LUT5 | 2617 |
-| LUT6 | 17009 |
-| MUXF7 | 2907 |
-| MUXF8 | 738 |
+| LUT1 | 469 |
+| LUT2 | 6908 |
+| LUT3 | 4589 |
+| LUT4 | 2552 |
+| LUT5 | 2588 |
+| LUT6 | 16945 |
+| MUXF7 | 3190 |
+| MUXF8 | 800 |
 | RAMB36E1 | 19 |
 | RAM32M | 4 |
 | RAM64M | 1536 |
@@ -99,35 +99,35 @@ Delta from the previous documented top-synthesis baseline:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| Synthesis time | 286.1 s | 266.9 s | -19.2 s |
-| Peak synthesis RSS | 1339.81 MiB | 1358.22 MiB | +18.41 MiB |
-| Cell report time | 5.7 s | 5.3 s | -0.4 s |
-| Critical-path report time | 45.3 s | 42.2 s | -3.1 s |
-| Topological path length | 78 | 73 | -5 |
-| Cells | 82696 | 82595 | -101 |
-| Estimated LCs | 27007 | 26561 | -446 |
-| CARRY4 | 2572 | 2571 | -1 |
+| Synthesis time | 266.9 s | 266.7 s | -0.2 s |
+| Peak synthesis RSS | 1358.22 MiB | 1388.66 MiB | +30.44 MiB |
+| Cell report time | 5.3 s | 5.4 s | +0.1 s |
+| Critical-path report time | 42.2 s | 42.7 s | +0.5 s |
+| Topological path length | 73 | 69 | -4 |
+| Cells | 82595 | 83101 | +506 |
+| Estimated LCs | 26561 | 26674 | +113 |
+| CARRY4 | 2571 | 2566 | -5 |
 | DSP48E1 | 15 | 15 | 0 |
 | FDCE | 4923 | 4923 | 0 |
 | FDPE | 24 | 24 | 0 |
 | FDRE | 28403 | 28403 | 0 |
 | FDSE | 14 | 14 | 0 |
-| LUT1 | 430 | 422 | -8 |
-| LUT2 | 6642 | 6841 | +199 |
-| LUT3 | 4562 | 4555 | -7 |
-| LUT4 | 2481 | 2380 | -101 |
-| LUT5 | 3211 | 2617 | -594 |
-| LUT6 | 16753 | 17009 | +256 |
-| MUXF7 | 2846 | 2907 | +61 |
-| MUXF8 | 650 | 738 | +88 |
+| LUT1 | 422 | 469 | +47 |
+| LUT2 | 6841 | 6908 | +67 |
+| LUT3 | 4555 | 4589 | +34 |
+| LUT4 | 2380 | 2552 | +172 |
+| LUT5 | 2617 | 2588 | -29 |
+| LUT6 | 17009 | 16945 | -64 |
+| MUXF7 | 2907 | 3190 | +283 |
+| MUXF8 | 738 | 800 | +62 |
 | RAMB36E1 | 19 | 19 | 0 |
 | RAM32M | 4 | 4 | 0 |
 | RAM64M | 1536 | 1536 | 0 |
 
-The direct luma palette token-ordering cleanup reduced the reported topological
-path length by 5, cells by 101, and estimated LCs by 446. Synthesis runtime
-fell by 19.2 seconds and remained below the 300 second review threshold. Peak
-RSS increased by 18.41 MiB but stayed well inside the 3072 MiB limit. BRAM and
-DSP counts are unchanged. The next likely timing target remains the luma
-palette token path and its handoff into entropy op muxing/range-coder
-normalization.
+The parallel luma palette token-count cleanup reduced the reported topological
+path length by 4 and moved the longest top-level path out of the luma
+palette/range-coder logic. The tradeoff is a marginal increase of 506 cells and
+113 estimated LCs, with BRAM, DSP, and register counts unchanged. Synthesis
+runtime stayed effectively flat and remained below the 300 second review
+threshold. The next likely timing target is `ff_av2_bitstream_headers`
+closed-header bit assembly/output-byte selection.
