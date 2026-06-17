@@ -46,7 +46,9 @@ module ff_av2_bitstream_headers (
   logic [15:0] closed_header_payload_index_w;
   logic [2:0] closed_header_index_w;
   logic [6:0] closed_bit_index_w;
-  logic [2:0] closed_loop_index_w;
+  logic [6:0] closed_header_run_start_w;
+  logic [6:0] closed_header_run_len_w;
+  logic [63:0] closed_header_run_mask_w;
 
   always @* begin
     seq_load_value = 64'd0;
@@ -110,67 +112,32 @@ module ff_av2_bitstream_headers (
 
   always @* begin
     closed_header_bits_w = 64'd0;
-    closed_bit_index_w = 7'd0;
+    closed_header_run_start_w =
+      7'd5 + {6'd0, frame_palette_mode} + {6'd0, frame_ibc_mode};
+    closed_header_run_len_w =
+      7'd2 + {4'd0, tile_log2_cols_w} + {4'd0, tile_log2_rows_w} +
+      (multi_tile ? 7'd2 : 7'd0);
 
-    // AV2 v1.0.0 Sections 5.19 and 5.20.1: first tile group plus the
-    // minimum uncompressed header used by the MVP still-picture path.
-    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
-    closed_bit_index_w = closed_bit_index_w + 7'd1;
-    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
-    closed_bit_index_w = closed_bit_index_w + 7'd1;
-    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
-    closed_bit_index_w = closed_bit_index_w + 7'd1;
-
-    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] =
-      frame_palette_mode;
-    closed_bit_index_w = closed_bit_index_w + 7'd1;
+    // AV2 v1.0.0 Sections 5.19 and 5.20.1: the MVP still-picture path writes
+    // a fixed first-tile-group header prefix, optional palette/IBC flags, a
+    // contiguous run of tile-info one bits, then zero-valued quantization,
+    // segmentation, qmatrix, and reduced_tx_set_used fields.
+    closed_header_bits_w[63:61] = 3'b111;
+    closed_header_bits_w[60] = frame_palette_mode;
     if (frame_palette_mode) begin
-      // cur_frame_force_integer_mv = 0
-      closed_bit_index_w = closed_bit_index_w + 7'd1;
+      closed_header_bits_w[58] = frame_ibc_mode;
+    end else begin
+      closed_header_bits_w[59] = frame_ibc_mode;
     end
+    closed_header_run_mask_w =
+      (64'hffff_ffff_ffff_ffff << (7'd64 - closed_header_run_len_w)) >>
+      closed_header_run_start_w;
+    closed_header_bits_w = closed_header_bits_w | closed_header_run_mask_w;
 
-    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] =
-      frame_ibc_mode;
-    closed_bit_index_w = closed_bit_index_w + 7'd1;
-    if (frame_ibc_mode) begin
-      // AV2 v1.0.0 read_intrabc_params(): allow_global_intrabc=0 makes
-      // AVM infer local IntraBC availability for this tile-local MVP path.
-      closed_bit_index_w = closed_bit_index_w + 7'd1;
-    end
-    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
-    closed_bit_index_w = closed_bit_index_w + 7'd1;
-    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
-    closed_bit_index_w = closed_bit_index_w + 7'd1;
-
-    // AV2 v1.0.0 write_tile_info_max_tile(): uniform_spacing_flag followed
-    // by one increment bit per log2 tile column/row above the Level 2.0
-    // minimum. The current 64x64-SB subset keeps min_log2 at zero.
-    for (closed_loop_index_w = 3'd0; closed_loop_index_w < 3'd6; closed_loop_index_w = closed_loop_index_w + 3'd1) begin
-      if (closed_loop_index_w < tile_log2_cols_w) begin
-        closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
-        closed_bit_index_w = closed_bit_index_w + 7'd1;
-      end
-    end
-    for (closed_loop_index_w = 3'd0; closed_loop_index_w < 3'd6; closed_loop_index_w = closed_loop_index_w + 3'd1) begin
-      if (closed_loop_index_w < tile_log2_rows_w) begin
-        closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
-        closed_bit_index_w = closed_bit_index_w + 7'd1;
-      end
-    end
-    if (multi_tile) begin
-      closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
-      closed_bit_index_w = closed_bit_index_w + 7'd1;
-      closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
-      closed_bit_index_w = closed_bit_index_w + 7'd1;
-    end
-
-    // quantization.base_qindex, segmentation.enabled, qmatrix, and
-    // reduced_tx_set_used are all zero in the MVP. For multi-tile single
-    // tile-group OBUs, tile_start_and_end_present_flag is also zero.
-    closed_bit_index_w = closed_bit_index_w + 7'd12;
-    if (multi_tile) begin
-      closed_bit_index_w = closed_bit_index_w + 7'd1;
-    end
+    closed_bit_index_w =
+      7'd19 + {6'd0, frame_palette_mode} + {6'd0, frame_ibc_mode} +
+      {4'd0, tile_log2_cols_w} + {4'd0, tile_log2_rows_w} +
+      (multi_tile ? 7'd3 : 7'd0);
     if (closed_bit_index_w[2:0] != 3'd0) begin
       closed_bit_index_w = closed_bit_index_w + (7'd8 - {4'd0, closed_bit_index_w[2:0]});
     end
