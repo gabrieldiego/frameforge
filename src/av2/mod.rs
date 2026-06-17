@@ -308,13 +308,7 @@ impl Av2Mvp444FrameMode {
     }
 
     fn allow_intrabc(&self) -> bool {
-        matches!(
-            self,
-            Self::LumaPalette {
-                ibc,
-                ..
-            } if ibc.any_left_copy()
-        )
+        matches!(self, Self::LumaPalette { .. })
     }
 
     fn profile(&self) -> Av2Black444MvpProfile {
@@ -1237,6 +1231,40 @@ mod tests {
             "over-limit luma palette blocks must emit lossless luma coefficient residuals"
         );
         assert!(recon[y_plane_len..].iter().all(|&sample| sample == 0));
+    }
+
+    #[test]
+    fn av2_mvp_444_can_select_horizontal_luma_intra_prediction() {
+        let request = Av2EncodeRequest {
+            params: Av2EncodeParams { frames: 1 },
+            geometry: Av2VideoGeometry {
+                width: 16,
+                height: 8,
+            },
+            format: PixelFormat::Yuv444p8,
+        };
+        let mut input = vec![0u8; 16 * 8 * 3];
+        for y in 0..8usize {
+            let edge = 16 + y as u8 * 28;
+            input[y * 16 + 7] = edge;
+            for x in 0..8usize {
+                input[y * 16 + 8 + x] = edge + x as u8;
+            }
+        }
+        let mut source = input.as_slice();
+        let mut output = Vec::new();
+        let mut recon = Vec::new();
+
+        av2_encode_fixed_black_444(&mut source, &mut output, Some(&mut recon), request)
+            .expect("horizontal intra luma prediction should encode");
+
+        assert_eq!(recon, input);
+        let trace = av2_mvp_444_trace_jsonl_for_frame(&input, request)
+            .expect("AV2 trace should be emitted");
+        assert!(
+            trace.contains("tile.intra.y_mode_idx_h"),
+            "horizontal luma intra prediction should be selected for the right block"
+        );
     }
 
     #[test]

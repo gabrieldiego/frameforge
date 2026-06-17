@@ -121,6 +121,7 @@ def av2_rtl_trace_name(
     partition_emit_do_split,
     partition_emit_rect,
     palette_mode,
+    leaf_luma_mode,
     palette_row,
     palette_col,
     palette_cache_size,
@@ -141,6 +142,12 @@ def av2_rtl_trace_name(
             "tile.intrabc.drl_idx",
         ][step] if 0 <= step <= 5 else "tile.unknown"
     if phase == AV2_PHASE_INTRA:
+        if step == 2:
+            if leaf_luma_mode == 1:
+                return "tile.intra.y_mode_idx_v"
+            if leaf_luma_mode == 2:
+                return "tile.intra.y_mode_idx_h"
+            return "tile.intra.y_mode_idx_dc"
         return [
             "tile.intra.use_dpcm_y",
             "tile.intra.y_mode_set_index",
@@ -272,6 +279,7 @@ async def av2_encoder_emits_obu_stream(dut):
             partition_emit_do_split = signal_int(dut, "partition_emit_do_split_w") == 1
             partition_emit_rect = signal_int(dut, "partition_emit_rect_w") == 1
             palette_mode = signal_int(dut, "palette_mode_q") == 1
+            leaf_luma_mode = signal_int(dut, "leaf_luma_mode_q")
             palette_row = signal_int(dut, "palette_row_q")
             palette_col = signal_int(dut, "palette_col_q")
             palette_cache_size = signal_int(dut, "palette_cache_size_w")
@@ -282,6 +290,7 @@ async def av2_encoder_emits_obu_stream(dut):
                 partition_emit_do_split,
                 partition_emit_rect,
                 palette_mode,
+                leaf_luma_mode,
                 palette_row,
                 palette_col,
                 palette_cache_size,
@@ -318,6 +327,7 @@ async def av2_encoder_emits_obu_stream(dut):
                 "txb_local_row": signal_int(dut, "txb_local_row_q"),
                 "txb_local_col": signal_int(dut, "txb_local_col_q"),
                 "palette_mode": signal_int(dut, "palette_mode_q"),
+                "leaf_luma_mode": leaf_luma_mode,
                 "palette_row": palette_row,
                 "palette_col": palette_col,
                 "palette_cache_size": palette_cache_size,

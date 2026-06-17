@@ -2,7 +2,7 @@ use super::{Av2Black444MvpProfile, Av2VideoGeometry};
 use crate::av2::entropy::{Av2EntropyPayload, Av2EntropyWriter};
 use crate::av2::ibc::Av2LeftIbc444;
 use crate::av2::palette::{
-    Av2LumaPalette444, AV2_LUMA_PALETTE_BLOCK_SIZE, AV2_LUMA_PALETTE_MAX_COLORS,
+    Av2LumaIntraMode, Av2LumaPalette444, AV2_LUMA_PALETTE_BLOCK_SIZE, AV2_LUMA_PALETTE_MAX_COLORS,
     AV2_LUMA_PALETTE_MIN_COLORS,
 };
 
@@ -815,7 +815,7 @@ enum Av2TileDecisionKind {
     Partition(Av2MvpPartition),
     IntrabcFlag(bool),
     LeftIntrabcCopy,
-    IntraLumaDc,
+    IntraLumaMode(Av2LumaIntraMode),
     IntraChromaDc,
     LumaPaletteModeInfo,
     LumaPaletteColorMap,
@@ -1011,7 +1011,7 @@ pub(crate) fn av2_black_444_tile_entropy_payload_for_region(
     region: Av2TileRegion,
     profile: Av2Black444MvpProfile,
 ) -> Av2EntropyPayload {
-    let plan = Av2Black444TilePlan::for_region(region, profile, false, false, None);
+    let plan = Av2Black444TilePlan::for_region(region, profile, false, false, None, None);
     let mut writer = Av2EntropyWriter::new();
     plan.write_entropy(&mut writer, None, None);
     writer.finish()
@@ -1023,8 +1023,19 @@ pub(crate) fn av2_luma_palette_444_tile_entropy_payload_for_region(
     palette: &Av2LumaPalette444,
     ibc: &Av2LeftIbc444,
 ) -> Av2EntropyPayload {
-    let plan =
-        Av2Black444TilePlan::for_region(region, profile, true, ibc.any_left_copy(), Some(ibc));
+    let plan = Av2Black444TilePlan::for_region(
+        region,
+        profile,
+        true,
+        // AV2 v1.0.0 read_intrabc_params() makes allow_intrabc a frame
+        // header flag. FrameForge's streaming RTL cannot know whether a later
+        // 64x64 tile will find a left-copy candidate before writing the header,
+        // so the 4:4:4 palette MVP enables the syntax for every palette tile
+        // and writes use_intrabc=0 when the hash matcher does not select IBC.
+        true,
+        Some(ibc),
+        Some(palette),
+    );
     let mut writer = Av2EntropyWriter::new();
     plan.write_entropy(&mut writer, Some(palette), Some(ibc));
     writer.finish()
@@ -1037,6 +1048,7 @@ impl Av2Black444TilePlan {
         luma_palette: bool,
         allow_intrabc: bool,
         ibc: Option<&Av2LeftIbc444>,
+        palette: Option<&Av2LumaPalette444>,
     ) -> Self {
         assert!(
             !profile.enable_sdp,
@@ -1082,6 +1094,7 @@ impl Av2Black444TilePlan {
             visible_cols_mi,
             &mut partition_context,
             ibc,
+            palette,
         );
         plan
     }
@@ -1095,6 +1108,7 @@ impl Av2Black444TilePlan {
         visible_cols_mi: usize,
         partition_context: &mut Av2PartitionContext,
         ibc: Option<&Av2LeftIbc444>,
+        palette: Option<&Av2LumaPalette444>,
     ) {
         if row_mi >= visible_rows_mi || col_mi >= visible_cols_mi {
             return;
@@ -1120,7 +1134,7 @@ impl Av2Black444TilePlan {
 
         match partition {
             Av2MvpPartition::None => {
-                self.visit_leaf(row_mi, col_mi, block_size, ibc);
+                self.visit_leaf(row_mi, col_mi, block_size, ibc, palette);
                 partition_context.update_leaf(row_mi, col_mi, block_size);
             }
             Av2MvpPartition::Horz => {
@@ -1135,6 +1149,7 @@ impl Av2Black444TilePlan {
                     visible_cols_mi,
                     partition_context,
                     ibc,
+                    palette,
                 );
                 self.visit_block(
                     row_mi + block_size.mi_height() / 2,
@@ -1144,6 +1159,7 @@ impl Av2Black444TilePlan {
                     visible_cols_mi,
                     partition_context,
                     ibc,
+                    palette,
                 );
             }
             Av2MvpPartition::Vert => {
@@ -1158,6 +1174,7 @@ impl Av2Black444TilePlan {
                     visible_cols_mi,
                     partition_context,
                     ibc,
+                    palette,
                 );
                 self.visit_block(
                     row_mi,
@@ -1167,6 +1184,7 @@ impl Av2Black444TilePlan {
                     visible_cols_mi,
                     partition_context,
                     ibc,
+                    palette,
                 );
             }
         }
@@ -1178,6 +1196,7 @@ impl Av2Black444TilePlan {
         col_mi: usize,
         block_size: Av2MvpBlockSize,
         ibc: Option<&Av2LeftIbc444>,
+        palette: Option<&Av2LumaPalette444>,
     ) {
         assert_eq!(
             block_size.width, MVP_LEAF_BLOCK_SIZE,
@@ -1190,6 +1209,10 @@ impl Av2Black444TilePlan {
         let x0 = self.origin_x + col_mi * MI_SIZE;
         let y0 = self.origin_y + row_mi * MI_SIZE;
         let use_left_ibc = ibc.is_some_and(|ibc| ibc.uses_left_copy(x0, y0));
+        let luma_mode = palette
+            .map(|palette| palette.luma_mode_for_block(x0, y0))
+            .unwrap_or(Av2LumaIntraMode::Dc);
+        let use_luma_palette = self.luma_palette && luma_mode == Av2LumaIntraMode::Dc;
         if self.allow_intrabc {
             self.decisions.push(Av2TileDecision {
                 kind: Av2TileDecisionKind::IntrabcFlag(use_left_ibc),
@@ -1209,7 +1232,7 @@ impl Av2Black444TilePlan {
         }
 
         self.decisions.push(Av2TileDecision {
-            kind: Av2TileDecisionKind::IntraLumaDc,
+            kind: Av2TileDecisionKind::IntraLumaMode(luma_mode),
             row: row_mi,
             col: col_mi,
             block_size,
@@ -1220,7 +1243,7 @@ impl Av2Black444TilePlan {
             col: col_mi,
             block_size,
         });
-        if self.luma_palette {
+        if use_luma_palette {
             self.decisions.push(Av2TileDecision {
                 kind: Av2TileDecisionKind::LumaPaletteModeInfo,
                 row: row_mi,
@@ -1306,8 +1329,15 @@ impl Av2Black444TilePlan {
                         decision.block_size,
                     );
                 }
-                Av2TileDecisionKind::IntraLumaDc => {
-                    write_intra_luma_dc(writer, *decision);
+                Av2TileDecisionKind::IntraLumaMode(mode) => {
+                    write_intra_luma_mode(writer, *decision, mode);
+                    if mode != Av2LumaIntraMode::Dc {
+                        palette_cache_context.clear_leaf(
+                            decision.row,
+                            decision.col,
+                            decision.block_size,
+                        );
+                    }
                 }
                 Av2TileDecisionKind::IntraChromaDc => {
                     write_intra_chroma_mode(writer, *decision, self.luma_palette);
@@ -1786,7 +1816,11 @@ fn write_left_intrabc_copy(
     }
 }
 
-fn write_intra_luma_dc(writer: &mut Av2EntropyWriter, decision: Av2TileDecision) {
+fn write_intra_luma_mode(
+    writer: &mut Av2EntropyWriter,
+    decision: Av2TileDecision,
+    mode: Av2LumaIntraMode,
+) {
     let mut dpcm_cdf = DEFAULT_DPCM_CDF;
     // AV2 v1.0.0 Section 5.20.5.5 read_intra_y_mode(): lossless
     // intra blocks signal DPCM usage before luma mode. The MVP path keeps
@@ -1794,9 +1828,10 @@ fn write_intra_luma_dc(writer: &mut Av2EntropyWriter, decision: Av2TileDecision)
     writer.write_symbol("tile.intra.use_dpcm_y", 0, &mut dpcm_cdf, 2, false);
 
     let mut mode_set_cdf = DEFAULT_Y_MODE_SET_CDF;
-    // DC_PRED is mode index 0 in the non-directional mode set at tile start,
-    // matching AVM write_intra_luma_mode()/read_intra_luma_mode() with
-    // get_y_mode_idx_ctx()==0.
+    // AV2 v1.0.0 write_intra_luma_mode()/read_intra_luma_mode() calls
+    // get_y_intra_mode_set() before mapping y_mode_idx to a predictor. With
+    // only non-directional neighbors, mode indexes 0, 5, and 6 map to DC_PRED,
+    // V_PRED, and H_PRED respectively in mode set 0.
     writer.write_symbol(
         "tile.intra.y_mode_set_index",
         0,
@@ -1806,7 +1841,13 @@ fn write_intra_luma_dc(writer: &mut Av2EntropyWriter, decision: Av2TileDecision)
     );
 
     let mut mode_idx_cdf = DEFAULT_Y_MODE_IDX_CTX0_CDF;
-    writer.write_symbol("tile.intra.y_mode_idx_dc", 0, &mut mode_idx_cdf, 8, false);
+    writer.write_symbol(
+        mode.symbol_name(),
+        mode.mode_index(),
+        &mut mode_idx_cdf,
+        8,
+        false,
+    );
 
     if let Some(size_group) = decision.block_size.fsc_size_group() {
         let mut fsc_cdf = DEFAULT_FSC_MODE_CTX0_CDFS[size_group];
@@ -3518,6 +3559,7 @@ mod tests {
             false,
             false,
             None,
+            None,
         );
 
         let partition_none_count = plan
@@ -3530,7 +3572,9 @@ mod tests {
         let luma_leaf_count = plan
             .decisions
             .iter()
-            .filter(|decision| decision.kind == Av2TileDecisionKind::IntraLumaDc)
+            .filter(|decision| {
+                decision.kind == Av2TileDecisionKind::IntraLumaMode(Av2LumaIntraMode::Dc)
+            })
             .count();
 
         assert_eq!(partition_none_count, 64);

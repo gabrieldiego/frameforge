@@ -20,6 +20,7 @@ pub(crate) struct Av2LeftIbc444 {
 }
 
 impl Av2LeftIbc444 {
+    #[cfg(test)]
     pub(crate) fn any_left_copy(&self) -> bool {
         self.any_left_copy
     }
@@ -77,15 +78,21 @@ pub(crate) fn build_left_ibc_444(
                 .min(geometry.height);
             let terminal_visible_leaf = x0 + AV2_IBC_HASH_BLOCK_SIZE == tile_right
                 && y0 + AV2_IBC_HASH_BLOCK_SIZE == tile_bottom;
-            // AV2/AVM derives the selected BV and subsequent contexts from
-            // neighboring mode information. This first fixed-DRL path only
-            // models a terminal leaf in the current 64x64 tile, so no later
-            // leaf can consume incomplete post-IBC context state.
+            // AV2/AVM derives the selected BV from the neighboring-mode BVP
+            // stack. This hash-only MVP does not model that stack yet, so only
+            // use the fixed DRL index in the subset validated against AVM:
+            // terminal leaves that are not on the bottom row of a full 64x64
+            // tile. The full-height bottom row can choose a different default
+            // BVP ordering and must fall back to the lossless intra/residual
+            // path until the real candidate stack is implemented.
+            let fixed_drl_left_candidate_supported =
+                (y0 % AV2_IBC_TILE_SIZE) + AV2_IBC_HASH_BLOCK_SIZE < AV2_IBC_TILE_SIZE;
             let use_left_copy = if left_in_same_tile {
                 blocks
                     .last()
                     .is_some_and(|left| left.hash == hash && !left.use_left_copy)
                     && terminal_visible_leaf
+                    && fixed_drl_left_candidate_supported
             } else {
                 false
             };
@@ -177,5 +184,32 @@ mod tests {
         assert!(!ibc.uses_left_copy(0, 0));
         assert!(!ibc.uses_left_copy(8, 0));
         assert!(ibc.uses_left_copy(16, 0));
+    }
+
+    #[test]
+    fn av2_left_ibc_hash_skips_full_tile_bottom_row_until_bvp_stack_exists() {
+        let geometry = Av2VideoGeometry {
+            width: 16,
+            height: 64,
+        };
+        let plane_len = geometry.width * geometry.height;
+        let mut frame = vec![0; plane_len * 3];
+        for plane in 0..3 {
+            for y in 0..geometry.height {
+                for x in 0..8 {
+                    let value = (plane * 29 + y * 11 + x * 7) as u8;
+                    frame[plane * plane_len + y * geometry.width + x] = value;
+                    frame[plane * plane_len + y * geometry.width + x + 8] = if y >= 56 {
+                        value
+                    } else {
+                        value.wrapping_add(13)
+                    };
+                }
+            }
+        }
+
+        let ibc = build_left_ibc_444(&frame, geometry).expect("IBC hash map should build");
+        assert!(!ibc.uses_left_copy(8, 56));
+        assert!(!ibc.any_left_copy());
     }
 }

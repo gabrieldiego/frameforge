@@ -73,6 +73,9 @@ module ff_av2_encoder #(
   localparam logic [2:0] PHASE_U_COEFF = 3'd4;
   localparam logic [2:0] PHASE_V_COEFF = 3'd5;
   localparam logic [2:0] PHASE_INTRABC = 3'd6;
+  localparam logic [1:0] LUMA_MODE_DC = 2'd0;
+  localparam logic [1:0] LUMA_MODE_V = 2'd1;
+  localparam logic [1:0] LUMA_MODE_H = 2'd2;
   localparam int AV2_STACK_DEPTH = 16;
   localparam int AV2_PARTITION_CONTEXT_DIM = 16;
 
@@ -122,6 +125,7 @@ module ff_av2_encoder #(
   logic [5:0] palette_col_q;
   logic [1:0] palette_identity_row_ctx_q;
   logic palette_mode_q;
+  logic [1:0] leaf_luma_mode_q;
   logic [15:0] txb_index_q;
   logic [15:0] txb_width_q;
   logic [15:0] txb_count_q;
@@ -257,6 +261,8 @@ module ff_av2_encoder #(
   logic [3:0] palette_size_w;
   logic [4:0] palette_cache_size_w;
   logic [63:0] palette_colors_w;
+  logic [1:0] palette_luma_mode_w;
+  logic leaf_luma_palette_w;
   logic [2:0] palette_current_index_w;
   logic [2:0] palette_left_index_w;
   logic [2:0] palette_top_index_w;
@@ -435,6 +441,7 @@ module ff_av2_encoder #(
     .palette_size(palette_size_w),
     .palette_cache_size(palette_cache_size_w),
     .palette_colors(palette_colors_w),
+    .query_luma_mode(palette_luma_mode_w),
     .query_index(palette_current_index_w),
     .query_left_index(palette_left_index_w),
     .query_top_index(palette_top_index_w),
@@ -449,7 +456,7 @@ module ff_av2_encoder #(
   );
 
   ff_av2_luma_palette_symbolizer luma_palette_symbolizer (
-    .enable(palette_mode_q),
+    .enable(leaf_luma_palette_w),
     .phase(phase_q),
     .step(step_q[4:0]),
     .row(palette_row_q),
@@ -541,6 +548,7 @@ module ff_av2_encoder #(
   assign input_sample_fire_w = (state_q == ST_INPUT_READ) && s_axis_valid && s_axis_ready;
   assign tile_input_last_w = input_sample_fire_w && (tile_input_index_q == (tile_samples_w - 32'd1));
   assign palette_query_start_w = (state_q == ST_PALETTE_QUERY);
+  assign leaf_luma_palette_w = palette_mode_q && (leaf_luma_mode_q == LUMA_MODE_DC);
   assign chroma_fetch_start_w =
     (state_q == ST_CHROMA_FETCH) &&
     (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF);
@@ -1240,7 +1248,26 @@ module ff_av2_encoder #(
         case (step_q)
           4'd0: begin op_fh_w = 32'd16384; op_fh_inc_w = 8; end
           4'd1: begin op_fh_w = 32'd3905; op_fh_inc_w = 12; end
-          4'd2: begin op_fh_w = 32'd17593; op_fh_inc_w = 14; end
+          4'd2: begin
+            // AV2 v1.0.0 Sections 5.20.5.5 and 5.20.5.6:
+            // read_intra_luma_mode() calls get_y_intra_mode_set(). With
+            // non-directional neighbors, DC_PRED, V_PRED, and H_PRED are
+            // symbols 0, 5, and 6 in mode set 0.
+            if (leaf_luma_mode_q == LUMA_MODE_V) begin
+              op_fl_w = 32'd6363;
+              op_fh_w = 32'd5113;
+              op_fl_inc_w = 6;
+              op_fh_inc_w = 4;
+            end else if (leaf_luma_mode_q == LUMA_MODE_H) begin
+              op_fl_w = 32'd5113;
+              op_fh_w = 32'd3908;
+              op_fl_inc_w = 4;
+              op_fh_inc_w = 2;
+            end else begin
+              op_fh_w = 32'd17593;
+              op_fh_inc_w = 14;
+            end
+          end
           4'd3: begin
             if (leaf_fsc_symbol_w) begin
               op_fh_w = leaf_fsc_fh_w;
@@ -1276,7 +1303,7 @@ module ff_av2_encoder #(
           end
           default: op_valid_w = 1'b0;
         endcase
-      end else if (phase_q == PHASE_PALETTE_HEADER || phase_q == PHASE_PALETTE_MAP) begin
+      end else if (leaf_luma_palette_w && (phase_q == PHASE_PALETTE_HEADER || phase_q == PHASE_PALETTE_MAP)) begin
         op_valid_w = palette_op_valid_w;
         op_literal_w = palette_op_literal_w;
         op_literal_value_w = palette_op_literal_value_w;
@@ -1556,6 +1583,7 @@ module ff_av2_encoder #(
       palette_col_q <= 6'd0;
       palette_identity_row_ctx_q <= 2'd3;
       palette_mode_q <= 1'b0;
+      leaf_luma_mode_q <= LUMA_MODE_DC;
       txb_index_q <= 16'd0;
       txb_width_q <= 16'd0;
       txb_count_q <= 16'd0;
@@ -1654,6 +1682,7 @@ module ff_av2_encoder #(
           palette_col_q <= 6'd0;
           palette_identity_row_ctx_q <= 2'd3;
           palette_mode_q <= 1'b0;
+          leaf_luma_mode_q <= LUMA_MODE_DC;
           txb_index_q <= 16'd0;
           txb_width_q <= 16'd0;
           txb_count_q <= 16'd0;
@@ -1701,7 +1730,13 @@ module ff_av2_encoder #(
               end else begin
                 palette_mode_q <= palette_analyzer_luma_mode_w;
                 frame_palette_mode_q <= frame_palette_mode_q | palette_analyzer_luma_mode_w;
-                frame_ibc_mode_q <= frame_ibc_mode_q | ibc_any_left_copy_w;
+                // AV2 v1.0.0 read_intrabc_params()/read_intra_frame_mode_info():
+                // allow_intrabc is a frame-header decision, while the MVP RTL
+                // analyzes one 64x64 tile at a time before outputting the final
+                // OBU. Enable the syntax whenever the 4:4:4 palette path is
+                // active, then use the hash matcher only to choose whether each
+                // leaf writes use_intrabc=1.
+                frame_ibc_mode_q <= frame_ibc_mode_q | palette_analyzer_luma_mode_w;
                 low_q <= 64'd0;
                 rng_q <= 32'h8000;
                 cnt_q <= -9;
@@ -1715,6 +1750,7 @@ module ff_av2_encoder #(
                 palette_row_q <= 6'd0;
                 palette_col_q <= 6'd0;
                 palette_identity_row_ctx_q <= 2'd3;
+                leaf_luma_mode_q <= LUMA_MODE_DC;
                 txb_index_q <= 16'd0;
                 txb_width_q <= 16'd0;
                 txb_count_q <= 16'd0;
@@ -1854,6 +1890,7 @@ module ff_av2_encoder #(
               palette_row_q <= 6'd0;
               palette_col_q <= 6'd0;
               palette_identity_row_ctx_q <= 2'd3;
+              leaf_luma_mode_q <= LUMA_MODE_DC;
               txb_index_q <= 16'd0;
               txb_local_row_q <= 5'd0;
               txb_local_col_q <= 5'd0;
@@ -1881,7 +1918,10 @@ module ff_av2_encoder #(
             end
           end
           ST_PALETTE_QUERY: begin
-            if (!palette_mode_q || palette_query_done_w) begin
+            if (palette_query_done_w) begin
+              leaf_luma_mode_q <= palette_luma_mode_w;
+              state_q <= ST_LEAF;
+            end else if (!palette_mode_q) begin
               state_q <= ST_LEAF;
             end
           end
@@ -1902,6 +1942,7 @@ module ff_av2_encoder #(
                 if (step_q == 5'd0 && !ibc_use_left_copy_w) begin
                   phase_q <= PHASE_INTRA;
                   step_q <= 5'd0;
+                  leaf_luma_mode_q <= LUMA_MODE_DC;
                   state_q <= palette_mode_q ? ST_PALETTE_QUERY : ST_LEAF;
                 end else if (step_q == 5'd5) begin
                   for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
@@ -1939,7 +1980,7 @@ module ff_av2_encoder #(
                 if (step_q == 5'd2 && !leaf_fsc_symbol_w) begin
                   step_q <= 5'd4;
                 end else if (step_q == 5'd5) begin
-                  phase_q <= palette_mode_q ? PHASE_PALETTE_HEADER : PHASE_Y_COEFF;
+                  phase_q <= leaf_luma_palette_w ? PHASE_PALETTE_HEADER : PHASE_Y_COEFF;
                   step_q <= 5'd0;
                   palette_row_q <= 6'd0;
                   palette_col_q <= 6'd0;
@@ -1948,6 +1989,9 @@ module ff_av2_encoder #(
                   txb_local_row_q <= 5'd0;
                   txb_local_col_q <= 5'd0;
                   last_u_txb_nonzero_q <= 1'b0;
+                  if (palette_mode_q && !leaf_luma_palette_w) begin
+                    state_q <= ST_CHROMA_FETCH;
+                  end
                 end else begin
                   step_q <= step_q + 5'd1;
                 end
@@ -2240,6 +2284,7 @@ module ff_av2_encoder #(
     1'b0,
     CTU_SIZE[0],
     SOURCE_SAMPLE_BITS[0],
+    ibc_any_left_copy_w,
     ibc_done_w
   };
 

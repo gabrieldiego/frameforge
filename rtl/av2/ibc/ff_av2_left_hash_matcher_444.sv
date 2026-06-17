@@ -38,6 +38,7 @@ module ff_av2_left_hash_matcher_444 #(
   logic [5:0] left_block_id_w;
   logic left_in_tile_w;
   logic terminal_visible_leaf_w;
+  logic fixed_drl_left_candidate_supported_w;
   logic block_complete_w;
   logic left_match_w;
   logic enabled_w;
@@ -54,11 +55,13 @@ module ff_av2_left_hash_matcher_444 #(
   assign terminal_visible_leaf_w =
     (block_id_q[5:3] == last_block_row_q) &&
     (block_id_q[2:0] == last_block_col_q);
+  assign fixed_drl_left_candidate_supported_w = block_id_q[5:3] != 3'd7;
   assign block_complete_w = sample_fire && (block_sample_q == 8'd191);
   assign left_match_w =
     enabled_w &&
     left_in_tile_w &&
     terminal_visible_leaf_w &&
+    fixed_drl_left_candidate_supported_w &&
     hash_valid_q[left_block_id_w] &&
     !left_copy_mask[left_block_id_w] &&
     (hash_table_q[left_block_id_w] == hash_after_sample_w);
@@ -100,10 +103,11 @@ module ff_av2_left_hash_matcher_444 #(
               // AV2 v1.0.0 IntraBC syntax carries a block vector; this first
               // hardware search only keeps a block hash and enables the
               // immediate-left 8x8 vector when the whole YUV444 block matches.
-              // Keep this first fixed-DRL implementation terminal-leaf only:
-              // AV2/AVM derives BVs and later contexts from neighboring
-              // MB_MODE_INFO, so later leaves must not consume incomplete
-              // post-IBC state until the full context model is implemented.
+              // Keep this first fixed-DRL implementation terminal-leaf only
+              // and off the full-height bottom row. AV2/AVM derives BVs from
+              // neighboring MB_MODE_INFO; the bottom row of a full 64x64 tile
+              // can choose a different default BVP ordering until the full
+              // candidate stack is implemented.
               hash_table_q[block_id_q] <= hash_after_sample_w;
               hash_valid_q[block_id_q] <= enabled_w;
               left_copy_mask[block_id_q] <= left_match_w;
