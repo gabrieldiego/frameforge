@@ -8,21 +8,21 @@ Older bring-up and intermediate optimization checkpoints are intentionally kept
 out of this report so the document remains focused on the current validated
 baseline and its immediate delta. Use git history for retired measurements.
 
-## 2026-06-17 Luma Palette Header Timing Split
+## 2026-06-17 Continuous Final Output Drain
 
-Measured after registering AV2 luma palette header literals at the palette
-analyzer query boundary. The symbolizer now selects precomputed first-color,
-delta-bits, delta-minus-one, and per-delta literal-width fields instead of
-recomputing palette deltas on the entropy-coder input path.
+Measured after changing `ff_av2_encoder` to keep `m_axis_valid` asserted while
+draining final OBU bytes. The encoder now prefetches the next output byte during
+an accepted transfer instead of returning to an idle/load cycle between bytes.
+This changes RTL output timing only; encoded AV2 bitstreams are unchanged.
 
 Baseline and current sources:
 
-- Baseline Git SHA: `d480045c0914eaafaa170a14bb02c56843187549`
-- Current validated source Git SHA: `3f8e91b67dff42fcf3af8addffc29e8ce5aeb996`
-- Baseline mode: previously documented AV2 bitstream header/layout split.
-- Current mode: AV2 luma palette header literals are precomputed and registered
-  in `ff_av2_palette_analyzer_444` before they are consumed by
+- Baseline Git SHA: `3f8e91b67dff42fcf3af8addffc29e8ce5aeb996`
+- Current validated source Git SHA: `22acd0ebb02db4dbd406cb174f6898b79e597c29`
+- Baseline mode: AV2 luma palette header literals are precomputed and
+  registered in `ff_av2_palette_analyzer_444` before they are consumed by
   `ff_av2_luma_palette_symbolizer`.
+- Current mode: continuous final-byte output drain in `ff_av2_encoder`.
 - Delta columns compare against the previous documented AV2 top-synthesis
   baseline for the same DUT and board.
 
@@ -60,17 +60,16 @@ Synthesis configuration:
 
 Synthesis result:
 
-- Yosys synthesis passed in 294.6 seconds.
-- Peak child RSS observed by the synthesis runner was 1357.64 MiB.
-- Runtime stayed 5.4 seconds below the 300 second review threshold and inside
-  the 600 second hard timeout.
-- Post-synthesis flattened-cell reporting completed in 5.7 seconds.
-- Post-synthesis critical-path reporting completed in 46.4 seconds with peak
-  memory 1357.64 MiB and topological path length 78.
-- The previous longest path through luma palette delta-bit calculation was
-  removed. The new longest top-level path starts at `palette_row_q`, runs
-  through palette-map neighbor/token ordering, and then enters the entropy
-  range-coder path toward `low_q`.
+- Yosys synthesis passed in 307.5 seconds.
+- Peak child RSS observed by the synthesis runner was 1392.27 MiB.
+- Runtime exceeded the 300 second review threshold by 7.5 seconds, but stayed
+  inside the 600 second hard timeout and 3072 MiB memory limit.
+- Post-synthesis flattened-cell reporting completed in 5.9 seconds.
+- Post-synthesis critical-path reporting completed in 48.2 seconds with peak
+  memory 1392.27 MiB and topological path length 78.
+- The longest top-level path still starts at `palette_row_q`, runs through
+  palette-map neighbor/token ordering, and then enters the entropy range-coder
+  path toward `low_q`.
 - The isolated `ff_av2_chroma_sample_store` path length remains 1.
 
 Flattened Xilinx-cell estimate from
@@ -78,22 +77,22 @@ Flattened Xilinx-cell estimate from
 
 | Metric | Count |
 |---|---:|
-| Cells | 84102 |
-| Estimated LCs | 27387 |
-| CARRY4 | 2650 |
+| Cells | 84187 |
+| Estimated LCs | 27064 |
+| CARRY4 | 2646 |
 | DSP48E1 | 15 |
 | FDCE | 4923 |
 | FDPE | 24 |
 | FDRE | 28451 |
 | FDSE | 38 |
-| LUT1 | 443 |
-| LUT2 | 6225 |
-| LUT3 | 4226 |
-| LUT4 | 2719 |
-| LUT5 | 2849 |
-| LUT6 | 17593 |
-| MUXF7 | 3605 |
-| MUXF8 | 1015 |
+| LUT1 | 524 |
+| LUT2 | 6709 |
+| LUT3 | 4313 |
+| LUT4 | 2695 |
+| LUT5 | 2955 |
+| LUT6 | 17101 |
+| MUXF7 | 3570 |
+| MUXF8 | 894 |
 | RAMB36E1 | 19 |
 | RAM32M | 4 |
 | RAM64M | 1536 |
@@ -102,33 +101,33 @@ Delta from the previous documented top-synthesis baseline:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| Synthesis time | 295.4 s | 294.6 s | -0.8 s |
-| Peak synthesis RSS | 1377.04 MiB | 1357.64 MiB | -19.40 MiB |
-| Cell report time | 5.7 s | 5.7 s | 0.0 s |
-| Critical-path report time | 46.6 s | 46.4 s | -0.2 s |
-| Topological path length | 127 | 78 | -49 |
-| Cells | 84654 | 84102 | -552 |
-| Estimated LCs | 27599 | 27387 | -212 |
-| CARRY4 | 2673 | 2650 | -23 |
+| Synthesis time | 294.6 s | 307.5 s | +12.9 s |
+| Peak synthesis RSS | 1357.64 MiB | 1392.27 MiB | +34.63 MiB |
+| Cell report time | 5.7 s | 5.9 s | +0.2 s |
+| Critical-path report time | 46.4 s | 48.2 s | +1.8 s |
+| Topological path length | 78 | 78 | 0 |
+| Cells | 84102 | 84187 | +85 |
+| Estimated LCs | 27387 | 27064 | -323 |
+| CARRY4 | 2650 | 2646 | -4 |
 | DSP48E1 | 15 | 15 | 0 |
-| FDCE | 4829 | 4923 | +94 |
+| FDCE | 4923 | 4923 | 0 |
 | FDPE | 24 | 24 | 0 |
 | FDRE | 28451 | 28451 | 0 |
 | FDSE | 38 | 38 | 0 |
-| LUT1 | 484 | 443 | -41 |
-| LUT2 | 6543 | 6225 | -318 |
-| LUT3 | 4529 | 4226 | -303 |
-| LUT4 | 2819 | 2719 | -100 |
-| LUT5 | 3048 | 2849 | -199 |
-| LUT6 | 17203 | 17593 | +390 |
-| MUXF7 | 3755 | 3605 | -150 |
-| MUXF8 | 1045 | 1015 | -30 |
+| LUT1 | 443 | 524 | +81 |
+| LUT2 | 6225 | 6709 | +484 |
+| LUT3 | 4226 | 4313 | +87 |
+| LUT4 | 2719 | 2695 | -24 |
+| LUT5 | 2849 | 2955 | +106 |
+| LUT6 | 17593 | 17101 | -492 |
+| MUXF7 | 3605 | 3570 | -35 |
+| MUXF8 | 1015 | 894 | -121 |
 | RAMB36E1 | 19 | 19 | 0 |
 | RAM32M | 4 | 4 | 0 |
 | RAM64M | 1536 | 1536 | 0 |
 
-This timing split reduced the reported topological path by 38.6% and also
-reduced estimated LCs by 212. BRAM, DSP, and the large FF bank counts are
-unchanged. The next likely timing target is palette-map token ordering: the new
-longest path still goes through `ff_av2_luma_palette_symbolizer`, but no longer
-through the palette-header delta arithmetic.
+The continuous output-drain change preserved the reported topological path
+length and reduced estimated LCs by 323. Cells increased by 85 and synthesis
+runtime crossed the review threshold, so the next area/timing work should still
+focus on palette-map token ordering and the entropy range-coder path. BRAM,
+DSP, and the large FF bank counts are unchanged.
