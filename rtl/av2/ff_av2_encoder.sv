@@ -56,8 +56,6 @@ module ff_av2_encoder #(
     ST_PAYLOAD_COPY_READ,
     ST_PAYLOAD_COPY_WRITE,
     ST_OUTPUT_PREP,
-    ST_OUTPUT_PAYLOAD_READ,
-    ST_OUTPUT_PAYLOAD_LOAD,
     ST_OUTPUT_VALID
   } state_t;
 
@@ -203,7 +201,10 @@ module ff_av2_encoder #(
   logic [15:0] seq_stream_index_w;
   logic [7:0] seq_stream_byte_w;
   logic [15:0] closed_leb_index_w;
+  logic [15:0] stream_lookup_index_w;
   logic [7:0] output_byte_w;
+  logic [7:0] output_lookup_byte_w;
+  logic output_lookup_last_w;
   logic [7:0] output_byte_q;
   logic output_last_q;
   logic output_tile_payload_w;
@@ -375,7 +376,7 @@ module ff_av2_encoder #(
     .payload_prefix_index(payload_prefix_index_q),
     .seq_len(seq_len_q),
     .payload_len(payload_len_q),
-    .stream_index(stream_index_q),
+    .stream_index(stream_lookup_index_w),
     .seq_stream_byte(seq_stream_byte_w),
     .seq_load_value(seq_load_value_w),
     .seq_load_bits(seq_load_bits_w),
@@ -621,6 +622,12 @@ module ff_av2_encoder #(
   assign palette_analyzer_start_w = (state_q == ST_TILE_START);
   assign input_sample_fire_w = (state_q == ST_INPUT_READ) && s_axis_valid && s_axis_ready;
   assign tile_input_last_w = input_sample_fire_w && (tile_input_index_q == (tile_samples_w - 32'd1));
+  assign stream_lookup_index_w =
+    (state_q == ST_OUTPUT_VALID && m_axis_valid && m_axis_ready && !output_last_q) ?
+      (stream_index_q + 16'd1) : stream_index_q;
+  assign output_lookup_last_w = (stream_lookup_index_w == (total_stream_len_w - 16'd1));
+  assign output_lookup_byte_w =
+    output_tile_payload_w ? payload_mem_q[tile_stream_index_w] : output_byte_w;
   assign palette_query_start_w = (state_q == ST_PALETTE_QUERY);
   assign leaf_luma_palette_w = palette_mode_q && (leaf_luma_mode_q == LUMA_MODE_DC);
   assign chroma_fetch_start_w =
@@ -919,7 +926,7 @@ module ff_av2_encoder #(
 
   always @* begin
     seq_stream_byte_w = 8'd0;
-    if ((stream_index_q >= 16'd4) && (stream_index_q < seq_end_index_w)) begin
+    if ((stream_lookup_index_w >= 16'd4) && (stream_lookup_index_w < seq_end_index_w)) begin
       seq_stream_byte_w = seq_mem_q[seq_stream_index_w];
     end
   end
@@ -1808,22 +1815,15 @@ module ff_av2_encoder #(
             end
           end
           ST_OUTPUT_PREP: begin
-            m_axis_valid <= 1'b0;
-            if (output_tile_payload_w) begin
-              precarry_read_addr_q <= tile_stream_index_w;
-              state_q <= ST_OUTPUT_PAYLOAD_READ;
-            end else begin
-              output_byte_q <= output_byte_w;
-              output_last_q <= (stream_index_q == (total_stream_len_w - 16'd1));
-              state_q <= ST_OUTPUT_VALID;
-            end
-          end
-          ST_OUTPUT_PAYLOAD_READ: begin
-            state_q <= ST_OUTPUT_PAYLOAD_LOAD;
-          end
-          ST_OUTPUT_PAYLOAD_LOAD: begin
-            output_byte_q <= payload_mem_q[tile_stream_index_w];
-            output_last_q <= (stream_index_q == (total_stream_len_w - 16'd1));
+            // The final OBU bytes are already staged in register arrays. Drive
+            // the first byte immediately, then keep m_axis_valid asserted in
+            // ST_OUTPUT_VALID while advancing the lookup index on each
+            // accepted byte.
+            output_byte_q <= output_lookup_byte_w;
+            output_last_q <= output_lookup_last_w;
+            m_axis_valid <= 1'b1;
+            m_axis_data <= output_lookup_byte_w;
+            m_axis_last <= output_lookup_last_w;
             state_q <= ST_OUTPUT_VALID;
           end
           ST_OUTPUT_VALID: begin
@@ -1838,10 +1838,13 @@ module ff_av2_encoder #(
                 state_q <= ST_IDLE;
                 stream_index_q <= 16'd0;
               end else begin
-                m_axis_valid <= 1'b0;
-                m_axis_last <= 1'b0;
                 stream_index_q <= stream_index_q + 16'd1;
-                state_q <= ST_OUTPUT_PREP;
+                output_byte_q <= output_lookup_byte_w;
+                output_last_q <= output_lookup_last_w;
+                m_axis_valid <= 1'b1;
+                m_axis_data <= output_lookup_byte_w;
+                m_axis_last <= output_lookup_last_w;
+                state_q <= ST_OUTPUT_VALID;
               end
             end
           end
