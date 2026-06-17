@@ -393,7 +393,7 @@ def encoder_chparam_commands(
     support_palette_444: bool,
     support_exact_hash_ibc_444: bool,
 ) -> list[str]:
-    if top != "ff_vvc_encoder":
+    if top not in ("ff_vvc_encoder", "ff_av2_encoder"):
         return []
     return [
         (
@@ -412,7 +412,7 @@ def encoder_vivado_generic_args(
     support_palette_444: bool,
     support_exact_hash_ibc_444: bool,
 ) -> str:
-    if top != "ff_vvc_encoder":
+    if top not in ("ff_vvc_encoder", "ff_av2_encoder"):
         return ""
     return (
         f" -generic MAX_VISIBLE_WIDTH={max_visible_width}"

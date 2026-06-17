@@ -1,5 +1,6 @@
 use super::{Av2Black444MvpProfile, Av2VideoGeometry};
 use crate::av2::entropy::{Av2EntropyPayload, Av2EntropyWriter};
+use crate::av2::ibc::Av2LeftIbc444;
 use crate::av2::palette::{
     Av2LumaPalette444, AV2_LUMA_PALETTE_BLOCK_SIZE, AV2_LUMA_PALETTE_MAX_COLORS,
     AV2_LUMA_PALETTE_MIN_COLORS,
@@ -235,6 +236,20 @@ const fn avm_cdf8_padded(
 }
 
 const DEFAULT_DPCM_CDF: [u16; 6] = [16384, 0, 0, 2, 3, 4];
+const DEFAULT_INTRABC_CDFS: [[u16; 6]; 3] = [
+    avm_cdf2(32085, 0, -1, 0),
+    avm_cdf2(15172, -1, -1, 0),
+    avm_cdf2(4503, 0, 0, 0),
+];
+const DEFAULT_INTRABC_MODE_CDF: [u16; 6] = avm_cdf2(29993, 0, -1, -1);
+const DEFAULT_SKIP_TXFM_CDFS: [[u16; 6]; 6] = [
+    avm_cdf2(25865, -1, 0, 0),
+    avm_cdf2(14316, 0, 0, 0),
+    avm_cdf2(4598, 0, 0, 0),
+    avm_cdf2(25612, 0, -1, -1),
+    avm_cdf2(12366, 0, 0, -1),
+    avm_cdf2(3320, 1, 1, 0),
+];
 const DEFAULT_FSC_MODE_CTX0_CDFS: [[u16; 6]; 6] = [
     avm_cdf2(30503, 0, 0, 1),
     avm_cdf2(31244, 0, 0, 1),
@@ -798,6 +813,8 @@ enum Av2MvpPartition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Av2TileDecisionKind {
     Partition(Av2MvpPartition),
+    IntrabcFlag(bool),
+    LeftIntrabcCopy,
     IntraLumaDc,
     IntraChromaDc,
     LumaPaletteModeInfo,
@@ -855,6 +872,8 @@ struct Av2Black444TilePlan {
     visible_rows_mi: usize,
     visible_cols_mi: usize,
     luma_palette: bool,
+    allow_intrabc: bool,
+    max_ref_bv_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -980,9 +999,9 @@ pub(crate) fn av2_black_444_tile_entropy_payload_for_region(
     region: Av2TileRegion,
     profile: Av2Black444MvpProfile,
 ) -> Av2EntropyPayload {
-    let plan = Av2Black444TilePlan::for_region(region, profile, false);
+    let plan = Av2Black444TilePlan::for_region(region, profile, false, false, None);
     let mut writer = Av2EntropyWriter::new();
-    plan.write_entropy(&mut writer, None);
+    plan.write_entropy(&mut writer, None, None);
     writer.finish()
 }
 
@@ -990,10 +1009,12 @@ pub(crate) fn av2_luma_palette_444_tile_entropy_payload_for_region(
     region: Av2TileRegion,
     profile: Av2Black444MvpProfile,
     palette: &Av2LumaPalette444,
+    ibc: &Av2LeftIbc444,
 ) -> Av2EntropyPayload {
-    let plan = Av2Black444TilePlan::for_region(region, profile, true);
+    let plan =
+        Av2Black444TilePlan::for_region(region, profile, true, ibc.any_left_copy(), Some(ibc));
     let mut writer = Av2EntropyWriter::new();
-    plan.write_entropy(&mut writer, Some(palette));
+    plan.write_entropy(&mut writer, Some(palette), Some(ibc));
     writer.finish()
 }
 
@@ -1002,6 +1023,8 @@ impl Av2Black444TilePlan {
         region: Av2TileRegion,
         profile: Av2Black444MvpProfile,
         luma_palette: bool,
+        allow_intrabc: bool,
+        ibc: Option<&Av2LeftIbc444>,
     ) -> Self {
         assert!(
             !profile.enable_sdp,
@@ -1027,6 +1050,7 @@ impl Av2Black444TilePlan {
         let geometry = region.geometry();
         let visible_rows_mi = geometry.height / MI_SIZE;
         let visible_cols_mi = geometry.width / MI_SIZE;
+        let max_ref_bv_count = usize::from(profile.def_max_bvp_drl_bits_minus_min) + 2;
         let mut plan = Self {
             decisions: Vec::new(),
             origin_x: region.origin_x,
@@ -1034,6 +1058,8 @@ impl Av2Black444TilePlan {
             visible_rows_mi,
             visible_cols_mi,
             luma_palette,
+            allow_intrabc,
+            max_ref_bv_count,
         };
         let mut partition_context = Av2PartitionContext::new();
         plan.visit_block(
@@ -1043,6 +1069,7 @@ impl Av2Black444TilePlan {
             visible_rows_mi,
             visible_cols_mi,
             &mut partition_context,
+            ibc,
         );
         plan
     }
@@ -1055,6 +1082,7 @@ impl Av2Black444TilePlan {
         visible_rows_mi: usize,
         visible_cols_mi: usize,
         partition_context: &mut Av2PartitionContext,
+        ibc: Option<&Av2LeftIbc444>,
     ) {
         if row_mi >= visible_rows_mi || col_mi >= visible_cols_mi {
             return;
@@ -1080,7 +1108,7 @@ impl Av2Black444TilePlan {
 
         match partition {
             Av2MvpPartition::None => {
-                self.visit_leaf(row_mi, col_mi, block_size);
+                self.visit_leaf(row_mi, col_mi, block_size, ibc);
                 partition_context.update_leaf(row_mi, col_mi, block_size);
             }
             Av2MvpPartition::Horz => {
@@ -1094,6 +1122,7 @@ impl Av2Black444TilePlan {
                     visible_rows_mi,
                     visible_cols_mi,
                     partition_context,
+                    ibc,
                 );
                 self.visit_block(
                     row_mi + block_size.mi_height() / 2,
@@ -1102,6 +1131,7 @@ impl Av2Black444TilePlan {
                     visible_rows_mi,
                     visible_cols_mi,
                     partition_context,
+                    ibc,
                 );
             }
             Av2MvpPartition::Vert => {
@@ -1115,6 +1145,7 @@ impl Av2Black444TilePlan {
                     visible_rows_mi,
                     visible_cols_mi,
                     partition_context,
+                    ibc,
                 );
                 self.visit_block(
                     row_mi,
@@ -1123,12 +1154,19 @@ impl Av2Black444TilePlan {
                     visible_rows_mi,
                     visible_cols_mi,
                     partition_context,
+                    ibc,
                 );
             }
         }
     }
 
-    fn visit_leaf(&mut self, row_mi: usize, col_mi: usize, block_size: Av2MvpBlockSize) {
+    fn visit_leaf(
+        &mut self,
+        row_mi: usize,
+        col_mi: usize,
+        block_size: Av2MvpBlockSize,
+        ibc: Option<&Av2LeftIbc444>,
+    ) {
         assert_eq!(
             block_size.width, MVP_LEAF_BLOCK_SIZE,
             "AV2 MVP currently fixes coding leaves to 8x8 blocks"
@@ -1137,6 +1175,27 @@ impl Av2Black444TilePlan {
             block_size.height, MVP_LEAF_BLOCK_SIZE,
             "AV2 MVP currently fixes coding leaves to 8x8 blocks"
         );
+        let x0 = self.origin_x + col_mi * MI_SIZE;
+        let y0 = self.origin_y + row_mi * MI_SIZE;
+        let use_left_ibc = ibc.is_some_and(|ibc| ibc.uses_left_copy(x0, y0));
+        if self.allow_intrabc {
+            self.decisions.push(Av2TileDecision {
+                kind: Av2TileDecisionKind::IntrabcFlag(use_left_ibc),
+                row: row_mi,
+                col: col_mi,
+                block_size,
+            });
+        }
+        if use_left_ibc {
+            self.decisions.push(Av2TileDecision {
+                kind: Av2TileDecisionKind::LeftIntrabcCopy,
+                row: row_mi,
+                col: col_mi,
+                block_size,
+            });
+            return;
+        }
+
         self.decisions.push(Av2TileDecision {
             kind: Av2TileDecisionKind::IntraLumaDc,
             row: row_mi,
@@ -1175,9 +1234,15 @@ impl Av2Black444TilePlan {
         });
     }
 
-    fn write_entropy(&self, writer: &mut Av2EntropyWriter, palette: Option<&Av2LumaPalette444>) {
+    fn write_entropy(
+        &self,
+        writer: &mut Av2EntropyWriter,
+        palette: Option<&Av2LumaPalette444>,
+        _ibc: Option<&Av2LeftIbc444>,
+    ) {
         let mut partition_context = Av2PartitionContext::new();
         let mut txb_contexts = Av2TxbEntropyContexts::new();
+        let mut intrabc_context = Av2IntrabcContext::new();
         let mut palette_cache_context =
             Av2PaletteColorCacheContext::new(self.visible_rows_mi, self.visible_cols_mi);
         for decision in &self.decisions {
@@ -1198,6 +1263,31 @@ impl Av2Black444TilePlan {
                             decision.block_size,
                         );
                     }
+                }
+                Av2TileDecisionKind::IntrabcFlag(use_intrabc) => {
+                    write_intrabc_flag(writer, *decision, &intrabc_context, use_intrabc);
+                }
+                Av2TileDecisionKind::LeftIntrabcCopy => {
+                    write_left_intrabc_copy(
+                        writer,
+                        *decision,
+                        &intrabc_context,
+                        self.profile_max_ref_bv_count(),
+                    );
+                    intrabc_context.update_leaf(
+                        decision.row,
+                        decision.col,
+                        decision.block_size,
+                        true,
+                        true,
+                    );
+                    txb_contexts.clear_leaf(
+                        decision.row,
+                        decision.col,
+                        decision.block_size,
+                        self.visible_rows_mi,
+                        self.visible_cols_mi,
+                    );
                 }
                 Av2TileDecisionKind::IntraLumaDc => {
                     write_intra_luma_dc(writer, *decision);
@@ -1232,6 +1322,13 @@ impl Av2Black444TilePlan {
                         self.visible_cols_mi,
                         &mut txb_contexts,
                     );
+                    intrabc_context.update_leaf(
+                        decision.row,
+                        decision.col,
+                        decision.block_size,
+                        false,
+                        false,
+                    );
                 }
                 Av2TileDecisionKind::LumaPaletteResidualCoefficients => {
                     write_luma_palette_residual_coefficients(
@@ -1244,9 +1341,20 @@ impl Av2Black444TilePlan {
                         self.origin_x,
                         self.origin_y,
                     );
+                    intrabc_context.update_leaf(
+                        decision.row,
+                        decision.col,
+                        decision.block_size,
+                        false,
+                        false,
+                    );
                 }
             }
         }
+    }
+
+    fn profile_max_ref_bv_count(&self) -> usize {
+        self.max_ref_bv_count
     }
 }
 
@@ -1269,6 +1377,77 @@ impl Av2TxbEntropyContexts {
             u_left: [0; TX4X4_MAX_BLOCK_DIM],
             v_above: [0; TX4X4_MAX_BLOCK_DIM],
             v_left: [0; TX4X4_MAX_BLOCK_DIM],
+        }
+    }
+
+    fn clear_leaf(
+        &mut self,
+        row_mi: usize,
+        col_mi: usize,
+        block_size: Av2MvpBlockSize,
+        visible_rows_mi: usize,
+        visible_cols_mi: usize,
+    ) {
+        let txb_width = block_size
+            .tx4x4_width()
+            .min(visible_cols_mi.saturating_sub(col_mi));
+        let txb_height = block_size
+            .tx4x4_height()
+            .min(visible_rows_mi.saturating_sub(row_mi));
+        for col in col_mi..(col_mi + txb_width).min(TX4X4_MAX_BLOCK_DIM) {
+            self.y_above[col] = 0;
+            self.u_above[col] = 0;
+            self.v_above[col] = 0;
+        }
+        for row in row_mi..(row_mi + txb_height).min(TX4X4_MAX_BLOCK_DIM) {
+            self.y_left[row] = 0;
+            self.u_left[row] = 0;
+            self.v_left[row] = 0;
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Av2IntrabcContext {
+    ibc_above: [bool; PARTITION_CONTEXT_DIM],
+    ibc_left: [bool; PARTITION_CONTEXT_DIM],
+    skip_above: [bool; PARTITION_CONTEXT_DIM],
+    skip_left: [bool; PARTITION_CONTEXT_DIM],
+}
+
+impl Av2IntrabcContext {
+    fn new() -> Self {
+        Self {
+            ibc_above: [false; PARTITION_CONTEXT_DIM],
+            ibc_left: [false; PARTITION_CONTEXT_DIM],
+            skip_above: [false; PARTITION_CONTEXT_DIM],
+            skip_left: [false; PARTITION_CONTEXT_DIM],
+        }
+    }
+
+    fn intrabc_ctx(&self, row_mi: usize, col_mi: usize) -> usize {
+        usize::from(self.ibc_above[col_mi]) + usize::from(self.ibc_left[row_mi])
+    }
+
+    fn skip_txfm_ctx(&self, row_mi: usize, col_mi: usize) -> usize {
+        usize::from(self.skip_above[col_mi]) + usize::from(self.skip_left[row_mi])
+    }
+
+    fn update_leaf(
+        &mut self,
+        row_mi: usize,
+        col_mi: usize,
+        block_size: Av2MvpBlockSize,
+        use_intrabc: bool,
+        skip_txfm: bool,
+    ) {
+        for col in col_mi..(col_mi + block_size.mi_width()).min(PARTITION_CONTEXT_DIM) {
+            self.ibc_above[col] = use_intrabc;
+            self.skip_above[col] = skip_txfm;
+        }
+        for row in row_mi..(row_mi + block_size.mi_height()).min(PARTITION_CONTEXT_DIM) {
+            self.ibc_left[row] = use_intrabc;
+            self.skip_left[row] = skip_txfm;
         }
     }
 }
@@ -1542,6 +1721,51 @@ fn write_partition(
             2,
             false,
         );
+    }
+}
+
+fn write_intrabc_flag(
+    writer: &mut Av2EntropyWriter,
+    decision: Av2TileDecision,
+    context: &Av2IntrabcContext,
+    use_intrabc: bool,
+) {
+    // AV2 v1.0.0 intra-frame mode syntax, mirrored from AVM
+    // write_mb_modes_kf()/read_intra_frame_mode_info(): when allow_intrabc is
+    // set, each non-chroma leaf signals use_intrabc before normal intra modes.
+    let ctx = context.intrabc_ctx(decision.row, decision.col);
+    let mut cdf = DEFAULT_INTRABC_CDFS[ctx];
+    writer.write_symbol(
+        "tile.intrabc.use_intrabc",
+        usize::from(use_intrabc),
+        &mut cdf,
+        2,
+        false,
+    );
+}
+
+fn write_left_intrabc_copy(
+    writer: &mut Av2EntropyWriter,
+    decision: Av2TileDecision,
+    context: &Av2IntrabcContext,
+    max_ref_bv_count: usize,
+) {
+    assert!(
+        max_ref_bv_count >= 4,
+        "AV2 left-block IntraBC uses default BV candidate 3"
+    );
+    let skip_ctx = context.skip_txfm_ctx(decision.row, decision.col);
+    let mut skip_cdf = DEFAULT_SKIP_TXFM_CDFS[skip_ctx];
+    writer.write_symbol("tile.intrabc.skip_txfm", 1, &mut skip_cdf, 2, false);
+
+    // AV2 v1.0.0 read_intrabc_info()/write_intrabc_info(): intrabc_mode=1
+    // copies the selected reference BV directly. With the sequence header's
+    // max_bvp_drl_bits widened to 3, AVM's default BV list entry 3 is the
+    // immediate left block vector {-block_width, 0}.
+    let mut mode_cdf = DEFAULT_INTRABC_MODE_CDF;
+    writer.write_symbol("tile.intrabc.mode", 1, &mut mode_cdf, 2, false);
+    for _idx in 0..3 {
+        writer.write_literal("tile.intrabc.drl_idx", 1, 1);
     }
 }
 
@@ -3275,6 +3499,8 @@ mod tests {
             }),
             Av2Black444MvpProfile::current(),
             false,
+            false,
+            None,
         );
 
         let partition_none_count = plan

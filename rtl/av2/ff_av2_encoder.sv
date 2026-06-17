@@ -9,6 +9,7 @@ module ff_av2_encoder #(
   parameter int SAMPLE_BITS = 8,
   parameter int SOURCE_SAMPLE_BITS = SAMPLE_BITS,
   parameter int SUPPORT_PALETTE_444 = 1,
+  parameter int SUPPORT_EXACT_HASH_IBC_444 = 1,
   // TODO(av2): replace this staged carry/tile buffer with a streaming carry
   // resolver. Lossless high-colour 64x64 4:4:4 vectors need about 20 KiB
   // today, while larger future pictures must not scale this buffer by frame.
@@ -71,6 +72,7 @@ module ff_av2_encoder #(
   localparam logic [2:0] PHASE_Y_COEFF = 3'd3;
   localparam logic [2:0] PHASE_U_COEFF = 3'd4;
   localparam logic [2:0] PHASE_V_COEFF = 3'd5;
+  localparam logic [2:0] PHASE_INTRABC = 3'd6;
   localparam int AV2_STACK_DEPTH = 16;
   localparam int AV2_PARTITION_CONTEXT_DIM = 16;
 
@@ -152,6 +154,10 @@ module ff_av2_encoder #(
   logic [7:0] u_txb_left_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
   logic [7:0] v_txb_above_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
   logic [7:0] v_txb_left_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
+  logic ibc_above_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
+  logic ibc_left_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
+  logic skip_above_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
+  logic skip_left_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
   logic last_u_txb_nonzero_q;
 
   logic        op_valid_w;
@@ -198,6 +204,14 @@ module ff_av2_encoder #(
   logic tile_input_last_w;
   logic tile_is_last_w;
   logic multi_tile_w;
+  logic frame_ibc_mode_q;
+  logic ibc_done_w;
+  logic ibc_any_left_copy_w;
+  logic [63:0] ibc_left_copy_mask_w;
+  logic [5:0] ibc_current_block_id_w;
+  logic ibc_use_left_copy_w;
+  logic [1:0] intrabc_ctx_w;
+  logic [1:0] intrabc_skip_ctx_w;
   logic [2:0] tile_log2_cols_w;
   logic [2:0] tile_log2_rows_w;
   logic [5:0] closed_header_bit_count_w;
@@ -369,6 +383,23 @@ module ff_av2_encoder #(
     .rect_ctx(partition_rect_ctx_w),
     .do_split_cdf0(partition_do_cdf0_w),
     .rect_type_cdf0(partition_rect_cdf0_w)
+  );
+
+  ff_av2_left_hash_matcher_444 #(
+    .SAMPLE_BITS(SAMPLE_BITS),
+    .SUPPORT_EXACT_HASH_IBC_444(SUPPORT_EXACT_HASH_IBC_444)
+  ) left_hash_ibc (
+    .clk(clk),
+    .rst_n(rst_n),
+    .start(palette_analyzer_start_w),
+    .sample_fire(input_sample_fire_w),
+    .visible_width(tile_width_q),
+    .visible_height(tile_height_q),
+    .sample(s_axis_data),
+    .sample_last(tile_input_last_w),
+    .done(ibc_done_w),
+    .any_left_copy(ibc_any_left_copy_w),
+    .left_copy_mask(ibc_left_copy_mask_w)
   );
 
   ff_av2_palette_analyzer_444 #(
@@ -582,6 +613,16 @@ module ff_av2_encoder #(
   assign carry_sum_w = carry_q + precarry_read_data_q;
   assign visible_rows_mi_w = tile_height_q[6:2];
   assign visible_cols_mi_w = tile_width_q[6:2];
+  assign ibc_current_block_id_w = {block_row_mi_q[3:1], block_col_mi_q[3:1]};
+  assign ibc_use_left_copy_w =
+    frame_ibc_mode_q &&
+    (block_w_mi_q == 5'd2) &&
+    (block_h_mi_q == 5'd2) &&
+    ibc_left_copy_mask_w[ibc_current_block_id_w];
+  assign intrabc_ctx_w =
+    {1'd0, ibc_above_q[block_col_mi_q]} + {1'd0, ibc_left_q[block_row_mi_q]};
+  assign intrabc_skip_ctx_w =
+    {1'd0, skip_above_q[block_col_mi_q]} + {1'd0, skip_left_q[block_row_mi_q]};
   assign block_visible_w =
     (block_row_mi_q < visible_rows_mi_q) &&
     (block_col_mi_q < visible_cols_mi_q);
@@ -858,8 +899,14 @@ module ff_av2_encoder #(
       closed_bit_index_w = closed_bit_index_w + 1;
     end
 
-    // allow_intrabc = 0
+    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] =
+      frame_ibc_mode_q;
     closed_bit_index_w = closed_bit_index_w + 1;
+    if (frame_ibc_mode_q) begin
+      // AV2 v1.0.0 read_intrabc_params(): allow_global_intrabc=0 makes
+      // AVM infer local IntraBC availability for this tile-local MVP path.
+      closed_bit_index_w = closed_bit_index_w + 1;
+    end
     closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
     closed_bit_index_w = closed_bit_index_w + 1;
     closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
@@ -1138,7 +1185,58 @@ module ff_av2_encoder #(
       end
     end else if (state_q == ST_LEAF) begin
       op_valid_w = 1'b1;
-      if (phase_q == PHASE_INTRA) begin
+      if (phase_q == PHASE_INTRABC) begin
+        case (step_q)
+          5'd0: begin
+            // AV2 v1.0.0 read_intra_frame_mode_info(): use_intrabc is
+            // signaled before normal intra mode syntax when allow_intrabc=1.
+            if (ibc_use_left_copy_w) begin
+              case (intrabc_ctx_w)
+                2'd0: op_fl_w = 32'd683;
+                2'd1: op_fl_w = 32'd17596;
+                default: op_fl_w = 32'd28265;
+              endcase
+              op_fh_w = 32'd0;
+              op_fl_inc_w = 8;
+              op_fh_inc_w = 0;
+            end else begin
+              case (intrabc_ctx_w)
+                2'd0: op_fh_w = 32'd683;
+                2'd1: op_fh_w = 32'd17596;
+                default: op_fh_w = 32'd28265;
+              endcase
+              op_fh_inc_w = 8;
+            end
+          end
+          5'd1: begin
+            case (intrabc_skip_ctx_w)
+              2'd0: op_fl_w = 32'd6903;
+              2'd1: op_fl_w = 32'd18452;
+              default: op_fl_w = 32'd28170;
+            endcase
+            op_fh_w = 32'd0;
+            op_fl_inc_w = 8;
+            op_fh_inc_w = 0;
+          end
+          5'd2: begin
+            // AV2 v1.0.0 write_intrabc_info(): intrabc_mode=1 selects a
+            // default reference block vector. The widened sequence profile
+            // lets DRL index 3 address the immediate-left 8x8 block.
+            op_fl_w = 32'd2775;
+            op_fh_w = 32'd0;
+            op_fl_inc_w = 8;
+            op_fh_inc_w = 0;
+          end
+          5'd3,
+          5'd4,
+          5'd5: begin
+            op_literal_w = 1'b1;
+            op_literal_value_w = 32'd1;
+            op_literal_bits_w = 5'd1;
+          end
+          default: op_valid_w = 1'b0;
+        endcase
+      end else if (phase_q == PHASE_INTRA) begin
         case (step_q)
           4'd0: begin op_fh_w = 32'd16384; op_fh_inc_w = 8; end
           4'd1: begin op_fh_w = 32'd3905; op_fh_inc_w = 12; end
@@ -1355,7 +1453,15 @@ module ff_av2_encoder #(
       8'd10: begin seq_load_value_w = 64'd0; seq_load_bits_w = 7'd6; end
       8'd11: begin seq_load_value_w = 64'd0; seq_load_bits_w = 7'd2; end
       8'd12: begin seq_load_value_w = 64'd0; seq_load_bits_w = 7'd8; end
-      8'd13: begin seq_load_value_w = 64'd8; seq_load_bits_w = 7'd5; end
+      8'd13: begin
+        if (frame_ibc_mode_q) begin
+          seq_load_value_w = 64'd28;
+          seq_load_bits_w = 7'd6;
+        end else begin
+          seq_load_value_w = 64'd8;
+          seq_load_bits_w = 7'd5;
+        end
+      end
       8'd14: begin seq_load_value_w = 64'd32878; seq_load_bits_w = 7'd17; end
       8'd15: begin seq_load_value_w = 64'd1; seq_load_bits_w = 7'd7; end
       8'd16: begin seq_load_value_w = 64'd0; seq_load_bits_w = 7'd3; end
@@ -1439,6 +1545,7 @@ module ff_av2_encoder #(
       tile_height_q <= 16'd64;
       tile_input_index_q <= 32'd0;
       frame_palette_mode_q <= 1'b0;
+      frame_ibc_mode_q <= 1'b0;
       seq_op_q <= 8'd0;
       seq_bits_left_q <= 7'd0;
       seq_value_q <= 64'd0;
@@ -1480,6 +1587,10 @@ module ff_av2_encoder #(
         u_txb_left_q[context_index_q] <= 8'd0;
         v_txb_above_q[context_index_q] <= 8'd0;
         v_txb_left_q[context_index_q] <= 8'd0;
+        ibc_above_q[context_index_q] <= 1'b0;
+        ibc_left_q[context_index_q] <= 1'b0;
+        skip_above_q[context_index_q] <= 1'b0;
+        skip_left_q[context_index_q] <= 1'b0;
       end
     end else begin
       input_error <= 1'b0;
@@ -1536,6 +1647,7 @@ module ff_av2_encoder #(
           tile_height_q <= (tile_rows_w == 16'd1) ? visible_height : 16'd64;
           tile_input_index_q <= 32'd0;
           frame_palette_mode_q <= 1'b0;
+          frame_ibc_mode_q <= 1'b0;
           phase_q <= PHASE_INTRA;
           step_q <= 5'd0;
           palette_row_q <= 6'd0;
@@ -1589,6 +1701,7 @@ module ff_av2_encoder #(
               end else begin
                 palette_mode_q <= palette_analyzer_luma_mode_w;
                 frame_palette_mode_q <= frame_palette_mode_q | palette_analyzer_luma_mode_w;
+                frame_ibc_mode_q <= frame_ibc_mode_q | ibc_any_left_copy_w;
                 low_q <= 64'd0;
                 rng_q <= 32'h8000;
                 cnt_q <= -9;
@@ -1597,7 +1710,7 @@ module ff_av2_encoder #(
                 pending_push_word_q <= 16'd0;
                 precarry_len_q <= 16'd0;
                 tile_len_q <= 16'd0;
-                phase_q <= PHASE_INTRA;
+                phase_q <= frame_ibc_mode_q ? PHASE_INTRABC : PHASE_INTRA;
                 step_q <= 5'd0;
                 palette_row_q <= 6'd0;
                 palette_col_q <= 6'd0;
@@ -1626,6 +1739,10 @@ module ff_av2_encoder #(
                   u_txb_left_q[context_index_q] <= 8'd0;
                   v_txb_above_q[context_index_q] <= 8'd0;
                   v_txb_left_q[context_index_q] <= 8'd0;
+                  ibc_above_q[context_index_q] <= 1'b0;
+                  ibc_left_q[context_index_q] <= 1'b0;
+                  skip_above_q[context_index_q] <= 1'b0;
+                  skip_left_q[context_index_q] <= 1'b0;
                 end
                 state_q <= (tile_index_q == 16'd0) ? ST_SEQ_LOAD : ST_LOAD_BLOCK;
               end
@@ -1693,7 +1810,7 @@ module ff_av2_encoder #(
                     partition_left_q[context_index_q] <= partition_update_left_w;
                   end
                 end
-                phase_q <= PHASE_INTRA;
+                phase_q <= frame_ibc_mode_q ? PHASE_INTRABC : PHASE_INTRA;
                 step_q <= 5'd0;
                 palette_row_q <= 6'd0;
                 palette_col_q <= 6'd0;
@@ -1704,7 +1821,8 @@ module ff_av2_encoder #(
                 last_u_txb_nonzero_q <= 1'b0;
                 txb_width_q <= txb_width_w;
                 txb_count_q <= txb_count_w;
-                state_q <= palette_mode_q ? ST_PALETTE_QUERY : ST_LEAF;
+                state_q <= frame_ibc_mode_q ? ST_LEAF :
+                           (palette_mode_q ? ST_PALETTE_QUERY : ST_LEAF);
               end else if (partition_q == PARTITION_HORZ) begin
                 stack_row_mi_q[stack_sp_q] <= block_row_mi_q + block_half_h_mi_w;
                 stack_col_mi_q[stack_sp_q] <= block_col_mi_q;
@@ -1731,7 +1849,7 @@ module ff_av2_encoder #(
                   partition_left_q[context_index_q] <= partition_update_left_w;
                 end
               end
-              phase_q <= PHASE_INTRA;
+              phase_q <= frame_ibc_mode_q ? PHASE_INTRABC : PHASE_INTRA;
               step_q <= 5'd0;
               palette_row_q <= 6'd0;
               palette_col_q <= 6'd0;
@@ -1742,7 +1860,8 @@ module ff_av2_encoder #(
               last_u_txb_nonzero_q <= 1'b0;
               txb_width_q <= txb_width_w;
               txb_count_q <= txb_count_w;
-              state_q <= palette_mode_q ? ST_PALETTE_QUERY : ST_LEAF;
+              state_q <= frame_ibc_mode_q ? ST_LEAF :
+                         (palette_mode_q ? ST_PALETTE_QUERY : ST_LEAF);
             end else if (partition_q == PARTITION_HORZ) begin
               stack_row_mi_q[stack_sp_q] <= block_row_mi_q + block_half_h_mi_w;
               stack_col_mi_q[stack_sp_q] <= block_col_mi_q;
@@ -1779,7 +1898,42 @@ module ff_av2_encoder #(
               rng_q <= norm_rng_w;
               cnt_q <= norm_cnt_w;
 
-              if (op_last_w) begin
+              if (phase_q == PHASE_INTRABC) begin
+                if (step_q == 5'd0 && !ibc_use_left_copy_w) begin
+                  phase_q <= PHASE_INTRA;
+                  step_q <= 5'd0;
+                  state_q <= palette_mode_q ? ST_PALETTE_QUERY : ST_LEAF;
+                end else if (step_q == 5'd5) begin
+                  for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
+                    if (context_index_q >= block_col_mi_q && context_index_q < (block_col_mi_q + block_w_mi_q)) begin
+                      ibc_above_q[context_index_q] <= 1'b1;
+                      skip_above_q[context_index_q] <= 1'b1;
+                      y_txb_above_q[context_index_q] <= 8'd0;
+                      u_txb_above_q[context_index_q] <= 8'd0;
+                      v_txb_above_q[context_index_q] <= 8'd0;
+                    end
+                    if (context_index_q >= block_row_mi_q && context_index_q < (block_row_mi_q + block_h_mi_q)) begin
+                      ibc_left_q[context_index_q] <= 1'b1;
+                      skip_left_q[context_index_q] <= 1'b1;
+                      y_txb_left_q[context_index_q] <= 8'd0;
+                      u_txb_left_q[context_index_q] <= 8'd0;
+                      v_txb_left_q[context_index_q] <= 8'd0;
+                    end
+                  end
+                  if (stack_sp_q != 5'd0) begin
+                    block_row_mi_q <= stack_row_mi_q[stack_sp_q - 5'd1];
+                    block_col_mi_q <= stack_col_mi_q[stack_sp_q - 5'd1];
+                    block_w_mi_q <= stack_w_mi_q[stack_sp_q - 5'd1];
+                    block_h_mi_q <= stack_h_mi_q[stack_sp_q - 5'd1];
+                    stack_sp_q <= stack_sp_q - 5'd1;
+                    state_q <= ST_LOAD_BLOCK;
+                  end else begin
+                    state_q <= ST_FINISH_INIT;
+                  end
+                end else begin
+                  step_q <= step_q + 5'd1;
+                end
+              end else if (op_last_w) begin
                 state_q <= ST_FINISH_INIT;
               end else if (phase_q == PHASE_INTRA) begin
                 if (step_q == 5'd2 && !leaf_fsc_symbol_w) begin
@@ -1896,6 +2050,16 @@ module ff_av2_encoder #(
                         state_q <= ST_CHROMA_FETCH;
                       end
                     end else begin
+                      for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
+                        if (context_index_q >= block_col_mi_q && context_index_q < (block_col_mi_q + block_w_mi_q)) begin
+                          ibc_above_q[context_index_q] <= 1'b0;
+                          skip_above_q[context_index_q] <= 1'b0;
+                        end
+                        if (context_index_q >= block_row_mi_q && context_index_q < (block_row_mi_q + block_h_mi_q)) begin
+                          ibc_left_q[context_index_q] <= 1'b0;
+                          skip_left_q[context_index_q] <= 1'b0;
+                        end
+                      end
                       if (stack_sp_q != 5'd0) begin
                         block_row_mi_q <= stack_row_mi_q[stack_sp_q - 5'd1];
                         block_col_mi_q <= stack_col_mi_q[stack_sp_q - 5'd1];
@@ -2075,7 +2239,8 @@ module ff_av2_encoder #(
   wire _unused_inputs_w = &{
     1'b0,
     CTU_SIZE[0],
-    SOURCE_SAMPLE_BITS[0]
+    SOURCE_SAMPLE_BITS[0],
+    ibc_done_w
   };
 
 endmodule

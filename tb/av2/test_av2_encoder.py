@@ -14,6 +14,7 @@ AV2_PHASE_PALETTE_MAP = 2
 AV2_PHASE_Y_COEFF = 3
 AV2_PHASE_U_COEFF = 4
 AV2_PHASE_V_COEFF = 5
+AV2_PHASE_INTRABC = 6
 
 
 def rtl_geometry():
@@ -130,6 +131,15 @@ def av2_rtl_trace_name(
         if partition_emit_rect:
             return "tile.partition.rect_type"
         return "tile.partition.implied"
+    if phase == AV2_PHASE_INTRABC:
+        return [
+            "tile.intrabc.use_intrabc",
+            "tile.intrabc.skip_txfm",
+            "tile.intrabc.mode",
+            "tile.intrabc.drl_idx",
+            "tile.intrabc.drl_idx",
+            "tile.intrabc.drl_idx",
+        ][step] if 0 <= step <= 5 else "tile.unknown"
     if phase == AV2_PHASE_INTRA:
         return [
             "tile.intra.use_dpcm_y",
@@ -202,6 +212,8 @@ def av2_rtl_trace_name(
 def av2_trace_spec(name):
     if name.startswith("tile.partition."):
         return "AV2 v1.0.0 Section 5.20.3.2 partition()"
+    if name.startswith("tile.intrabc."):
+        return "AV2 v1.0.0 Sections 5.20.5.1 and 5.20.5.3 intra block copy syntax"
     if name.startswith("tile.intra."):
         return "AV2 v1.0.0 Sections 5.20.5.5 and 5.20.5.6 intra mode syntax"
     if name.startswith("tile.palette."):

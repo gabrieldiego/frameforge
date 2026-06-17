@@ -3,10 +3,12 @@ use std::io::{Read, Write};
 use crate::picture::{Picture, PixelFormat};
 
 pub mod entropy;
+mod ibc;
 mod palette;
 mod syntax;
 mod tile;
 
+use ibc::Av2LeftIbc444;
 use palette::Av2LumaPalette444;
 use syntax::{Av2SyntaxPayload, Av2SyntaxWriter};
 use tile::{
@@ -94,6 +96,15 @@ impl Av2Black444MvpProfile {
             // being ported.
             disable_cdf_update: true,
         }
+    }
+
+    fn with_left_ibc_candidates(mut self) -> Self {
+        // AVM derives the immediate-left 8x8 block vector as the fourth
+        // default IntraBC BV candidate in mvref_common.c. AV2 sequence syntax
+        // stores max_bvp_drl_bits minus MIN_MAX_IBC_DRL_BITS; value 2 therefore
+        // permits DRL indices 0..3 without frame-level overrides.
+        self.def_max_bvp_drl_bits_minus_min = 2;
+        self
     }
 }
 
@@ -274,7 +285,10 @@ impl Av2EncodeRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Av2Mvp444FrameMode {
     Black,
-    LumaPalette(Av2LumaPalette444),
+    LumaPalette {
+        palette: Av2LumaPalette444,
+        ibc: Av2LeftIbc444,
+    },
 }
 
 impl Av2Mvp444FrameMode {
@@ -283,19 +297,39 @@ impl Av2Mvp444FrameMode {
         if frame == black {
             return Ok(Self::Black);
         }
-        Ok(Self::LumaPalette(palette::build_luma_palette_444(
-            frame, geometry,
-        )?))
+        Ok(Self::LumaPalette {
+            palette: palette::build_luma_palette_444(frame, geometry)?,
+            ibc: ibc::build_left_ibc_444(frame, geometry)?,
+        })
     }
 
     fn allow_screen_content_tools(&self) -> bool {
-        matches!(self, Self::LumaPalette(_))
+        matches!(self, Self::LumaPalette { .. })
+    }
+
+    fn allow_intrabc(&self) -> bool {
+        matches!(
+            self,
+            Self::LumaPalette {
+                ibc,
+                ..
+            } if ibc.any_left_copy()
+        )
+    }
+
+    fn profile(&self) -> Av2Black444MvpProfile {
+        let profile = Av2Black444MvpProfile::current();
+        if self.allow_intrabc() {
+            profile.with_left_ibc_candidates()
+        } else {
+            profile
+        }
     }
 
     fn reconstruction(&self, geometry: Av2VideoGeometry) -> Vec<u8> {
         match self {
             Self::Black => av2_black_444_reconstruction_for_geometry(geometry),
-            Self::LumaPalette(palette) => palette.reconstruction().to_vec(),
+            Self::LumaPalette { palette, .. } => palette.reconstruction().to_vec(),
         }
     }
 }
@@ -348,7 +382,7 @@ fn av2_mvp_444_bitstream_for_mode(
     append_obu(
         &mut out,
         Av2ObuType::SequenceHeader,
-        &av2_black_444_sequence_header_payload(geometry),
+        &av2_mvp_444_sequence_header_payload(geometry, frame_mode.profile()),
     );
     append_obu(
         &mut out,
@@ -379,9 +413,10 @@ fn av2_mvp_444_trace_jsonl_for_mode(
     frame_mode: &Av2Mvp444FrameMode,
 ) -> Result<String, String> {
     let tile_layout = Av2TileLayout::for_geometry(geometry);
-    let sequence = av2_black_444_sequence_header_payload(geometry);
+    let sequence = av2_mvp_444_sequence_header_payload(geometry, frame_mode.profile());
     let closed_loop_header = av2_mvp_444_closed_loop_key_header_payload(
         frame_mode.allow_screen_content_tools(),
+        frame_mode.allow_intrabc(),
         &tile_layout,
     );
     let entropy = av2_tile_entropy_payloads_for_mode(&tile_layout, frame_mode);
@@ -474,7 +509,15 @@ fn validate_fixed_black_444_geometry(geometry: Av2VideoGeometry) -> Option<Av2Vi
     supported.then_some(geometry)
 }
 
+#[cfg(test)]
 fn av2_black_444_sequence_header_payload(geometry: Av2VideoGeometry) -> Av2SyntaxPayload {
+    av2_mvp_444_sequence_header_payload(geometry, Av2Black444MvpProfile::current())
+}
+
+fn av2_mvp_444_sequence_header_payload(
+    geometry: Av2VideoGeometry,
+    profile: Av2Black444MvpProfile,
+) -> Av2SyntaxPayload {
     let mut writer = Av2SyntaxWriter::new();
     let width_bits = av2_frame_dimension_bits(geometry.width);
     let height_bits = av2_frame_dimension_bits(geometry.height);
@@ -520,7 +563,7 @@ fn av2_black_444_sequence_header_payload(geometry: Av2VideoGeometry) -> Av2Synta
     );
     writer.write_flag("sequence_header.conf_win_enabled_flag", false);
 
-    write_fixed_black_444_sequence_tools(&mut writer);
+    write_fixed_black_444_sequence_tools(&mut writer, profile);
 
     writer.write_flag("sequence_header.film_grain_params_present", false);
     writer.write_flag("sequence_header.seq_extension_present_flag", false);
@@ -534,9 +577,10 @@ fn av2_frame_dimension_bits(dimension: usize) -> u8 {
     (64 - max_index.leading_zeros()) as u8
 }
 
-fn write_fixed_black_444_sequence_tools(writer: &mut Av2SyntaxWriter) {
-    let profile = Av2Black444MvpProfile::current();
-
+fn write_fixed_black_444_sequence_tools(
+    writer: &mut Av2SyntaxWriter,
+    profile: Av2Black444MvpProfile,
+) {
     // AV2 v1.0.0 sequence_header() tool groups, mirrored from AVM
     // write_sequence_header(). Values are the fixed AVM choices for one
     // black yuv444p8 still picture in the minimum viable bitstream subset.
@@ -628,6 +672,7 @@ fn write_fixed_black_444_sequence_tools(writer: &mut Av2SyntaxWriter) {
 fn av2_black_444_closed_loop_key_header_payload() -> Av2SyntaxPayload {
     av2_mvp_444_closed_loop_key_header_payload(
         false,
+        false,
         &Av2TileLayout::for_geometry(Av2VideoGeometry {
             width: 64,
             height: 64,
@@ -637,6 +682,7 @@ fn av2_black_444_closed_loop_key_header_payload() -> Av2SyntaxPayload {
 
 fn av2_mvp_444_closed_loop_key_header_payload(
     allow_screen_content_tools: bool,
+    allow_intrabc: bool,
     tile_layout: &Av2TileLayout,
 ) -> Av2SyntaxPayload {
     let profile = Av2Black444MvpProfile::current();
@@ -658,7 +704,14 @@ fn av2_mvp_444_closed_loop_key_header_payload(
     if allow_screen_content_tools {
         writer.write_flag("uncompressed_header.cur_frame_force_integer_mv", false);
     }
-    writer.write_flag("uncompressed_header.allow_intrabc", false);
+    writer.write_flag("uncompressed_header.allow_intrabc", allow_intrabc);
+    if allow_intrabc {
+        // AV2 v1.0.0 read_intrabc_params(): key frames signal global/local
+        // availability after allow_intrabc. FrameForge's first IBC path is
+        // local to the current 64x64 tile, so allow_global_intrabc is false
+        // and allow_local_intrabc is inferred true by AVM.
+        writer.write_flag("uncompressed_header.allow_global_intrabc", false);
+    }
     writer.write_flag(
         "uncompressed_header.disable_cdf_update",
         profile.disable_cdf_update,
@@ -738,6 +791,7 @@ fn av2_mvp_444_closed_loop_key_payload(
     let tile_layout = Av2TileLayout::for_geometry(geometry);
     let mut payload = av2_mvp_444_closed_loop_key_header_payload(
         frame_mode.allow_screen_content_tools(),
+        frame_mode.allow_intrabc(),
         &tile_layout,
     );
     let tile_payload = av2_tile_group_payload_for_mode(&tile_layout, frame_mode);
@@ -790,17 +844,15 @@ fn av2_tile_entropy_payload_for_region(
         Av2Mvp444FrameMode::Black => {
             av2_black_444_tile_entropy_payload_for_region(region, Av2Black444MvpProfile::current())
         }
-        Av2Mvp444FrameMode::LumaPalette(palette) => {
-            if av2_luma_palette_region_is_black(palette, region) {
-                av2_black_444_tile_entropy_payload_for_region(
-                    region,
-                    Av2Black444MvpProfile::current(),
-                )
+        Av2Mvp444FrameMode::LumaPalette { palette, ibc } => {
+            if !frame_mode.allow_intrabc() && av2_luma_palette_region_is_black(palette, region) {
+                av2_black_444_tile_entropy_payload_for_region(region, frame_mode.profile())
             } else {
                 av2_luma_palette_444_tile_entropy_payload_for_region(
                     region,
-                    Av2Black444MvpProfile::current(),
+                    frame_mode.profile(),
                     palette,
+                    ibc,
                 )
             }
         }
@@ -938,6 +990,8 @@ fn av2_spec_section_for_syntax_field(name: &str) -> &'static str {
 fn av2_spec_section_for_entropy_field(name: &str) -> &'static str {
     if name.starts_with("tile.partition.") {
         "AV2 v1.0.0 Section 5.20.3.2 partition()"
+    } else if name.starts_with("tile.intrabc.") {
+        "AV2 v1.0.0 Sections 5.20.5.1 and 5.20.5.3 intra block copy syntax"
     } else if name.starts_with("tile.intra.") {
         "AV2 v1.0.0 Sections 5.20.5.5 and 5.20.5.6 intra mode syntax"
     } else if name.starts_with("tile.palette.") {
