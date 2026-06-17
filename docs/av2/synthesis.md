@@ -8,19 +8,19 @@ Older bring-up and intermediate optimization checkpoints are intentionally kept
 out of this report so the document remains focused on the current validated
 baseline and its immediate delta. Use git history for retired measurements.
 
-## 2026-06-17 Direct Closed Header Assembly
+## 2026-06-17 Residual Entropy Context Cleanup
 
-Measured after replacing the AV2 closed-header repeated dynamic bit writes with
-direct fixed-field assignments plus a single contiguous tile-info mask. This is
-a synthesis cleanup only; encoded AV2 bitstreams and output scheduling are
+Measured after replacing the AV2 residual cumulative-level context adder chain
+with a saturated reduction tree and a scan-order EOB priority mask. This is a
+synthesis cleanup only; encoded AV2 bitstreams and output scheduling are
 unchanged.
 
 Baseline and current sources:
 
-- Baseline Git SHA: `fb0c9e5c49edde163f75faa36e922524355cd025`
-- Current validated source Git SHA: `0059f7a8f61fa78529b075e699d7b118de7882f4`
-- Baseline mode: narrowed closed-header bit counters.
-- Current mode: direct closed-header field assembly.
+- Baseline Git SHA: `0059f7a8f61fa78529b075e699d7b118de7882f4`
+- Current validated source Git SHA: `88dbd0f5809a69d9b5fd2e4411bf27ca09ec9898`
+- Baseline mode: direct closed-header field assembly.
+- Current mode: residual entropy context cleanup.
 - Delta columns compare against the previous documented AV2 top-synthesis
   baseline for the same DUT and board.
 
@@ -58,17 +58,17 @@ Synthesis configuration:
 
 Synthesis result:
 
-- Yosys synthesis passed in 235.2 seconds.
-- Peak child RSS observed by the synthesis runner was 1304.47 MiB.
-- Runtime stayed 64.8 seconds below the 300 second review threshold and inside
+- Yosys synthesis passed in 234.7 seconds.
+- Peak child RSS observed by the synthesis runner was 1286.67 MiB.
+- Runtime stayed 65.3 seconds below the 300 second review threshold and inside
   the 600 second hard timeout and 3072 MiB memory limit.
-- Post-synthesis flattened-cell reporting completed in 5.1 seconds.
-- Post-synthesis critical-path reporting completed in 41.2 seconds with peak
-  memory 1304.47 MiB and topological path length 66.
-- The longest top-level path now starts at
-  `palette_analyzer.luma_fetch_txb_samples`, runs through the luma palette
-  residual symbolizer's transform/residual context accumulation, and reaches
-  `entropy_context_q`.
+- Post-synthesis flattened-cell reporting completed in 5.0 seconds.
+- Post-synthesis critical-path reporting completed in 41.9 seconds with peak
+  memory 1286.67 MiB and topological path length 61.
+- The longest top-level path now starts at `palette_row_q`, runs through the
+  palette analyzer's top-left query logic, the luma palette symbolizer's
+  priority/token/CDF path, the entropy op mux, and the range coder normalization
+  path to `low_q`.
 - The isolated `ff_av2_chroma_sample_store` path length remains 1.
 
 Flattened Xilinx-cell estimate from
@@ -76,22 +76,22 @@ Flattened Xilinx-cell estimate from
 
 | Metric | Count |
 |---|---:|
-| Cells | 78870 |
-| Estimated LCs | 25127 |
-| CARRY4 | 2269 |
+| Cells | 77824 |
+| Estimated LCs | 24551 |
+| CARRY4 | 2243 |
 | DSP48E1 | 15 |
 | FDCE | 4923 |
 | FDPE | 24 |
 | FDRE | 28403 |
 | FDSE | 14 |
-| LUT1 | 442 |
-| LUT2 | 6532 |
-| LUT3 | 4424 |
-| LUT4 | 2208 |
-| LUT5 | 2637 |
-| LUT6 | 15858 |
-| MUXF7 | 1931 |
-| MUXF8 | 435 |
+| LUT1 | 268 |
+| LUT2 | 6547 |
+| LUT3 | 4189 |
+| LUT4 | 2231 |
+| LUT5 | 2354 |
+| LUT6 | 15713 |
+| MUXF7 | 1767 |
+| MUXF8 | 367 |
 | RAMB36E1 | 19 |
 | RAM32M | 4 |
 | RAM64M | 1536 |
@@ -100,35 +100,35 @@ Delta from the previous documented top-synthesis baseline:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| Synthesis time | 240.5 s | 235.2 s | -5.3 s |
-| Peak synthesis RSS | 1321.33 MiB | 1304.47 MiB | -16.86 MiB |
-| Cell report time | 5.2 s | 5.1 s | -0.1 s |
-| Critical-path report time | 41.8 s | 41.2 s | -0.6 s |
-| Topological path length | 69 | 66 | -3 |
-| Cells | 81663 | 78870 | -2793 |
-| Estimated LCs | 26287 | 25127 | -1160 |
-| CARRY4 | 2431 | 2269 | -162 |
+| Synthesis time | 235.2 s | 234.7 s | -0.5 s |
+| Peak synthesis RSS | 1304.47 MiB | 1286.67 MiB | -17.80 MiB |
+| Cell report time | 5.1 s | 5.0 s | -0.1 s |
+| Critical-path report time | 41.2 s | 41.9 s | +0.7 s |
+| Topological path length | 66 | 61 | -5 |
+| Cells | 78870 | 77824 | -1046 |
+| Estimated LCs | 25127 | 24551 | -576 |
+| CARRY4 | 2269 | 2243 | -26 |
 | DSP48E1 | 15 | 15 | 0 |
 | FDCE | 4923 | 4923 | 0 |
 | FDPE | 24 | 24 | 0 |
 | FDRE | 28403 | 28403 | 0 |
 | FDSE | 14 | 14 | 0 |
-| LUT1 | 430 | 442 | +12 |
-| LUT2 | 6838 | 6532 | -306 |
-| LUT3 | 4371 | 4424 | +53 |
-| LUT4 | 2581 | 2208 | -373 |
-| LUT5 | 2526 | 2637 | +111 |
-| LUT6 | 16809 | 15858 | -951 |
-| MUXF7 | 2856 | 1931 | -925 |
-| MUXF8 | 693 | 435 | -258 |
+| LUT1 | 442 | 268 | -174 |
+| LUT2 | 6532 | 6547 | +15 |
+| LUT3 | 4424 | 4189 | -235 |
+| LUT4 | 2208 | 2231 | +23 |
+| LUT5 | 2637 | 2354 | -283 |
+| LUT6 | 15858 | 15713 | -145 |
+| MUXF7 | 1931 | 1767 | -164 |
+| MUXF8 | 435 | 367 | -68 |
 | RAMB36E1 | 19 | 19 | 0 |
 | RAM32M | 4 | 4 | 0 |
 | RAM64M | 1536 | 1536 | 0 |
 
-The direct closed-header assembly reduced the reported topological path length
-by 3 and moved the longest top-level path out of `ff_av2_bitstream_headers`.
-It also reduced cells by 2793, estimated LCs by 1160, CARRY4 cells by 162, peak
-RSS by 16.86 MiB, and synthesis runtime by 5.3 seconds. BRAM, DSP, and register
-counts are unchanged. The next likely timing target is luma palette residual
-symbolization, especially transform/residual context accumulation into
-`entropy_context_q`.
+The residual context cleanup reduced the reported topological path length by 5
+and moved the longest top-level path out of the luma palette residual
+symbolizer. It also reduced cells by 1046, estimated LCs by 576, CARRY4 cells by
+26, peak RSS by 17.80 MiB, and synthesis runtime by 0.5 seconds. BRAM, DSP, and
+register counts are unchanged. The next likely timing target is the luma palette
+symbolizer path that starts at top-left neighbor lookup and feeds the range
+coder through palette token CDF selection.
