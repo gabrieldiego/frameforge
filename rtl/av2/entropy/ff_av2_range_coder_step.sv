@@ -20,13 +20,16 @@ module ff_av2_range_coder_step (
 );
 
   logic [63:0] raw_low_w;
-  logic [31:0] raw_rng_w;
+  logic [15:0] raw_rng_w;
   logic signed [7:0] raw_bypass_bits_w;
-  logic [31:0] rr_w;
-  logic [31:0] pp_fl_w;
-  logic [31:0] pp_fh_w;
-  logic [31:0] scaled_u_w;
-  logic [31:0] scaled_v_w;
+  logic [15:0] rng16_w;
+  logic [7:0] rr_w;
+  logic [12:0] pp_fl_w;
+  logic [12:0] pp_fh_w;
+  logic [20:0] scaled_u_product_w;
+  logic [20:0] scaled_v_product_w;
+  logic [15:0] scaled_u_w;
+  logic [15:0] scaled_v_w;
   logic signed [7:0] ilog_rng_w;
   logic signed [7:0] norm_c_w;
   logic signed [7:0] norm_d_w;
@@ -37,23 +40,29 @@ module ff_av2_range_coder_step (
   logic [63:0] norm_low_work_w;
 
   always @* begin
-    rr_w = rng >> 8;
-    pp_fl_w = (((op_fl >> 7) << 4) + op_fl_inc);
-    pp_fh_w = (((op_fh >> 7) << 4) + op_fh_inc);
-    scaled_u_w = (((rr_w * pp_fl_w[31:0]) >> 7) << 3);
-    scaled_v_w = (((rr_w * pp_fh_w[31:0]) >> 7) << 3);
+    // AV2 v1.0.0 entropy coding keeps rng within 16 bits before normalize();
+    // see the software model's normalize() assertion. Keep the probability
+    // scaling datapath at that width instead of synthesizing 32-bit multiplies.
+    rng16_w = rng[15:0];
+    rr_w = rng16_w[15:8];
+    pp_fl_w = {op_fl[15:7], 4'd0} + {8'd0, op_fl_inc};
+    pp_fh_w = {op_fh[15:7], 4'd0} + {8'd0, op_fh_inc};
+    scaled_u_product_w = rr_w * pp_fl_w;
+    scaled_v_product_w = rr_w * pp_fh_w;
+    scaled_u_w = {scaled_u_product_w[19:7], 3'd0};
+    scaled_v_w = {scaled_v_product_w[19:7], 3'd0};
 
     if (op_literal) begin
       raw_low_w = (low << op_literal_bits) + (rng * op_literal_value);
-      raw_rng_w = rng;
+      raw_rng_w = rng16_w;
       raw_bypass_bits_w = {3'd0, op_literal_bits};
     end else if (op_fl < 32'd32768) begin
-      raw_low_w = low + (rng - scaled_u_w);
+      raw_low_w = low + {48'd0, (rng16_w - scaled_u_w)};
       raw_rng_w = scaled_u_w - scaled_v_w;
       raw_bypass_bits_w = 8'sd0;
     end else begin
       raw_low_w = low;
-      raw_rng_w = rng - scaled_v_w;
+      raw_rng_w = rng16_w - scaled_v_w;
       raw_bypass_bits_w = 8'sd0;
     end
 
@@ -114,7 +123,7 @@ module ff_av2_range_coder_step (
     end
 
     norm_low = norm_low_work_w << norm_d_w[5:0];
-    norm_rng = raw_rng_w << norm_d_w[4:0];
+    norm_rng = {16'd0, raw_rng_w << norm_d_w[3:0]};
     norm_cnt = norm_s_after_w;
   end
 
