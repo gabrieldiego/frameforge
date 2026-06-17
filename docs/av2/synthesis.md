@@ -472,6 +472,119 @@ Area increased because the full-screen 64x64 + multi-CTU regression profile kept
 full luma-palette symbolizer chain active and did not introduce further partitioning
 or sharing optimizations.
 
+## 2026-06-16 Left-Hash IBC Regression + Synthesis
+
+Measured after adding the first AV2 left-hash IBC path and constraining the
+fixed-left-BV implementation to terminal visible 8x8 leaves. The restriction
+keeps the current implementation from feeding incomplete post-IBC neighbor
+state into later leaves while still validating the syntax path, hash matcher,
+and SW/RTL bitstream parity.
+
+Baseline and current sources:
+
+- Baseline Git SHA: `0adfd7466c9de101af7d1960d9bf033d1ee3a441`
+- Current validated source Git SHA: `d04435fd29ec73e18181c54c2452b869add56b87`
+- Delta columns compare against the previous documented AV2 top-synthesis
+  baseline, `2026-06-16 Screenshot Sweeps + Multi-CTU`.
+
+Validation configuration:
+
+```sh
+make validate-set CODEC=av2 \
+  VALIDATION_SET=screenshot-sweep-444 \
+  VALIDATION_STOP_ON_FAIL=1 \
+  VALIDATION_WITH_SYNTH=0
+make validate-set CODEC=av2 \
+  VALIDATION_SET=screenshot-multictu-444 \
+  VALIDATION_STOP_ON_FAIL=1 \
+  VALIDATION_WITH_SYNTH=0
+```
+
+Result:
+
+- `screenshot-sweep-444`: OK (64/64)
+- `screenshot-multictu-444`: OK (10/10)
+
+Synthesis configuration:
+
+- command: `make synth CODEC=av2`
+- DUT: `av2-encoder`
+- RTL top: `ff_av2_encoder`
+- board: `synth/boards/arty-z7-10.env`
+- clock metadata: `25 MHz`
+- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
+- memory limit: 3072 MiB
+- feature flags: palette 4:4:4 enabled, exact-hash IBC 4:4:4 enabled
+
+Result:
+
+- Yosys synthesis passed in 275.6 seconds.
+- Peak child RSS observed by the synthesis runner was 1202.92 MiB.
+- Runtime stayed below the 300 second review threshold and well inside the
+  600 second hard timeout.
+- Post-synthesis critical-path reporting completed in 41.1 seconds with peak
+  memory 1202.92 MiB and topological path length 127.
+- The longest top-level path remains in the luma palette/range-coder path,
+  from `palette_analyzer.query_palette_colors_q` through
+  `ff_av2_luma_palette_symbolizer` delta-bit calculation toward `low_q`.
+- The isolated `ff_av2_chroma_sample_store` path length remains 1.
+
+Flattened Xilinx-cell estimate from
+`yosys -p 'read_json synth/out/arty-z7-10/ff_av2_encoder/ff_av2_encoder.json; hierarchy -top ff_av2_encoder; flatten; stat -tech xilinx'`:
+
+| Metric | Count |
+|---|---:|
+| Cells | 68721 |
+| Estimated LCs | 23723 |
+| CARRY4 | 2595 |
+| DSP48E1 | 15 |
+| FDCE | 4075 |
+| FDPE | 24 |
+| FDRE | 20129 |
+| FDSE | 38 |
+| LUT1 | 398 |
+| LUT2 | 6107 |
+| LUT3 | 5271 |
+| LUT4 | 2295 |
+| LUT5 | 2436 |
+| LUT6 | 13721 |
+| MUXF7 | 2650 |
+| MUXF8 | 727 |
+| RAMB36E1 | 19 |
+| RAM32M | 4 |
+| RAM64M | 1536 |
+
+Delta from the previous documented top-synthesis baseline:
+
+| Metric | Baseline | Current | Delta |
+|---|---:|---:|---:|
+| Synthesis time | 229.6 s | 275.6 s | +46.0 s |
+| Peak synthesis RSS | 1129.09 MiB | 1202.92 MiB | +73.83 MiB |
+| Critical-path report time | 26.0 s | 41.1 s | +15.1 s |
+| Topological path length | 126 | 127 | +1 |
+| Cells | 61852 | 68721 | +6869 |
+| Estimated LCs | 22002 | 23723 | +1721 |
+| CARRY4 | 2532 | 2595 | +63 |
+| DSP48E1 | 15 | 15 | 0 |
+| FDCE | 1857 | 4075 | +2218 |
+| FDPE | 10 | 24 | +14 |
+| FDRE | 20096 | 20129 | +33 |
+| LUT1 | 517 | 398 | -119 |
+| LUT2 | 5699 | 6107 | +408 |
+| LUT3 | 4829 | 5271 | +442 |
+| LUT4 | 2197 | 2295 | +98 |
+| LUT5 | 2267 | 2436 | +169 |
+| LUT6 | 12709 | 13721 | +1012 |
+| MUXF7 | 2437 | 2650 | +213 |
+| MUXF8 | 635 | 727 | +92 |
+| RAMB36E1 | 19 | 19 | 0 |
+| RAM32M | 4 | 4 | 0 |
+| RAM64M | 1536 | 1536 | 0 |
+
+The IBC path adds modest LUT/control cost and a small critical-path increase,
+but does not add block RAM pressure or a new dominant critical-path family. The
+memory headroom remains acceptable under the 3072 MiB synthesis cap.
+
 ## Retired Bring-Up Measurements
 
 Temporary AV2 fixed-output emitters existed during validation plumbing bring-up.

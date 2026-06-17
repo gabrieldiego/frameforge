@@ -24,6 +24,21 @@ validation and synthesis checkpoints.
   - one full AV2 sweep including `screenshot-sweep-444` and `screenshot-multictu-444`,
   - one Yosys synthesis baseline and documented delta.
 
+## Feature Baseline Routine
+
+Use this routine for every new AV2 coding tool or RTL cleanup that changes the
+bitstream path:
+
+1. Commit the validated SW/RTL source first, before writing the report docs.
+2. Run the required validation sets with strict SW/RTL/REF checksum parity.
+3. Run `make synth CODEC=av2` on the committed source and capture elapsed time,
+   peak RSS, critical-path length, and flattened Xilinx-cell estimates.
+4. Update `quality-bitrate.md` with per-vector bits/bpp and deltas against the
+   previous report baseline, including both baseline and current source Git SHA1s.
+5. Update `synthesis.md` with area/timing/memory deltas against the previous
+   synthesis baseline, including both baseline and current source Git SHA1s.
+6. Commit the report/doc update separately from the source checkpoint.
+
 ## Roadmap
 
 ### Phase 0 — Baseline and Confidence
