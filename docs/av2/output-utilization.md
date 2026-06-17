@@ -18,18 +18,18 @@ Metric definitions:
 - `cycles/bit`: `total_cycles / rtl_bitstream_bits`.
 - `cycles/input pixel`: `total_cycles / (width * height * frames)`.
 
-## 2026-06-17 Palette CDF Token Mux Cleanup
+## 2026-06-17 Palette Query Map Unpack
 
-Measured after replacing the AV2 luma palette map-token CDF arrays with named
-CDF endpoints and an explicit token interval mux. This is a synthesis cleanup
-only; it does not change output scheduling or encoded AV2 bitstreams.
+Measured after unpacking the selected AV2 luma palette map into 64 registered
+3-bit query entries during the existing palette query cycle. This is a synthesis
+cleanup only; it does not change output scheduling or encoded AV2 bitstreams.
 
 Baseline and current sources:
 
-- Baseline Git SHA: `e2cac734b0ca685fc3e26258b27a2a2715531daa`
-- Current validated source Git SHA: `f8a3c0bf8931504e690088fe96d454c780316e44`
-- Baseline mode: range coder datapath narrowing.
-- Current mode: palette CDF token mux cleanup.
+- Baseline Git SHA: `f8a3c0bf8931504e690088fe96d454c780316e44`
+- Current validated source Git SHA: `561f9f3f6cf0587907ddaab98c716ab084c3c256`
+- Baseline mode: palette CDF token mux cleanup.
+- Current mode: palette query map unpack.
 - Delta columns compare against the baseline checkpoint above.
 
 Validation commands:
