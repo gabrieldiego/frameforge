@@ -18,19 +18,19 @@ Metric definitions:
 - `cycles/bit`: `total_cycles / rtl_bitstream_bits`.
 - `cycles/input pixel`: `total_cycles / (width * height * frames)`.
 
-## 2026-06-17 Residual Entropy Context Cleanup
+## 2026-06-17 Palette Token Ranking Cleanup
 
-Measured after replacing the AV2 residual cumulative-level context adder chain
-with a saturated reduction tree and a scan-order EOB priority mask. This is a
-synthesis cleanup only; it does not change output scheduling or encoded AV2
-bitstreams.
+Measured after replacing the AV2 luma palette token rank calculation's full
+8-entry priority-hit mask with a direct count of priority colors below the
+current palette index. This is a synthesis cleanup only; it does not change
+output scheduling or encoded AV2 bitstreams.
 
 Baseline and current sources:
 
-- Baseline Git SHA: `0059f7a8f61fa78529b075e699d7b118de7882f4`
-- Current validated source Git SHA: `88dbd0f5809a69d9b5fd2e4411bf27ca09ec9898`
-- Baseline mode: direct closed-header field assembly.
-- Current mode: residual entropy context cleanup.
+- Baseline Git SHA: `88dbd0f5809a69d9b5fd2e4411bf27ca09ec9898`
+- Current validated source Git SHA: `1c68cec7173dc4aa40e50370834d85587470665c`
+- Baseline mode: residual entropy context cleanup.
+- Current mode: palette token ranking cleanup.
 - Delta columns compare against the baseline checkpoint above.
 
 Validation commands:
