@@ -5,7 +5,7 @@ module ff_av2_entropy_coder (
   input  logic        leaf_active,
   input  logic [63:0] low,
   input  logic [31:0] rng,
-  input  integer      cnt,
+  input  logic signed [7:0] cnt,
   input  logic [2:0]  phase,
   input  logic [6:0]  step,
   input  logic [1:0]  partition,
@@ -60,7 +60,7 @@ module ff_av2_entropy_coder (
   output logic [15:0] norm_push1,
   output logic [63:0] norm_low,
   output logic [31:0] norm_rng,
-  output integer      norm_cnt
+  output logic signed [7:0] norm_cnt
 );
 
   logic        op_literal_w;

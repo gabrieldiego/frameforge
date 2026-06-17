@@ -114,7 +114,7 @@ module ff_av2_encoder #(
   logic [15:0] seq_bit_pos_q;
   logic [63:0] low_q;
   logic [31:0] rng_q;
-  integer cnt_q;
+  logic signed [7:0] cnt_q;
   logic [2:0] phase_q;
   logic [6:0] step_q;
   logic [5:0] palette_row_q;
@@ -143,8 +143,8 @@ module ff_av2_encoder #(
   logic [7:0] partition_above_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
   logic [7:0] partition_left_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
   logic [63:0] finish_e_q;
-  integer finish_c_q;
-  integer finish_s_q;
+  logic signed [7:0] finish_c_q;
+  logic signed [7:0] finish_s_q;
   logic [15:0] carry_q;
   logic [15:0] carry_index_q;
   integer context_index_q;
@@ -167,7 +167,7 @@ module ff_av2_encoder #(
   logic [15:0] norm_push1_w;
   logic [63:0] norm_low_w;
   logic [31:0] norm_rng_w;
-  integer norm_cnt_w;
+  logic signed [7:0] norm_cnt_w;
   logic [63:0] seq_load_value_w;
   logic [6:0] seq_load_bits_w;
   logic [4:0] width_bits_w;
@@ -867,10 +867,11 @@ module ff_av2_encoder #(
           end
         end
         ST_FINISH_PUSH: begin
-          if (finish_s_q > 0) begin
+          if (finish_s_q > 8'sd0) begin
             precarry_write_valid_w = 1'b1;
             precarry_write_addr_w = precarry_len_q;
-            precarry_write_data_w = (finish_e_q >> (finish_c_q + 16)) & 16'hffff;
+            precarry_write_data_w =
+              (finish_e_q >> (finish_c_q[5:0] + 6'd16)) & 16'hffff;
           end
         end
         ST_CARRY_WRITE: begin
@@ -1125,7 +1126,7 @@ module ff_av2_encoder #(
       m_axis_last <= 1'b0;
       low_q <= 64'd0;
       rng_q <= 32'h8000;
-      cnt_q <= -9;
+      cnt_q <= -8'sd9;
       precarry_read_addr_q <= 16'd0;
       pending_push_valid_q <= 1'b0;
       pending_push_word_q <= 16'd0;
@@ -1178,8 +1179,8 @@ module ff_av2_encoder #(
       partition_emit_step_q <= 1'b0;
       stack_sp_q <= 5'd0;
       finish_e_q <= 64'd0;
-      finish_c_q <= 0;
-      finish_s_q <= 0;
+      finish_c_q <= 8'sd0;
+      finish_s_q <= 8'sd0;
       carry_q <= 16'd0;
       carry_index_q <= 16'd0;
       output_byte_q <= 8'd0;
@@ -1236,7 +1237,7 @@ module ff_av2_encoder #(
           seq_mem_q[15] <= 8'd0;
           low_q <= 64'd0;
           rng_q <= 32'h8000;
-          cnt_q <= -9;
+          cnt_q <= -8'sd9;
           precarry_read_addr_q <= 16'd0;
           pending_push_valid_q <= 1'b0;
           pending_push_word_q <= 16'd0;
@@ -1317,7 +1318,7 @@ module ff_av2_encoder #(
                 frame_ibc_mode_q <= frame_ibc_mode_q | palette_analyzer_luma_mode_w;
                 low_q <= 64'd0;
                 rng_q <= 32'h8000;
-                cnt_q <= -9;
+                cnt_q <= -8'sd9;
                 precarry_read_addr_q <= 16'd0;
                 pending_push_valid_q <= 1'b0;
                 pending_push_word_q <= 16'd0;
@@ -1722,21 +1723,22 @@ module ff_av2_encoder #(
           ST_FINISH_INIT: begin
             finish_e_q <= ((low_q + 64'h3fff) & ~64'h3fff) | 64'h4000;
             finish_c_q <= cnt_q;
-            finish_s_q <= cnt_q + 10;
+            finish_s_q <= cnt_q + 8'sd10;
             state_q <= ST_FINISH_PUSH;
           end
           ST_FINISH_PUSH: begin
-            if (finish_s_q > 0) begin
+            if (finish_s_q > 8'sd0) begin
               precarry_len_q <= precarry_len_q + 16'd1;
-              if ((finish_c_q + 16) >= 64) begin
+              if ((finish_c_q + 8'sd16) >= 8'sd64) begin
                 finish_e_q <= 64'd0;
-              end else if ((finish_c_q + 16) <= 0) begin
+              end else if ((finish_c_q + 8'sd16) <= 8'sd0) begin
                 finish_e_q <= finish_e_q;
               end else begin
-                finish_e_q <= finish_e_q & ((64'd1 << (finish_c_q + 16)) - 64'd1);
+                finish_e_q <=
+                  finish_e_q & ((64'd1 << (finish_c_q[5:0] + 6'd16)) - 64'd1);
               end
-              finish_c_q <= finish_c_q - 8;
-              finish_s_q <= finish_s_q - 8;
+              finish_c_q <= finish_c_q - 8'sd8;
+              finish_s_q <= finish_s_q - 8'sd8;
             end else begin
               carry_q <= 16'd0;
               carry_index_q <= precarry_len_q - 16'd1;
