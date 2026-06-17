@@ -55,9 +55,22 @@ module ff_av2_luma_palette_symbolizer (
   logic color_priority2_match_w;
   logic [1:0] color_priority_before_count_w;
   logic [2:0] color_non_priority_rank_w;
-  logic [2:0] cdf_symbol_w;
-  logic [31:0] cdf_w [0:7];
-  logic [4:0] prob_inc_w [0:7];
+  logic [31:0] cdf0_w;
+  logic [31:0] cdf1_w;
+  logic [31:0] cdf2_w;
+  logic [31:0] cdf3_w;
+  logic [31:0] cdf4_w;
+  logic [31:0] cdf5_w;
+  logic [31:0] cdf6_w;
+  logic [31:0] cdf7_w;
+  logic [4:0] prob_inc0_w;
+  logic [4:0] prob_inc1_w;
+  logic [4:0] prob_inc2_w;
+  logic [4:0] prob_inc3_w;
+  logic [4:0] prob_inc4_w;
+  logic [4:0] prob_inc5_w;
+  logic [4:0] prob_inc6_w;
+  logic [4:0] prob_inc7_w;
 
   always @* begin
     color_first_step_w = palette_cache_size + 5'd2;
@@ -180,62 +193,62 @@ module ff_av2_luma_palette_symbolizer (
   end
 
   always @* begin
-    cdf_w[0] = 32'd32768;
-    cdf_w[1] = 32'd0;
-    cdf_w[2] = 32'd0;
-    cdf_w[3] = 32'd0;
-    cdf_w[4] = 32'd0;
-    cdf_w[5] = 32'd0;
-    cdf_w[6] = 32'd0;
-    cdf_w[7] = 32'd0;
-    prob_inc_w[0] = 0;
-    prob_inc_w[1] = 0;
-    prob_inc_w[2] = 0;
-    prob_inc_w[3] = 0;
-    prob_inc_w[4] = 0;
-    prob_inc_w[5] = 0;
-    prob_inc_w[6] = 0;
-    prob_inc_w[7] = 0;
+    cdf0_w = 32'd32768;
+    cdf1_w = 32'd0;
+    cdf2_w = 32'd0;
+    cdf3_w = 32'd0;
+    cdf4_w = 32'd0;
+    cdf5_w = 32'd0;
+    cdf6_w = 32'd0;
+    cdf7_w = 32'd0;
+    prob_inc0_w = 0;
+    prob_inc1_w = 0;
+    prob_inc2_w = 0;
+    prob_inc3_w = 0;
+    prob_inc4_w = 0;
+    prob_inc5_w = 0;
+    prob_inc6_w = 0;
+    prob_inc7_w = 0;
 
     if (palette_size == 4'd2) begin
-      prob_inc_w[0] = 8;
-      prob_inc_w[1] = 0;
+      prob_inc0_w = 8;
+      prob_inc1_w = 0;
       case (color_ctx_w)
-        3'd0: cdf_w[0] = 32'd4628;
-        3'd1: cdf_w[0] = 32'd16384;
-        3'd2: cdf_w[0] = 32'd24186;
-        3'd3: cdf_w[0] = 32'd5355;
-        default: cdf_w[0] = 32'd2339;
+        3'd0: cdf0_w = 32'd4628;
+        3'd1: cdf0_w = 32'd16384;
+        3'd2: cdf0_w = 32'd24186;
+        3'd3: cdf0_w = 32'd5355;
+        default: cdf0_w = 32'd2339;
       endcase
     end else if (palette_size == 4'd4) begin
-      prob_inc_w[0] = 12;
-      prob_inc_w[1] = 8;
-      prob_inc_w[2] = 4;
-      prob_inc_w[3] = 0;
+      prob_inc0_w = 12;
+      prob_inc1_w = 8;
+      prob_inc2_w = 4;
+      prob_inc3_w = 0;
       case (color_ctx_w)
-        3'd0: begin cdf_w[0] = 32'd9062; cdf_w[1] = 32'd5806; cdf_w[2] = 32'd3708; end
-        3'd1: begin cdf_w[0] = 32'd22792; cdf_w[1] = 32'd10252; cdf_w[2] = 32'd5386; end
-        3'd2: begin cdf_w[0] = 32'd26077; cdf_w[1] = 32'd7308; cdf_w[2] = 32'd3534; end
-        3'd3: begin cdf_w[0] = 32'd13859; cdf_w[1] = 32'd8843; cdf_w[2] = 32'd4365; end
-        default: begin cdf_w[0] = 32'd2460; cdf_w[1] = 32'd1692; cdf_w[2] = 32'd950; end
+        3'd0: begin cdf0_w = 32'd9062; cdf1_w = 32'd5806; cdf2_w = 32'd3708; end
+        3'd1: begin cdf0_w = 32'd22792; cdf1_w = 32'd10252; cdf2_w = 32'd5386; end
+        3'd2: begin cdf0_w = 32'd26077; cdf1_w = 32'd7308; cdf2_w = 32'd3534; end
+        3'd3: begin cdf0_w = 32'd13859; cdf1_w = 32'd8843; cdf2_w = 32'd4365; end
+        default: begin cdf0_w = 32'd2460; cdf1_w = 32'd1692; cdf2_w = 32'd950; end
       endcase
     end else begin
       // AV2 v1.0.0 Section 8.3 CDF updates: nsymbs=8 selects the 8-symbol
       // increment row used by the software entropy writer.
-      prob_inc_w[0] = 14;
-      prob_inc_w[1] = 12;
-      prob_inc_w[2] = 10;
-      prob_inc_w[3] = 8;
-      prob_inc_w[4] = 6;
-      prob_inc_w[5] = 4;
-      prob_inc_w[6] = 2;
-      prob_inc_w[7] = 0;
+      prob_inc0_w = 14;
+      prob_inc1_w = 12;
+      prob_inc2_w = 10;
+      prob_inc3_w = 8;
+      prob_inc4_w = 6;
+      prob_inc5_w = 4;
+      prob_inc6_w = 2;
+      prob_inc7_w = 0;
       case (color_ctx_w)
-        3'd0: begin cdf_w[0] = 32'd10297; cdf_w[1] = 32'd7685; cdf_w[2] = 32'd6784; cdf_w[3] = 32'd5875; cdf_w[4] = 32'd5114; cdf_w[5] = 32'd4018; cdf_w[6] = 32'd2865; end
-        3'd1: begin cdf_w[0] = 32'd25226; cdf_w[1] = 32'd15711; cdf_w[2] = 32'd13617; cdf_w[3] = 32'd9218; cdf_w[4] = 32'd7309; cdf_w[5] = 32'd5702; cdf_w[6] = 32'd3964; end
-        3'd2: begin cdf_w[0] = 32'd25186; cdf_w[1] = 32'd12331; cdf_w[2] = 32'd10040; cdf_w[3] = 32'd8146; cdf_w[4] = 32'd6253; cdf_w[5] = 32'd4189; cdf_w[6] = 32'd2136; end
-        3'd3: begin cdf_w[0] = 32'd10666; cdf_w[1] = 32'd8624; cdf_w[2] = 32'd5852; cdf_w[3] = 32'd4617; cdf_w[4] = 32'd3922; cdf_w[5] = 32'd3556; cdf_w[6] = 32'd2615; end
-        default: begin cdf_w[0] = 32'd2244; cdf_w[1] = 32'd1881; cdf_w[2] = 32'd1612; cdf_w[3] = 32'd1375; cdf_w[4] = 32'd1142; cdf_w[5] = 32'd857; cdf_w[6] = 32'd487; end
+        3'd0: begin cdf0_w = 32'd10297; cdf1_w = 32'd7685; cdf2_w = 32'd6784; cdf3_w = 32'd5875; cdf4_w = 32'd5114; cdf5_w = 32'd4018; cdf6_w = 32'd2865; end
+        3'd1: begin cdf0_w = 32'd25226; cdf1_w = 32'd15711; cdf2_w = 32'd13617; cdf3_w = 32'd9218; cdf4_w = 32'd7309; cdf5_w = 32'd5702; cdf6_w = 32'd3964; end
+        3'd2: begin cdf0_w = 32'd25186; cdf1_w = 32'd12331; cdf2_w = 32'd10040; cdf3_w = 32'd8146; cdf4_w = 32'd6253; cdf5_w = 32'd4189; cdf6_w = 32'd2136; end
+        3'd3: begin cdf0_w = 32'd10666; cdf1_w = 32'd8624; cdf2_w = 32'd5852; cdf3_w = 32'd4617; cdf4_w = 32'd3922; cdf5_w = 32'd3556; cdf6_w = 32'd2615; end
+        default: begin cdf0_w = 32'd2244; cdf1_w = 32'd1881; cdf2_w = 32'd1612; cdf3_w = 32'd1375; cdf4_w = 32'd1142; cdf5_w = 32'd857; cdf6_w = 32'd487; end
       endcase
     end
   end
@@ -363,16 +376,60 @@ module ff_av2_luma_palette_symbolizer (
             op_literal_bits = 5'd3;
           end
         end else begin
-          cdf_symbol_w = color_token_w;
-          if (cdf_symbol_w == 0) begin
-            op_fl = 32'd32768;
-            op_fl_inc = 0;
-          end else begin
-            op_fl = cdf_w[cdf_symbol_w - 1];
-            op_fl_inc = prob_inc_w[cdf_symbol_w - 1];
-          end
-          op_fh = cdf_w[cdf_symbol_w];
-          op_fh_inc = prob_inc_w[cdf_symbol_w];
+          // AV2 v1.0.0 Section 5.20.8.4 palette_tokens(): token N encodes
+          // interval [cdf[N-1], cdf[N]), with token 0 using the upper range.
+          // Keep this as an explicit token mux so synthesis does not build a
+          // dynamic CDF memory read on the palette-map critical path.
+          case (color_token_w)
+            3'd0: begin
+              op_fl = 32'd32768;
+              op_fh = cdf0_w;
+              op_fl_inc = 0;
+              op_fh_inc = prob_inc0_w;
+            end
+            3'd1: begin
+              op_fl = cdf0_w;
+              op_fh = cdf1_w;
+              op_fl_inc = prob_inc0_w;
+              op_fh_inc = prob_inc1_w;
+            end
+            3'd2: begin
+              op_fl = cdf1_w;
+              op_fh = cdf2_w;
+              op_fl_inc = prob_inc1_w;
+              op_fh_inc = prob_inc2_w;
+            end
+            3'd3: begin
+              op_fl = cdf2_w;
+              op_fh = cdf3_w;
+              op_fl_inc = prob_inc2_w;
+              op_fh_inc = prob_inc3_w;
+            end
+            3'd4: begin
+              op_fl = cdf3_w;
+              op_fh = cdf4_w;
+              op_fl_inc = prob_inc3_w;
+              op_fh_inc = prob_inc4_w;
+            end
+            3'd5: begin
+              op_fl = cdf4_w;
+              op_fh = cdf5_w;
+              op_fl_inc = prob_inc4_w;
+              op_fh_inc = prob_inc5_w;
+            end
+            3'd6: begin
+              op_fl = cdf5_w;
+              op_fh = cdf6_w;
+              op_fl_inc = prob_inc5_w;
+              op_fh_inc = prob_inc6_w;
+            end
+            default: begin
+              op_fl = cdf6_w;
+              op_fh = cdf7_w;
+              op_fl_inc = prob_inc6_w;
+              op_fh_inc = prob_inc7_w;
+            end
+          endcase
         end
       end
     end
