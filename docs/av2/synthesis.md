@@ -1,506 +1,48 @@
 # AV2 Synthesis Baselines
 
-This file records AV2-specific synthesis measurements. The shared command
-wrapper is documented in [../synthesis.md](../synthesis.md), but AV2 area,
-timing, elapsed time, and memory results are tracked separately from VVC.
-
-## 2026-06-12 Integration Shell
-
-Configuration:
-
-- command: `make synth CODEC=av2`
-- DUT: `av2-encoder`
-- RTL top: `ff_av2_encoder`
-- board: `synth/boards/arty-z7-10.env`
-- clock metadata: `25 MHz`
-- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
-- memory limit: 3072 MiB
-
-Result:
-
-- Yosys synthesis passed in 3.6 seconds.
-- Peak child RSS observed by the synthesis runner was 127.45 MiB.
-- Post-synthesis critical-path reporting completed in 0.1 seconds and reported
-  path length 1.
-
-This measurement covers only the AV2 streaming entry point and explicit
-unsupported-encode response. It is useful as a routing and synthesis-wrapper
-baseline, not as an estimate of a real AV2 encoder implementation.
-
-## 2026-06-13 Structured Black + First Luma Palette
-
-Configuration:
-
-- command: `make synth CODEC=av2`
-- DUT: `av2-encoder`
-- RTL top: `ff_av2_encoder`
-- board: `synth/boards/arty-z7-10.env`
-- clock metadata: `25 MHz`
-- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
-- memory limit: 3072 MiB
-- supported RTL input subset: planar 8-bit 4:4:4, up to 64x64, black frames
-  plus the deterministic 64x64 two-color luma-palette bars smoke vector.
-
-Validation before synthesis:
-
-```sh
-cargo test av2 -- --nocapture
-make -B rtl-test CODEC=av2 DUT=av2-encoder RTL_VISIBLE_WIDTH=64 RTL_VISIBLE_HEIGHT=64 RTL_CHROMA_FORMAT_IDC=3
-make validate-set CODEC=av2 VALIDATION_SET=sweep-black-444 VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
-make validate-set CODEC=av2 VALIDATION_SET=av2-palette-luma-444 VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
-```
-
-Result:
-
-- Yosys synthesis passed in 34.6 seconds.
-- Peak child RSS observed by the synthesis runner was 302.04 MiB.
-- Post-synthesis critical-path reporting completed in 4.8 seconds and reported
-  path length 62.
-- The critical path remained in the existing partition/range-coder logic, not
-  the first palette symbolizer.
-
-Flattened Xilinx-cell estimate from
-`yosys -p 'read_json synth/out/arty-z7-10/ff_av2_encoder/ff_av2_encoder.json; hierarchy -top ff_av2_encoder; flatten; stat -tech xilinx'`:
-
-| Metric | Count |
-|---|---:|
-| Cells | 8076 |
-| Estimated LCs | 3387 |
-| CARRY4 | 387 |
-| DSP48E1 | 14 |
-| FDCE | 775 |
-| FDPE | 32 |
-| FDRE | 450 |
-| LUT1 | 30 |
-| LUT2 | 1123 |
-| LUT3 | 756 |
-| LUT4 | 523 |
-| LUT5 | 671 |
-| LUT6 | 1437 |
-| MUXF7 | 543 |
-| MUXF8 | 173 |
-| RAMB18E1 | 3 |
-
-This is the first useful AV2 encoder synthesis baseline. Comparing it with the
-integration shell is only useful to show expected growth from unsupported
-plumbing into real generated tile syntax; the shell was not a real encoder area
-estimate.
-
-## 2026-06-14 General Luma Palette + Block Packets
-
-Measured after replacing the narrow luma-bars classifier with the general
-8x8-block luma palette analyzer and changing the AV2 RTL input contract to the
-same visible 8x8 Y/U/V packet shape used by the VVC 4:4:4 path. The codec
-walkers remain independent internally; this only aligns the top-level
-testbench-facing packet shape.
-
-Configuration:
-
-- command: `make synth CODEC=av2`
-- DUT: `av2-encoder`
-- RTL top: `ff_av2_encoder`
-- board: `synth/boards/arty-z7-10.env`
-- clock metadata: `25 MHz`
-- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
-- memory limit: 3072 MiB
-- supported RTL input subset: 8-bit 4:4:4, up to 64x64, black frames, and
-  luma-palette 8x8 blocks with up to eight luma entries per block.
-
-Validation before synthesis:
-
-```sh
-make validate CODEC=av2 \
-  INPUT=verification/generated/test_vectors/av2_luma_palette_bars_64x64_1f_yuv444p8.yuv \
-  WIDTH=64 HEIGHT=64 FRAMES=1 FORMAT=yuv444p8 VALIDATE_SYNTH=0
-make test-vectors TEST_VECTOR_SET=screenshot-sweep-444
-make validate-set CODEC=av2 VALIDATION_SET=screenshot-sweep-444 VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
-```
-
-Result:
-
-- Yosys synthesis passed in 304.8 seconds.
-- Peak child RSS observed by the synthesis runner was 1094.01 MiB.
-- Runtime exceeded the 300 second review threshold by 4.8 seconds, but stayed
-  inside the 600 second hard timeout and 3072 MiB memory cap.
-- Post-synthesis critical-path reporting completed in 96.9 seconds with peak
-  child RSS of 1326.54 MiB and reported topological path length 129.
-- The reported longest path starts in `palette_analyzer.block_palette_color_q`,
-  passes through `ff_av2_luma_palette_symbolizer` delta-bit calculation, and
-  reaches the range-coder `low_q` path.
-
-Flattened Xilinx-cell estimate from
-`yosys -p 'read_json synth/out/arty-z7-10/ff_av2_encoder/ff_av2_encoder.json; hierarchy -top ff_av2_encoder; flatten; stat -tech xilinx'`:
-
-| Metric | Count |
-|---|---:|
-| Cells | 79770 |
-| Estimated LCs | 33892 |
-| CARRY4 | 508 |
-| DSP48E1 | 11 |
-| FDCE | 18785 |
-| FDPE | 99 |
-| FDRE | 448 |
-| LUT1 | 553 |
-| LUT2 | 2549 |
-| LUT3 | 2732 |
-| LUT4 | 5757 |
-| LUT5 | 9481 |
-| LUT6 | 15922 |
-| MUXF7 | 3361 |
-| MUXF8 | 300 |
-| RAMB36E1 | 4 |
-
-Compared with the immediately preceding generalized luma-palette working run
-before the input-packet alignment, the topological path stayed at 129, main
-synthesis RSS was effectively flat, and critical-path reporting was about 8.9
-seconds faster. Main synthesis runtime increased by about 9.8 seconds.
-
-Compared with the current documented VVC top encoder 4:4:4 BDPCM baseline
-(`docs/vvc/synthesis.md`, June 11, 2026), this AV2 subset is smaller but less
-complete:
-
-| Metric | AV2 | VVC | AV2 / VVC |
-|---|---:|---:|---:|
-| Synthesis time | 304.8 s | 376.3 s | 81.0% |
-| Peak synthesis RSS | 1094.01 MiB | 1882.95 MiB | 58.1% |
-| Cells | 79770 | 118404 | 67.4% |
-| Estimated LCs | 33892 | 45381 | 74.7% |
-| Topological path length | 129 | 55 | 234.5% |
-
-The area comparison is encouraging only as a checkpoint, not as an efficiency
-claim, because the VVC encoder currently implements more coding tools. The AV2
-critical path is the clearer optimization target before adding much more syntax.
-Until AV2 reaches approximate feature parity with the current VVC screen-content
-subset, any AV2 top synthesis that exceeds the documented VVC top in cells,
-estimated LCs, memory, or runtime should be treated as a runaway-design warning
-and optimized before more syntax is added.
-
-## 2026-06-14 Luma Palette + Chroma BDPCM
-
-Measured after adding the 4:4:4 chroma horizontal-BDPCM path and moving the
-stored U/V sample window into `ff_av2_chroma_sample_store`. The store is kept as
-its own hierarchy so Yosys maps the two 4096x8 chroma sample planes into RAM
-instead of expanding them into a full-superblock combinational mux.
-
-Configuration:
-
-- command: `make synth CODEC=av2`
-- DUT: `av2-encoder`
-- RTL top: `ff_av2_encoder`
-- board: `synth/boards/arty-z7-10.env`
-- clock metadata: `25 MHz`
-- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
-- memory limit: 3072 MiB
-- supported RTL input subset: 8-bit 4:4:4, up to 64x64, black frames,
-  luma-palette 8x8 blocks with up to eight luma entries per block, and
-  horizontal-BDPCM chroma residuals.
-
-Validation before synthesis:
-
-```sh
-make rtl-test CODEC=av2 DUT=av2-encoder \
-  RTL_VISIBLE_WIDTH=8 RTL_VISIBLE_HEIGHT=8 \
-  RTL_CHROMA_FORMAT_IDC=3 RTL_SAMPLE_BITS=8 RTL_SOURCE_SAMPLE_BITS=8
-make validate CODEC=av2 \
-  INPUT=verification/generated/test_vectors/bdpcm_horizontal_8x8_1f_yuv444p8.yuv \
-  WIDTH=8 HEIGHT=8 FRAMES=1 FORMAT=yuv444p8 VALIDATE_SYNTH=0
-make validate-set CODEC=av2 \
-  VALIDATION_SET=bdpcm-444 \
-  VALIDATION_STOP_ON_FAIL=1 \
-  VALIDATION_WITH_SYNTH=0
-```
-
-Result:
-
-- Yosys synthesis passed in 316.6 seconds.
-- Peak child RSS observed by the synthesis runner was 1185.96 MiB.
-- Runtime exceeded the 300 second review threshold by 16.6 seconds, but stayed
-  inside the 600 second hard timeout and 3072 MiB memory cap.
-- Post-synthesis critical-path reporting completed in 101.5 seconds with peak
-  child RSS of 1283.70 MiB and reported topological path length 129.
-- The longest top-level path remains the existing luma-palette/range-coder
-  path. The isolated `ff_av2_chroma_sample_store` path length was 1.
-
-Flattened Xilinx-cell estimate from
-`yosys -p 'read_json synth/out/arty-z7-10/ff_av2_encoder/ff_av2_encoder.json; hierarchy -top ff_av2_encoder; flatten; stat -tech xilinx'`:
-
-| Metric | Count |
-|---|---:|
-| Cells | 89138 |
-| Estimated LCs | 37418 |
-| CARRY4 | 1276 |
-| DSP48E1 | 11 |
-| FDCE | 19882 |
-| FDPE | 103 |
-| FDRE | 448 |
-| LUT1 | 557 |
-| LUT2 | 4350 |
-| LUT3 | 3900 |
-| LUT4 | 5743 |
-| LUT5 | 9765 |
-| LUT6 | 18010 |
-| MUXF7 | 3633 |
-| MUXF8 | 715 |
-| RAMB36E1 | 6 |
-
-Delta from the immediately preceding generalized luma-palette baseline:
-
-| Metric | Previous | Current | Delta |
-|---|---:|---:|---:|
-| Synthesis time | 304.8 s | 316.6 s | +11.8 s |
-| Peak synthesis RSS | 1094.01 MiB | 1185.96 MiB | +91.95 MiB |
-| Cells | 79770 | 89138 | +9368 |
-| Estimated LCs | 33892 | 37418 | +3526 |
-| Topological path length | 129 | 129 | 0 |
-| RAMB36E1 | 4 | 6 | +2 |
-
-The first implementation briefly caused synthesis to time out because the
-analyzer exported U/V samples through wide combinational indexed arrays. The
-current baseline fixes that by fetching one 4x4 chroma TXB at a time from the
-RAM-backed chroma store before starting the BDPCM symbolizer.
-
-## 2026-06-15 Luma Palette + Lossless Residual
-
-Measured after adding the luma residual path for palette-predicted blocks.
-Luma is still signalled through AV2 palette syntax, but the palette predictor
-is followed by lossless `TX_4X4` coefficient syntax so blocks with more than
-eight luma colors reconstruct exactly. Chroma remains horizontal BDPCM with
-lossless coefficient coding.
-
-This pass also replaced the analyzer's wide per-cycle dynamic palette query
-with a one-leaf metadata cache. The top encoder now loads the current 8x8
-leaf's palette colors, indices, row flags, and cache size before entering
-`ST_LEAF`. That trades a few block RAMs for a much smaller live combinational
-query path.
-
-Configuration:
-
-- command: `make synth CODEC=av2`
-- DUT: `av2-encoder`
-- RTL top: `ff_av2_encoder`
-- board: `synth/boards/arty-z7-10.env`
-- clock metadata: `25 MHz`
-- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
-- memory limit: 3072 MiB
-- supported RTL input subset: 8-bit 4:4:4, up to 64x64, black frames,
-  luma-palette 8x8 predictors with lossless luma residuals, and
-  horizontal-BDPCM chroma residuals.
-
-Validation before synthesis:
-
-```sh
-make validate CODEC=av2 \
-  INPUT=verification/generated/test_vectors/palette_escape_8x8_1f_yuv444p8.yuv \
-  WIDTH=8 HEIGHT=8 FRAMES=1 FORMAT=yuv444p8 VALIDATE_SYNTH=0
-make validate CODEC=av2 \
-  INPUT=verification/generated/test_vectors/palette_escape_64x64_1f_yuv444p8.yuv \
-  WIDTH=64 HEIGHT=64 FRAMES=1 FORMAT=yuv444p8 VALIDATE_SYNTH=0
-make validate-set CODEC=av2 \
-  VALIDATION_SET=palette-escape-444 \
-  VALIDATION_STOP_ON_FAIL=1 \
-  VALIDATION_WITH_SYNTH=0
-```
-
-Result:
-
-- Yosys synthesis passed in 188.4 seconds.
-- Peak child RSS observed by the synthesis runner was 1134.36 MiB.
-- Runtime stayed below the 300 second review threshold and inside the 600
-  second hard timeout and 3072 MiB memory cap.
-- Post-synthesis critical-path reporting completed in 24.8 seconds with peak
-  child RSS of 1134.36 MiB and reported topological path length 126.
-- The longest top-level path starts in
-  `palette_analyzer.query_palette_colors_q`, passes through
-  `ff_av2_luma_palette_symbolizer` palette-delta bit calculation, and reaches
-  the range-coder `low_q` path.
-- Isolated `ff_av2_palette_analyzer_444` synthesis now passes in 89.3 seconds
-  with peak RSS 564.67 MiB. Before the metadata-cache rewrite, the same
-  isolated analyzer timed out at 240 seconds.
-
-Flattened Xilinx-cell estimate from
-`yosys -p 'read_json synth/out/arty-z7-10/ff_av2_encoder/ff_av2_encoder.json; hierarchy -top ff_av2_encoder; flatten; stat -tech xilinx'`:
-
-| Metric | Count |
-|---|---:|
-| Cells | 56106 |
-| Estimated LCs | 18635 |
-| CARRY4 | 2165 |
-| DSP48E1 | 11 |
-| FDCE | 3216 |
-| FDPE | 44 |
-| FDRE | 18880 |
-| LUT1 | 505 |
-| LUT2 | 5403 |
-| LUT3 | 3726 |
-| LUT4 | 2143 |
-| LUT5 | 2217 |
-| LUT6 | 10549 |
-| MUXF7 | 2186 |
-| MUXF8 | 601 |
-| RAMB36E1 | 19 |
-
-Delta from the immediately preceding luma-palette plus chroma-BDPCM baseline:
-
-| Metric | Previous | Current | Delta |
-|---|---:|---:|---:|
-| Synthesis time | 316.6 s | 188.4 s | -128.2 s |
-| Peak synthesis RSS | 1185.96 MiB | 1134.36 MiB | -51.60 MiB |
-| Cells | 89138 | 56106 | -33032 |
-| Estimated LCs | 37418 | 18635 | -18783 |
-| Topological path length | 129 | 126 | -3 |
-| RAMB36E1 | 6 | 19 | +13 |
-
-The area reduction comes from removing the analyzer's wide dynamic block
-palette query from the active symbolizer path. The RAM increase is expected:
-the current lossless path stores the Y/U/V sample planes and a larger staged
-tile payload. The staged carry buffer remains a known optimization target once
-the next functional blocks are in place.
-
-## 2026-06-16 Luma Palette + Lossless Residual (Regression Check)
-
-The latest full-top AV2 run after this change-set was attempted to establish a
-fresh synthesis checkpoint. The same DUT and board as above were used.
-
-Configuration:
-
-- command: `make synth CODEC=av2 SYNTH_YOSYS_QUIET=0`
-- DUT: `av2-encoder`
-- RTL top: `ff_av2_encoder`
-- board: `synth/boards/arty-z7-10.env`
-- clock metadata: `25 MHz`
-- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
-- memory limit: 3072 MiB
-- supported RTL input subset: 8-bit 4:4:4, up to 64x64, black frames,
-  full luma palette flow with luma residual coding and horizontal BDPCM chroma.
-
-Result:
-
-- Yosys synthesis did not complete and hit the 600 second timeout.
-- Final log shows the command stalled in `PROC_ARST` (`ff_av2_encoder.sv`) at
-  8.5. Executing `PROC_ARST` pass.
-- No `ff_av2_encoder.json`, `ff_av2_encoder.post_synth.v`, `critical_path.log`,
-  or updated critical-path report were produced.
-- No new area or timing measurements are available for this configuration.
-
-The previous documented baseline immediately prior to this attempt (`2026-06-15`
-run) completed in 188.4 seconds with 1134.36 MiB peak RSS and the area/timing
-results in the table above. This attempt regressed to a non-zero
-`make`/exit status (124) because runtime exceeded the 600 second hard stop; treat
-this as a regression indicator and optimization target (likely `PROC_ARST` growth in
-the top-level encoder process normalization path).
-
-## 2026-06-16 Screenshot Sweeps + Multi-CTU (Regression + Synthesis)
-
-Validation and synthesis were rerun after the prior timeout-reverting change,
-using the full local AV2 screenshot geometry set and multi-CTU set.
-
-Validation configuration:
-
-```sh
-make validate-set CODEC=av2 \
-  VALIDATION_SET=screenshot-sweep-444 \
-  VALIDATION_STOP_ON_FAIL=1 \
-  VALIDATION_WITH_SYNTH=0
-make validate-set CODEC=av2 \
-  VALIDATION_SET=screenshot-multictu-444 \
-  VALIDATION_STOP_ON_FAIL=1 \
-  VALIDATION_WITH_SYNTH=0
-```
-
-Result:
-
-- `screenshot-sweep-444`: OK (64/64)
-- `screenshot-multictu-444`: OK (10/10)
-
-Synthesis configuration:
-
-- command: `make synth CODEC=av2 SYNTH_YOSYS_QUIET=0`
-- DUT: `av2-encoder`
-- RTL top: `ff_av2_encoder`
-- board: `synth/boards/arty-z7-10.env`
-- clock metadata: `25 MHz`
-- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
-- memory limit: 3072 MiB
-
-Result:
-
-- Yosys synthesis passed in 229.6 seconds.
-- Peak child RSS observed by the synthesis runner was 1129.09 MiB.
-- Runtime stayed below the 300 second review threshold.
-- Post-synthesis critical-path reporting completed in 26.0 seconds with peak
-  memory 1129.09 MiB and topological path length 126.
-- The longest topological path is still in `ff_av2_encoder` (`palette_analyzer`
-  to palette delta bit-calculation logic) with a path length of 126.
-
-Flattened Xilinx-cell estimate from
-`yosys -p 'read_json synth/out/arty-z7-10/ff_av2_encoder/ff_av2_encoder.json; hierarchy -top ff_av2_encoder; flatten; stat -tech xilinx'`:
-
-| Metric | Count |
-|---|---:|
-| Cells | 61852 |
-| Estimated LCs | 22002 |
-| CARRY4 | 2532 |
-| DSP48E1 | 15 |
-| FDCE | 1857 |
-| FDPE | 10 |
-| FDRE | 20096 |
-| LUT1 | 517 |
-| LUT2 | 5699 |
-| LUT3 | 4829 |
-| LUT4 | 2197 |
-| LUT5 | 2267 |
-| LUT6 | 12709 |
-| MUXF7 | 2437 |
-| MUXF8 | 635 |
-| RAMB36E1 | 19 |
-| RAM32M | 4 |
-| RAM64M | 1536 |
-
-Delta from the previous documented `2026-06-15` synthesis baseline (188.4 seconds,
-1134.36 MiB, 56106 cells, 18635 LCs, path length 126):
-
-| Metric | Previous | Current | Delta |
-|---|---:|---:|---:|
-| Synthesis time | 188.4 s | 229.6 s | +41.2 s |
-| Peak synthesis RSS | 1134.36 MiB | 1129.09 MiB | -5.27 MiB |
-| Cells | 56106 | 61852 | +5746 |
-| Estimated LCs | 18635 | 22002 | +3367 |
-| Topological path length | 126 | 126 | 0 |
-| RAMB36E1 | 19 | 19 | 0 |
-
-Area increased because the full-screen 64x64 + multi-CTU regression profile kept the
-full luma-palette symbolizer chain active and did not introduce further partitioning
-or sharing optimizations.
-
-## 2026-06-16 Left-Hash IBC Regression + Synthesis
-
-Measured after adding the first AV2 left-hash IBC path and constraining the
-fixed-left-BV implementation to terminal visible 8x8 leaves. The restriction
-keeps the current implementation from feeding incomplete post-IBC neighbor
-state into later leaves while still validating the syntax path, hash matcher,
-and SW/RTL bitstream parity.
+This file records the current AV2-specific synthesis checkpoint. The shared
+command wrapper is documented in [../synthesis.md](../synthesis.md), but AV2
+area, timing, elapsed time, and memory results are tracked separately from VVC.
+
+Older bring-up and intermediate optimization checkpoints are intentionally kept
+out of this report so the document remains focused on the current validated
+baseline and its immediate delta. Use git history for retired measurements.
+
+## 2026-06-16 Luma Intra + IntraBC Syntax Fix
+
+Measured after adding the first AV2 luma H/V intra-prediction selector and
+fixing SW/RTL parity for frame-level `allow_intrabc` versus per-leaf
+`use_intrabc`. The H/V path is deliberately restricted to terminal 8x8 leaves
+with the currently implemented luma-mode context so the syntax remains aligned
+with the AV2 reference decoder while later context expansion is still pending.
 
 Baseline and current sources:
 
-- Baseline Git SHA: `0adfd7466c9de101af7d1960d9bf033d1ee3a441`
-- Current validated source Git SHA: `d04435fd29ec73e18181c54c2452b869add56b87`
+- Baseline Git SHA: `d04435fd29ec73e18181c54c2452b869add56b87`
+- Current validated source Git SHA: `17ff78397917f320a13809216e957826acd9cbc7`
+- Baseline mode: previously documented AV2 left-hash IBC checkpoint.
+- Current mode: AV2 software/RTL/reference-decoder validation after adding
+  restricted H/V luma intra prediction and fixing IntraBC syntax parity.
 - Delta columns compare against the previous documented AV2 top-synthesis
-  baseline, `2026-06-16 Screenshot Sweeps + Multi-CTU`.
+  baseline for the same DUT and board.
 
 Validation configuration:
 
 ```sh
 make validate-set CODEC=av2 \
   VALIDATION_SET=screenshot-sweep-444 \
+  VALIDATION_SET_DIR=verification/test_vector_sets/local \
   VALIDATION_STOP_ON_FAIL=1 \
   VALIDATION_WITH_SYNTH=0
+
 make validate-set CODEC=av2 \
   VALIDATION_SET=screenshot-multictu-444 \
+  VALIDATION_SET_DIR=verification/test_vector_sets/local \
   VALIDATION_STOP_ON_FAIL=1 \
   VALIDATION_WITH_SYNTH=0
 ```
 
-Result:
+Validation result:
 
 - `screenshot-sweep-444`: OK (64/64)
 - `screenshot-multictu-444`: OK (10/10)
@@ -516,14 +58,14 @@ Synthesis configuration:
 - memory limit: 3072 MiB
 - feature flags: palette 4:4:4 enabled, exact-hash IBC 4:4:4 enabled
 
-Result:
+Synthesis result:
 
-- Yosys synthesis passed in 275.6 seconds.
-- Peak child RSS observed by the synthesis runner was 1202.92 MiB.
-- Runtime stayed below the 300 second review threshold and well inside the
-  600 second hard timeout.
-- Post-synthesis critical-path reporting completed in 41.1 seconds with peak
-  memory 1202.92 MiB and topological path length 127.
+- Yosys synthesis passed in 305.4 seconds.
+- Peak child RSS observed by the synthesis runner was 1341.33 MiB.
+- Runtime exceeded the 300 second review threshold by 5.4 seconds but stayed
+  inside the 600 second hard timeout.
+- Post-synthesis critical-path reporting completed in 50.4 seconds with peak
+  memory 1341.33 MiB and topological path length 127.
 - The longest top-level path remains in the luma palette/range-coder path,
   from `palette_analyzer.query_palette_colors_q` through
   `ff_av2_luma_palette_symbolizer` delta-bit calculation toward `low_q`.
@@ -534,22 +76,22 @@ Flattened Xilinx-cell estimate from
 
 | Metric | Count |
 |---|---:|
-| Cells | 68721 |
-| Estimated LCs | 23723 |
-| CARRY4 | 2595 |
+| Cells | 82642 |
+| Estimated LCs | 27327 |
+| CARRY4 | 2615 |
 | DSP48E1 | 15 |
-| FDCE | 4075 |
+| FDCE | 4829 |
 | FDPE | 24 |
-| FDRE | 20129 |
+| FDRE | 28451 |
 | FDSE | 38 |
-| LUT1 | 398 |
-| LUT2 | 6107 |
-| LUT3 | 5271 |
-| LUT4 | 2295 |
-| LUT5 | 2436 |
-| LUT6 | 13721 |
-| MUXF7 | 2650 |
-| MUXF8 | 727 |
+| LUT1 | 482 |
+| LUT2 | 6254 |
+| LUT3 | 4581 |
+| LUT4 | 2935 |
+| LUT5 | 2783 |
+| LUT6 | 17028 |
+| MUXF7 | 2847 |
+| MUXF8 | 761 |
 | RAMB36E1 | 19 |
 | RAM32M | 4 |
 | RAM64M | 1536 |
@@ -558,37 +100,32 @@ Delta from the previous documented top-synthesis baseline:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| Synthesis time | 229.6 s | 275.6 s | +46.0 s |
-| Peak synthesis RSS | 1129.09 MiB | 1202.92 MiB | +73.83 MiB |
-| Critical-path report time | 26.0 s | 41.1 s | +15.1 s |
-| Topological path length | 126 | 127 | +1 |
-| Cells | 61852 | 68721 | +6869 |
-| Estimated LCs | 22002 | 23723 | +1721 |
-| CARRY4 | 2532 | 2595 | +63 |
+| Synthesis time | 275.6 s | 305.4 s | +29.8 s |
+| Peak synthesis RSS | 1202.92 MiB | 1341.33 MiB | +138.41 MiB |
+| Critical-path report time | 41.1 s | 50.4 s | +9.3 s |
+| Topological path length | 127 | 127 | 0 |
+| Cells | 68721 | 82642 | +13921 |
+| Estimated LCs | 23723 | 27327 | +3604 |
+| CARRY4 | 2595 | 2615 | +20 |
 | DSP48E1 | 15 | 15 | 0 |
-| FDCE | 1857 | 4075 | +2218 |
-| FDPE | 10 | 24 | +14 |
-| FDRE | 20096 | 20129 | +33 |
-| LUT1 | 517 | 398 | -119 |
-| LUT2 | 5699 | 6107 | +408 |
-| LUT3 | 4829 | 5271 | +442 |
-| LUT4 | 2197 | 2295 | +98 |
-| LUT5 | 2267 | 2436 | +169 |
-| LUT6 | 12709 | 13721 | +1012 |
-| MUXF7 | 2437 | 2650 | +213 |
-| MUXF8 | 635 | 727 | +92 |
+| FDCE | 4075 | 4829 | +754 |
+| FDPE | 24 | 24 | 0 |
+| FDRE | 20129 | 28451 | +8322 |
+| FDSE | 38 | 38 | 0 |
+| LUT1 | 398 | 482 | +84 |
+| LUT2 | 6107 | 6254 | +147 |
+| LUT3 | 5271 | 4581 | -690 |
+| LUT4 | 2295 | 2935 | +640 |
+| LUT5 | 2436 | 2783 | +347 |
+| LUT6 | 13721 | 17028 | +3307 |
+| MUXF7 | 2650 | 2847 | +197 |
+| MUXF8 | 727 | 761 | +34 |
 | RAMB36E1 | 19 | 19 | 0 |
 | RAM32M | 4 | 4 | 0 |
 | RAM64M | 1536 | 1536 | 0 |
 
-The IBC path adds modest LUT/control cost and a small critical-path increase,
-but does not add block RAM pressure or a new dominant critical-path family. The
-memory headroom remains acceptable under the 3072 MiB synthesis cap.
-
-## Retired Bring-Up Measurements
-
-Temporary AV2 fixed-output emitters existed during validation plumbing bring-up.
-Those measurements are intentionally retired because the source streams and
-trace-derived entropy data were removed. Future synthesis baselines should only
-cover implementations that generate bitstream content from named, spec-auditable
-syntax decisions.
+The new logic increases register and LUT pressure, but does not add block RAM,
+DSP usage, or topological critical-path depth. The synthesis runtime now barely
+crosses the review threshold, so future passes should watch the luma
+palette/range-coder path and the extra luma predictor state for opportunities
+to recover area before widening the intra context model.

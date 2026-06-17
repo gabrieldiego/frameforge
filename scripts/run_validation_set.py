@@ -171,7 +171,7 @@ def extract_bitrate_delta(output: str, codec: str) -> str:
         return "n/a"
 
     compare = None
-    compare_order = ("rtl_bitstream", "ref_bitstream")
+    compare_order = ("rtl_bitstream",)
     for candidate in compare_order:
         if candidate in metrics:
             compare = candidate
