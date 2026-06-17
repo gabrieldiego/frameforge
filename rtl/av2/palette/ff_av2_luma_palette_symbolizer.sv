@@ -53,15 +53,8 @@ module ff_av2_luma_palette_symbolizer (
   logic color_priority0_match_w;
   logic color_priority1_match_w;
   logic color_priority2_match_w;
-  logic [7:0] color_priority_hit_w;
-  logic [7:0] color_non_priority_before_mask_w;
-  logic [1:0] color_non_priority_sum01_w;
-  logic [1:0] color_non_priority_sum23_w;
-  logic [1:0] color_non_priority_sum45_w;
-  logic [1:0] color_non_priority_sum67_w;
-  logic [2:0] color_non_priority_sum0123_w;
-  logic [2:0] color_non_priority_sum4567_w;
-  logic [2:0] color_non_priority_before_w;
+  logic [1:0] color_priority_before_count_w;
+  logic [2:0] color_non_priority_rank_w;
   logic [2:0] cdf_symbol_w;
   logic [31:0] cdf_w [0:7];
   logic [4:0] prob_inc_w [0:7];
@@ -166,76 +159,14 @@ module ff_av2_luma_palette_symbolizer (
     color_priority1_match_w = color_priority1_valid_w && (current_index == color_priority1_w);
     color_priority2_match_w = color_priority2_valid_w && (current_index == color_priority2_w);
 
-    color_priority_hit_w[0] =
-      (color_priority0_valid_w && color_priority0_w == 3'd0) ||
-      (color_priority1_valid_w && color_priority1_w == 3'd0) ||
-      (color_priority2_valid_w && color_priority2_w == 3'd0);
-    color_priority_hit_w[1] =
-      (color_priority0_valid_w && color_priority0_w == 3'd1) ||
-      (color_priority1_valid_w && color_priority1_w == 3'd1) ||
-      (color_priority2_valid_w && color_priority2_w == 3'd1);
-    color_priority_hit_w[2] =
-      (color_priority0_valid_w && color_priority0_w == 3'd2) ||
-      (color_priority1_valid_w && color_priority1_w == 3'd2) ||
-      (color_priority2_valid_w && color_priority2_w == 3'd2);
-    color_priority_hit_w[3] =
-      (color_priority0_valid_w && color_priority0_w == 3'd3) ||
-      (color_priority1_valid_w && color_priority1_w == 3'd3) ||
-      (color_priority2_valid_w && color_priority2_w == 3'd3);
-    color_priority_hit_w[4] =
-      (color_priority0_valid_w && color_priority0_w == 3'd4) ||
-      (color_priority1_valid_w && color_priority1_w == 3'd4) ||
-      (color_priority2_valid_w && color_priority2_w == 3'd4);
-    color_priority_hit_w[5] =
-      (color_priority0_valid_w && color_priority0_w == 3'd5) ||
-      (color_priority1_valid_w && color_priority1_w == 3'd5) ||
-      (color_priority2_valid_w && color_priority2_w == 3'd5);
-    color_priority_hit_w[6] =
-      (color_priority0_valid_w && color_priority0_w == 3'd6) ||
-      (color_priority1_valid_w && color_priority1_w == 3'd6) ||
-      (color_priority2_valid_w && color_priority2_w == 3'd6);
-    color_priority_hit_w[7] =
-      (color_priority0_valid_w && color_priority0_w == 3'd7) ||
-      (color_priority1_valid_w && color_priority1_w == 3'd7) ||
-      (color_priority2_valid_w && color_priority2_w == 3'd7);
-
-    color_non_priority_before_mask_w[0] =
-      (3'd0 < current_index) && (4'd0 < palette_size) && !color_priority_hit_w[0];
-    color_non_priority_before_mask_w[1] =
-      (3'd1 < current_index) && (4'd1 < palette_size) && !color_priority_hit_w[1];
-    color_non_priority_before_mask_w[2] =
-      (3'd2 < current_index) && (4'd2 < palette_size) && !color_priority_hit_w[2];
-    color_non_priority_before_mask_w[3] =
-      (3'd3 < current_index) && (4'd3 < palette_size) && !color_priority_hit_w[3];
-    color_non_priority_before_mask_w[4] =
-      (3'd4 < current_index) && (4'd4 < palette_size) && !color_priority_hit_w[4];
-    color_non_priority_before_mask_w[5] =
-      (3'd5 < current_index) && (4'd5 < palette_size) && !color_priority_hit_w[5];
-    color_non_priority_before_mask_w[6] =
-      (3'd6 < current_index) && (4'd6 < palette_size) && !color_priority_hit_w[6];
-    color_non_priority_before_mask_w[7] =
-      (3'd7 < current_index) && (4'd7 < palette_size) && !color_priority_hit_w[7];
-
-    color_non_priority_sum01_w =
-      {1'b0, color_non_priority_before_mask_w[0]} +
-      {1'b0, color_non_priority_before_mask_w[1]};
-    color_non_priority_sum23_w =
-      {1'b0, color_non_priority_before_mask_w[2]} +
-      {1'b0, color_non_priority_before_mask_w[3]};
-    color_non_priority_sum45_w =
-      {1'b0, color_non_priority_before_mask_w[4]} +
-      {1'b0, color_non_priority_before_mask_w[5]};
-    color_non_priority_sum67_w =
-      {1'b0, color_non_priority_before_mask_w[6]} +
-      {1'b0, color_non_priority_before_mask_w[7]};
-    color_non_priority_sum0123_w =
-      {1'b0, color_non_priority_sum01_w} +
-      {1'b0, color_non_priority_sum23_w};
-    color_non_priority_sum4567_w =
-      {1'b0, color_non_priority_sum45_w} +
-      {1'b0, color_non_priority_sum67_w};
-    color_non_priority_before_w =
-      color_non_priority_sum0123_w + color_non_priority_sum4567_w;
+    // AV2 v1.0.0 Section 5.20.8.4 palette_tokens(): non-priority symbols are
+    // ranked after the priority colors. Count priority colors below the current
+    // palette index instead of building a full 8-entry priority-hit mask.
+    color_priority_before_count_w =
+      {1'b0, color_priority0_valid_w && color_priority0_w < current_index} +
+      {1'b0, color_priority1_valid_w && color_priority1_w < current_index} +
+      {1'b0, color_priority2_valid_w && color_priority2_w < current_index};
+    color_non_priority_rank_w = current_index - {1'b0, color_priority_before_count_w};
 
     if (color_priority0_match_w) begin
       color_token_w = 3'd0;
@@ -244,7 +175,7 @@ module ff_av2_luma_palette_symbolizer (
     end else if (color_priority2_match_w) begin
       color_token_w = 3'd2;
     end else begin
-      color_token_w = {1'b0, color_priority_count_w} + color_non_priority_before_w;
+      color_token_w = {1'b0, color_priority_count_w} + color_non_priority_rank_w;
     end
   end
 
