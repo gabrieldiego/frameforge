@@ -39,28 +39,82 @@ bitstream path:
    synthesis baseline, including both baseline and current source Git SHA1s.
 6. Commit the report/doc update separately from the source checkpoint.
 
+## Implemented Baseline
+
+The current validated AV2 baseline is no longer just palette bring-up. Treat
+these blocks as implemented, with future work focused on widening decisions and
+reducing cost rather than proving the plumbing again:
+
+- 8x8 visible Y/U/V packet input contract shared with the VVC 4:4:4 testbench.
+- 64x64 superblock/tile walking with partial and multi-superblock screenshot
+  crop coverage.
+- Luma-only AV2 palette syntax for 8x8 leaves, using up to eight palette colors
+  as a predictor.
+- Lossless luma residual coefficient coding after palette or non-DC luma intra
+  prediction.
+- Lossless horizontal chroma BDPCM plus coefficient coding for 4:4:4 chroma.
+- First exact-hash IntraBC path using the immediate-left 8x8 block as a
+  candidate.
+- First restricted luma intra prediction path with DC, vertical, and horizontal
+  modes where the currently implemented context model is valid.
+- Strict SW/RTL/reference-decoder checksum validation and per-milestone
+  bitrate/synthesis delta reporting.
+
 ## Roadmap
 
 ### Phase 0 — Baseline and Confidence
 
 1. Baseline pass
-   - Freeze current working lossless 4:4:4 palette + luma residual + chroma BDPCM path.
-   - Keep 8-bit, fixed 8x8 leaf TBs, and 1024x1024 test ceilings.
-   - Required checks: `screenshot-sweep-444` + `screenshot-multictu-444` pass.
+   - Done: freeze current working lossless 4:4:4 palette + luma residual +
+     chroma BDPCM + left-hash IBC + restricted H/V intra path.
+   - Keep 8-bit, fixed 8x8 coding leaves, and synthesis-visible geometry
+     ceilings that do not create resolution-sized line buffers.
+   - Required checks remain `screenshot-sweep-444` + `screenshot-multictu-444`.
 
 2. Test coverage hardening
-   - Add/keep local manifests for screen-content geometry sweeps and partial/multi-CTU crops.
+   - Done: keep local manifests for screen-content geometry sweeps and
+     partial/multi-superblock crops.
    - Ensure all validation outputs include SW/RTL/REF checksum and PSNR.
    - Add at least one small 8x8 / 16x16 smoke sanity vector for quick local regression.
 
 3. Documentation and tracing baseline
-   - Keep `docs/av2/quality-bitrate.md` and `docs/av2/synthesis.md` as mandatory
-     artifacts for every feature milestone.
+   - Done: keep `docs/av2/quality-bitrate.md` and `docs/av2/synthesis.md` as
+     mandatory artifacts for every feature milestone.
    - Add syntax traceability notes when a new block is implemented.
 
 ### Phase 1 — Feature Completeness for Lossless 4:4:4 Screens
 
-1. Palette path stability
+1. Prediction decision block
+   - Add a small SW/RTL decision block that chooses between the currently
+     implemented predictors: luma palette+residual, DC residual, H/V intra
+     residual, and left-hash IBC.
+   - Keep the first version simple: deterministic priority or rough bit-count
+     estimates are acceptable; exact RDO can come later.
+   - The block should emit explicit trace labels explaining why each 8x8 leaf
+     chose a mode.
+
+2. Luma intra expansion
+   - Widen the luma-mode context model so vertical/horizontal prediction can be
+     used on non-terminal leaves without relying on the current context guard.
+   - Add one new simple predictor mode at a time, starting with the mode that
+     has the lowest syntax/context cost in AVM for screen edges.
+   - Keep residual coding lossless so a bad predictor only costs bitrate.
+
+3. IntraBC candidate block
+   - Expand the current immediate-left hash candidate into a small candidate
+     module that can also test above and above-left 8x8 blocks.
+   - Store hashes and candidate metadata, not whole blocks, unless a later
+     exact-compare stage proves necessary.
+   - Keep the search local and deterministic first; full virtual-buffer/window
+     behavior can be staged after the candidate syntax is stable.
+
+4. Chroma prediction/BDPCM expansion
+   - Add vertical chroma BDPCM beside the current horizontal path.
+   - Add a simple direction chooser using local SAD or a rough bit proxy.
+   - Keep chroma lossless and block-local; any non-BDPCM fallback must still
+     round-trip exactly through the reference decoder.
+
+5. Palette path stability
    - Make sure palette coding on 8x8 remains robust for frequent-color screen blocks.
    - Add stress cases with:
      - small solid regions,
@@ -68,17 +122,17 @@ bitstream path:
      - large text/GUI-like transitions.
    - Verify bitstream/RECON parity remains stable and deterministic.
 
-2. Residual fallback robustness
-   - Expand lossless residual/BDPCM decision coverage for blocks that miss palette
-     compactness.
+6. Residual fallback robustness
+   - Expand lossless residual/BDPCM decision coverage for blocks that miss
+     palette compactness.
    - Add explicit decision-rule tests: palette hit / not-hit / fallback path.
    - Keep BDPCM lossless and block-local in syntax implementation.
 
-3. Chroma behavior for arbitrary colors
+7. Chroma behavior for arbitrary colors
    - Validate chroma-only failure modes are never silently dropped.
    - Ensure fallback coding remains lossless for all 4:4:4 screen-style inputs.
 
-4. Partitioning sanity for screen blocks
+8. Partitioning sanity for screen blocks
    - Confirm all 8x8, 16x16, ..., 64x64 non-rectangular/screen-aligned tile shapes in
      screenshot manifests are supported without behavior changes.
 
@@ -115,7 +169,7 @@ bitstream path:
 ### Phase 4 — Extension Work (after lossless baseline is stable)
 
 1. Syntax extensions that benefit screen content
-   - Evaluate IBC/IBC-hash candidates once base predictor coverage is stable.
+   - Widen IBC/IBC-hash candidates once base predictor coverage is stable.
    - Add directional/linear prediction refinements only if compatible with lossless
      requirement and AVM reference behavior.
 
@@ -126,23 +180,30 @@ bitstream path:
 ## Immediate next milestones (next 1–2 cycles)
 
 - ✅ Complete the current regression and synthesis checkpoint (done).
-- [ ] Add screen-content-specific manifest with randomized crop ordering for regression
-  replayability and seed logging.
-- [ ] Run screenshot full sweep and multi-CTU sweep after each syntax change.
+- ✅ Validate screenshot full sweep and multi-superblock crops for the current
+  lossless 4:4:4 AV2 baseline.
+- [ ] Add the prediction decision block so mode selection becomes its own
+  auditable module instead of being spread across palette analysis and tile
+  emission.
+- [ ] Add vertical chroma BDPCM and a tiny direction chooser.
+- [ ] Expand IBC from immediate-left only to a small hash-candidate set.
 - [ ] Reduce active critical path in luma-palette delta coding and measure with
-  `docs/av2/synthesis.md`.
-- [ ] Add one end-to-end “screen scene” baseline (single source screenshot crop run)
-  that records bits, bpp, and PSNR/inf-lossless status.
+  `docs/av2/synthesis.md` after the next functional block lands.
+- [ ] Add one end-to-end “screen scene” baseline (single source screenshot crop
+  run) that records bits, bpp, and PSNR/inf-lossless status.
 
 ## Feature Set to Implement Across Cycles
 
 Use this as the recurring feature checklist for each active development cycle:
 
 - **Codec syntax support**
+  - Prediction decision module for palette, residual, intra, BDPCM, and IBC
+    modes
   - Palette predictor refinements (luma-only per current AV2 spec shape)
   - Residual path coverage for all 8x8 leaves (palette residual + BDPCM variants)
   - Additional predictor modes with strict fallback ordering
-  - Intra prediction mode expansion for screen content (where AVM-compatible)
+  - Intra prediction context and mode expansion for screen content
+  - IBC hash-candidate expansion beyond immediate-left only
   - Block-tree and partition decision support
   - Optional entropy/range-coder context/state updates once correctness is stable
   - Chroma-robust fallback policy (no silent failures on non-palette blocks)
