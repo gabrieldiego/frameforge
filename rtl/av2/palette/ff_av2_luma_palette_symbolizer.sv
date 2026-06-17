@@ -8,7 +8,10 @@ module ff_av2_luma_palette_symbolizer (
   input  logic [5:0] col,
   input  logic [3:0] palette_size,
   input  logic [4:0] palette_cache_size,
-  input  logic [63:0] palette_colors,
+  input  logic [7:0] palette_first_color,
+  input  logic [1:0] palette_delta_bits_minus5,
+  input  logic [55:0] palette_delta_minus1,
+  input  logic [34:0] palette_delta_literal_bits,
   input  logic [2:0] current_index,
   input  logic [2:0] left_index,
   input  logic [2:0] top_index,
@@ -30,12 +33,8 @@ module ff_av2_luma_palette_symbolizer (
   localparam logic [2:0] PHASE_PALETTE_HEADER = 3'd1;
   localparam logic [2:0] PHASE_PALETTE_MAP = 3'd2;
 
-  logic [7:0] color_w [0:7];
-  logic [7:0] delta_w [0:6];
-  logic [7:0] max_delta_w;
-  logic [4:0] base_delta_bits_w;
   logic [4:0] delta_bits_for_step_w;
-  logic [8:0] range_for_step_w;
+  logic [7:0] delta_minus1_for_step_w;
   logic [2:0] delta_index_w;
   logic [4:0] color_first_step_w;
   logic [4:0] delta_bits_step_w;
@@ -54,57 +53,41 @@ module ff_av2_luma_palette_symbolizer (
   logic [4:0] prob_inc_w [0:7];
 
   always @* begin
-    for (scan_index_w = 0; scan_index_w < 8; scan_index_w = scan_index_w + 1) begin
-      color_w[scan_index_w] = palette_colors[scan_index_w * 8 +: 8];
-    end
-  end
-
-  always @* begin
-    max_delta_w = 8'd1;
-    for (scan_index_w = 0; scan_index_w < 7; scan_index_w = scan_index_w + 1) begin
-      if (scan_index_w + 1 < palette_size) begin
-        delta_w[scan_index_w] = color_w[scan_index_w + 1] - color_w[scan_index_w];
-        if (delta_w[scan_index_w] > max_delta_w) begin
-          max_delta_w = delta_w[scan_index_w];
-        end
-      end else begin
-        delta_w[scan_index_w] = 8'd1;
-      end
-    end
-
-    if (max_delta_w <= 8'd32) base_delta_bits_w = 5'd5;
-    else if (max_delta_w <= 8'd64) base_delta_bits_w = 5'd6;
-    else if (max_delta_w <= 8'd128) base_delta_bits_w = 5'd7;
-    else base_delta_bits_w = 5'd8;
-
     color_first_step_w = palette_cache_size + 5'd2;
     delta_bits_step_w = palette_cache_size + 5'd3;
     delta_step_start_w = palette_cache_size + 5'd4;
     delta_index_w = (step >= delta_step_start_w) ? (step - delta_step_start_w) : 3'd0;
-    delta_bits_for_step_w = base_delta_bits_w;
-    range_for_step_w = 9'd255 - {1'b0, color_w[0]};
-    for (scan_index_w = 0; scan_index_w < 7; scan_index_w = scan_index_w + 1) begin
-      if (scan_index_w < delta_index_w) begin
-        range_for_step_w = range_for_step_w - {1'b0, delta_w[scan_index_w]};
-        if (range_for_step_w <= 9'd2) begin
-          delta_bits_for_step_w = 5'd1;
-        end else if (range_for_step_w <= 9'd4) begin
-          delta_bits_for_step_w = (delta_bits_for_step_w < 5'd2) ? delta_bits_for_step_w : 5'd2;
-        end else if (range_for_step_w <= 9'd8) begin
-          delta_bits_for_step_w = (delta_bits_for_step_w < 5'd3) ? delta_bits_for_step_w : 5'd3;
-        end else if (range_for_step_w <= 9'd16) begin
-          delta_bits_for_step_w = (delta_bits_for_step_w < 5'd4) ? delta_bits_for_step_w : 5'd4;
-        end else if (range_for_step_w <= 9'd32) begin
-          delta_bits_for_step_w = (delta_bits_for_step_w < 5'd5) ? delta_bits_for_step_w : 5'd5;
-        end else if (range_for_step_w <= 9'd64) begin
-          delta_bits_for_step_w = (delta_bits_for_step_w < 5'd6) ? delta_bits_for_step_w : 5'd6;
-        end else if (range_for_step_w <= 9'd128) begin
-          delta_bits_for_step_w = (delta_bits_for_step_w < 5'd7) ? delta_bits_for_step_w : 5'd7;
-        end else begin
-          delta_bits_for_step_w = (delta_bits_for_step_w < 5'd8) ? delta_bits_for_step_w : 5'd8;
-        end
+
+    case (delta_index_w)
+      3'd0: begin
+        delta_minus1_for_step_w = palette_delta_minus1[7:0];
+        delta_bits_for_step_w = palette_delta_literal_bits[4:0];
       end
-    end
+      3'd1: begin
+        delta_minus1_for_step_w = palette_delta_minus1[15:8];
+        delta_bits_for_step_w = palette_delta_literal_bits[9:5];
+      end
+      3'd2: begin
+        delta_minus1_for_step_w = palette_delta_minus1[23:16];
+        delta_bits_for_step_w = palette_delta_literal_bits[14:10];
+      end
+      3'd3: begin
+        delta_minus1_for_step_w = palette_delta_minus1[31:24];
+        delta_bits_for_step_w = palette_delta_literal_bits[19:15];
+      end
+      3'd4: begin
+        delta_minus1_for_step_w = palette_delta_minus1[39:32];
+        delta_bits_for_step_w = palette_delta_literal_bits[24:20];
+      end
+      3'd5: begin
+        delta_minus1_for_step_w = palette_delta_minus1[47:40];
+        delta_bits_for_step_w = palette_delta_literal_bits[29:25];
+      end
+      default: begin
+        delta_minus1_for_step_w = palette_delta_minus1[55:48];
+        delta_bits_for_step_w = palette_delta_literal_bits[34:30];
+      end
+    endcase
   end
 
   always @* begin
@@ -310,15 +293,15 @@ module ff_av2_luma_palette_symbolizer (
         op_literal_bits = 5'd1;
       end else if (step == color_first_step_w) begin
         op_literal = 1'b1;
-        op_literal_value = {24'd0, color_w[0]};
+        op_literal_value = {24'd0, palette_first_color};
         op_literal_bits = 5'd8;
       end else if (step == delta_bits_step_w) begin
         op_literal = 1'b1;
-        op_literal_value = {29'd0, base_delta_bits_w - 5'd5};
+        op_literal_value = {30'd0, palette_delta_bits_minus5};
         op_literal_bits = 5'd2;
       end else if (step <= ({1'b0, palette_size} + palette_cache_size + 5'd2)) begin
         op_literal = 1'b1;
-        op_literal_value = {24'd0, delta_w[delta_index_w] - 8'd1};
+        op_literal_value = {24'd0, delta_minus1_for_step_w};
         op_literal_bits = delta_bits_for_step_w;
       end else begin
         op_valid = 1'b0;

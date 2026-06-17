@@ -225,7 +225,10 @@ module ff_av2_encoder #(
   logic palette_query_done_w;
   logic [3:0] palette_size_w;
   logic [4:0] palette_cache_size_w;
-  logic [63:0] palette_colors_w;
+  logic [7:0] palette_first_color_w;
+  logic [1:0] palette_delta_bits_minus5_w;
+  logic [55:0] palette_delta_minus1_w;
+  logic [34:0] palette_delta_literal_bits_w;
   logic [1:0] palette_luma_mode_w;
   logic leaf_luma_palette_w;
   logic [2:0] palette_current_index_w;
@@ -441,12 +444,16 @@ module ff_av2_encoder #(
     .query_done(palette_query_done_w),
     .palette_size(palette_size_w),
     .palette_cache_size(palette_cache_size_w),
-    .palette_colors(palette_colors_w),
+    .palette_colors(),
     .query_luma_mode(palette_luma_mode_w),
     .query_index(palette_current_index_w),
     .query_left_index(palette_left_index_w),
     .query_top_index(palette_top_index_w),
     .query_top_left_index(palette_top_left_index_w),
+    .palette_first_color(palette_first_color_w),
+    .palette_delta_bits_minus5(palette_delta_bits_minus5_w),
+    .palette_delta_minus1(palette_delta_minus1_w),
+    .palette_delta_literal_bits(palette_delta_literal_bits_w),
     .query_identity_row_flag(palette_identity_row_flag_w),
     .chroma_fetch_done(chroma_fetch_done_w),
     .chroma_fetch_txb_samples(chroma_fetch_txb_samples_w),
@@ -464,7 +471,10 @@ module ff_av2_encoder #(
     .col(palette_col_q),
     .palette_size(palette_size_w),
     .palette_cache_size(palette_cache_size_w),
-    .palette_colors(palette_colors_w),
+    .palette_first_color(palette_first_color_w),
+    .palette_delta_bits_minus5(palette_delta_bits_minus5_w),
+    .palette_delta_minus1(palette_delta_minus1_w),
+    .palette_delta_literal_bits(palette_delta_literal_bits_w),
     .current_index(palette_current_index_w),
     .left_index(palette_left_index_w),
     .top_index(palette_top_index_w),

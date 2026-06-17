@@ -38,6 +38,10 @@ module ff_av2_palette_analyzer_444 #(
   output logic [2:0] query_left_index,
   output logic [2:0] query_top_index,
   output logic [2:0] query_top_left_index,
+  output logic [7:0] palette_first_color,
+  output logic [1:0] palette_delta_bits_minus5,
+  output logic [55:0] palette_delta_minus1,
+  output logic [34:0] palette_delta_literal_bits,
   output logic [1:0] query_identity_row_flag,
   output logic       chroma_fetch_done,
   output logic [127:0] chroma_fetch_txb_samples,
@@ -107,6 +111,10 @@ module ff_av2_palette_analyzer_444 #(
   logic [63:0] query_palette_colors_q;
   logic [3:0] query_palette_size_q;
   logic [4:0] query_palette_cache_size_q;
+  logic [7:0] query_palette_first_color_q;
+  logic [1:0] query_palette_delta_bits_minus5_q;
+  logic [55:0] query_palette_delta_minus1_q;
+  logic [34:0] query_palette_delta_literal_bits_q;
   logic [7:0] query_row_same_left_q;
   logic [7:0] query_row_same_above_q;
 
@@ -192,6 +200,15 @@ module ff_av2_palette_analyzer_444 #(
   logic [63:0] vertical_inner_predictor_edge_w;
   logic [63:0] horizontal_inner_predictor_edge_w;
   logic [63:0] palette_colors_pack_w;
+  logic [63:0] query_load_palette_colors_w;
+  logic [3:0] query_load_palette_size_w;
+  logic [7:0] query_load_color_w [0:7];
+  logic [7:0] query_load_delta_w [0:6];
+  logic [7:0] query_load_max_delta_w;
+  logic [4:0] query_load_base_delta_bits_w;
+  logic [4:0] query_load_delta_limit_w;
+  logic [4:0] query_load_delta_bits_w [0:6];
+  logic [8:0] query_load_delta_range_w;
   logic [4:0] block_palette_cache_size_w;
   logic fixed_mode_ctx0_w;
   logic above_mode_dc_or_unavailable_w;
@@ -207,6 +224,7 @@ module ff_av2_palette_analyzer_444 #(
   integer block_index_q;
   integer edge_index_q;
   integer inner_index_q;
+  integer delta_index_q;
 
   assign sample_u8_w = sample[7:0];
   assign black_sample_ok_w = (sample == {SAMPLE_BITS{1'b0}});
@@ -256,6 +274,8 @@ module ff_av2_palette_analyzer_444 #(
     palette_color_q[1],
     palette_color_q[0]
   };
+  assign query_load_palette_colors_w = block_palette_colors_q[query_load_block_id_q];
+  assign query_load_palette_size_w = block_palette_size_q[query_load_block_id_q];
   // AV2 v1.0.0 Section 5.20.7 residual syntax scans 4x4 TXBs. The query
   // coordinates are MI units, so bit 0 selects the bottom/right 4x4 quadrant
   // inside the current 8x8 packet: row offset 4*8 samples, column offset 4.
@@ -473,12 +493,74 @@ module ff_av2_palette_analyzer_444 #(
   end
 
   always @* begin
+    for (delta_index_q = 0; delta_index_q < 8; delta_index_q = delta_index_q + 1) begin
+      query_load_color_w[delta_index_q] =
+        query_load_palette_colors_w[delta_index_q * 8 +: 8];
+    end
+
+    query_load_max_delta_w = 8'd1;
+    for (delta_index_q = 0; delta_index_q < 7; delta_index_q = delta_index_q + 1) begin
+      if (delta_index_q + 1 < query_load_palette_size_w) begin
+        query_load_delta_w[delta_index_q] =
+          query_load_color_w[delta_index_q + 1] - query_load_color_w[delta_index_q];
+        if (query_load_delta_w[delta_index_q] > query_load_max_delta_w) begin
+          query_load_max_delta_w = query_load_delta_w[delta_index_q];
+        end
+      end else begin
+        query_load_delta_w[delta_index_q] = 8'd1;
+      end
+    end
+
+    if (query_load_max_delta_w <= 8'd32) begin
+      query_load_base_delta_bits_w = 5'd5;
+    end else if (query_load_max_delta_w <= 8'd64) begin
+      query_load_base_delta_bits_w = 5'd6;
+    end else if (query_load_max_delta_w <= 8'd128) begin
+      query_load_base_delta_bits_w = 5'd7;
+    end else begin
+      query_load_base_delta_bits_w = 5'd8;
+    end
+
+    for (delta_index_q = 0; delta_index_q < 7; delta_index_q = delta_index_q + 1) begin
+      // AV2 v1.0.0 Section 5.20.8.1 palette_mode_info(): each delta is
+      // bounded by the remaining sample range after the previous colors. Since
+      // FrameForge stores sorted palette entries, that range is 255-color[i].
+      query_load_delta_range_w = 9'd255 - {1'b0, query_load_color_w[delta_index_q]};
+      if (query_load_delta_range_w <= 9'd2) begin
+        query_load_delta_limit_w = 5'd1;
+      end else if (query_load_delta_range_w <= 9'd4) begin
+        query_load_delta_limit_w = 5'd2;
+      end else if (query_load_delta_range_w <= 9'd8) begin
+        query_load_delta_limit_w = 5'd3;
+      end else if (query_load_delta_range_w <= 9'd16) begin
+        query_load_delta_limit_w = 5'd4;
+      end else if (query_load_delta_range_w <= 9'd32) begin
+        query_load_delta_limit_w = 5'd5;
+      end else if (query_load_delta_range_w <= 9'd64) begin
+        query_load_delta_limit_w = 5'd6;
+      end else if (query_load_delta_range_w <= 9'd128) begin
+        query_load_delta_limit_w = 5'd7;
+      end else begin
+        query_load_delta_limit_w = 5'd8;
+      end
+
+      query_load_delta_bits_w[delta_index_q] =
+        (query_load_base_delta_bits_w < query_load_delta_limit_w) ?
+          query_load_base_delta_bits_w : query_load_delta_limit_w;
+    end
+  end
+
+  always @* begin
     for (pack_index_q = 0; pack_index_q < 8; pack_index_q = pack_index_q + 1) begin
       palette_colors[pack_index_q * 8 +: 8] =
         query_palette_colors_q[pack_index_q * 8 +: 8];
     end
     palette_size = query_palette_size_q;
     palette_cache_size = query_palette_cache_size_q;
+    palette_first_color = query_palette_first_color_q;
+    palette_delta_bits_minus5 = query_palette_delta_bits_minus5_q;
+    palette_delta_minus1 = query_palette_delta_minus1_q;
+    palette_delta_literal_bits = query_palette_delta_literal_bits_q;
     query_luma_mode = query_luma_mode_q;
     query_index = query_palette_index_q[query_bit_offset_w +: 3];
     query_left_index = query_palette_index_q[query_left_bit_offset_w +: 3];
@@ -552,6 +634,10 @@ module ff_av2_palette_analyzer_444 #(
       query_palette_colors_q <= 64'd0;
       query_palette_size_q <= 4'd2;
       query_palette_cache_size_q <= 5'd0;
+      query_palette_first_color_q <= 8'd0;
+      query_palette_delta_bits_minus5_q <= 2'd0;
+      query_palette_delta_minus1_q <= 56'd0;
+      query_palette_delta_literal_bits_q <= 35'd0;
       query_row_same_left_q <= 8'd0;
       query_row_same_above_q <= 8'd0;
       for (edge_index_q = 0; edge_index_q < 8; edge_index_q = edge_index_q + 1) begin
@@ -600,6 +686,10 @@ module ff_av2_palette_analyzer_444 #(
       query_luma_mode_q <= LUMA_MODE_DC;
       query_luma_predictor_edge_q <= 64'd0;
       query_luma_predictor_inner_edge_q <= 64'd0;
+      query_palette_first_color_q <= 8'd0;
+      query_palette_delta_bits_minus5_q <= 2'd0;
+      query_palette_delta_minus1_q <= 56'd0;
+      query_palette_delta_literal_bits_q <= 35'd0;
       for (edge_index_q = 0; edge_index_q < 8; edge_index_q = edge_index_q + 1) begin
         above_predictor_edge_q[edge_index_q] <= 64'd0;
       end
@@ -627,6 +717,14 @@ module ff_av2_palette_analyzer_444 #(
         query_palette_colors_q <= block_palette_colors_q[query_load_block_id_q];
         query_palette_size_q <= block_palette_size_q[query_load_block_id_q];
         query_palette_cache_size_q <= block_palette_cache_size_q[query_load_block_id_q];
+        query_palette_first_color_q <= query_load_color_w[0];
+        query_palette_delta_bits_minus5_q <= query_load_base_delta_bits_w - 5'd5;
+        for (delta_index_q = 0; delta_index_q < 7; delta_index_q = delta_index_q + 1) begin
+          query_palette_delta_minus1_q[delta_index_q * 8 +: 8] <=
+            query_load_delta_w[delta_index_q] - 8'd1;
+          query_palette_delta_literal_bits_q[delta_index_q * 5 +: 5] <=
+            query_load_delta_bits_w[delta_index_q];
+        end
         query_luma_mode_q <= block_luma_mode_q[query_load_block_id_q];
         query_luma_predictor_edge_q <= block_luma_predictor_edge_q[query_load_block_id_q];
         query_luma_predictor_inner_edge_q <=
