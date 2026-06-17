@@ -18,19 +18,18 @@ Metric definitions:
 - `cycles/bit`: `total_cycles / rtl_bitstream_bits`.
 - `cycles/input pixel`: `total_cycles / (width * height * frames)`.
 
-## 2026-06-17 Range Coder Datapath Narrowing
+## 2026-06-17 Palette CDF Token Mux Cleanup
 
-Measured after narrowing the AV2 range coder's probability-scaling datapath to
-the 16-bit `rng` interval used by the entropy coder normalization path. This is
-a synthesis cleanup only; it does not change output scheduling or encoded AV2
-bitstreams.
+Measured after replacing the AV2 luma palette map-token CDF arrays with named
+CDF endpoints and an explicit token interval mux. This is a synthesis cleanup
+only; it does not change output scheduling or encoded AV2 bitstreams.
 
 Baseline and current sources:
 
-- Baseline Git SHA: `1c68cec7173dc4aa40e50370834d85587470665c`
-- Current validated source Git SHA: `e2cac734b0ca685fc3e26258b27a2a2715531daa`
-- Baseline mode: palette token ranking cleanup.
-- Current mode: range coder datapath narrowing.
+- Baseline Git SHA: `e2cac734b0ca685fc3e26258b27a2a2715531daa`
+- Current validated source Git SHA: `f8a3c0bf8931504e690088fe96d454c780316e44`
+- Baseline mode: range coder datapath narrowing.
+- Current mode: palette CDF token mux cleanup.
 - Delta columns compare against the baseline checkpoint above.
 
 Validation commands:
