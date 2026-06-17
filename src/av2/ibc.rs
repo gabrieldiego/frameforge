@@ -71,8 +71,21 @@ pub(crate) fn build_left_ibc_444(
             // match inside the 64x64 tile preserves the current independent
             // superblock-tile contract while staging a wider search window.
             let left_in_same_tile = x0 % AV2_IBC_TILE_SIZE != 0;
+            let tile_right = ((x0 / AV2_IBC_TILE_SIZE) * AV2_IBC_TILE_SIZE + AV2_IBC_TILE_SIZE)
+                .min(geometry.width);
+            let tile_bottom = ((y0 / AV2_IBC_TILE_SIZE) * AV2_IBC_TILE_SIZE + AV2_IBC_TILE_SIZE)
+                .min(geometry.height);
+            let terminal_visible_leaf = x0 + AV2_IBC_HASH_BLOCK_SIZE == tile_right
+                && y0 + AV2_IBC_HASH_BLOCK_SIZE == tile_bottom;
+            // AV2/AVM derives the selected BV and subsequent contexts from
+            // neighboring mode information. This first fixed-DRL path only
+            // models a terminal leaf in the current 64x64 tile, so no later
+            // leaf can consume incomplete post-IBC context state.
             let use_left_copy = if left_in_same_tile {
-                blocks.last().is_some_and(|left| left.hash == hash)
+                blocks
+                    .last()
+                    .is_some_and(|left| left.hash == hash && !left.use_left_copy)
+                    && terminal_visible_leaf
             } else {
                 false
             };
@@ -139,5 +152,30 @@ mod tests {
         assert!(!ibc.uses_left_copy(0, 0));
         assert!(ibc.uses_left_copy(8, 0));
         assert!(ibc.any_left_copy());
+    }
+
+    #[test]
+    fn av2_left_ibc_hash_only_marks_terminal_tile_leaf() {
+        let geometry = Av2VideoGeometry {
+            width: 24,
+            height: 8,
+        };
+        let plane_len = geometry.width * geometry.height;
+        let mut frame = vec![0; plane_len * 3];
+        for plane in 0..3 {
+            for y in 0..8 {
+                for x in 0..8 {
+                    let value = (plane * 31 + y * 13 + x * 5) as u8;
+                    for block in 0..3 {
+                        frame[plane * plane_len + y * geometry.width + x + block * 8] = value;
+                    }
+                }
+            }
+        }
+
+        let ibc = build_left_ibc_444(&frame, geometry).expect("IBC hash map should build");
+        assert!(!ibc.uses_left_copy(0, 0));
+        assert!(!ibc.uses_left_copy(8, 0));
+        assert!(ibc.uses_left_copy(16, 0));
     }
 }

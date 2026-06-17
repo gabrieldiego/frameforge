@@ -962,6 +962,18 @@ impl Av2PaletteColorCacheContext {
             self.left[row] = colors.clone();
         }
     }
+
+    fn clear_leaf(&mut self, row_mi: usize, col_mi: usize, block_size: Av2MvpBlockSize) {
+        // AV2 v1.0.0 palette cache derives from neighboring MB_MODE_INFO
+        // palette sizes. IntraBC leaves return before palette_mode_info(), so
+        // their palette size is zero for subsequent above/left cache lookups.
+        for col in col_mi..(col_mi + block_size.mi_width()).min(self.above.len()) {
+            self.above[col] = None;
+        }
+        for row in row_mi..(row_mi + block_size.mi_height()).min(self.left.len()) {
+            self.left[row] = None;
+        }
+    }
 }
 
 fn av2_palette_cache_from_neighbors(above: Option<&[u8]>, left: Option<&[u8]>) -> Vec<u8> {
@@ -1287,6 +1299,11 @@ impl Av2Black444TilePlan {
                         decision.block_size,
                         self.visible_rows_mi,
                         self.visible_cols_mi,
+                    );
+                    palette_cache_context.clear_leaf(
+                        decision.row,
+                        decision.col,
+                        decision.block_size,
                     );
                 }
                 Av2TileDecisionKind::IntraLumaDc => {
