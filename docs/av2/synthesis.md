@@ -8,24 +8,23 @@ Older bring-up and intermediate optimization checkpoints are intentionally kept
 out of this report so the document remains focused on the current validated
 baseline and its immediate delta. Use git history for retired measurements.
 
-## 2026-06-17 Entropy RTL Split
+## 2026-06-17 Bitstream Header RTL Split
 
-Measured after moving the AV2 entropy operation mux and range-coder step out of
-`ff_av2_encoder` and into `rtl/av2/entropy`. This is intended as a structural
-cleanup only: the SW/RTL/reference-decoder bitstreams are unchanged, the
-testbench now taps the entropy wrapper internals directly for traces, and the
-synthesis runner now emits a flattened Xilinx-cell report by default after
-successful Yosys synthesis.
+Measured after moving AV2 sequence-header field selection, closed-frame header
+byte construction, OBU length layout, and top-level non-payload byte muxing out
+of `ff_av2_encoder` and into `rtl/av2/bitstream`. This is intended as a
+structural cleanup only: the SW/RTL/reference-decoder bitstreams are unchanged,
+and the top encoder now owns the state machine and staged memories while the
+bitstream helper owns header/layout combinational logic.
 
 Baseline and current sources:
 
-- Baseline Git SHA: `17ff78397917f320a13809216e957826acd9cbc7`
-- Current validated source Git SHA: `ebc77b3258bc516b282e23a31e9b554312acbff2`
-- Baseline mode: previously documented AV2 luma intra + IntraBC syntax fix
-  checkpoint.
-- Current mode: AV2 entropy operation selection and range-coder normalization
-  split into submodules, with automatic flattened cell reporting in the Yosys
-  synthesis flow.
+- Baseline Git SHA: `ebc77b3258bc516b282e23a31e9b554312acbff2`
+- Current validated source Git SHA: `d480045c0914eaafaa170a14bb02c56843187549`
+- Baseline mode: previously documented AV2 entropy operation selection and
+  range-coder normalization split into submodules.
+- Current mode: AV2 bitstream header/layout construction split into a
+  dedicated `ff_av2_bitstream_headers` submodule.
 - Delta columns compare against the previous documented AV2 top-synthesis
   baseline for the same DUT and board.
 
@@ -63,17 +62,17 @@ Synthesis configuration:
 
 Synthesis result:
 
-- Yosys synthesis passed in 303.5 seconds.
-- Peak child RSS observed by the synthesis runner was 1377.16 MiB.
-- Runtime exceeded the 300 second review threshold by 3.5 seconds but stayed
-  inside the 600 second hard timeout.
-- Post-synthesis flattened-cell reporting completed in 5.6 seconds.
-- Post-synthesis critical-path reporting completed in 49.1 seconds with peak
-  memory 1377.16 MiB and topological path length 127.
+- Yosys synthesis passed in 295.4 seconds.
+- Peak child RSS observed by the synthesis runner was 1377.04 MiB.
+- Runtime stayed 4.6 seconds below the 300 second review threshold and inside
+  the 600 second hard timeout.
+- Post-synthesis flattened-cell reporting completed in 5.7 seconds.
+- Post-synthesis critical-path reporting completed in 46.6 seconds with peak
+  memory 1377.04 MiB and topological path length 127.
 - The longest top-level path remains in the luma palette/range-coder path,
   from `palette_analyzer.query_palette_colors_q` through
-  `ff_av2_luma_palette_symbolizer` delta-bit calculation, through the new
-  entropy wrapper, toward `low_q`.
+  `ff_av2_luma_palette_symbolizer` delta-bit calculation. The extracted
+  bitstream header helper does not appear on the reported longest path.
 - The isolated `ff_av2_chroma_sample_store` path length remains 1.
 
 Flattened Xilinx-cell estimate from
@@ -81,22 +80,22 @@ Flattened Xilinx-cell estimate from
 
 | Metric | Count |
 |---|---:|
-| Cells | 84647 |
-| Estimated LCs | 27323 |
-| CARRY4 | 2634 |
+| Cells | 84654 |
+| Estimated LCs | 27599 |
+| CARRY4 | 2673 |
 | DSP48E1 | 15 |
 | FDCE | 4829 |
 | FDPE | 24 |
 | FDRE | 28451 |
 | FDSE | 38 |
-| LUT1 | 505 |
-| LUT2 | 6557 |
-| LUT3 | 4577 |
-| LUT4 | 2796 |
-| LUT5 | 2504 |
-| LUT6 | 17446 |
-| MUXF7 | 3957 |
-| MUXF8 | 1168 |
+| LUT1 | 484 |
+| LUT2 | 6543 |
+| LUT3 | 4529 |
+| LUT4 | 2819 |
+| LUT5 | 3048 |
+| LUT6 | 17203 |
+| MUXF7 | 3755 |
+| MUXF8 | 1045 |
 | RAMB36E1 | 19 |
 | RAM32M | 4 |
 | RAM64M | 1536 |
@@ -105,33 +104,34 @@ Delta from the previous documented top-synthesis baseline:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| Synthesis time | 305.4 s | 303.5 s | -1.9 s |
-| Peak synthesis RSS | 1341.33 MiB | 1377.16 MiB | +35.83 MiB |
-| Critical-path report time | 50.4 s | 49.1 s | -1.3 s |
+| Synthesis time | 303.5 s | 295.4 s | -8.1 s |
+| Peak synthesis RSS | 1377.16 MiB | 1377.04 MiB | -0.12 MiB |
+| Cell report time | 5.6 s | 5.7 s | +0.1 s |
+| Critical-path report time | 49.1 s | 46.6 s | -2.5 s |
 | Topological path length | 127 | 127 | 0 |
-| Cells | 82642 | 84647 | +2005 |
-| Estimated LCs | 27327 | 27323 | -4 |
-| CARRY4 | 2615 | 2634 | +19 |
+| Cells | 84647 | 84654 | +7 |
+| Estimated LCs | 27323 | 27599 | +276 |
+| CARRY4 | 2634 | 2673 | +39 |
 | DSP48E1 | 15 | 15 | 0 |
 | FDCE | 4829 | 4829 | 0 |
 | FDPE | 24 | 24 | 0 |
 | FDRE | 28451 | 28451 | 0 |
 | FDSE | 38 | 38 | 0 |
-| LUT1 | 482 | 505 | +23 |
-| LUT2 | 6254 | 6557 | +303 |
-| LUT3 | 4581 | 4577 | -4 |
-| LUT4 | 2935 | 2796 | -139 |
-| LUT5 | 2783 | 2504 | -279 |
-| LUT6 | 17028 | 17446 | +418 |
-| MUXF7 | 2847 | 3957 | +1110 |
-| MUXF8 | 761 | 1168 | +407 |
+| LUT1 | 505 | 484 | -21 |
+| LUT2 | 6557 | 6543 | -14 |
+| LUT3 | 4577 | 4529 | -48 |
+| LUT4 | 2796 | 2819 | +23 |
+| LUT5 | 2504 | 3048 | +544 |
+| LUT6 | 17446 | 17203 | -243 |
+| MUXF7 | 3957 | 3755 | -202 |
+| MUXF8 | 1168 | 1045 | -123 |
 | RAMB36E1 | 19 | 19 | 0 |
 | RAM32M | 4 | 4 | 0 |
 | RAM64M | 1536 | 1536 | 0 |
 
-The refactor keeps the estimated LC count effectively flat and does not add
-block RAM, DSP usage, registers, or topological critical-path depth. The larger
-raw cell and MUXF counts appear to be a Yosys mapping side effect from the new
-hierarchy, not a meaningful FPGA-area increase. Runtime remains just above the
-review threshold, so future optimization passes should continue watching the
-luma palette/range-coder path.
+The refactor keeps block RAM, DSP usage, registers, and topological
+critical-path depth unchanged. Estimated LCs increased by about 1.0%, while raw
+cell count is effectively flat and MUX usage decreased. Main synthesis time
+moved back under the 300 second review threshold, so the cleanup is acceptable;
+future optimization passes should continue watching the luma
+palette/range-coder path.
