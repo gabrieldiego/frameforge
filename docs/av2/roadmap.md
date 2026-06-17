@@ -26,18 +26,23 @@ validation and synthesis checkpoints.
 
 ## Feature Baseline Routine
 
-Use this routine for every new AV2 coding tool or RTL cleanup that changes the
-bitstream path:
+Use this routine for every new AV2 coding tool or RTL cleanup. Any RTL change
+must refresh both the output-utilization and synthesis reports. Changes that
+also affect encoder decisions, syntax, prediction, residuals, or other
+bitstream-generating algorithms must refresh the bitrate report as well.
 
 1. Commit the validated SW/RTL source first, before writing the report docs.
 2. Run the required validation sets with strict SW/RTL/REF checksum parity.
-3. Run `make synth CODEC=av2` on the committed source and capture elapsed time,
+3. Update `output-utilization.md` with per-vector RTL output utilization,
+   bubble rate, cycles/bit, and cycles/input pixel when RTL validation is run.
+4. Run `make synth CODEC=av2` on the committed source and capture elapsed time,
    peak RSS, critical-path length, and flattened Xilinx-cell estimates.
-4. Update `quality-bitrate.md` with per-vector bits/bpp and deltas against the
-   previous report baseline, including both baseline and current source Git SHA1s.
 5. Update `synthesis.md` with area/timing/memory deltas against the previous
    synthesis baseline, including both baseline and current source Git SHA1s.
-6. Commit the report/doc update separately from the source checkpoint.
+6. If the encoder algorithm changed, update `quality-bitrate.md` with
+   per-vector bits/bpp and deltas against the previous report baseline,
+   including both baseline and current source Git SHA1s.
+7. Commit the report/doc update separately from the source checkpoint.
 
 ## Implemented Baseline
 
@@ -58,7 +63,7 @@ reducing cost rather than proving the plumbing again:
 - First restricted luma intra prediction path with DC, vertical, and horizontal
   modes where the currently implemented context model is valid.
 - Strict SW/RTL/reference-decoder checksum validation and per-milestone
-  bitrate/synthesis delta reporting.
+  bitrate/output-utilization/synthesis delta reporting.
 
 ## Roadmap
 
@@ -78,7 +83,8 @@ reducing cost rather than proving the plumbing again:
    - Add at least one small 8x8 / 16x16 smoke sanity vector for quick local regression.
 
 3. Documentation and tracing baseline
-   - Done: keep `docs/av2/quality-bitrate.md` and `docs/av2/synthesis.md` as
+   - Done: keep `docs/av2/quality-bitrate.md`,
+     `docs/av2/output-utilization.md`, and `docs/av2/synthesis.md` as
      mandatory artifacts for every feature milestone.
    - Add syntax traceability notes when a new block is implemented.
 
