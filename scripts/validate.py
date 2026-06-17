@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import math
 import os
 import re
@@ -431,6 +432,7 @@ def validate_av2_fixed_black_path(
     rtl_bitstream = out_dir / f"{stem}_rtl.{codec.bitstream_extension}"
     rtl_internal_recon = out_dir / f"{stem}_rtl_internal_rec.yuv"
     rtl_trace = out_dir / f"{stem}_rtl_trace.jsonl"
+    rtl_metrics = out_dir / f"{stem}_rtl_cycle_metrics.json"
     if av2_mvp_444_expected_reconstruction(info, validation_input_path) is None:
         print(
             "FAIL: AV2 software validation only supports one yuv444p8 "
@@ -507,6 +509,7 @@ def validate_av2_fixed_black_path(
         env["FRAMEFORGE_RTL_AV2_ENCODER_OUT"] = str(rtl_bitstream)
         env["FRAMEFORGE_RTL_AV2_ENCODER_RECON_OUT"] = str(rtl_internal_recon)
         env["FRAMEFORGE_RTL_AV2_TRACE_OUT"] = str(rtl_trace)
+        env["FRAMEFORGE_RTL_AV2_METRICS_OUT"] = str(rtl_metrics)
         env["COCOTB_TEST_FILTER"] = (
             "^test_av2_encoder\\.av2_encoder_emits_obu_stream$"
         )
@@ -556,6 +559,10 @@ def validate_av2_fixed_black_path(
     print_bitrate_report("software_bitstream", sw_bitstream, info)
     if ran_rtl:
         print_bitrate_report("rtl_bitstream", rtl_bitstream, info)
+        if not rtl_metrics.exists():
+            print("FAIL: AV2 RTL cycle metrics were not written", file=sys.stderr)
+            return 1
+        print_rtl_cycle_report("rtl", rtl_metrics, info)
     print_psnr_report("software_internal_recon", validation_input_path, sw_internal_recon)
     print_psnr_report("software_ref_decoded_recon", validation_input_path, sw_ref_decoded_recon)
     if rtl_recon_has_data:
@@ -792,6 +799,30 @@ def print_bitrate_report(label: str, bitstream_path: Path, info: InputInfo) -> N
     print(f"{encoded_bits}  {label}_bits")
     print(f"{bpp:.4f}  {label}_bits_per_luma_pixel")
     print(f"{source_ratio:.4f}  {label}_encoded_to_source_bytes")
+
+
+def print_rtl_cycle_report(label: str, metrics_path: Path, info: InputInfo) -> None:
+    metrics = json.loads(metrics_path.read_text())
+    total_cycles = int(metrics["total_cycles"])
+    output_active_cycles = int(metrics["output_active_cycles"])
+    output_wait_cycles = int(metrics["output_wait_cycles"])
+    output_utilization = float(metrics["output_utilization"])
+    output_bubble_rate = float(metrics["output_bubble_rate"])
+    cycles_per_bit = float(metrics["cycles_per_bit"])
+    cycles_per_input_pixel = float(metrics["cycles_per_input_pixel"])
+    expected_pixels = info.width * info.height * info.frames
+    if int(metrics.get("input_pixels", expected_pixels)) != expected_pixels:
+        raise ValueError(
+            f"RTL cycle metrics input pixel count mismatch: "
+            f"expected {expected_pixels}, got {metrics.get('input_pixels')}"
+        )
+    print(f"{total_cycles}  {label}_total_cycles")
+    print(f"{output_active_cycles}  {label}_output_active_cycles")
+    print(f"{output_wait_cycles}  {label}_output_wait_cycles")
+    print(f"{output_utilization:.6f}  {label}_output_utilization")
+    print(f"{output_bubble_rate:.6f}  {label}_output_bubble_rate")
+    print(f"{cycles_per_bit:.6f}  {label}_cycles_per_bit")
+    print(f"{cycles_per_input_pixel:.6f}  {label}_cycles_per_input_pixel")
 
 
 def psnr_bytes(reference_path: Path, reconstructed_path: Path) -> float | None:

@@ -87,6 +87,43 @@ def av2_rtl_input_stream(data):
     return bytes(stream)
 
 
+def write_av2_cycle_metrics(
+    path,
+    width,
+    height,
+    observed_bytes,
+    total_cycles,
+    output_active_cycles,
+):
+    if not path:
+        return
+    bitstream_bits = observed_bytes * 8
+    input_pixels = width * height
+    output_wait_cycles = max(0, total_cycles - output_active_cycles)
+    output_utilization = output_active_cycles / total_cycles if total_cycles else 0.0
+    cycles_per_bit = total_cycles / bitstream_bits if bitstream_bits else 0.0
+    cycles_per_input_pixel = total_cycles / input_pixels if input_pixels else 0.0
+    metrics = {
+        "codec": "av2",
+        "width": width,
+        "height": height,
+        "frames": 1,
+        "bitstream_bytes": observed_bytes,
+        "bitstream_bits": bitstream_bits,
+        "input_pixels": input_pixels,
+        "total_cycles": total_cycles,
+        "output_active_cycles": output_active_cycles,
+        "output_wait_cycles": output_wait_cycles,
+        "output_utilization": output_utilization,
+        "output_bubble_rate": 1.0 - output_utilization,
+        "cycles_per_bit": cycles_per_bit,
+        "cycles_per_input_pixel": cycles_per_input_pixel,
+    }
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n")
+
+
 async def drive_input_frame(dut, data):
     index = 0
     if not data:
@@ -265,11 +302,14 @@ async def av2_encoder_emits_obu_stream(dut):
     trace_records = []
     completed = False
     width, height = rtl_geometry()
+    total_cycles = 0
+    output_active_cycles = 0
     default_max_cycles = max(80000, width * height * 3 * 32 + 20000)
     max_cycles = int(os.environ.get("FRAMEFORGE_RTL_AV2_MAX_CYCLES", str(default_max_cycles)))
     for _ in range(max_cycles):
         await RisingEdge(dut.clk)
         await ReadOnly()
+        total_cycles += 1
         state = signal_int(dut, "state_q")
         op_valid = signal_int(dut, "op_valid_w")
         op_consumed = op_valid == 1 and signal_int(dut, "pending_push_valid_q") == 0
@@ -410,6 +450,7 @@ async def av2_encoder_emits_obu_stream(dut):
             }
             raise AssertionError(f"AV2 RTL rejected the 4:4:4 input: {details}")
         if int(dut.m_axis_valid.value) == 1 and int(dut.m_axis_ready.value) == 1:
+            output_active_cycles += 1
             observed.append(int(dut.m_axis_data.value))
             if int(dut.m_axis_last.value) == 1:
                 completed = True
@@ -454,6 +495,14 @@ async def av2_encoder_emits_obu_stream(dut):
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(bytes(observed))
     recon_path.write_bytes(av2_palette_reconstruction(input_data))
+    write_av2_cycle_metrics(
+        os.environ.get("FRAMEFORGE_RTL_AV2_METRICS_OUT"),
+        width,
+        height,
+        len(observed),
+        total_cycles,
+        output_active_cycles,
+    )
     if trace_path := os.environ.get("FRAMEFORGE_RTL_AV2_TRACE_OUT"):
         path = Path(trace_path)
         path.parent.mkdir(parents=True, exist_ok=True)

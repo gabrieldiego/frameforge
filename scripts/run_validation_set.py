@@ -27,6 +27,10 @@ class ValidationResult:
     reason: str
     log_path: Path
     bitrate_delta: str = "n/a"
+    rtl_output_utilization: str = "n/a"
+    rtl_output_bubble_rate: str = "n/a"
+    rtl_cycles_per_bit: str = "n/a"
+    rtl_cycles_per_input_pixel: str = "n/a"
 
 
 def main() -> int:
@@ -67,11 +71,18 @@ def main() -> int:
     passed = [result for result in results if result.status == "PASS"]
     bitrates = [extract_bpp_delta(result.bitrate_delta) for result in passed]
     comparable = [value for value in bitrates if value is not None]
+    cycle_values = [
+        parse_optional_float(result.rtl_cycles_per_input_pixel) for result in passed
+    ]
+    comparable_cycles = [value for value in cycle_values if value is not None]
 
     print()
     print(f"FrameForge validation set: {args.set}")
-    print("| # | vector | result | bitrate_delta | reason | log |")
-    print("|---:|---|---|---:|---|---|")
+    print(
+        "| # | vector | result | bitrate_delta | output_util | bubble_rate | "
+        "cycles/bit | cycles/pixel | reason | log |"
+    )
+    print("|---:|---|---|---:|---:|---:|---:|---:|---|---|")
     for index, result in enumerate(results, start=1):
         resolved_log = result.log_path.resolve()
         try:
@@ -79,7 +90,10 @@ def main() -> int:
         except ValueError:
             rel_log = resolved_log
         print(
-            f"| {index} | {result.path.name} | {result.status} | {result.bitrate_delta} | "
+            f"| {index} | {result.path.name} | {result.status} | "
+            f"{result.bitrate_delta} | {result.rtl_output_utilization} | "
+            f"{result.rtl_output_bubble_rate} | {result.rtl_cycles_per_bit} | "
+            f"{result.rtl_cycles_per_input_pixel} | "
             f"{markdown_escape(result.reason)} | {rel_log} |"
         )
 
@@ -91,6 +105,14 @@ def main() -> int:
         print(
             f"\nSet bitrate summary (software vs compare stream, bpp): "
             f"avg={avg_delta:.4f} min={min_delta:.4f} max={max_delta:.4f}"
+        )
+    if comparable_cycles:
+        avg_cycles = sum(comparable_cycles) / len(comparable_cycles)
+        min_cycles = min(comparable_cycles)
+        max_cycles = max(comparable_cycles)
+        print(
+            f"Set RTL cycle summary (cycles/input pixel): "
+            f"avg={avg_cycles:.4f} min={min_cycles:.4f} max={max_cycles:.4f}"
         )
     if failed:
         print(f"\nFAIL: {len(failed)} of {len(results)} validation case(s) failed", file=sys.stderr)
@@ -128,6 +150,7 @@ def run_validation(path: Path, args: argparse.Namespace) -> ValidationResult:
     )
     log_path.write_text(process.stdout)
     bitrate_delta = extract_bitrate_delta(process.stdout, args.codec_config.name)
+    cycle_metrics = extract_cycle_metrics(process.stdout)
     if process.returncode == 0:
         reason = (
             "SW/reference-decoder checksum checks passed"
@@ -140,6 +163,16 @@ def run_validation(path: Path, args: argparse.Namespace) -> ValidationResult:
             reason=reason,
             log_path=log_path,
             bitrate_delta=bitrate_delta,
+            rtl_output_utilization=format_cycle_metric(
+                cycle_metrics.get("rtl_output_utilization")
+            ),
+            rtl_output_bubble_rate=format_cycle_metric(
+                cycle_metrics.get("rtl_output_bubble_rate")
+            ),
+            rtl_cycles_per_bit=format_cycle_metric(cycle_metrics.get("rtl_cycles_per_bit")),
+            rtl_cycles_per_input_pixel=format_cycle_metric(
+                cycle_metrics.get("rtl_cycles_per_input_pixel")
+            ),
         )
     return ValidationResult(
         path=path,
@@ -147,6 +180,12 @@ def run_validation(path: Path, args: argparse.Namespace) -> ValidationResult:
         reason=extract_failure_reason(process.stdout),
         log_path=log_path,
         bitrate_delta=bitrate_delta,
+        rtl_output_utilization=format_cycle_metric(cycle_metrics.get("rtl_output_utilization")),
+        rtl_output_bubble_rate=format_cycle_metric(cycle_metrics.get("rtl_output_bubble_rate")),
+        rtl_cycles_per_bit=format_cycle_metric(cycle_metrics.get("rtl_cycles_per_bit")),
+        rtl_cycles_per_input_pixel=format_cycle_metric(
+            cycle_metrics.get("rtl_cycles_per_input_pixel")
+        ),
     )
 
 
@@ -196,6 +235,15 @@ def extract_bpp_delta(text: str) -> float | None:
     return float(match.group("delta"))
 
 
+def parse_optional_float(text: str) -> float | None:
+    if text == "n/a":
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
 def parse_bitrate_metrics(output: str) -> dict[str, float]:
     bpp_pattern = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s+([a-z0-9_]+)_bits_per_luma_pixel\s*$")
     metrics: dict[str, float] = {}
@@ -207,6 +255,26 @@ def parse_bitrate_metrics(output: str) -> dict[str, float]:
         label = match.group(2)
         metrics[label] = value
     return metrics
+
+
+def extract_cycle_metrics(output: str) -> dict[str, float]:
+    metric_pattern = re.compile(
+        r"^\s*([0-9]+(?:\.[0-9]+)?)\s+"
+        r"(rtl_(?:output_utilization|output_bubble_rate|cycles_per_bit|cycles_per_input_pixel))\s*$"
+    )
+    metrics: dict[str, float] = {}
+    for line in output.splitlines():
+        match = metric_pattern.match(line.strip())
+        if not match:
+            continue
+        metrics[match.group(2)] = float(match.group(1))
+    return metrics
+
+
+def format_cycle_metric(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:.6f}"
 
 
 if __name__ == "__main__":
