@@ -8,21 +8,19 @@ Older bring-up and intermediate optimization checkpoints are intentionally kept
 out of this report so the document remains focused on the current validated
 baseline and its immediate delta. Use git history for retired measurements.
 
-## 2026-06-17 Continuous Final Output Drain
+## 2026-06-17 Range-Coder Count Narrowing
 
-Measured after changing `ff_av2_encoder` to keep `m_axis_valid` asserted while
-draining final OBU bytes. The encoder now prefetches the next output byte during
-an accepted transfer instead of returning to an idle/load cycle between bytes.
-This changes RTL output timing only; encoded AV2 bitstreams are unchanged.
+Measured after narrowing AV2 entropy range-coder count and finalization
+arithmetic from 32-bit `integer` signals to explicit signed 8-bit logic. This
+is a synthesis cleanup only; encoded AV2 bitstreams and output scheduling are
+unchanged.
 
 Baseline and current sources:
 
-- Baseline Git SHA: `3f8e91b67dff42fcf3af8addffc29e8ce5aeb996`
-- Current validated source Git SHA: `22acd0ebb02db4dbd406cb174f6898b79e597c29`
-- Baseline mode: AV2 luma palette header literals are precomputed and
-  registered in `ff_av2_palette_analyzer_444` before they are consumed by
-  `ff_av2_luma_palette_symbolizer`.
-- Current mode: continuous final-byte output drain in `ff_av2_encoder`.
+- Baseline Git SHA: `22acd0ebb02db4dbd406cb174f6898b79e597c29`
+- Current validated source Git SHA: `6c7ec6f9938788f89f9755c6eccdbb2142fec39c`
+- Baseline mode: continuous final-byte output drain in `ff_av2_encoder`.
+- Current mode: signed 8-bit range-coder count and finalization arithmetic.
 - Delta columns compare against the previous documented AV2 top-synthesis
   baseline for the same DUT and board.
 
@@ -60,13 +58,13 @@ Synthesis configuration:
 
 Synthesis result:
 
-- Yosys synthesis passed in 307.5 seconds.
-- Peak child RSS observed by the synthesis runner was 1392.27 MiB.
-- Runtime exceeded the 300 second review threshold by 7.5 seconds, but stayed
-  inside the 600 second hard timeout and 3072 MiB memory limit.
-- Post-synthesis flattened-cell reporting completed in 5.9 seconds.
-- Post-synthesis critical-path reporting completed in 48.2 seconds with peak
-  memory 1392.27 MiB and topological path length 78.
+- Yosys synthesis passed in 286.1 seconds.
+- Peak child RSS observed by the synthesis runner was 1339.81 MiB.
+- Runtime stayed 13.9 seconds below the 300 second review threshold and inside
+  the 600 second hard timeout and 3072 MiB memory limit.
+- Post-synthesis flattened-cell reporting completed in 5.7 seconds.
+- Post-synthesis critical-path reporting completed in 45.3 seconds with peak
+  memory 1339.81 MiB and topological path length 78.
 - The longest top-level path still starts at `palette_row_q`, runs through
   palette-map neighbor/token ordering, and then enters the entropy range-coder
   path toward `low_q`.
@@ -77,22 +75,22 @@ Flattened Xilinx-cell estimate from
 
 | Metric | Count |
 |---|---:|
-| Cells | 84187 |
-| Estimated LCs | 27064 |
-| CARRY4 | 2646 |
+| Cells | 82696 |
+| Estimated LCs | 27007 |
+| CARRY4 | 2572 |
 | DSP48E1 | 15 |
 | FDCE | 4923 |
 | FDPE | 24 |
-| FDRE | 28451 |
-| FDSE | 38 |
-| LUT1 | 524 |
-| LUT2 | 6709 |
-| LUT3 | 4313 |
-| LUT4 | 2695 |
-| LUT5 | 2955 |
-| LUT6 | 17101 |
-| MUXF7 | 3570 |
-| MUXF8 | 894 |
+| FDRE | 28403 |
+| FDSE | 14 |
+| LUT1 | 430 |
+| LUT2 | 6642 |
+| LUT3 | 4562 |
+| LUT4 | 2481 |
+| LUT5 | 3211 |
+| LUT6 | 16753 |
+| MUXF7 | 2846 |
+| MUXF8 | 650 |
 | RAMB36E1 | 19 |
 | RAM32M | 4 |
 | RAM64M | 1536 |
@@ -101,33 +99,33 @@ Delta from the previous documented top-synthesis baseline:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| Synthesis time | 294.6 s | 307.5 s | +12.9 s |
-| Peak synthesis RSS | 1357.64 MiB | 1392.27 MiB | +34.63 MiB |
-| Cell report time | 5.7 s | 5.9 s | +0.2 s |
-| Critical-path report time | 46.4 s | 48.2 s | +1.8 s |
+| Synthesis time | 307.5 s | 286.1 s | -21.4 s |
+| Peak synthesis RSS | 1392.27 MiB | 1339.81 MiB | -52.46 MiB |
+| Cell report time | 5.9 s | 5.7 s | -0.2 s |
+| Critical-path report time | 48.2 s | 45.3 s | -2.9 s |
 | Topological path length | 78 | 78 | 0 |
-| Cells | 84102 | 84187 | +85 |
-| Estimated LCs | 27387 | 27064 | -323 |
-| CARRY4 | 2650 | 2646 | -4 |
+| Cells | 84187 | 82696 | -1491 |
+| Estimated LCs | 27064 | 27007 | -57 |
+| CARRY4 | 2646 | 2572 | -74 |
 | DSP48E1 | 15 | 15 | 0 |
 | FDCE | 4923 | 4923 | 0 |
 | FDPE | 24 | 24 | 0 |
-| FDRE | 28451 | 28451 | 0 |
-| FDSE | 38 | 38 | 0 |
-| LUT1 | 443 | 524 | +81 |
-| LUT2 | 6225 | 6709 | +484 |
-| LUT3 | 4226 | 4313 | +87 |
-| LUT4 | 2719 | 2695 | -24 |
-| LUT5 | 2849 | 2955 | +106 |
-| LUT6 | 17593 | 17101 | -492 |
-| MUXF7 | 3605 | 3570 | -35 |
-| MUXF8 | 1015 | 894 | -121 |
+| FDRE | 28451 | 28403 | -48 |
+| FDSE | 38 | 14 | -24 |
+| LUT1 | 524 | 430 | -94 |
+| LUT2 | 6709 | 6642 | -67 |
+| LUT3 | 4313 | 4562 | +249 |
+| LUT4 | 2695 | 2481 | -214 |
+| LUT5 | 2955 | 3211 | +256 |
+| LUT6 | 17101 | 16753 | -348 |
+| MUXF7 | 3570 | 2846 | -724 |
+| MUXF8 | 894 | 650 | -244 |
 | RAMB36E1 | 19 | 19 | 0 |
 | RAM32M | 4 | 4 | 0 |
 | RAM64M | 1536 | 1536 | 0 |
 
-The continuous output-drain change preserved the reported topological path
-length and reduced estimated LCs by 323. Cells increased by 85 and synthesis
-runtime crossed the review threshold, so the next area/timing work should still
-focus on palette-map token ordering and the entropy range-coder path. BRAM,
-DSP, and the large FF bank counts are unchanged.
+The range-coder count narrowing preserved the reported topological path length
+while reducing cells by 1491, estimated LCs by 57, CARRY4 cells by 74, and peak
+synthesis RSS by 52.46 MiB. Synthesis runtime returned below the 300 second
+review threshold. BRAM and DSP counts are unchanged. The next likely timing
+target remains palette-map token ordering into the entropy range-coder path.
