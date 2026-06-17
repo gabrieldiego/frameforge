@@ -18,19 +18,19 @@ Metric definitions:
 - `cycles/bit`: `total_cycles / rtl_bitstream_bits`.
 - `cycles/input pixel`: `total_cycles / (width * height * frames)`.
 
-## 2026-06-17 Range-Coder Count Narrowing
+## 2026-06-17 Luma Palette Token Ordering
 
-Measured after narrowing AV2 entropy range-coder count and finalization
-arithmetic from 32-bit `integer` signals to explicit signed 8-bit logic.
-This is a synthesis cleanup only; it does not change output scheduling or
-encoded AV2 bitstreams.
+Measured after replacing the AV2 luma palette symbolizer's temporary
+eight-entry color-order/status arrays with direct neighbor-priority token
+generation. This is a synthesis cleanup only; it does not change output
+scheduling or encoded AV2 bitstreams.
 
 Baseline and current sources:
 
-- Baseline Git SHA: `22acd0ebb02db4dbd406cb174f6898b79e597c29`
-- Current validated source Git SHA: `6c7ec6f9938788f89f9755c6eccdbb2142fec39c`
-- Baseline mode: continuous final-byte output drain in `ff_av2_encoder`.
-- Current mode: signed 8-bit range-coder count and finalization arithmetic.
+- Baseline Git SHA: `6c7ec6f9938788f89f9755c6eccdbb2142fec39c`
+- Current validated source Git SHA: `50244062149c2de2216098735676af4fd653c177`
+- Baseline mode: signed 8-bit range-coder count and finalization arithmetic.
+- Current mode: direct luma palette neighbor-priority token ordering.
 - Delta columns compare against the baseline checkpoint above.
 
 Validation commands:
