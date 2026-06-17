@@ -18,19 +18,19 @@ Metric definitions:
 - `cycles/bit`: `total_cycles / rtl_bitstream_bits`.
 - `cycles/input pixel`: `total_cycles / (width * height * frames)`.
 
-## 2026-06-17 Closed Header Counter Narrowing
+## 2026-06-17 Direct Closed Header Assembly
 
-Measured after narrowing the AV2 closed-header bit index and tile-loop index
-from 32-bit `integer` signals to explicit 7-bit and 3-bit logic. This is a
-synthesis cleanup only; it does not change output scheduling or encoded AV2
+Measured after replacing the AV2 closed-header repeated dynamic bit writes with
+direct fixed-field assignments plus a single contiguous tile-info mask. This is
+a synthesis cleanup only; it does not change output scheduling or encoded AV2
 bitstreams.
 
 Baseline and current sources:
 
-- Baseline Git SHA: `db00d97a03e6e39ae40be1355f4ff56aba79acb3`
-- Current validated source Git SHA: `fb0c9e5c49edde163f75faa36e922524355cd025`
-- Baseline mode: parallel luma palette non-priority token count tree.
-- Current mode: narrowed closed-header bit counters.
+- Baseline Git SHA: `fb0c9e5c49edde163f75faa36e922524355cd025`
+- Current validated source Git SHA: `0059f7a8f61fa78529b075e699d7b118de7882f4`
+- Baseline mode: narrowed closed-header bit counters.
+- Current mode: direct closed-header field assembly.
 - Delta columns compare against the baseline checkpoint above.
 
 Validation commands:
