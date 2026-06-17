@@ -37,8 +37,6 @@ module ff_av2_encoder #(
 );
 
   localparam int AV2_MAX_SEQUENCE_BYTES = 16;
-  localparam int AV2_MAX_CLOSED_HEADER_BYTES = 8;
-  localparam int AV2_TILE_SIZE_BYTES = 4;
   typedef enum logic [4:0] {
     ST_IDLE,
     ST_TILE_START,
@@ -192,17 +190,8 @@ module ff_av2_encoder #(
   logic ibc_use_left_copy_w;
   logic [1:0] intrabc_ctx_w;
   logic [1:0] intrabc_skip_ctx_w;
-  logic [2:0] tile_log2_cols_w;
-  logic [2:0] tile_log2_rows_w;
-  logic [5:0] closed_header_bit_count_w;
   logic [3:0] closed_header_len_w;
-  logic [63:0] closed_header_bits_w;
-  logic [7:0] closed_header_byte_w;
-  logic [2:0] closed_header_index_w;
-  logic [15:0] payload_prefix_value_w;
   logic [7:0] payload_prefix_byte_w;
-  integer closed_bit_index_w;
-  integer closed_loop_index_w;
   logic [15:0] closed_len_w;
   logic [1:0] closed_leb_len_w;
   logic [15:0] seq_end_index_w;
@@ -211,8 +200,8 @@ module ff_av2_encoder #(
   logic [15:0] total_stream_len_w;
   logic [15:0] tile_payload_start_w;
   logic [15:0] tile_stream_index_w;
-  logic [15:0] closed_header_payload_index_w;
   logic [15:0] seq_stream_index_w;
+  logic [7:0] seq_stream_byte_w;
   logic [15:0] closed_leb_index_w;
   logic [7:0] output_byte_w;
   logic [7:0] output_byte_q;
@@ -365,6 +354,42 @@ module ff_av2_encoder #(
     .rect_ctx(partition_rect_ctx_w),
     .do_split_cdf0(partition_do_cdf0_w),
     .rect_type_cdf0(partition_rect_cdf0_w)
+  );
+
+  ff_av2_bitstream_headers bitstream_headers (
+    .width(width_q),
+    .height(height_q),
+    .width_bits(width_bits_q),
+    .height_bits(height_bits_q),
+    .seq_op(seq_op_q),
+    .seq_bit_pos(seq_bit_pos_q),
+    .frame_palette_mode(frame_palette_mode_q),
+    .frame_ibc_mode(frame_ibc_mode_q),
+    .tile_cols(tile_cols_q),
+    .tile_rows(tile_rows_q),
+    .multi_tile(multi_tile_w),
+    .tile_len(tile_len_q),
+    .payload_prefix_index(payload_prefix_index_q),
+    .seq_len(seq_len_q),
+    .payload_len(payload_len_q),
+    .stream_index(stream_index_q),
+    .seq_stream_byte(seq_stream_byte_w),
+    .seq_load_value(seq_load_value_w),
+    .seq_load_bits(seq_load_bits_w),
+    .payload_prefix_byte(payload_prefix_byte_w),
+    .closed_header_len(closed_header_len_w),
+    .closed_len(closed_len_w),
+    .closed_leb_len(closed_leb_len_w),
+    .seq_end_index(seq_end_index_w),
+    .closed_leb_start(closed_leb_start_w),
+    .closed_header_start(closed_header_start_w),
+    .total_stream_len(total_stream_len_w),
+    .tile_payload_start(tile_payload_start_w),
+    .seq_stream_index(seq_stream_index_w),
+    .closed_leb_index(closed_leb_index_w),
+    .tile_stream_index(tile_stream_index_w),
+    .output_tile_payload(output_tile_payload_w),
+    .output_byte(output_byte_w)
   );
 
   ff_av2_left_hash_matcher_444 #(
@@ -632,31 +657,6 @@ module ff_av2_encoder #(
   assign tile_samples_w = ({16'd0, tile_width_q} * {16'd0, tile_height_q}) * 32'd3;
   assign tile_is_last_w = (tile_index_q == (tile_count_q - 16'd1));
   assign multi_tile_w = (tile_count_q != 16'd1);
-  assign payload_prefix_value_w = tile_len_q - 16'd1;
-  assign payload_prefix_byte_w =
-    (payload_prefix_index_q == 2'd0) ? payload_prefix_value_w[7:0] :
-    (payload_prefix_index_q == 2'd1) ? payload_prefix_value_w[15:8] :
-    8'd0;
-
-  assign closed_len_w = {12'd0, closed_header_len_w} + 16'd1 + payload_len_q;
-  // AV2 v1.0.0 Section 5.3 uses unsigned LEB128 for OBU payload lengths.
-  // Lossless high-colour 64x64 4:4:4 tiles can exceed the two-byte LEB128
-  // range, so keep the staged writer correct through the current 16-bit bound.
-  assign closed_leb_len_w =
-    (closed_len_w >= 16'd16384) ? 2'd3 :
-    (closed_len_w >= 16'd128) ? 2'd2 : 2'd1;
-  assign seq_end_index_w = 16'd4 + seq_len_q;
-  assign closed_leb_start_w = seq_end_index_w;
-  assign closed_header_start_w = closed_leb_start_w + {14'd0, closed_leb_len_w};
-  assign total_stream_len_w =
-    closed_header_start_w + 16'd1 + {12'd0, closed_header_len_w} + payload_len_q;
-  assign tile_payload_start_w = closed_header_start_w + 16'd1 + {12'd0, closed_header_len_w};
-  assign seq_stream_index_w = stream_index_q - 16'd4;
-  assign closed_leb_index_w = stream_index_q - closed_leb_start_w;
-  assign tile_stream_index_w = stream_index_q - tile_payload_start_w;
-  assign closed_header_payload_index_w = stream_index_q - closed_header_start_w - 16'd1;
-  assign closed_header_index_w = closed_header_payload_index_w[2:0];
-  assign output_tile_payload_w = (stream_index_q >= tile_payload_start_w);
   assign carry_sum_w = carry_q + precarry_read_data_q;
   assign visible_rows_mi_w = tile_height_q[6:2];
   assign visible_cols_mi_w = tile_width_q[6:2];
@@ -908,102 +908,10 @@ module ff_av2_encoder #(
   end
 
   always @* begin
-    tile_log2_cols_w = 3'd0;
-    if (tile_cols_q > 16'd1) tile_log2_cols_w = 3'd1;
-    if (tile_cols_q > 16'd2) tile_log2_cols_w = 3'd2;
-    if (tile_cols_q > 16'd4) tile_log2_cols_w = 3'd3;
-    if (tile_cols_q > 16'd8) tile_log2_cols_w = 3'd4;
-    if (tile_cols_q > 16'd16) tile_log2_cols_w = 3'd5;
-    if (tile_cols_q > 16'd32) tile_log2_cols_w = 3'd6;
-
-    tile_log2_rows_w = 3'd0;
-    if (tile_rows_q > 16'd1) tile_log2_rows_w = 3'd1;
-    if (tile_rows_q > 16'd2) tile_log2_rows_w = 3'd2;
-    if (tile_rows_q > 16'd4) tile_log2_rows_w = 3'd3;
-    if (tile_rows_q > 16'd8) tile_log2_rows_w = 3'd4;
-    if (tile_rows_q > 16'd16) tile_log2_rows_w = 3'd5;
-    if (tile_rows_q > 16'd32) tile_log2_rows_w = 3'd6;
-  end
-
-  always @* begin
-    closed_header_bits_w = 64'd0;
-    closed_bit_index_w = 0;
-
-    // AV2 v1.0.0 Sections 5.19 and 5.20.1: first tile group plus the
-    // minimum uncompressed header used by the MVP still-picture path.
-    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
-    closed_bit_index_w = closed_bit_index_w + 1;
-    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
-    closed_bit_index_w = closed_bit_index_w + 1;
-    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
-    closed_bit_index_w = closed_bit_index_w + 1;
-
-    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] =
-      frame_palette_mode_q;
-    closed_bit_index_w = closed_bit_index_w + 1;
-    if (frame_palette_mode_q) begin
-      // cur_frame_force_integer_mv = 0
-      closed_bit_index_w = closed_bit_index_w + 1;
+    seq_stream_byte_w = 8'd0;
+    if ((stream_index_q >= 16'd4) && (stream_index_q < seq_end_index_w)) begin
+      seq_stream_byte_w = seq_mem_q[seq_stream_index_w];
     end
-
-    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] =
-      frame_ibc_mode_q;
-    closed_bit_index_w = closed_bit_index_w + 1;
-    if (frame_ibc_mode_q) begin
-      // AV2 v1.0.0 read_intrabc_params(): allow_global_intrabc=0 makes
-      // AVM infer local IntraBC availability for this tile-local MVP path.
-      closed_bit_index_w = closed_bit_index_w + 1;
-    end
-    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
-    closed_bit_index_w = closed_bit_index_w + 1;
-    closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
-    closed_bit_index_w = closed_bit_index_w + 1;
-
-    // AV2 v1.0.0 write_tile_info_max_tile(): uniform_spacing_flag followed
-    // by one increment bit per log2 tile column/row above the Level 2.0
-    // minimum. The current 64x64-SB subset keeps min_log2 at zero.
-    for (closed_loop_index_w = 0; closed_loop_index_w < 6; closed_loop_index_w = closed_loop_index_w + 1) begin
-      if (closed_loop_index_w < tile_log2_cols_w) begin
-        closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
-        closed_bit_index_w = closed_bit_index_w + 1;
-      end
-    end
-    for (closed_loop_index_w = 0; closed_loop_index_w < 6; closed_loop_index_w = closed_loop_index_w + 1) begin
-      if (closed_loop_index_w < tile_log2_rows_w) begin
-        closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
-        closed_bit_index_w = closed_bit_index_w + 1;
-      end
-    end
-    if (multi_tile_w) begin
-      closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
-      closed_bit_index_w = closed_bit_index_w + 1;
-      closed_header_bits_w[(AV2_MAX_CLOSED_HEADER_BYTES * 8 - 1) - closed_bit_index_w] = 1'b1;
-      closed_bit_index_w = closed_bit_index_w + 1;
-    end
-
-    // quantization.base_qindex, segmentation.enabled, qmatrix, and
-    // reduced_tx_set_used are all zero in the MVP. For multi-tile single
-    // tile-group OBUs, tile_start_and_end_present_flag is also zero.
-    closed_bit_index_w = closed_bit_index_w + 12;
-    if (multi_tile_w) begin
-      closed_bit_index_w = closed_bit_index_w + 1;
-    end
-    if (closed_bit_index_w[2:0] != 3'd0) begin
-      closed_bit_index_w = closed_bit_index_w + (8 - closed_bit_index_w[2:0]);
-    end
-    closed_header_bit_count_w = closed_bit_index_w[5:0];
-    closed_header_len_w = closed_bit_index_w[5:3];
-
-    case (closed_header_index_w)
-      3'd0: closed_header_byte_w = closed_header_bits_w[63:56];
-      3'd1: closed_header_byte_w = closed_header_bits_w[55:48];
-      3'd2: closed_header_byte_w = closed_header_bits_w[47:40];
-      3'd3: closed_header_byte_w = closed_header_bits_w[39:32];
-      3'd4: closed_header_byte_w = closed_header_bits_w[31:24];
-      3'd5: closed_header_byte_w = closed_header_bits_w[23:16];
-      3'd6: closed_header_byte_w = closed_header_bits_w[15:8];
-      default: closed_header_byte_w = closed_header_bits_w[7:0];
-    endcase
   end
 
   always @* begin
@@ -1188,81 +1096,6 @@ module ff_av2_encoder #(
       u_txb_nonzero_fh_w = 32'd10420;
       v_txb_nonzero_fh_w = 32'd16384;
       y_dc_sign_fl_w = 32'd19136;
-    end
-  end
-
-  always @* begin
-    seq_load_value_w = 64'd0;
-    seq_load_bits_w = 7'd0;
-    case (seq_op_q)
-      8'd0: begin seq_load_value_w = 64'd1; seq_load_bits_w = 7'd1; end
-      8'd1: begin seq_load_value_w = 64'd4; seq_load_bits_w = 7'd5; end
-      8'd2: begin seq_load_value_w = 64'd1; seq_load_bits_w = 7'd1; end
-      8'd3: begin seq_load_value_w = 64'd0; seq_load_bits_w = 7'd5; end
-      8'd4: begin seq_load_value_w = 64'd3; seq_load_bits_w = 7'd3; end
-      8'd5: begin seq_load_value_w = 64'd2; seq_load_bits_w = 7'd3; end
-      8'd6: begin seq_load_value_w = {60'd0, width_bits_q[3:0] - 4'd1}; seq_load_bits_w = 7'd4; end
-      8'd7: begin seq_load_value_w = {60'd0, height_bits_q[3:0] - 4'd1}; seq_load_bits_w = 7'd4; end
-      8'd8: begin seq_load_value_w = {48'd0, width_q - 16'd1}; seq_load_bits_w = {2'd0, width_bits_q}; end
-      8'd9: begin seq_load_value_w = {48'd0, height_q - 16'd1}; seq_load_bits_w = {2'd0, height_bits_q}; end
-      8'd10: begin seq_load_value_w = 64'd0; seq_load_bits_w = 7'd6; end
-      8'd11: begin seq_load_value_w = 64'd0; seq_load_bits_w = 7'd2; end
-      8'd12: begin seq_load_value_w = 64'd0; seq_load_bits_w = 7'd8; end
-      8'd13: begin
-        if (frame_ibc_mode_q) begin
-          seq_load_value_w = 64'd28;
-          seq_load_bits_w = 7'd6;
-        end else begin
-          seq_load_value_w = 64'd8;
-          seq_load_bits_w = 7'd5;
-        end
-      end
-      8'd14: begin seq_load_value_w = 64'd32878; seq_load_bits_w = 7'd17; end
-      8'd15: begin seq_load_value_w = 64'd1; seq_load_bits_w = 7'd7; end
-      8'd16: begin seq_load_value_w = 64'd0; seq_load_bits_w = 7'd3; end
-      8'd17: begin
-        if (seq_bit_pos_q[2:0] == 3'd0) begin
-          seq_load_value_w = 64'h80;
-          seq_load_bits_w = 7'd8;
-        end else begin
-          seq_load_bits_w = 7'd8 - {4'd0, seq_bit_pos_q[2:0]};
-          seq_load_value_w = 64'd1 << (seq_load_bits_w - 7'd1);
-        end
-      end
-      default: begin seq_load_value_w = 64'd0; seq_load_bits_w = 7'd0; end
-    endcase
-  end
-
-  always @* begin
-    output_byte_w = 8'h00;
-    if (stream_index_q == 16'd0) begin
-      output_byte_w = 8'h01;
-    end else if (stream_index_q == 16'd1) begin
-      output_byte_w = 8'h08;
-    end else if (stream_index_q == 16'd2) begin
-      output_byte_w = 8'd1 + seq_len_q[7:0];
-    end else if (stream_index_q == 16'd3) begin
-      output_byte_w = 8'h04;
-    end else if (stream_index_q < seq_end_index_w) begin
-      output_byte_w = seq_mem_q[seq_stream_index_w];
-    end else if (stream_index_q < closed_header_start_w) begin
-      if (closed_leb_index_w == 16'd0 && closed_leb_len_w != 2'd1) begin
-        output_byte_w = closed_len_w[6:0] | 8'h80;
-      end else if (closed_leb_index_w == 16'd0) begin
-        output_byte_w = closed_len_w[7:0];
-      end else if (closed_leb_index_w == 16'd1 && closed_leb_len_w == 2'd3) begin
-        output_byte_w = {1'b0, closed_len_w[13:7]} | 8'h80;
-      end else if (closed_leb_index_w == 16'd1) begin
-        output_byte_w = {1'b0, closed_len_w[13:7]};
-      end else begin
-        output_byte_w = {6'd0, closed_len_w[15:14]};
-      end
-    end else if (stream_index_q == closed_header_start_w) begin
-      output_byte_w = 8'h10;
-    end else if (stream_index_q < tile_payload_start_w) begin
-      output_byte_w = closed_header_byte_w;
-    end else begin
-      output_byte_w = 8'h00;
     end
   end
 
