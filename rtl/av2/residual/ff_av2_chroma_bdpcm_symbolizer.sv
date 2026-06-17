@@ -83,7 +83,16 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   logic [15:0] level_pre_w [0:15];
   logic coeff_negative_pre_w [0:15];
   logic [15:0] abs_coeff_w;
-  logic [15:0] cul_level_w;
+  logic [3:0] cul_context_level_w;
+  logic [15:0] tx4x4_nonzero_scan_w;
+  logic [3:0] cul_level_sat_w [0:15];
+  logic [4:0] cul_pair_sum_w [0:7];
+  logic [3:0] cul_pair_sat_w [0:7];
+  logic [4:0] cul_quad_sum_w [0:3];
+  logic [3:0] cul_quad_sat_w [0:3];
+  logic [4:0] cul_oct_sum_w [0:1];
+  logic [3:0] cul_oct_sat_w [0:1];
+  logic [4:0] cul_final_sum_w;
   logic signed [15:0] dc_value_w;
   logic [4:0] eob_pre_w;
   logic [3:0] eob_pt_pre_w;
@@ -195,7 +204,8 @@ module ff_av2_chroma_bdpcm_symbolizer #(
     end
 
     eob_pre_w = 5'd0;
-    cul_level_w = 16'd0;
+    tx4x4_nonzero_scan_w = 16'd0;
+    cul_context_level_w = 4'd0;
     dc_value_w = 16'sd0;
     for (sample_index_w = 0; sample_index_w < 16; sample_index_w = sample_index_w + 1) begin
       if (coeff_w[sample_index_w] < 0) begin
@@ -209,30 +219,76 @@ module ff_av2_chroma_bdpcm_symbolizer #(
     end
 
     for (scan_index_w = 0; scan_index_w < 16; scan_index_w = scan_index_w + 1) begin
-      if (level_pre_w[TX4X4_SCAN_PACK[(scan_index_w * 4) +: 4]] != 16'd0) begin
-        // AV2 v1.0.0 Section 5.20.7.27 coeffs(): a TX_4X4 end-of-block
-        // value can be 16. AVM's tokenization treats EOB as a value in
-        // 1..TX4X4_SAMPLES, so the RTL must keep one more bit than scan_q.
-        eob_pre_w = {1'b0, scan_index_w[3:0]} + 5'd1;
-      end
+      tx4x4_nonzero_scan_w[scan_index_w] =
+        (level_pre_w[TX4X4_SCAN_PACK[(scan_index_w * 4) +: 4]] != 16'd0);
     end
 
-    for (scan_index_w = 0; scan_index_w < 16; scan_index_w = scan_index_w + 1) begin
-      if (scan_index_w < eob_pre_w && level_pre_w[TX4X4_SCAN_PACK[(scan_index_w * 4) +: 4]] != 16'd0) begin
-        cul_level_w = cul_level_w + level_pre_w[TX4X4_SCAN_PACK[(scan_index_w * 4) +: 4]];
-      end
+    // AV2 v1.0.0 Section 5.20.7.27 coeffs(): a TX_4X4 end-of-block value can
+    // be 16. AVM's tokenization treats EOB as a value in 1..TX4X4_SAMPLES, so
+    // the RTL must keep one more bit than scan_q.
+    casez (tx4x4_nonzero_scan_w)
+      16'b1???_????_????_????: eob_pre_w = 5'd16;
+      16'b01??_????_????_????: eob_pre_w = 5'd15;
+      16'b001?_????_????_????: eob_pre_w = 5'd14;
+      16'b0001_????_????_????: eob_pre_w = 5'd13;
+      16'b0000_1???_????_????: eob_pre_w = 5'd12;
+      16'b0000_01??_????_????: eob_pre_w = 5'd11;
+      16'b0000_001?_????_????: eob_pre_w = 5'd10;
+      16'b0000_0001_????_????: eob_pre_w = 5'd9;
+      16'b0000_0000_1???_????: eob_pre_w = 5'd8;
+      16'b0000_0000_01??_????: eob_pre_w = 5'd7;
+      16'b0000_0000_001?_????: eob_pre_w = 5'd6;
+      16'b0000_0000_0001_????: eob_pre_w = 5'd5;
+      16'b0000_0000_0000_1???: eob_pre_w = 5'd4;
+      16'b0000_0000_0000_01??: eob_pre_w = 5'd3;
+      16'b0000_0000_0000_001?: eob_pre_w = 5'd2;
+      16'b0000_0000_0000_0001: eob_pre_w = 5'd1;
+      default: eob_pre_w = 5'd0;
+    endcase
+
+    // AV2 v1.0.0 Section 5.20.7.27 coeffs(): the above/left entropy context
+    // uses min(culLevel, 7). EOB is the last nonzero scan position, so summing
+    // all 16 coefficient levels is equivalent to summing scan positions before
+    // EOB while avoiding an EOB-dependent adder chain.
+    for (sample_index_w = 0; sample_index_w < 16; sample_index_w = sample_index_w + 1) begin
+      cul_level_sat_w[sample_index_w] =
+        (level_pre_w[sample_index_w] > 16'd7) ? 4'd8 : {1'b0, level_pre_w[sample_index_w][2:0]};
     end
+    for (sample_index_w = 0; sample_index_w < 8; sample_index_w = sample_index_w + 1) begin
+      cul_pair_sum_w[sample_index_w] =
+        {1'b0, cul_level_sat_w[sample_index_w * 2]} +
+        {1'b0, cul_level_sat_w[(sample_index_w * 2) + 1]};
+      cul_pair_sat_w[sample_index_w] =
+        (cul_pair_sum_w[sample_index_w] > 5'd7) ? 4'd8 : cul_pair_sum_w[sample_index_w][3:0];
+    end
+    for (sample_index_w = 0; sample_index_w < 4; sample_index_w = sample_index_w + 1) begin
+      cul_quad_sum_w[sample_index_w] =
+        {1'b0, cul_pair_sat_w[sample_index_w * 2]} +
+        {1'b0, cul_pair_sat_w[(sample_index_w * 2) + 1]};
+      cul_quad_sat_w[sample_index_w] =
+        (cul_quad_sum_w[sample_index_w] > 5'd7) ? 4'd8 : cul_quad_sum_w[sample_index_w][3:0];
+    end
+    for (sample_index_w = 0; sample_index_w < 2; sample_index_w = sample_index_w + 1) begin
+      cul_oct_sum_w[sample_index_w] =
+        {1'b0, cul_quad_sat_w[sample_index_w * 2]} +
+        {1'b0, cul_quad_sat_w[(sample_index_w * 2) + 1]};
+      cul_oct_sat_w[sample_index_w] =
+        (cul_oct_sum_w[sample_index_w] > 5'd7) ? 4'd8 : cul_oct_sum_w[sample_index_w][3:0];
+    end
+    cul_final_sum_w = {1'b0, cul_oct_sat_w[0]} + {1'b0, cul_oct_sat_w[1]};
+    cul_context_level_w = (cul_final_sum_w > 5'd7) ? 4'd7 : cul_final_sum_w[3:0];
+
     if (coeff_negative_pre_w[0]) begin
       dc_value_w = -$signed(level_pre_w[0]);
     end else begin
       dc_value_w = $signed(level_pre_w[0]);
     end
 
-    entropy_context_pre_w = (cul_level_w > 16'd7) ? 8'd7 : {4'd0, cul_level_w[3:0]};
+    entropy_context_pre_w = {4'd0, cul_context_level_w};
     if (dc_value_w < 0) begin
-      entropy_context_pre_w = ((cul_level_w > 16'd7) ? 8'd7 : {4'd0, cul_level_w[3:0]}) | 8'd8;
+      entropy_context_pre_w = {4'd0, cul_context_level_w} | 8'd8;
     end else if (dc_value_w > 0) begin
-      entropy_context_pre_w = ((cul_level_w > 16'd7) ? 8'd7 : {4'd0, cul_level_w[3:0]}) + 8'd16;
+      entropy_context_pre_w = {4'd0, cul_context_level_w} + 8'd16;
     end
 
     if (eob_pre_w <= 5'd2) eob_pt_pre_w = eob_pre_w[3:0];
