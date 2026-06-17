@@ -18,19 +18,19 @@ Metric definitions:
 - `cycles/bit`: `total_cycles / rtl_bitstream_bits`.
 - `cycles/input pixel`: `total_cycles / (width * height * frames)`.
 
-## 2026-06-17 Parallel Luma Palette Token Count
+## 2026-06-17 Closed Header Counter Narrowing
 
-Measured after replacing the AV2 luma palette symbolizer's serial unrolled
-non-priority-color count with explicit per-index masks and pairwise sums.
-This is a synthesis/timing cleanup only; it does not change output scheduling
-or encoded AV2 bitstreams.
+Measured after narrowing the AV2 closed-header bit index and tile-loop index
+from 32-bit `integer` signals to explicit 7-bit and 3-bit logic. This is a
+synthesis cleanup only; it does not change output scheduling or encoded AV2
+bitstreams.
 
 Baseline and current sources:
 
-- Baseline Git SHA: `50244062149c2de2216098735676af4fd653c177`
-- Current validated source Git SHA: `db00d97a03e6e39ae40be1355f4ff56aba79acb3`
-- Baseline mode: direct luma palette neighbor-priority token ordering.
-- Current mode: parallel luma palette non-priority token count tree.
+- Baseline Git SHA: `db00d97a03e6e39ae40be1355f4ff56aba79acb3`
+- Current validated source Git SHA: `fb0c9e5c49edde163f75faa36e922524355cd025`
+- Baseline mode: parallel luma palette non-priority token count tree.
+- Current mode: narrowed closed-header bit counters.
 - Delta columns compare against the baseline checkpoint above.
 
 Validation commands:
