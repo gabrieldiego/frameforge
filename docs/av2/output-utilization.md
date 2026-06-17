@@ -18,19 +18,19 @@ Metric definitions:
 - `cycles/bit`: `total_cycles / rtl_bitstream_bits`.
 - `cycles/input pixel`: `total_cycles / (width * height * frames)`.
 
-## 2026-06-17 Palette Token Ranking Cleanup
+## 2026-06-17 Range Coder Datapath Narrowing
 
-Measured after replacing the AV2 luma palette token rank calculation's full
-8-entry priority-hit mask with a direct count of priority colors below the
-current palette index. This is a synthesis cleanup only; it does not change
-output scheduling or encoded AV2 bitstreams.
+Measured after narrowing the AV2 range coder's probability-scaling datapath to
+the 16-bit `rng` interval used by the entropy coder normalization path. This is
+a synthesis cleanup only; it does not change output scheduling or encoded AV2
+bitstreams.
 
 Baseline and current sources:
 
-- Baseline Git SHA: `88dbd0f5809a69d9b5fd2e4411bf27ca09ec9898`
-- Current validated source Git SHA: `1c68cec7173dc4aa40e50370834d85587470665c`
-- Baseline mode: residual entropy context cleanup.
-- Current mode: palette token ranking cleanup.
+- Baseline Git SHA: `1c68cec7173dc4aa40e50370834d85587470665c`
+- Current validated source Git SHA: `e2cac734b0ca685fc3e26258b27a2a2715531daa`
+- Baseline mode: palette token ranking cleanup.
+- Current mode: range coder datapath narrowing.
 - Delta columns compare against the baseline checkpoint above.
 
 Validation commands:
