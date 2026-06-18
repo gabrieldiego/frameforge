@@ -20,6 +20,7 @@ module ff_av2_palette_analyzer_444 #(
   input  logic       query_start,
   input  logic       chroma_fetch_start,
   input  logic       chroma_fetch_plane_v,
+  input  logic       chroma_fetch_predictor_only,
   input  logic [4:0] chroma_fetch_txb_row_mi,
   input  logic [4:0] chroma_fetch_txb_col_mi,
   input  logic       luma_fetch_start,
@@ -46,8 +47,14 @@ module ff_av2_palette_analyzer_444 #(
   output logic       chroma_fetch_done,
   output logic [127:0] chroma_fetch_txb_samples,
   output logic [31:0] chroma_fetch_predictor_samples,
+  output logic [127:0] chroma_fetch_u_txb_samples,
+  output logic [31:0] chroma_fetch_u_predictor_samples,
+  output logic [127:0] chroma_fetch_v_txb_samples,
+  output logic [31:0] chroma_fetch_v_predictor_samples,
   output logic       luma_fetch_done,
   output logic [127:0] luma_fetch_txb_samples,
+  output logic [127:0] luma_fetch_u_txb_samples,
+  output logic [127:0] luma_fetch_v_txb_samples,
   output logic [127:0] luma_fetch_predictor_samples
 );
 
@@ -626,8 +633,14 @@ module ff_av2_palette_analyzer_444 #(
       chroma_fetch_done <= 1'b0;
       chroma_fetch_txb_samples <= 128'd0;
       chroma_fetch_predictor_samples <= 32'd0;
+      chroma_fetch_u_txb_samples <= 128'd0;
+      chroma_fetch_u_predictor_samples <= 32'd0;
+      chroma_fetch_v_txb_samples <= 128'd0;
+      chroma_fetch_v_predictor_samples <= 32'd0;
       luma_fetch_done <= 1'b0;
       luma_fetch_txb_samples <= 128'd0;
+      luma_fetch_u_txb_samples <= 128'd0;
+      luma_fetch_v_txb_samples <= 128'd0;
       luma_fetch_predictor_samples <= 128'd0;
       query_done <= 1'b0;
       current_palette_index_q <= 192'd0;
@@ -774,6 +787,8 @@ module ff_av2_palette_analyzer_444 #(
       end else if (luma_fetch_active_q) begin
         if (luma_fetch_read_pending_q) begin
           luma_fetch_txb_samples[luma_fetch_capture_step_q * 8 +: 8] <= luma_read_y_w;
+          luma_fetch_u_txb_samples[luma_fetch_capture_step_q * 8 +: 8] <= chroma_read_u_w;
+          luma_fetch_v_txb_samples[luma_fetch_capture_step_q * 8 +: 8] <= chroma_read_v_w;
           luma_fetch_predictor_samples[luma_fetch_capture_step_q * 8 +: 8] <=
             luma_fetch_predictor_sample_w;
           if (luma_fetch_capture_step_q == 5'd15) begin
@@ -801,7 +816,7 @@ module ff_av2_palette_analyzer_444 #(
         fetch_plane_v_q <= chroma_fetch_plane_v;
         fetch_txb_row_mi_q <= chroma_fetch_txb_row_mi;
         fetch_txb_col_mi_q <= chroma_fetch_txb_col_mi;
-        fetch_step_q <= 5'd0;
+        fetch_step_q <= chroma_fetch_predictor_only ? 5'd16 : 5'd0;
         fetch_read_pending_q <= 1'b0;
         chroma_fetch_done <= 1'b0;
       end else if (fetch_active_q) begin
@@ -809,6 +824,10 @@ module ff_av2_palette_analyzer_444 #(
           if (fetch_read_is_pred_q) begin
             chroma_fetch_predictor_samples[(fetch_capture_step_q - 5'd16) * 8 +: 8] <=
               fetch_plane_v_q ? chroma_read_v_w : chroma_read_u_w;
+            chroma_fetch_u_predictor_samples[(fetch_capture_step_q - 5'd16) * 8 +: 8] <=
+              chroma_read_u_w;
+            chroma_fetch_v_predictor_samples[(fetch_capture_step_q - 5'd16) * 8 +: 8] <=
+              chroma_read_v_w;
             if (fetch_capture_step_q == 5'd19) begin
               fetch_active_q <= 1'b0;
               fetch_read_pending_q <= 1'b0;
@@ -822,6 +841,8 @@ module ff_av2_palette_analyzer_444 #(
           end else begin
             chroma_fetch_txb_samples[fetch_capture_step_q * 8 +: 8] <=
               fetch_plane_v_q ? chroma_read_v_w : chroma_read_u_w;
+            chroma_fetch_u_txb_samples[fetch_capture_step_q * 8 +: 8] <= chroma_read_u_w;
+            chroma_fetch_v_txb_samples[fetch_capture_step_q * 8 +: 8] <= chroma_read_v_w;
             if (fetch_capture_step_q < 5'd15) begin
               fetch_capture_step_q <= fetch_capture_step_q + 5'd1;
               if (fetch_capture_step_q < 5'd14) begin
@@ -840,6 +861,8 @@ module ff_av2_palette_analyzer_444 #(
         end else if (fetch_step_q < 5'd20) begin
           if (fetch_txb_col_mi_q == 5'd0 && fetch_txb_row_mi_q == 5'd0) begin
             chroma_fetch_predictor_samples[(fetch_step_q - 5'd16) * 8 +: 8] <= 8'd129;
+            chroma_fetch_u_predictor_samples[(fetch_step_q - 5'd16) * 8 +: 8] <= 8'd129;
+            chroma_fetch_v_predictor_samples[(fetch_step_q - 5'd16) * 8 +: 8] <= 8'd129;
             if (fetch_step_q == 5'd19) begin
               fetch_active_q <= 1'b0;
               chroma_fetch_done <= 1'b1;

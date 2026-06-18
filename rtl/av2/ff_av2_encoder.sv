@@ -127,6 +127,24 @@ module ff_av2_encoder #(
   logic txb_prefetch_started_q;
   logic txb_prefetch_done_q;
   logic txb_prefetch_chroma_q;
+  logic txb_prefetch_plane_v_q;
+  logic [1:0] txb_prefetch_index_q;
+  logic [127:0] cached_v_txb_samples_q [0:3];
+  logic [31:0] cached_v_predictor_samples_q [0:3];
+  logic [127:0] cached_u_txb_samples_q [0:3];
+  logic [3:0] cached_v_valid_q;
+  logic [3:0] cached_chroma_samples_valid_q;
+  logic [31:0] left_edge_u_top_q;
+  logic [31:0] left_edge_u_bottom_q;
+  logic [31:0] left_edge_v_top_q;
+  logic [31:0] left_edge_v_bottom_q;
+  logic [4:0] left_edge_row_mi_q;
+  logic [4:0] left_edge_col_mi_q;
+  logic left_edge_valid_q;
+  logic [31:0] above_col0_u_q;
+  logic [31:0] above_col0_v_q;
+  logic [4:0] above_col0_row_mi_q;
+  logic above_col0_valid_q;
   logic [4:0] visible_rows_mi_q;
   logic [4:0] visible_cols_mi_q;
   logic [4:0] block_row_mi_q;
@@ -226,8 +244,44 @@ module ff_av2_encoder #(
   logic txb_prefetch_first_luma_w;
   logic txb_prefetch_luma_start_w;
   logic txb_prefetch_chroma_start_w;
+  logic txb_prefetch_chroma_target_v_w;
+  logic chroma_fetch_req_cross_phase_w;
+  logic chroma_fetch_req_next_txb_w;
   logic txb_fetch_done_w;
   logic txb_prefetch_fetch_done_w;
+  logic v_chroma_cache_hit_w;
+  logic u_chroma_cache_hit_w;
+  logic chroma_fetch_current_cache_hit_w;
+  logic chroma_predictor_compute_valid_w;
+  logic chroma_fetch_req_predictor_compute_w;
+  logic chroma_fetch_req_ready_w;
+  logic chroma_fetch_completed_u_w;
+  logic luma_fetch_completed_w;
+  logic [1:0] chroma_fetch_cache_index_w;
+  logic [1:0] luma_fetch_cache_index_w;
+  logic [1:0] chroma_fetch_req_index_w;
+  logic [1:0] chroma_left_source_index_w;
+  logic [1:0] chroma_above_source_index_w;
+  logic chroma_fetch_predictor_only_w;
+  logic [31:0] cached_u_left_predictor_w;
+  logic [31:0] cached_v_left_predictor_w;
+  logic [31:0] cached_u_above_predictor_w;
+  logic [31:0] cached_v_above_predictor_w;
+  logic [31:0] cached_u_external_left_predictor_w;
+  logic [31:0] cached_v_external_left_predictor_w;
+  logic [31:0] cached_u_external_above_predictor_w;
+  logic [31:0] cached_v_external_above_predictor_w;
+  logic [31:0] chroma_cached_predictor_samples_w;
+  logic chroma_external_left_predictor_valid_w;
+  logic chroma_req_external_left_predictor_valid_w;
+  logic chroma_external_above_predictor_valid_w;
+  logic chroma_req_external_above_predictor_valid_w;
+  logic [31:0] current_u_right_edge_top_w;
+  logic [31:0] current_u_right_edge_bottom_w;
+  logic [31:0] current_v_right_edge_top_w;
+  logic [31:0] current_v_right_edge_bottom_w;
+  logic [31:0] current_u_col0_above_edge_w;
+  logic [31:0] current_v_col0_above_edge_w;
   logic [4:0] luma_fetch_req_row_mi_w;
   logic [4:0] luma_fetch_req_col_mi_w;
   logic [4:0] chroma_fetch_req_row_mi_w;
@@ -275,7 +329,13 @@ module ff_av2_encoder #(
   logic luma_fetch_done_w;
   logic [127:0] chroma_fetch_txb_samples_w;
   logic [31:0] chroma_fetch_predictor_samples_w;
+  logic [127:0] chroma_fetch_u_txb_samples_w;
+  logic [31:0] chroma_fetch_u_predictor_samples_w;
+  logic [127:0] chroma_fetch_v_txb_samples_w;
+  logic [31:0] chroma_fetch_v_predictor_samples_w;
   logic [127:0] luma_fetch_txb_samples_w;
+  logic [127:0] luma_fetch_u_txb_samples_w;
+  logic [127:0] luma_fetch_v_txb_samples_w;
   logic [127:0] luma_fetch_predictor_samples_w;
   logic [3:0] luma_residual_skip_ctx_w;
   logic [1:0] luma_residual_dc_sign_ctx_w;
@@ -308,6 +368,8 @@ module ff_av2_encoder #(
   logic chroma_bdpcm_txb_done_w;
   logic chroma_bdpcm_txb_nonzero_w;
   logic [7:0] chroma_bdpcm_entropy_context_w;
+  logic [127:0] chroma_bdpcm_txb_samples_w;
+  logic [31:0] chroma_bdpcm_predictor_samples_w;
   logic [4:0] visible_rows_mi_w;
   logic [4:0] visible_cols_mi_w;
   logic block_visible_w;
@@ -453,6 +515,7 @@ module ff_av2_encoder #(
     .query_start(palette_query_start_w),
     .chroma_fetch_start(chroma_fetch_start_w),
     .chroma_fetch_plane_v(chroma_fetch_req_plane_v_w),
+    .chroma_fetch_predictor_only(chroma_fetch_predictor_only_w),
     .chroma_fetch_txb_row_mi(chroma_fetch_req_row_mi_w),
     .chroma_fetch_txb_col_mi(chroma_fetch_req_col_mi_w),
     .luma_fetch_start(luma_fetch_start_w),
@@ -479,8 +542,14 @@ module ff_av2_encoder #(
     .chroma_fetch_done(chroma_fetch_done_w),
     .chroma_fetch_txb_samples(chroma_fetch_txb_samples_w),
     .chroma_fetch_predictor_samples(chroma_fetch_predictor_samples_w),
+    .chroma_fetch_u_txb_samples(chroma_fetch_u_txb_samples_w),
+    .chroma_fetch_u_predictor_samples(chroma_fetch_u_predictor_samples_w),
+    .chroma_fetch_v_txb_samples(chroma_fetch_v_txb_samples_w),
+    .chroma_fetch_v_predictor_samples(chroma_fetch_v_predictor_samples_w),
     .luma_fetch_done(luma_fetch_done_w),
     .luma_fetch_txb_samples(luma_fetch_txb_samples_w),
+    .luma_fetch_u_txb_samples(luma_fetch_u_txb_samples_w),
+    .luma_fetch_v_txb_samples(luma_fetch_v_txb_samples_w),
     .luma_fetch_predictor_samples(luma_fetch_predictor_samples_w)
   );
 
@@ -550,8 +619,8 @@ module ff_av2_encoder #(
     .plane_v(phase_q == PHASE_V_COEFF),
     .skip_ctx(chroma_bdpcm_skip_ctx_w),
     .dc_sign_ctx(2'd0),
-    .txb_samples(chroma_fetch_txb_samples_w),
-    .predictor_samples(chroma_fetch_predictor_samples_w),
+    .txb_samples(chroma_bdpcm_txb_samples_w),
+    .predictor_samples(chroma_bdpcm_predictor_samples_w),
     .predictor_txb_samples(128'd0),
     .op_valid(chroma_bdpcm_op_valid_w),
     .op_literal(chroma_bdpcm_op_literal_w),
@@ -649,7 +718,8 @@ module ff_av2_encoder #(
   assign chroma_fetch_start_w =
     ((state_q == ST_CHROMA_FETCH) &&
      !txb_prefetch_started_q &&
-     (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF)) ||
+     (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF) &&
+     !chroma_fetch_current_cache_hit_w) ||
     txb_prefetch_chroma_start_w ||
     (txb_prefetch_started_q && !txb_prefetch_done_q && txb_prefetch_chroma_q);
   assign luma_fetch_start_w =
@@ -681,7 +751,7 @@ module ff_av2_encoder #(
     palette_mode_q &&
     (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF) &&
     ((state_q == ST_LEAF) ||
-     ((state_q == ST_CHROMA_FETCH) && chroma_fetch_done_w));
+     ((state_q == ST_CHROMA_FETCH) && (chroma_fetch_done_w || chroma_fetch_current_cache_hit_w)));
 
   // AV2 4:4:4 bring-up path: traverse one 64x64 superblock, split visible
   // coding leaves down to 8x8, and generate syntax through the range coder.
@@ -851,8 +921,91 @@ module ff_av2_encoder #(
   assign next_txb_col_w = {11'd0, block_col_mi_q + next_txb_local_col_w};
   assign txb_fetch_done_w =
     (phase_q == PHASE_Y_COEFF) ? luma_fetch_done_w :
-    ((phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF) ? chroma_fetch_done_w : 1'b0);
+    (phase_q == PHASE_U_COEFF) ? chroma_fetch_done_w :
+    (phase_q == PHASE_V_COEFF) ? (chroma_fetch_done_w || v_chroma_cache_hit_w) : 1'b0;
   assign txb_prefetch_fetch_done_w = luma_fetch_done_w || chroma_fetch_done_w;
+  assign v_chroma_cache_hit_w =
+    palette_mode_q &&
+    (phase_q == PHASE_V_COEFF) &&
+    (cached_v_valid_q[txb_index_q[1:0]] || chroma_predictor_compute_valid_w);
+  assign u_chroma_cache_hit_w =
+    palette_mode_q &&
+    (phase_q == PHASE_U_COEFF) &&
+    chroma_predictor_compute_valid_w;
+  assign chroma_fetch_current_cache_hit_w = u_chroma_cache_hit_w || v_chroma_cache_hit_w;
+  assign chroma_fetch_cache_index_w =
+    txb_prefetch_started_q ? txb_prefetch_index_q : txb_index_q[1:0];
+  assign luma_fetch_cache_index_w =
+    txb_prefetch_started_q ? txb_prefetch_index_q : txb_index_q[1:0];
+  assign chroma_fetch_req_cross_phase_w =
+    (state_q == ST_LEAF) &&
+    cross_phase_has_next_txb_w &&
+    !(same_phase_has_next_txb_w && (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF));
+  assign chroma_fetch_req_next_txb_w =
+    (state_q == ST_LEAF) &&
+    ((same_phase_has_next_txb_w && (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF)) ||
+     cross_phase_has_next_txb_w);
+  assign chroma_fetch_req_index_w =
+    chroma_fetch_req_cross_phase_w ? 2'd0 :
+    (chroma_fetch_req_next_txb_w ? (txb_index_q[1:0] + 2'd1) : txb_index_q[1:0]);
+  // The cached predictor shortcut is intentionally limited to cases that
+  // match ff_av2_palette_analyzer_444's fetch_pred_read_addr_w sequence: the
+  // tile top-left constant and left-edge predictors from the previous 4x4 TXB.
+  assign chroma_predictor_compute_valid_w =
+    cached_chroma_samples_valid_q[txb_index_q[1:0]] &&
+    (((txb_row_w[4:0] == 5'd0) && (txb_col_w[4:0] == 5'd0)) ||
+     txb_col_w[0] ||
+     chroma_external_left_predictor_valid_w ||
+     chroma_external_above_predictor_valid_w ||
+     ((txb_col_w[4:0] == 5'd0) && txb_row_w[0]));
+  assign chroma_fetch_req_predictor_compute_w =
+    cached_chroma_samples_valid_q[chroma_fetch_req_index_w] &&
+    (((chroma_fetch_req_row_mi_w == 5'd0) && (chroma_fetch_req_col_mi_w == 5'd0)) ||
+     chroma_fetch_req_col_mi_w[0] ||
+     chroma_req_external_left_predictor_valid_w ||
+     chroma_req_external_above_predictor_valid_w ||
+     ((chroma_fetch_req_col_mi_w == 5'd0) && chroma_fetch_req_row_mi_w[0]));
+  assign chroma_external_left_predictor_valid_w =
+    (txb_col_w[4:0] != 5'd0) &&
+    !txb_col_w[0] &&
+    left_edge_valid_q &&
+    (left_edge_row_mi_q == block_row_mi_q) &&
+    ((left_edge_col_mi_q + 5'd2) == block_col_mi_q);
+  assign chroma_req_external_left_predictor_valid_w =
+    (chroma_fetch_req_col_mi_w != 5'd0) &&
+    !chroma_fetch_req_col_mi_w[0] &&
+    left_edge_valid_q &&
+    (left_edge_row_mi_q == block_row_mi_q) &&
+    ((left_edge_col_mi_q + 5'd2) == block_col_mi_q);
+  assign chroma_external_above_predictor_valid_w =
+    (txb_col_w[4:0] == 5'd0) &&
+    (txb_row_w[4:0] != 5'd0) &&
+    !txb_row_w[0] &&
+    above_col0_valid_q &&
+    ((above_col0_row_mi_q + 5'd2) == block_row_mi_q);
+  assign chroma_req_external_above_predictor_valid_w =
+    (chroma_fetch_req_col_mi_w == 5'd0) &&
+    (chroma_fetch_req_row_mi_w != 5'd0) &&
+    !chroma_fetch_req_row_mi_w[0] &&
+    above_col0_valid_q &&
+    ((above_col0_row_mi_q + 5'd2) == block_row_mi_q);
+  assign chroma_fetch_req_ready_w =
+    chroma_fetch_req_predictor_compute_w ||
+    (chroma_fetch_req_plane_v_w && cached_v_valid_q[chroma_fetch_req_index_w]);
+  assign chroma_fetch_predictor_only_w =
+    cached_chroma_samples_valid_q[chroma_fetch_req_index_w] &&
+    !chroma_fetch_req_predictor_compute_w;
+  assign chroma_fetch_completed_u_w =
+    chroma_fetch_done_w &&
+    (txb_prefetch_started_q ?
+      (txb_prefetch_chroma_q && !txb_prefetch_plane_v_q) :
+      (phase_q == PHASE_U_COEFF));
+  assign luma_fetch_completed_w =
+    luma_fetch_done_w &&
+    (txb_prefetch_started_q ? !txb_prefetch_chroma_q : (phase_q == PHASE_Y_COEFF));
+  assign txb_prefetch_chroma_target_v_w =
+    ((same_phase_has_next_txb_w && (phase_q == PHASE_V_COEFF)) ||
+     (cross_phase_has_next_txb_w && (phase_q == PHASE_U_COEFF)));
   assign txb_prefetch_luma_start_w =
     !start &&
     !pending_push_valid_q &&
@@ -872,11 +1025,12 @@ module ff_av2_encoder #(
     ((same_phase_has_next_txb_w && (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF)) ||
      cross_phase_has_next_txb_w) &&
     !txb_prefetch_started_q &&
+    !txb_prefetch_chroma_target_v_w &&
+    !chroma_fetch_req_predictor_compute_w &&
     !chroma_fetch_done_w;
   assign txb_prefetch_cross_phase_w =
     txb_prefetch_chroma_start_w &&
-    cross_phase_has_next_txb_w &&
-    !(same_phase_has_next_txb_w && (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF));
+    chroma_fetch_req_cross_phase_w;
   assign txb_prefetch_first_luma_w =
     txb_prefetch_luma_start_w &&
     (phase_q == PHASE_INTRA || phase_q == PHASE_PALETTE_HEADER || phase_q == PHASE_PALETTE_MAP);
@@ -887,13 +1041,104 @@ module ff_av2_encoder #(
     txb_prefetch_first_luma_w ? block_col_mi_q :
     (txb_prefetch_luma_start_w ? next_txb_col_w[4:0] : txb_col_w[4:0]);
   assign chroma_fetch_req_row_mi_w =
-    txb_prefetch_cross_phase_w ? block_row_mi_q :
-    (txb_prefetch_chroma_start_w ? next_txb_row_w[4:0] : txb_row_w[4:0]);
+    chroma_fetch_req_cross_phase_w ? block_row_mi_q :
+    (chroma_fetch_req_next_txb_w ? next_txb_row_w[4:0] : txb_row_w[4:0]);
   assign chroma_fetch_req_col_mi_w =
-    txb_prefetch_cross_phase_w ? block_col_mi_q :
-    (txb_prefetch_chroma_start_w ? next_txb_col_w[4:0] : txb_col_w[4:0]);
+    chroma_fetch_req_cross_phase_w ? block_col_mi_q :
+    (chroma_fetch_req_next_txb_w ? next_txb_col_w[4:0] : txb_col_w[4:0]);
   assign chroma_fetch_req_plane_v_w =
-    txb_prefetch_cross_phase_w ? (phase_q == PHASE_U_COEFF) : (phase_q == PHASE_V_COEFF);
+    chroma_fetch_req_cross_phase_w ? (phase_q == PHASE_U_COEFF) : (phase_q == PHASE_V_COEFF);
+  assign chroma_left_source_index_w = txb_index_q[1:0] - 2'd1;
+  assign chroma_above_source_index_w = txb_index_q[1:0] - txb_width_q[1:0];
+  assign cached_u_left_predictor_w = {
+    cached_u_txb_samples_q[chroma_left_source_index_w][15 * 8 +: 8],
+    cached_u_txb_samples_q[chroma_left_source_index_w][11 * 8 +: 8],
+    cached_u_txb_samples_q[chroma_left_source_index_w][7 * 8 +: 8],
+    cached_u_txb_samples_q[chroma_left_source_index_w][3 * 8 +: 8]
+  };
+  assign cached_v_left_predictor_w = {
+    cached_v_txb_samples_q[chroma_left_source_index_w][15 * 8 +: 8],
+    cached_v_txb_samples_q[chroma_left_source_index_w][11 * 8 +: 8],
+    cached_v_txb_samples_q[chroma_left_source_index_w][7 * 8 +: 8],
+    cached_v_txb_samples_q[chroma_left_source_index_w][3 * 8 +: 8]
+  };
+  assign cached_u_above_predictor_w = {
+    cached_u_txb_samples_q[chroma_above_source_index_w][12 * 8 +: 8],
+    cached_u_txb_samples_q[chroma_above_source_index_w][12 * 8 +: 8],
+    cached_u_txb_samples_q[chroma_above_source_index_w][12 * 8 +: 8],
+    cached_u_txb_samples_q[chroma_above_source_index_w][12 * 8 +: 8]
+  };
+  assign cached_v_above_predictor_w = {
+    cached_v_txb_samples_q[chroma_above_source_index_w][12 * 8 +: 8],
+    cached_v_txb_samples_q[chroma_above_source_index_w][12 * 8 +: 8],
+    cached_v_txb_samples_q[chroma_above_source_index_w][12 * 8 +: 8],
+    cached_v_txb_samples_q[chroma_above_source_index_w][12 * 8 +: 8]
+  };
+  assign cached_u_external_left_predictor_w =
+    txb_row_w[0] ? left_edge_u_bottom_q : left_edge_u_top_q;
+  assign cached_v_external_left_predictor_w =
+    txb_row_w[0] ? left_edge_v_bottom_q : left_edge_v_top_q;
+  assign cached_u_external_above_predictor_w = above_col0_u_q;
+  assign cached_v_external_above_predictor_w = above_col0_v_q;
+  assign chroma_cached_predictor_samples_w =
+    ((txb_row_w[4:0] == 5'd0) && (txb_col_w[4:0] == 5'd0)) ? 32'h81818181 :
+    txb_col_w[0] ?
+      ((phase_q == PHASE_V_COEFF) ? cached_v_left_predictor_w : cached_u_left_predictor_w) :
+    chroma_external_left_predictor_valid_w ?
+      ((phase_q == PHASE_V_COEFF) ?
+        cached_v_external_left_predictor_w : cached_u_external_left_predictor_w) :
+    chroma_external_above_predictor_valid_w ?
+      ((phase_q == PHASE_V_COEFF) ?
+        cached_v_external_above_predictor_w : cached_u_external_above_predictor_w) :
+      ((phase_q == PHASE_V_COEFF) ? cached_v_above_predictor_w : cached_u_above_predictor_w);
+  assign current_u_right_edge_top_w = {
+    cached_u_txb_samples_q[2'd1][15 * 8 +: 8],
+    cached_u_txb_samples_q[2'd1][11 * 8 +: 8],
+    cached_u_txb_samples_q[2'd1][7 * 8 +: 8],
+    cached_u_txb_samples_q[2'd1][3 * 8 +: 8]
+  };
+  assign current_u_right_edge_bottom_w = {
+    cached_u_txb_samples_q[2'd3][15 * 8 +: 8],
+    cached_u_txb_samples_q[2'd3][11 * 8 +: 8],
+    cached_u_txb_samples_q[2'd3][7 * 8 +: 8],
+    cached_u_txb_samples_q[2'd3][3 * 8 +: 8]
+  };
+  assign current_v_right_edge_top_w = {
+    cached_v_txb_samples_q[2'd1][15 * 8 +: 8],
+    cached_v_txb_samples_q[2'd1][11 * 8 +: 8],
+    cached_v_txb_samples_q[2'd1][7 * 8 +: 8],
+    cached_v_txb_samples_q[2'd1][3 * 8 +: 8]
+  };
+  assign current_v_right_edge_bottom_w = {
+    cached_v_txb_samples_q[2'd3][15 * 8 +: 8],
+    cached_v_txb_samples_q[2'd3][11 * 8 +: 8],
+    cached_v_txb_samples_q[2'd3][7 * 8 +: 8],
+    cached_v_txb_samples_q[2'd3][3 * 8 +: 8]
+  };
+  assign current_u_col0_above_edge_w = {
+    cached_u_txb_samples_q[2'd2][12 * 8 +: 8],
+    cached_u_txb_samples_q[2'd2][12 * 8 +: 8],
+    cached_u_txb_samples_q[2'd2][12 * 8 +: 8],
+    cached_u_txb_samples_q[2'd2][12 * 8 +: 8]
+  };
+  assign current_v_col0_above_edge_w = {
+    cached_v_txb_samples_q[2'd2][12 * 8 +: 8],
+    cached_v_txb_samples_q[2'd2][12 * 8 +: 8],
+    cached_v_txb_samples_q[2'd2][12 * 8 +: 8],
+    cached_v_txb_samples_q[2'd2][12 * 8 +: 8]
+  };
+  assign chroma_bdpcm_txb_samples_w =
+    ((phase_q == PHASE_V_COEFF) && cached_chroma_samples_valid_q[txb_index_q[1:0]]) ?
+      cached_v_txb_samples_q[txb_index_q[1:0]] :
+    ((phase_q == PHASE_U_COEFF) && cached_chroma_samples_valid_q[txb_index_q[1:0]]) ?
+      cached_u_txb_samples_q[txb_index_q[1:0]] :
+      chroma_fetch_txb_samples_w;
+  assign chroma_bdpcm_predictor_samples_w =
+    ((phase_q == PHASE_V_COEFF) && cached_v_valid_q[txb_index_q[1:0]]) ?
+      cached_v_predictor_samples_q[txb_index_q[1:0]] :
+    chroma_predictor_compute_valid_w ?
+      chroma_cached_predictor_samples_w :
+      chroma_fetch_predictor_samples_w;
   assign luma_residual_top_level_w =
     ((y_txb_above_q[txb_col_w[4:0]] & 8'd7) > 8'd4) ?
       3'd4 : y_txb_above_q[txb_col_w[4:0]][2:0];
@@ -1263,6 +1508,21 @@ module ff_av2_encoder #(
       txb_prefetch_started_q <= 1'b0;
       txb_prefetch_done_q <= 1'b0;
       txb_prefetch_chroma_q <= 1'b0;
+      txb_prefetch_plane_v_q <= 1'b0;
+      txb_prefetch_index_q <= 2'd0;
+      cached_v_valid_q <= 4'd0;
+      cached_chroma_samples_valid_q <= 4'd0;
+      left_edge_u_top_q <= 32'd0;
+      left_edge_u_bottom_q <= 32'd0;
+      left_edge_v_top_q <= 32'd0;
+      left_edge_v_bottom_q <= 32'd0;
+      left_edge_row_mi_q <= 5'd0;
+      left_edge_col_mi_q <= 5'd0;
+      left_edge_valid_q <= 1'b0;
+      above_col0_u_q <= 32'd0;
+      above_col0_v_q <= 32'd0;
+      above_col0_row_mi_q <= 5'd0;
+      above_col0_valid_q <= 1'b0;
       last_u_txb_nonzero_q <= 1'b0;
       visible_rows_mi_q <= 5'd0;
       visible_cols_mi_q <= 5'd0;
@@ -1296,6 +1556,19 @@ module ff_av2_encoder #(
       end
     end else begin
       input_error <= 1'b0;
+      if (luma_fetch_completed_w) begin
+        cached_u_txb_samples_q[luma_fetch_cache_index_w] <= luma_fetch_u_txb_samples_w;
+        cached_v_txb_samples_q[luma_fetch_cache_index_w] <= luma_fetch_v_txb_samples_w;
+        cached_chroma_samples_valid_q[luma_fetch_cache_index_w] <= 1'b1;
+      end
+      if (chroma_fetch_completed_u_w) begin
+        if (!cached_chroma_samples_valid_q[chroma_fetch_cache_index_w]) begin
+          cached_v_txb_samples_q[chroma_fetch_cache_index_w] <= chroma_fetch_v_txb_samples_w;
+          cached_chroma_samples_valid_q[chroma_fetch_cache_index_w] <= 1'b1;
+        end
+        cached_v_predictor_samples_q[chroma_fetch_cache_index_w] <= chroma_fetch_v_predictor_samples_w;
+        cached_v_valid_q[chroma_fetch_cache_index_w] <= 1'b1;
+      end
       if (start) begin
         input_error <= start_invalid_w;
         if (!start_invalid_w && state_q == ST_IDLE) begin
@@ -1364,6 +1637,21 @@ module ff_av2_encoder #(
           txb_prefetch_started_q <= 1'b0;
           txb_prefetch_done_q <= 1'b0;
           txb_prefetch_chroma_q <= 1'b0;
+          txb_prefetch_plane_v_q <= 1'b0;
+          txb_prefetch_index_q <= 2'd0;
+          cached_v_valid_q <= 4'd0;
+          cached_chroma_samples_valid_q <= 4'd0;
+          left_edge_u_top_q <= 32'd0;
+          left_edge_u_bottom_q <= 32'd0;
+          left_edge_v_top_q <= 32'd0;
+          left_edge_v_bottom_q <= 32'd0;
+          left_edge_row_mi_q <= 5'd0;
+          left_edge_col_mi_q <= 5'd0;
+          left_edge_valid_q <= 1'b0;
+          above_col0_u_q <= 32'd0;
+          above_col0_v_q <= 32'd0;
+          above_col0_row_mi_q <= 5'd0;
+          above_col0_valid_q <= 1'b0;
           last_u_txb_nonzero_q <= 1'b0;
           visible_rows_mi_q <= visible_rows_mi_w;
           visible_cols_mi_q <= visible_cols_mi_w;
@@ -1438,6 +1726,21 @@ module ff_av2_encoder #(
                 txb_prefetch_started_q <= 1'b0;
                 txb_prefetch_done_q <= 1'b0;
                 txb_prefetch_chroma_q <= 1'b0;
+                txb_prefetch_plane_v_q <= 1'b0;
+                txb_prefetch_index_q <= 2'd0;
+                cached_v_valid_q <= 4'd0;
+                cached_chroma_samples_valid_q <= 4'd0;
+                left_edge_u_top_q <= 32'd0;
+                left_edge_u_bottom_q <= 32'd0;
+                left_edge_v_top_q <= 32'd0;
+                left_edge_v_bottom_q <= 32'd0;
+                left_edge_row_mi_q <= 5'd0;
+                left_edge_col_mi_q <= 5'd0;
+                left_edge_valid_q <= 1'b0;
+                above_col0_u_q <= 32'd0;
+                above_col0_v_q <= 32'd0;
+                above_col0_row_mi_q <= 5'd0;
+                above_col0_valid_q <= 1'b0;
                 last_u_txb_nonzero_q <= 1'b0;
                 visible_rows_mi_q <= visible_rows_mi_w;
                 visible_cols_mi_q <= visible_cols_mi_w;
@@ -1541,6 +1844,10 @@ module ff_av2_encoder #(
                 txb_count_q <= txb_count_w;
                 txb_prefetch_started_q <= 1'b0;
                 txb_prefetch_done_q <= 1'b0;
+                txb_prefetch_plane_v_q <= 1'b0;
+                txb_prefetch_index_q <= 2'd0;
+                cached_v_valid_q <= 4'd0;
+                cached_chroma_samples_valid_q <= 4'd0;
                 state_q <= frame_ibc_mode_q ? ST_LEAF :
                            (palette_mode_q ? ST_PALETTE_QUERY : ST_LEAF);
               end else if (partition_q == PARTITION_HORZ) begin
@@ -1583,6 +1890,10 @@ module ff_av2_encoder #(
               txb_count_q <= txb_count_w;
               txb_prefetch_started_q <= 1'b0;
               txb_prefetch_done_q <= 1'b0;
+              txb_prefetch_plane_v_q <= 1'b0;
+              txb_prefetch_index_q <= 2'd0;
+              cached_v_valid_q <= 4'd0;
+              cached_chroma_samples_valid_q <= 4'd0;
               state_q <= frame_ibc_mode_q ? ST_LEAF :
                          (palette_mode_q ? ST_PALETTE_QUERY : ST_LEAF);
             end else if (partition_q == PARTITION_HORZ) begin
@@ -1616,6 +1927,10 @@ module ff_av2_encoder #(
               txb_prefetch_started_q <= 1'b1;
               txb_prefetch_done_q <= 1'b0;
               txb_prefetch_chroma_q <= txb_prefetch_chroma_start_w;
+              txb_prefetch_plane_v_q <= chroma_fetch_req_plane_v_w;
+              txb_prefetch_index_q <=
+                (txb_prefetch_cross_phase_w || txb_prefetch_first_luma_w) ?
+                  2'd0 : (txb_index_q[1:0] + 2'd1);
             end else if (txb_prefetch_started_q && txb_prefetch_fetch_done_w) begin
               txb_prefetch_done_q <= 1'b1;
             end
@@ -1778,7 +2093,9 @@ module ff_av2_encoder #(
                     txb_prefetch_done_q <= 1'b0;
                     last_u_txb_nonzero_q <= 1'b0;
                     if (palette_mode_q) begin
-                      if (txb_prefetch_done_q) begin
+                      if (txb_prefetch_done_q || chroma_fetch_req_ready_w) begin
+                        txb_prefetch_started_q <= 1'b0;
+                        txb_prefetch_done_q <= 1'b0;
                         state_q <= ST_LEAF;
                       end else begin
                         txb_prefetch_started_q <= txb_prefetch_started_q;
@@ -1830,7 +2147,9 @@ module ff_av2_encoder #(
                       txb_prefetch_started_q <= 1'b0;
                       txb_prefetch_done_q <= 1'b0;
                       if (palette_mode_q) begin
-                        if (txb_prefetch_done_q) begin
+                        if (txb_prefetch_done_q || chroma_fetch_req_ready_w) begin
+                          txb_prefetch_started_q <= 1'b0;
+                          txb_prefetch_done_q <= 1'b0;
                           state_q <= ST_LEAF;
                         end else begin
                           txb_prefetch_started_q <= txb_prefetch_started_q;
@@ -1848,6 +2167,21 @@ module ff_av2_encoder #(
                           ibc_left_q[context_index_q] <= 1'b0;
                           skip_left_q[context_index_q] <= 1'b0;
                         end
+                      end
+                      left_edge_u_top_q <= current_u_right_edge_top_w;
+                      left_edge_u_bottom_q <= current_u_right_edge_bottom_w;
+                      left_edge_v_top_q <= current_v_right_edge_top_w;
+                      left_edge_v_bottom_q <= current_v_right_edge_bottom_w;
+                      left_edge_row_mi_q <= block_row_mi_q;
+                      left_edge_col_mi_q <= block_col_mi_q;
+                      left_edge_valid_q <=
+                        cached_chroma_samples_valid_q[2'd1] &&
+                        cached_chroma_samples_valid_q[2'd3];
+                      if (block_col_mi_q == 5'd0) begin
+                        above_col0_u_q <= current_u_col0_above_edge_w;
+                        above_col0_v_q <= current_v_col0_above_edge_w;
+                        above_col0_row_mi_q <= block_row_mi_q;
+                        above_col0_valid_q <= cached_chroma_samples_valid_q[2'd2];
                       end
                       if (stack_sp_q != 5'd0) begin
                         txb_prefetch_started_q <= 1'b0;
@@ -1874,7 +2208,7 @@ module ff_av2_encoder #(
                       txb_local_col_q <= txb_local_col_q + 5'd1;
                     end
                     if (palette_mode_q) begin
-                      if (txb_prefetch_done_q) begin
+                      if (txb_prefetch_done_q || chroma_fetch_req_ready_w) begin
                         txb_prefetch_started_q <= 1'b0;
                         txb_prefetch_done_q <= 1'b0;
                         state_q <= ST_LEAF;
@@ -1892,7 +2226,10 @@ module ff_av2_encoder #(
           ST_CHROMA_FETCH: begin
             if (txb_prefetch_done_q ||
                 (phase_q == PHASE_Y_COEFF && luma_fetch_done_w) ||
-                ((phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF) && chroma_fetch_done_w)) begin
+                (phase_q == PHASE_U_COEFF && chroma_fetch_done_w) ||
+                ((phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF) &&
+                 chroma_fetch_current_cache_hit_w) ||
+                (phase_q == PHASE_V_COEFF && chroma_fetch_done_w)) begin
               step_q <= 5'd0;
               txb_prefetch_started_q <= 1'b0;
               txb_prefetch_done_q <= 1'b0;
