@@ -120,6 +120,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   logic [4:0] hr_prefix_bits_w;
   logic [31:0] hr_low_mask_w;
   logic has_lower_nonzero_w;
+  logic [3:0] next_lower_nonzero_scan_w;
 
   logic [3:0] table_w;
   logic [4:0] table_ctx_w;
@@ -473,10 +474,12 @@ module ff_av2_chroma_bdpcm_symbolizer #(
     hr_prefix_bits_w = hr_length_w - 5'd1 - {2'd0, hr_k_w};
     hr_low_mask_w = (32'd1 << hr_m_w) - 32'd1;
     has_lower_nonzero_w = 1'b0;
+    next_lower_nonzero_scan_w = 4'd0;
     for (scan_index_w = 0; scan_index_w < 16; scan_index_w = scan_index_w + 1) begin
       if (scan_index_w < scan_q && scan_index_w < eob_q &&
           level_q[TX4X4_SCAN_PACK[(scan_index_w * 4) +: 4]] != 16'd0) begin
         has_lower_nonzero_w = 1'b1;
+        next_lower_nonzero_scan_w = scan_index_w[3:0];
       end
     end
   end
@@ -1063,10 +1066,10 @@ module ff_av2_chroma_bdpcm_symbolizer #(
         end
         EMIT_SIGN_SCAN: begin
           if (scan_q >= eob_q || current_level_w == 16'd0) begin
-            if (scan_q == 4'd0) begin
-              active_q <= 1'b0;
+            if (has_lower_nonzero_w) begin
+              scan_q <= next_lower_nonzero_scan_w;
             end else begin
-              scan_q <= scan_q - 4'd1;
+              active_q <= 1'b0;
             end
           end else if (op_valid && advance) begin
             if (current_high_range_w) begin
@@ -1080,7 +1083,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
             end else if (!has_lower_nonzero_w) begin
               active_q <= 1'b0;
             end else begin
-              scan_q <= scan_q - 4'd1;
+              scan_q <= next_lower_nonzero_scan_w;
             end
           end
         end
@@ -1099,7 +1102,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
           if (!has_lower_nonzero_w) begin
             active_q <= 1'b0;
           end else begin
-            scan_q <= scan_q - 4'd1;
+            scan_q <= next_lower_nonzero_scan_w;
             emit_state_q <= EMIT_SIGN_SCAN;
           end
         end
@@ -1114,7 +1117,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
             if (!has_lower_nonzero_w) begin
               active_q <= 1'b0;
             end else begin
-              scan_q <= scan_q - 4'd1;
+              scan_q <= next_lower_nonzero_scan_w;
               emit_state_q <= EMIT_SIGN_SCAN;
             end
           end
@@ -1124,7 +1127,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
           if (!has_lower_nonzero_w) begin
             active_q <= 1'b0;
           end else begin
-            scan_q <= scan_q - 4'd1;
+            scan_q <= next_lower_nonzero_scan_w;
             emit_state_q <= EMIT_SIGN_SCAN;
           end
         end
