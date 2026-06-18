@@ -8,20 +8,20 @@ Older bring-up and intermediate optimization checkpoints are intentionally kept
 out of this report so the document remains focused on the current validated
 baseline and its immediate delta. Use git history for retired measurements.
 
-## 2026-06-17 Chroma Drain Overlap And TXB Pre-Arm
+## 2026-06-17 TXB Sample Prefetch During Entropy Emission
 
-Measured after allowing the AV2 palette analyzer to consume U/V samples while
-its luma pad/sort/map pass runs, and after arming the residual symbolizers on
-the final TXB fetch-done cycle. Encoded AV2 bitstreams are unchanged; this
-checkpoint only removes input/analyzer stalls and one residual setup cycle per
-fetched TXB.
+Measured after prefetching analyzer sample-store data for the next transform
+block while the current transform block is emitting entropy symbols. This
+scheduling change reduces output bubbles without changing the AV2 bitstream,
+reference reconstruction, or BRAM footprint. The cost is a modest increase in
+control and mux logic around the analyzer fetch interface.
 
 Baseline and current sources:
 
-- Baseline Git SHA: `d71698bf9f3d390bdb1eacbb260948499a6ea495`
-- Current validated source Git SHA: `1dbdb05bed336861b76d4ee27a162464d0d743ab`
-- Baseline mode: payload/carry and analyzer-fetch pipelining.
-- Current mode: chroma-drain overlap and residual TXB pre-arm.
+- Baseline Git SHA: `1dbdb05bed336861b76d4ee27a162464d0d743ab`
+- Current validated source Git SHA: `7f0ac7ee85b6ac6d5ef7c9ef8b402897e9843590`
+- Baseline mode: chroma-drain overlap and residual TXB pre-arm.
+- Current mode: TXB sample prefetch during entropy emission.
 - Delta columns compare against the previous documented AV2 top-synthesis
   baseline for the same DUT and board.
 
@@ -59,13 +59,13 @@ Synthesis configuration:
 
 Synthesis result:
 
-- Yosys synthesis passed in 255.1 seconds.
-- Peak child RSS observed by the synthesis runner was 1287.34 MiB.
-- Runtime stayed 44.9 seconds below the 300 second review threshold and inside
+- Yosys synthesis passed in 273.3 seconds.
+- Peak child RSS observed by the synthesis runner was 1296.33 MiB.
+- Runtime stayed 26.7 seconds below the 300 second review threshold and inside
   the 600 second hard timeout and 3072 MiB memory limit.
-- Post-synthesis flattened-cell reporting completed in 5.0 seconds.
-- Post-synthesis critical-path reporting completed in 61.3 seconds with peak
-  memory 1287.34 MiB and topological path length 55.
+- Post-synthesis flattened-cell reporting completed in 5.3 seconds.
+- Post-synthesis critical-path reporting completed in 65.1 seconds with peak
+  memory 1296.33 MiB and topological path length 55.
 - The longest top-level path still starts at `palette_row_q`, runs through the
   palette analyzer's top-left query logic, the luma palette symbolizer's
   priority-before-count/token-rank/CDF token-mux path, the entropy op mux, and
@@ -77,22 +77,22 @@ Flattened Xilinx-cell estimate from
 
 | Metric | Count |
 |---|---:|
-| Cells | 78290 |
-| Estimated LCs | 24884 |
-| CARRY4 | 2203 |
+| Cells | 78519 |
+| Estimated LCs | 25382 |
+| CARRY4 | 2213 |
 | DSP48E1 | 11 |
 | FDCE | 4912 |
 | FDPE | 24 |
-| FDRE | 28387 |
+| FDRE | 28390 |
 | FDSE | 14 |
-| LUT1 | 343 |
-| LUT2 | 6326 |
-| LUT3 | 4195 |
-| LUT4 | 2760 |
-| LUT5 | 2304 |
-| LUT6 | 15625 |
-| MUXF7 | 2028 |
-| MUXF8 | 420 |
+| LUT1 | 330 |
+| LUT2 | 6115 |
+| LUT3 | 4521 |
+| LUT4 | 2210 |
+| LUT5 | 2337 |
+| LUT6 | 16314 |
+| MUXF7 | 2032 |
+| MUXF8 | 403 |
 | RAMB36E1 | 19 |
 | RAM32M | 4 |
 | RAM64M | 1536 |
@@ -101,38 +101,35 @@ Delta from the previous documented top-synthesis baseline:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| Synthesis time | 268.1 s | 255.1 s | -13.0 s |
-| Peak synthesis RSS | 1332.36 MiB | 1287.34 MiB | -45.02 MiB |
-| Cell report time | 5.5 s | 5.0 s | -0.5 s |
-| Critical-path report time | 62.3 s | 61.3 s | -1.0 s |
+| Synthesis time | 255.1 s | 273.3 s | +18.2 s |
+| Peak synthesis RSS | 1287.34 MiB | 1296.33 MiB | +8.99 MiB |
+| Cell report time | 5.0 s | 5.3 s | +0.3 s |
+| Critical-path report time | 61.3 s | 65.1 s | +3.8 s |
 | Topological path length | 55 | 55 | 0 |
-| Cells | 78445 | 78290 | -155 |
-| Estimated LCs | 24963 | 24884 | -79 |
-| CARRY4 | 2204 | 2203 | -1 |
+| Cells | 78290 | 78519 | +229 |
+| Estimated LCs | 24884 | 25382 | +498 |
+| CARRY4 | 2203 | 2213 | +10 |
 | DSP48E1 | 11 | 11 | 0 |
-| FDCE | 4911 | 4912 | +1 |
+| FDCE | 4912 | 4912 | 0 |
 | FDPE | 24 | 24 | 0 |
-| FDRE | 28387 | 28387 | 0 |
+| FDRE | 28387 | 28390 | +3 |
 | FDSE | 14 | 14 | 0 |
-| LUT1 | 390 | 343 | -47 |
-| LUT2 | 6190 | 6326 | +136 |
-| LUT3 | 4167 | 4195 | +28 |
-| LUT4 | 2368 | 2760 | +392 |
-| LUT5 | 2743 | 2304 | -439 |
-| LUT6 | 15685 | 15625 | -60 |
-| MUXF7 | 2182 | 2028 | -154 |
-| MUXF8 | 497 | 420 | -77 |
+| LUT1 | 343 | 330 | -13 |
+| LUT2 | 6326 | 6115 | -211 |
+| LUT3 | 4195 | 4521 | +326 |
+| LUT4 | 2760 | 2210 | -550 |
+| LUT5 | 2304 | 2337 | +33 |
+| LUT6 | 15625 | 16314 | +689 |
+| MUXF7 | 2028 | 2032 | +4 |
+| MUXF8 | 420 | 403 | -17 |
 | RAMB36E1 | 19 | 19 | 0 |
 | RAM32M | 4 | 4 | 0 |
 | RAM64M | 1536 | 1536 | 0 |
 
-The chroma-drain overlap and TXB pre-arm keep the longest reported topological
-path at 55 nodes, remove 155 flattened cells, reduce estimated LCs by 79, and
-leave all RAM counts unchanged. Synthesis time and peak RSS also improve
-slightly. The output-cycle reduction documented in
-[output-utilization.md](output-utilization.md) is 128060 aggregate cycles on the
-full screenshot sweep and 134923 aggregate cycles on the multi-CTU/partial set,
-with unchanged bitstreams. The next likely throughput target is TXB prefetch
-from the analyzer sample store; the next likely timing target remains the
-palette-token-to-range-coder path, especially the analyzer's top-left index
-lookup and range normalization.
+The TXB prefetch scheduler keeps the longest reported topological path at 55
+nodes and leaves all RAM counts unchanged. The added request muxing and prefetch
+state increased the estimate by 229 flattened cells and 498 estimated LCs, while
+aggregate cycles fell by 126598 on the full screenshot sweep and 107566 on the
+multi-CTU/partial set. The next likely throughput target is the staged
+pre-carry/output path; removing more bubbles there will likely require a broader
+streaming carry resolver rather than another local fetch scheduler.
