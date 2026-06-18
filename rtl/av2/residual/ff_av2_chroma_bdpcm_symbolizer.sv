@@ -13,6 +13,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   input  logic [127:0] txb_samples,
   input  logic [31:0] predictor_samples,
   input  logic [127:0] predictor_txb_samples,
+  input  logic        known_zero_txb,
   output logic        op_valid,
   output logic        op_literal,
   output logic [31:0] op_literal_value,
@@ -126,6 +127,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   logic [4:0] nsymbs_w;
   logic op_done_w;
   logic progress_w;
+  logic start_op_w;
   logic [31:0] cdf0_w;
   logic [31:0] cdf1_w;
   logic [31:0] cdf2_w;
@@ -490,15 +492,15 @@ module ff_av2_chroma_bdpcm_symbolizer #(
     nsymbs_w = 5'd0;
     op_done_w = 1'b0;
 
-    if (active_q) begin
-      case (emit_state_q)
+    if (active_q || start_op_w) begin
+      case (start_op_w ? EMIT_SKIP : emit_state_q)
         EMIT_SKIP: begin
           op_valid = 1'b1;
           table_w = TABLE_SKIP;
-          table_ctx_w = skip_ctx_q;
-          symbol_w = txb_nonzero_q ? 4'd0 : 4'd1;
+          table_ctx_w = start_op_w ? skip_ctx : skip_ctx_q;
+          symbol_w = start_op_w ? 4'd1 : (txb_nonzero_q ? 4'd0 : 4'd1);
           nsymbs_w = 5'd2;
-          op_done_w = !txb_nonzero_q;
+          op_done_w = start_op_w || !txb_nonzero_q;
         end
         EMIT_EOB: begin
           op_valid = 1'b1;
@@ -913,10 +915,11 @@ module ff_av2_chroma_bdpcm_symbolizer #(
     end
   end
 
+  assign start_op_w = enable && !active_q && known_zero_txb;
   assign progress_w = active_q && (advance || !op_valid);
-  assign txb_done = active_q && op_valid && op_done_w;
-  assign txb_nonzero = txb_nonzero_q;
-  assign entropy_context = entropy_context_q;
+  assign txb_done = (active_q || start_op_w) && op_valid && op_done_w;
+  assign txb_nonzero = start_op_w ? 1'b0 : txb_nonzero_q;
+  assign entropy_context = start_op_w ? 8'd0 : entropy_context_q;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -945,6 +948,27 @@ module ff_av2_chroma_bdpcm_symbolizer #(
       emit_state_q <= EMIT_SKIP;
       scan_q <= 4'd15;
       hr_avg_q <= 16'd0;
+    end else if (!active_q && known_zero_txb) begin
+      active_q <= !advance;
+      emit_state_q <= EMIT_SKIP;
+      scan_q <= 4'd15;
+      eob_q <= 5'd0;
+      eob_pt_q <= 4'd0;
+      eob_extra_q <= 4'd0;
+      eob_offset_bits_q <= 3'd0;
+      eob_shift_q <= 3'd0;
+      entropy_context_q <= 8'd0;
+      txb_nonzero_q <= 1'b0;
+      plane_v_q <= plane_v;
+      skip_ctx_q <= skip_ctx;
+      dc_sign_ctx_q <= dc_sign_ctx;
+      hr_avg_q <= 16'd0;
+      for (sample_index_w = 0; sample_index_w < 16; sample_index_w = sample_index_w + 1) begin
+        level_q[sample_index_w] <= 16'd0;
+        coeff_negative_q[sample_index_w] <= 1'b0;
+        coeff_ctx_q[sample_index_w] <= 5'd0;
+        br_ctx_q[sample_index_w] <= 5'd0;
+      end
     end else if (!active_q) begin
       active_q <= 1'b1;
       emit_state_q <= EMIT_SKIP;
@@ -979,21 +1003,21 @@ module ff_av2_chroma_bdpcm_symbolizer #(
           if (eob_offset_bits_q != 3'd0) begin
             emit_state_q <= EMIT_EOB_EXTRA_BIT;
           end else begin
-            emit_state_q <= EMIT_BASE_SCAN;
-            scan_q <= 4'd15;
+            emit_state_q <= (eob_q == 5'd1) ? EMIT_DC_BASE : EMIT_BASE_SCAN;
+            scan_q <= eob_q[3:0] - 4'd1;
           end
         end
         EMIT_EOB_EXTRA_BIT: begin
           if (eob_shift_q != 3'd0) begin
             emit_state_q <= EMIT_EOB_EXTRA_LITERAL;
           end else begin
-            emit_state_q <= EMIT_BASE_SCAN;
-            scan_q <= 4'd15;
+            emit_state_q <= (eob_q == 5'd1) ? EMIT_DC_BASE : EMIT_BASE_SCAN;
+            scan_q <= eob_q[3:0] - 4'd1;
           end
         end
         EMIT_EOB_EXTRA_LITERAL: begin
-          emit_state_q <= EMIT_BASE_SCAN;
-          scan_q <= 4'd15;
+          emit_state_q <= (eob_q == 5'd1) ? EMIT_DC_BASE : EMIT_BASE_SCAN;
+          scan_q <= eob_q[3:0] - 4'd1;
         end
         EMIT_BASE_SCAN: begin
           if (scan_q == 4'd0) begin
@@ -1017,7 +1041,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
         EMIT_BR: begin
           if (scan_q == 4'd0) begin
             emit_state_q <= EMIT_SIGN_SCAN;
-            scan_q <= 4'd15;
+            scan_q <= eob_q[3:0] - 4'd1;
             hr_avg_q <= 16'd0;
           end else begin
             emit_state_q <= EMIT_BASE_SCAN;
@@ -1033,7 +1057,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
             scan_q <= 4'd0;
           end else begin
             emit_state_q <= EMIT_SIGN_SCAN;
-            scan_q <= 4'd15;
+            scan_q <= eob_q[3:0] - 4'd1;
             hr_avg_q <= 16'd0;
           end
         end

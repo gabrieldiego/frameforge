@@ -308,6 +308,7 @@ module ff_av2_encoder #(
   logic [2:0] palette_left_index_w;
   logic [2:0] palette_top_index_w;
   logic [2:0] palette_top_left_index_w;
+  logic palette_luma_residual_zero_w;
   logic [1:0] palette_identity_row_flag_w;
   logic palette_op_valid_w;
   logic palette_op_literal_w;
@@ -534,6 +535,7 @@ module ff_av2_encoder #(
     .query_left_index(palette_left_index_w),
     .query_top_index(palette_top_index_w),
     .query_top_left_index(palette_top_left_index_w),
+    .query_luma_residual_zero(palette_luma_residual_zero_w),
     .palette_first_color(palette_first_color_w),
     .palette_delta_bits_minus5(palette_delta_bits_minus5_w),
     .palette_delta_minus1(palette_delta_minus1_w),
@@ -596,6 +598,7 @@ module ff_av2_encoder #(
     .txb_samples(luma_fetch_txb_samples_w),
     .predictor_samples(32'd0),
     .predictor_txb_samples(luma_fetch_predictor_samples_w),
+    .known_zero_txb(palette_luma_residual_zero_w),
     .op_valid(luma_residual_op_valid_w),
     .op_literal(luma_residual_op_literal_w),
     .op_literal_value(luma_residual_op_literal_value_w),
@@ -622,6 +625,7 @@ module ff_av2_encoder #(
     .txb_samples(chroma_bdpcm_txb_samples_w),
     .predictor_samples(chroma_bdpcm_predictor_samples_w),
     .predictor_txb_samples(128'd0),
+    .known_zero_txb(1'b0),
     .op_valid(chroma_bdpcm_op_valid_w),
     .op_literal(chroma_bdpcm_op_literal_w),
     .op_literal_value(chroma_bdpcm_op_literal_value_w),
