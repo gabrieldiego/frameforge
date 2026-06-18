@@ -156,6 +156,7 @@ def main() -> int:
     rtl_bitstream = out_dir / f"{stem}_rtl.{codec.bitstream_extension}"
     sw_internal_recon = out_dir / f"{stem}_software_internal_rec.yuv"
     rtl_internal_recon = out_dir / f"{stem}_rtl_internal_rec.yuv"
+    rtl_metrics = out_dir / f"{stem}_rtl_cycle_metrics.json"
     vtm_recon = out_dir / f"{stem}_vtm_from_decodable_bitstream.yuv"
     validation_input_path = materialized_validation_input(input_path, info, out_dir, stem, input_format)
     if codec.name == "av2":
@@ -301,6 +302,7 @@ def main() -> int:
         env["FRAMEFORGE_RTL_VVC_ENCODER_INPUT"] = str(rtl_input_path)
         env["FRAMEFORGE_RTL_VVC_ENCODER_OUT"] = str(rtl_bitstream)
         env["FRAMEFORGE_RTL_VVC_ENCODER_RECON_OUT"] = str(rtl_internal_recon)
+    env["FRAMEFORGE_RTL_VVC_METRICS_OUT"] = str(rtl_metrics)
     run(
         [
             "make",
@@ -364,6 +366,10 @@ def main() -> int:
             print(f"{digest}  {name}")
     print_bitrate_report("software_bitstream", sw_bitstream, info)
     print_bitrate_report("rtl_bitstream", rtl_bitstream, info)
+    if not rtl_metrics.exists():
+        print("FAIL: VVC RTL cycle metrics were not written", file=sys.stderr)
+        return 1
+    print_rtl_cycle_report("rtl", rtl_metrics, info)
     print_psnr_report("software_internal_recon", validation_input_path, sw_internal_recon)
     print_psnr_report("rtl_internal_recon", validation_input_path, rtl_internal_recon)
     if has_vtm_recon:

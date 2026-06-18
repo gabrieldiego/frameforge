@@ -1,11 +1,29 @@
+import json
+import os
 import subprocess
 import tempfile
-import os
 from pathlib import Path
 
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ReadOnly, RisingEdge, Timer
+from encoder_axi import (
+    AXI_DST_BASE,
+    REG_ENCODED_BYTE_COUNT,
+    REG_STATUS,
+    STATUS_AXI_ERROR,
+    STATUS_DONE,
+    STATUS_INPUT_ERROR,
+    axi_read_memory_model,
+    axi_write_memory_model,
+    axil_read,
+    planar_memory_image,
+    program_encoder_control,
+    read_output_bytes,
+    reset_axi_memory_signals,
+    reset_axil_signals,
+    start_encoder_via_axil,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -103,6 +121,32 @@ def chroma_plane_samples():
 
 def frame_samples():
     return luma_samples() + (chroma_plane_samples() * 2)
+
+
+def source_sample_bytes():
+    return 1 if rtl_source_sample_bits() <= 8 else 2
+
+
+def vvc_axi_layout(frames):
+    sample_bytes = source_sample_bytes()
+    luma_bytes = luma_samples() * sample_bytes
+    chroma_bytes = chroma_plane_samples() * sample_bytes
+    if rtl_chroma_format_idc() == 1:
+        chroma_width = rtl_visible_width() // 2
+    elif rtl_chroma_format_idc() == 2:
+        chroma_width = rtl_visible_width() // 2
+    else:
+        chroma_width = rtl_visible_width()
+    return {
+        "src_y_base": 0,
+        "src_u_base": luma_bytes,
+        "src_v_base": luma_bytes + chroma_bytes,
+        "src_y_stride": rtl_visible_width() * sample_bytes,
+        "src_u_stride": chroma_width * sample_bytes,
+        "src_v_stride": chroma_width * sample_bytes,
+        "src_frame_stride": (luma_bytes + chroma_bytes + chroma_bytes),
+        "frame_count": frames,
+    }
 
 
 def active_luma_tu_cols_for(width):
@@ -213,6 +257,36 @@ def software_input_bytes(data):
 def software_input_byte_count(frames):
     sample_bytes = 1 if rtl_source_sample_bits() <= 8 else 2
     return frame_samples() * frames * sample_bytes
+
+
+def write_vvc_cycle_metrics(path, width, height, frames, observed_bytes, total_cycles, output_active_cycles):
+    if not path:
+        return
+    bitstream_bits = observed_bytes * 8
+    input_pixels = width * height * frames
+    output_wait_cycles = max(0, total_cycles - output_active_cycles)
+    output_utilization = output_active_cycles / total_cycles if total_cycles else 0.0
+    cycles_per_bit = total_cycles / bitstream_bits if bitstream_bits else 0.0
+    cycles_per_input_pixel = total_cycles / input_pixels if input_pixels else 0.0
+    metrics = {
+        "codec": "vvc",
+        "width": width,
+        "height": height,
+        "frames": frames,
+        "bitstream_bytes": observed_bytes,
+        "bitstream_bits": bitstream_bits,
+        "input_pixels": input_pixels,
+        "total_cycles": total_cycles,
+        "output_active_cycles": output_active_cycles,
+        "output_wait_cycles": output_wait_cycles,
+        "output_utilization": output_utilization,
+        "output_bubble_rate": 1.0 - output_utilization,
+        "cycles_per_bit": cycles_per_bit,
+        "cycles_per_input_pixel": cycles_per_input_pixel,
+    }
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n")
 
 
 def signed_value(value, bits):
@@ -670,23 +744,13 @@ async def collect_stream(
     await Timer(1, unit="ns")
 
     dut.rst_n.value = 0
-    dut.start.value = 0
-    dut.visible_width.value = rtl_visible_width()
-    dut.visible_height.value = rtl_visible_height()
-    dut.chroma_format_idc.value = rtl_chroma_format_idc()
-    dut.s_axis_valid.value = 0
-    dut.s_axis_data.value = 0
-    dut.s_axis_last.value = 0
-    dut.m_axis_ready.value = 1
+    reset_axil_signals(dut)
+    reset_axi_memory_signals(dut)
 
     for _ in range(2):
         await RisingEdge(dut.clk)
     dut.rst_n.value = 1
     await RisingEdge(dut.clk)
-
-    dut.start.value = 1
-    await RisingEdge(dut.clk)
-    dut.start.value = 0
 
     def signal_int(path):
         node = dut
@@ -728,6 +792,10 @@ async def collect_stream(
     symbol_records = []
     frontend_raw_records = []
     syntax_records = []
+    input_leaf_trace_path = os.environ.get(f"FRAMEFORGE_RTL_VVC_INPUT_LEAVES_OUT_{frames}F")
+    palette_fetch_trace_path = os.environ.get(f"FRAMEFORGE_RTL_VVC_PALETTE_FETCH_OUT_{frames}F")
+    input_leaf_records = []
+    palette_fetch_records = []
 
     def write_trace_records():
         if path := os.environ.get(f"FRAMEFORGE_RTL_CTU_SYMBOLS_OUT_{frames}F"):
@@ -743,6 +811,18 @@ async def collect_stream(
             lines = [
                 f"{kind:02x} {data:08x} {last:d}\n"
                 for kind, data, last in syntax_records
+            ]
+            Path(path).write_text("".join(lines))
+        if path := input_leaf_trace_path:
+            lines = [
+                f"{leaf:02d} {component:d} {sample:02d} {data:02x} {last:d} {addr:08x}\n"
+                for leaf, component, sample, data, last, addr in input_leaf_records
+            ]
+            Path(path).write_text("".join(lines))
+        if path := palette_fetch_trace_path:
+            lines = [
+                f"{origin_x:02d} {origin_y:02d} {index:04d} {valid:d} {y:02x} {cb:02x} {cr:02x}\n"
+                for origin_x, origin_y, index, valid, y, cb, cr in palette_fetch_records
             ]
             Path(path).write_text("".join(lines))
 
@@ -761,13 +841,34 @@ async def collect_stream(
     }
     handshake_tail = []
 
-    if data_path is None:
-        feed_task = cocotb.start_soon(feed_input(dut, data, frames))
+    if data_path is not None:
+        source_bytes = Path(data_path).read_bytes()[: software_input_byte_count(frames)]
     else:
-        feed_task = cocotb.start_soon(feed_input_file(dut, data_path, frames))
+        source_bytes = software_input_bytes(data)
+    axi_memory = planar_memory_image(source_bytes)
+    axi_layout = vvc_axi_layout(frames)
+    cocotb.start_soon(axi_read_memory_model(dut, axi_memory))
+    cocotb.start_soon(axi_write_memory_model(dut, axi_memory))
+    await program_encoder_control(
+        dut,
+        width=rtl_visible_width(),
+        height=rtl_visible_height(),
+        chroma_format=rtl_chroma_format_idc(),
+        frame_count=frames,
+        src_y_base=axi_layout["src_y_base"],
+        src_u_base=axi_layout["src_u_base"],
+        src_v_base=axi_layout["src_v_base"],
+        src_y_stride=axi_layout["src_y_stride"],
+        src_u_stride=axi_layout["src_u_stride"],
+        src_v_stride=axi_layout["src_v_stride"],
+        src_frame_stride=axi_layout["src_frame_stride"],
+    )
+    await start_encoder_via_axil(dut)
 
     output_frame_count = 0
     output_byte_count = 0
+    output_active_cycles = 0
+    total_cycles = 0
     ctu_symbol_count = 0
     ctu_slice_count = 0
     ctus_per_frame = max(ctu_count(), 1)
@@ -804,6 +905,7 @@ async def collect_stream(
     )
     try:
         for cycle in range(max_cycles):
+            total_cycles = cycle + 1
             await RisingEdge(dut.clk)
             await ReadOnly()
             if (
@@ -821,6 +923,41 @@ async def collect_stream(
                 if value_is_one(dut.ctu_symbol_last, "ctu_symbol_last"):
                     ctu_symbol_count += 1
                     log_ctu_progress("symbolized", ctu_symbol_count)
+            if (
+                input_leaf_trace_path is not None
+                and
+                hasattr(dut, "s_axis_valid")
+                and value_is_one(dut.s_axis_valid, "s_axis_valid")
+                and value_is_one(dut.s_axis_ready, "s_axis_ready")
+                and signal_int("input_stream_sample_q") == 0
+            ):
+                input_leaf_records.append(
+                    (
+                        signal_int("input_stream_leaf_q"),
+                        signal_int("input_stream_component_q"),
+                        signal_int("input_stream_sample_q"),
+                        known_int(dut.s_axis_data, "s_axis_data"),
+                        known_int(dut.s_axis_last, "s_axis_last"),
+                        known_int(dut.m_axi_araddr, "m_axi_araddr"),
+                    )
+                )
+            if (
+                palette_fetch_trace_path is not None
+                and
+                signal_int("gen_palette_symbolizer.palette_symbolizer.state_q") == 3
+                and signal_int("gen_palette_symbolizer.palette_symbolizer.feed_sample_valid_q") == 1
+            ):
+                palette_fetch_records.append(
+                    (
+                        signal_int("gen_palette_symbolizer.palette_symbolizer.drain_origin_x_q"),
+                        signal_int("gen_palette_symbolizer.palette_symbolizer.drain_origin_y_q"),
+                        signal_int("gen_palette_symbolizer.palette_symbolizer.feed_frame_index"),
+                        signal_int("gen_palette_symbolizer.palette_symbolizer.drain_cu_order_valid_w"),
+                        signal_int("gen_palette_symbolizer.palette_symbolizer.feed_y_sample_q"),
+                        signal_int("gen_palette_symbolizer.palette_symbolizer.feed_cb_sample_q"),
+                        signal_int("gen_palette_symbolizer.palette_symbolizer.feed_cr_sample_q"),
+                    )
+                )
             if (
                 hasattr(dut, "palette_stream_valid")
                 and value_is_one(dut.palette_stream_valid, "palette_stream_valid")
@@ -911,6 +1048,7 @@ async def collect_stream(
             ):
                 byte = known_int(dut.m_axis_data, "m_axis_data")
                 output_byte_count += 1
+                output_active_cycles += 1
                 observed.append(byte)
                 if output_handle is None:
                     pass
@@ -1073,14 +1211,43 @@ async def collect_stream(
             f"expected {frames}: {debug_state}"
         ),
     )
-    await feed_task
-    await RisingEdge(dut.clk)
-    await ReadOnly()
-    assert_fail_fast(dut.input_error.value == 0, "RTL encoder reported input_error")
+    status = 0
+    for _ in range(128):
+        await RisingEdge(dut.clk)
+        status = await axil_read(dut, REG_STATUS)
+        if status & STATUS_DONE:
+            break
+    assert_fail_fast(
+        (status & STATUS_INPUT_ERROR) == 0,
+        f"AXI-Lite STATUS reported input error: 0x{status:08x}",
+    )
+    assert_fail_fast(
+        (status & STATUS_AXI_ERROR) == 0,
+        f"AXI-Lite STATUS reported AXI error: 0x{status:08x}",
+    )
+    assert_fail_fast(
+        (status & STATUS_DONE) != 0,
+        f"AXI-Lite STATUS did not report done: 0x{status:08x}",
+    )
+    encoded_len = await axil_read(dut, REG_ENCODED_BYTE_COUNT)
+    axi_observed = read_output_bytes(axi_memory, encoded_len)
+    assert_fail_fast(
+        axi_observed == bytes(observed),
+        "AXI bitstream writer output does not match the encoder byte probe",
+    )
+    write_vvc_cycle_metrics(
+        os.environ.get("FRAMEFORGE_RTL_VVC_METRICS_OUT"),
+        rtl_visible_width(),
+        rtl_visible_height(),
+        frames,
+        len(axi_observed),
+        total_cycles,
+        output_active_cycles,
+    )
 
     if output_path is not None:
-        return bytes(observed), source
-    return bytes(observed), source
+        return axi_observed, source
+    return axi_observed, source
 
 
 @cocotb.test()

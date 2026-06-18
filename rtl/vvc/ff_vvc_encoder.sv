@@ -1,33 +1,66 @@
 `timescale 1ns/1ps
 
+// Public SoC integration port for the VVC encoder. Control/status is shared
+// AXI4-Lite, source pixels are fetched through AXI4 reads, and the Annex-B
+// bitstream is written through AXI4 writes. The 8x8 TU/CU sample stream below
+// remains internal glue behind the shared frame reader.
 module ff_vvc_encoder #(
   parameter int MAX_VISIBLE_WIDTH = 1024,
   parameter int MAX_VISIBLE_HEIGHT = 1024,
   parameter int CTU_SIZE = 64,
   parameter int SAMPLE_BITS = 8,
   parameter int SOURCE_SAMPLE_BITS = SAMPLE_BITS,
+  parameter int AXI_ADDR_BITS = 32,
+  parameter int AXI_DATA_BITS = 128,
   parameter bit SUPPORT_PALETTE_444 = 1'b1,
   parameter bit SUPPORT_EXACT_HASH_IBC_444 = 1'b0
 ) (
   input  logic       clk,
   input  logic       rst_n,
-  input  logic       start,
-  input  logic [15:0] visible_width,
-  input  logic [15:0] visible_height,
-  // VVC chroma_format_idc values: 1=4:2:0, 2=4:2:2, 3=4:4:4.
-  input  logic [1:0] chroma_format_idc,
-  output logic       busy,
+  input  logic [11:0] s_axil_awaddr,
+  input  logic       s_axil_awvalid,
+  output logic       s_axil_awready,
+  input  logic [31:0] s_axil_wdata,
+  input  logic [3:0] s_axil_wstrb,
+  input  logic       s_axil_wvalid,
+  output logic       s_axil_wready,
+  output logic [1:0] s_axil_bresp,
+  output logic       s_axil_bvalid,
+  input  logic       s_axil_bready,
+  input  logic [11:0] s_axil_araddr,
+  input  logic       s_axil_arvalid,
+  output logic       s_axil_arready,
+  output logic [31:0] s_axil_rdata,
+  output logic [1:0] s_axil_rresp,
+  output logic       s_axil_rvalid,
+  input  logic       s_axil_rready,
 
-  input  logic       s_axis_valid,
-  output logic       s_axis_ready,
-  input  logic [SAMPLE_BITS - 1:0] s_axis_data,
-  input  logic       s_axis_last,
-  output logic       input_error,
+  output logic                         m_axi_arvalid,
+  input  logic                         m_axi_arready,
+  output logic [AXI_ADDR_BITS - 1:0]   m_axi_araddr,
+  output logic [7:0]                   m_axi_arlen,
+  output logic [2:0]                   m_axi_arsize,
+  output logic [1:0]                   m_axi_arburst,
+  input  logic                         m_axi_rvalid,
+  output logic                         m_axi_rready,
+  input  logic [AXI_DATA_BITS - 1:0]   m_axi_rdata,
+  input  logic [1:0]                   m_axi_rresp,
+  input  logic                         m_axi_rlast,
 
-  output logic       m_axis_valid,
-  input  logic       m_axis_ready,
-  output logic [7:0] m_axis_data,
-  output logic       m_axis_last
+  output logic                         m_axi_awvalid,
+  input  logic                         m_axi_awready,
+  output logic [AXI_ADDR_BITS - 1:0]   m_axi_awaddr,
+  output logic [7:0]                   m_axi_awlen,
+  output logic [2:0]                   m_axi_awsize,
+  output logic [1:0]                   m_axi_awburst,
+  output logic                         m_axi_wvalid,
+  input  logic                         m_axi_wready,
+  output logic [AXI_DATA_BITS - 1:0]   m_axi_wdata,
+  output logic [(AXI_DATA_BITS / 8) - 1:0] m_axi_wstrb,
+  output logic                         m_axi_wlast,
+  input  logic                         m_axi_bvalid,
+  output logic                         m_axi_bready,
+  input  logic [1:0]                   m_axi_bresp
 );
   localparam int CODED_DIMENSION_GRANULARITY = 8;
   localparam int NAL_OVERHEAD_LEN = 6;
@@ -67,6 +100,43 @@ module ff_vvc_encoder #(
   localparam logic [1:0] PALETTE_MUX_CU = 2'd1;
   localparam logic [4:0] VVC_NAL_UNIT_TYPE_IDR_W_RADL = 5'd8;
   localparam logic [4:0] VVC_NAL_UNIT_TYPE_CRA = 5'd9;
+
+  logic       start;
+  logic [15:0] visible_width;
+  logic [15:0] visible_height;
+  logic [1:0]  chroma_format_idc;
+  logic [31:0] frame_count;
+  logic [AXI_ADDR_BITS - 1:0] src_y_base;
+  logic [AXI_ADDR_BITS - 1:0] src_u_base;
+  logic [AXI_ADDR_BITS - 1:0] src_v_base;
+  logic [31:0] src_y_stride;
+  logic [31:0] src_u_stride;
+  logic [31:0] src_v_stride;
+  logic [31:0] src_frame_stride;
+  logic [AXI_ADDR_BITS - 1:0] dst_bitstream_base;
+  logic [31:0] dst_bitstream_capacity;
+  logic       busy;
+  logic       done;
+  logic       input_error;
+  logic       axi_error;
+  logic [31:0] encoded_byte_count;
+  logic       s_axis_valid;
+  logic       s_axis_ready;
+  logic [SAMPLE_BITS - 1:0] s_axis_data;
+  logic       s_axis_last;
+  logic       m_axis_valid;
+  logic       m_axis_ready;
+  logic [7:0] m_axis_data;
+  logic       m_axis_last;
+  logic       frame_reader_start_w;
+  logic       frame_reader_busy_w;
+  logic       frame_reader_done_w;
+  logic       frame_reader_error_w;
+  logic [AXI_ADDR_BITS - 1:0] input_frame_offset_q;
+  logic       bitstream_writer_start_w;
+  logic       bitstream_writer_busy_w;
+  logic       bitstream_writer_frame_done_w;
+  logic       bitstream_writer_error_w;
 
   logic [INPUT_COUNT_BITS - 1:0] input_count_q;
   logic [INPUT_COUNT_BITS - 1:0] input_len_q;
@@ -861,6 +931,10 @@ module ff_vvc_encoder #(
                 luma_tu_quant_pending_q || luma_quant_active_q || luma_quant_busy_w ||
                 m_axis_valid ||
                 (generated_out_state_q != GENERATED_OUT_IDLE);
+  assign frame_reader_start_w = (start && !busy) || resume_input_q;
+  assign bitstream_writer_start_w = start && !busy;
+  assign done = bitstream_writer_frame_done_w;
+  assign axi_error = frame_reader_error_w || bitstream_writer_error_w;
   assign frame_pipeline_clear_w = (start && !busy) || frame_clear_q;
   assign cabac_enable = 1'b1;
   assign cabac_stream_ready = rbsp_payload_ready;
@@ -927,6 +1001,134 @@ module ff_vvc_encoder #(
     (generated_out_state_q == GENERATED_OUT_CABAC) && !cabac_start_q && !cabac_input_valid_q;
   assign palette_stream_ready =
     ctu_has_palette_cu && (palette_mux_state_q == PALETTE_MUX_CU) && source_symbol_ready;
+
+  ff_encoder_axil_regs #(
+    .AXI_ADDR_BITS(AXI_ADDR_BITS),
+    .AXIL_ADDR_BITS(12)
+  ) control_regs (
+    .clk(clk),
+    .rst_n(rst_n),
+    .s_axil_awaddr(s_axil_awaddr),
+    .s_axil_awvalid(s_axil_awvalid),
+    .s_axil_awready(s_axil_awready),
+    .s_axil_wdata(s_axil_wdata),
+    .s_axil_wstrb(s_axil_wstrb),
+    .s_axil_wvalid(s_axil_wvalid),
+    .s_axil_wready(s_axil_wready),
+    .s_axil_bresp(s_axil_bresp),
+    .s_axil_bvalid(s_axil_bvalid),
+    .s_axil_bready(s_axil_bready),
+    .s_axil_araddr(s_axil_araddr),
+    .s_axil_arvalid(s_axil_arvalid),
+    .s_axil_arready(s_axil_arready),
+    .s_axil_rdata(s_axil_rdata),
+    .s_axil_rresp(s_axil_rresp),
+    .s_axil_rvalid(s_axil_rvalid),
+    .s_axil_rready(s_axil_rready),
+    .busy(busy),
+    .done(done),
+    .input_error(input_error),
+    .axi_error(axi_error),
+    .encoded_byte_count(encoded_byte_count),
+    .start_pulse(start),
+    .visible_width(visible_width),
+    .visible_height(visible_height),
+    .chroma_format_idc(chroma_format_idc),
+    .frame_count(frame_count),
+    .src_y_base(src_y_base),
+    .src_u_base(src_u_base),
+    .src_v_base(src_v_base),
+    .src_y_stride(src_y_stride),
+    .src_u_stride(src_u_stride),
+    .src_v_stride(src_v_stride),
+    .src_frame_stride(src_frame_stride),
+    .dst_bitstream_base(dst_bitstream_base),
+    .dst_bitstream_capacity(dst_bitstream_capacity)
+  );
+
+  // Public SoC data-plane glue. Control fields above model the AXI4-Lite
+  // register contents; pixels are fetched from planar frame-buffer addresses
+  // through AXI4-MM reads, then translated into the existing CTU-local TU
+  // stream consumed by the encoder core.
+  ff_axi4_frame_reader #(
+    .AXI_ADDR_BITS(AXI_ADDR_BITS),
+    .AXI_DATA_BITS(AXI_DATA_BITS),
+    .SAMPLE_BITS(SAMPLE_BITS),
+    .CTU_SIZE(CTU_SIZE),
+    .RASTER_BLOCK_ORDER(1'b0)
+  ) frame_reader (
+    .clk(clk),
+    .rst_n(rst_n),
+    .start(frame_reader_start_w),
+    .visible_width(visible_width),
+    .visible_height(visible_height),
+    .chroma_format_idc(chroma_format_idc),
+    .segment_origin_x(current_ctu_origin_x_w),
+    .segment_origin_y(current_ctu_origin_y_w),
+    .segment_width(ctu_visible_width_w),
+    .segment_height(ctu_visible_height_w),
+    .stream_last_on_segment_end(1'b1),
+    .frame_last_segment(current_slice_last_w),
+    .src_y_base(src_y_base),
+    .src_u_base(src_u_base),
+    .src_v_base(src_v_base),
+    .src_frame_offset(input_frame_offset_q),
+    .src_y_stride(src_y_stride),
+    .src_u_stride(src_u_stride),
+    .src_v_stride(src_v_stride),
+    .m_axi_arvalid(m_axi_arvalid),
+    .m_axi_arready(m_axi_arready),
+    .m_axi_araddr(m_axi_araddr),
+    .m_axi_arlen(m_axi_arlen),
+    .m_axi_arsize(m_axi_arsize),
+    .m_axi_arburst(m_axi_arburst),
+    .m_axi_rvalid(m_axi_rvalid),
+    .m_axi_rready(m_axi_rready),
+    .m_axi_rdata(m_axi_rdata),
+    .m_axi_rresp(m_axi_rresp),
+    .m_axi_rlast(m_axi_rlast),
+    .sample_valid(s_axis_valid),
+    .sample_ready(s_axis_ready),
+    .sample_data(s_axis_data),
+    .sample_last(s_axis_last),
+    .busy(frame_reader_busy_w),
+    .done(frame_reader_done_w),
+    .error(frame_reader_error_w)
+  );
+
+  ff_axi4_bitstream_writer #(
+    .AXI_ADDR_BITS(AXI_ADDR_BITS),
+    .AXI_DATA_BITS(AXI_DATA_BITS)
+  ) bitstream_writer (
+    .clk(clk),
+    .rst_n(rst_n),
+    .start(bitstream_writer_start_w),
+    .dst_base(dst_bitstream_base),
+    .dst_capacity(dst_bitstream_capacity),
+    .s_axis_valid(m_axis_valid),
+    .s_axis_ready(m_axis_ready),
+    .s_axis_data(m_axis_data),
+    .s_axis_last(m_axis_last),
+    .m_axi_awvalid(m_axi_awvalid),
+    .m_axi_awready(m_axi_awready),
+    .m_axi_awaddr(m_axi_awaddr),
+    .m_axi_awlen(m_axi_awlen),
+    .m_axi_awsize(m_axi_awsize),
+    .m_axi_awburst(m_axi_awburst),
+    .m_axi_wvalid(m_axi_wvalid),
+    .m_axi_wready(m_axi_wready),
+    .m_axi_wdata(m_axi_wdata),
+    .m_axi_wstrb(m_axi_wstrb),
+    .m_axi_wlast(m_axi_wlast),
+    .m_axi_bvalid(m_axi_bvalid),
+    .m_axi_bready(m_axi_bready),
+    .m_axi_bresp(m_axi_bresp),
+    .bytes_written(encoded_byte_count),
+    .frame_done(bitstream_writer_frame_done_w),
+    .busy(bitstream_writer_busy_w),
+    .error(bitstream_writer_error_w)
+  );
+
   ff_vvc_cu_activity_mask #(
     .CTU_SIZE(CTU_SIZE),
     .CU_SIZE(PALETTE_CU_SIZE),
@@ -1056,7 +1258,7 @@ module ff_vvc_encoder #(
   always @* begin
     palette_sample_valid = 1'b0;
     palette_sample_plane = 2'd0;
-    if (ctu_has_palette_cu && input_active_q && s_axis_valid &&
+    if (ctu_has_palette_cu && input_active_q && s_axis_valid && s_axis_ready &&
         (input_count_q < frame_samples_w)) begin
       palette_sample_valid = 1'b1;
       palette_sample_plane = palette_sample_plane_w;
@@ -1245,6 +1447,7 @@ module ff_vvc_encoder #(
       pending_output_q <= 1'b0;
       resume_input_q <= 1'b0;
       frame_clear_q <= 1'b0;
+      input_frame_offset_q <= '0;
       chroma_tu_quant_pending_q <= 1'b0;
       chroma_tu_quant_frame_last_q <= 1'b0;
       chroma_quant_tu_q <= 6'd0;
@@ -1292,6 +1495,9 @@ module ff_vvc_encoder #(
         m_axis_valid <= 1'b0;
         m_axis_last <= 1'b0;
       end
+      if (frame_reader_error_w || bitstream_writer_error_w) begin
+        input_error <= 1'b1;
+      end
       if (start && !busy) begin
         input_active_q <= 1'b1;
         s_axis_ready   <= 1'b1;
@@ -1301,6 +1507,7 @@ module ff_vvc_encoder #(
         input_stream_component_q <= 2'd0;
         input_stream_sample_q <= 6'd0;
         input_error    <= (visible_width == 16'd0) || (visible_height == 16'd0) ||
+                          (frame_count == 32'd0) ||
                           (visible_width > MAX_VISIBLE_WIDTH) ||
                           (visible_height > MAX_VISIBLE_HEIGHT);
         m_axis_valid   <= 1'b0;
@@ -1308,6 +1515,7 @@ module ff_vvc_encoder #(
         pending_output_q <= 1'b0;
         resume_input_q <= 1'b0;
         frame_clear_q <= 1'b0;
+        input_frame_offset_q <= '0;
         chroma_tu_quant_pending_q <= 1'b0;
         chroma_tu_quant_frame_last_q <= 1'b0;
         chroma_quant_tu_q <= 6'd0;
@@ -1622,16 +1830,20 @@ module ff_vvc_encoder #(
               if (slice_stream_last) begin
                 generated_out_state_q <= GENERATED_OUT_IDLE;
                 frame_clear_q <= 1'b1;
-                resume_input_q <= 1'b1;
                 if (current_slice_last_w) begin
                   // VPS/SPS/PPS are emitted once. Multi-CTU pictures emit a
                   // standalone picture header followed by one CTU slice per
                   // tile, matching the Rust one-slice-per-CTU model.
-                  frame_index_q <= frame_index_q + 64'd1;
-                  current_slice_q <= 16'd0;
-                  current_ctu_x_q <= 16'd0;
-                  current_ctu_y_q <= 16'd0;
+                  if ((frame_index_q + 64'd1) < {32'd0, frame_count}) begin
+                    resume_input_q <= 1'b1;
+                    frame_index_q <= frame_index_q + 64'd1;
+                    input_frame_offset_q <= input_frame_offset_q + src_frame_stride;
+                    current_slice_q <= 16'd0;
+                    current_ctu_x_q <= 16'd0;
+                    current_ctu_y_q <= 16'd0;
+                  end
                 end else begin
+                  resume_input_q <= 1'b1;
                   current_slice_q <= current_slice_q + 16'd1;
                   if ((current_ctu_x_q + 16'd1) >= ctu_cols_w) begin
                     current_ctu_x_q <= 16'd0;

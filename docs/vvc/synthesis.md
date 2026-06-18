@@ -4,6 +4,101 @@ This file records VVC-specific synthesis measurements and optimization history.
 The shared synthesis process, tool setup, and Vivado flow are documented in
 [../synthesis.md](../synthesis.md).
 
+## 2026-06-18 Shared AXI Interface Baseline
+
+Measured after moving the VVC top-level integration to the shared AXI4-Lite
+control interface plus AXI4 memory-mapped source/bitstream data movers, and
+after aligning CRA slice headers with H.266 7.3.7/7.3.9 so multi-frame 4:4:4
+streams decode in VTM.
+
+Baseline and current sources:
+
+- Baseline source: previous documented 4:4:4 BDPCM top-encoder synthesis
+  checkpoint.
+- Source base Git SHA for this run: `c6bcfcfae062a8671c4194d3e062f9b195134012`
+- Current mode: shared AXI4-Lite control registers, AXI4 memory-mapped single
+  beat source reads, AXI4 memory-mapped packed bitstream writes, 4:4:4 palette
+  enabled, exact-hash IBC disabled by default.
+
+Validation configuration:
+
+```sh
+make hardware-regression CODEC=vvc HARDWARE_REGRESSION_SYNTH=0
+```
+
+Validation result:
+
+- `smoke`: OK (6/6)
+- `sweep-420`: OK (64/64)
+- `sweep-444`: OK (64/64)
+- Software and RTL bitstreams matched exactly.
+- Software, RTL, and VTM reconstructions matched for every smoke and sweep
+  vector.
+
+Synthesis configuration:
+
+- command: `make synth CODEC=vvc SYNTH_DUT=vvc-encoder`
+- DUT: `vvc-encoder`
+- RTL top: `ff_vvc_encoder`
+- board: `synth/boards/arty-z7-10.env`
+- clock metadata: `25 MHz`
+- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
+- memory limit: 3072 MiB
+- max visible size: 1024x1024
+- 4:4:4 palette support: enabled
+- exact-hash IBC for 4:4:4: disabled (`SYNTH_SUPPORT_EXACT_HASH_IBC_444=0`)
+
+Synthesis result:
+
+- Top `ff_vvc_encoder` synthesis completed in 391.0 seconds with 1944.94 MiB
+  peak child RSS observed by the synthesis runner.
+- Runtime exceeded the 300 second review threshold but stayed inside the 600
+  second hard timeout and 3072 MiB memory limit.
+- Post-synthesis flattened-cell reporting completed in 9.0 seconds.
+- Post-synthesis critical-path reporting completed in 69.6 seconds with peak
+  memory 1944.94 MiB and topological path length 55.
+- The longest topological path remains in `ff_vvc_cabac_syntax_frontend` IBC
+  MVD absolute-value and EG1 prefix generation before `m_axis_data`.
+
+Flattened Xilinx-cell estimate from
+`synth/out/arty-z7-10/ff_vvc_encoder/cell_report.log`:
+
+| Metric | Count |
+|---|---:|
+| Cells | 122311 |
+| Estimated LCs | 46446 |
+| CARRY4 | 3165 |
+| DSP48E1 | 9 |
+| FDCE | 13265 |
+| FDPE | 299 |
+| FDRE | 17596 |
+| FDSE | 4 |
+| LUT1 | 1584 |
+| LUT2 | 19485 |
+| LUT3 | 5880 |
+| LUT4 | 4892 |
+| LUT5 | 6846 |
+| LUT6 | 24471 |
+| MUXF7 | 6904 |
+| MUXF8 | 1370 |
+| RAMB36E1 | 9 |
+
+Delta from the previous documented VVC top-synthesis baseline:
+
+| Metric | Baseline | Current | Delta |
+|---|---:|---:|---:|
+| Synthesis time | 376.3 s | 391.0 s | +14.7 s |
+| Peak synthesis RSS | 1883.0 MiB | 1944.9 MiB | +61.9 MiB |
+| Critical-path report time | 68.3 s | 69.6 s | +1.3 s |
+| Topological path length | 55 | 55 | +0 |
+| Cells | 118404 | 122311 | +3907 |
+| Estimated LCs | 45381 | 46446 | +1065 |
+
+The AXI wrapper and CRA slice-header fix increase area modestly and do not
+lengthen the reported topological critical path. The runtime remains above the
+review threshold, so future top-level interface work should watch synthesis
+time and memory as well as area.
+
 ## Recent CABAC Context Results
 
 On June 4, 2026, the VVC CABAC residual-context bank was expanded from 70 to

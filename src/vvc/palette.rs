@@ -481,6 +481,7 @@ fn vvc_palette_444_slice_payload(
         );
     }
     writer.write_flag("sh_no_output_of_prior_pics_flag", false);
+    super::header::write_vvc_slice_header_ref_pic_lists(&mut writer, picture_kind);
     // H.266 8.4.5.3 reconstructs palette_escape_val with levelScale[QP % 6].
     // The current PPS base QP is 32, so sh_qp_delta -28 gives SliceQpY 4 and
     // levelScale[4] == 64, making 8-bit escape samples reconstruct exactly.
@@ -501,11 +502,7 @@ fn vvc_palette_444_slice_payload(
         // deliberately reusing the existing regular residual CABAC path.
         writer.write_flag("sh_ts_residual_coding_disabled_flag", true);
     }
-    writer.write_flag("cabac_alignment_one_bit", true);
-    if picture_kind.is_cra() {
-        writer.write_flag("cabac_alignment_one_bit", true);
-    }
-    writer.byte_align_zero("cabac_alignment_zero_bit");
+    super::header::write_vvc_slice_header_byte_alignment(&mut writer);
     write_vvc_palette_444_entropy(&mut writer, frame);
     writer.rbsp_trailing_bits();
     debug_assert!(writer.is_byte_aligned());

@@ -5,37 +5,37 @@ from pathlib import Path
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ReadOnly, RisingEdge
-
-AV2_STATE_NAMES = {
-    0: "idle",
-    1: "tile_start",
-    2: "input_read",
-    3: "seq_load",
-    4: "seq_write",
-    5: "load_block",
-    6: "partition",
-    7: "palette_query",
-    8: "leaf",
-    9: "finish_init",
-    10: "finish_push",
-    11: "chroma_fetch",
-    12: "carry_read",
-    13: "carry_write",
-    14: "payload_prefix",
-    15: "output_prep",
-    16: "output_valid",
-}
-AV2_STATE_PARTITION = 6
-AV2_STATE_LEAF = 8
-AV2_STATE_CHROMA_FETCH = 11
-AV2_PHASE_INTRA = 0
-AV2_PHASE_PALETTE_HEADER = 1
-AV2_PHASE_PALETTE_MAP = 2
-AV2_PHASE_Y_COEFF = 3
-AV2_PHASE_U_COEFF = 4
-AV2_PHASE_V_COEFF = 5
-AV2_PHASE_INTRABC = 6
-
+from av2_metrics import (
+    AV2_PHASE_INTRABC,
+    AV2_PHASE_INTRA,
+    AV2_PHASE_PALETTE_HEADER,
+    AV2_PHASE_PALETTE_MAP,
+    AV2_PHASE_U_COEFF,
+    AV2_PHASE_V_COEFF,
+    AV2_PHASE_Y_COEFF,
+    AV2_STATE_CHROMA_FETCH,
+    AV2_STATE_LEAF,
+    AV2_STATE_NAMES,
+    AV2_STATE_PARTITION,
+    write_av2_cycle_metrics,
+)
+from encoder_axi import (
+    AXI_DST_BASE,
+    REG_ENCODED_BYTE_COUNT,
+    REG_STATUS,
+    STATUS_AXI_ERROR,
+    STATUS_INPUT_ERROR,
+    STATUS_DONE,
+    axi_read_memory_model,
+    axi_write_memory_model,
+    axil_read,
+    planar_memory_image,
+    program_encoder_control,
+    read_output_bytes,
+    reset_axi_memory_signals,
+    reset_axil_signals,
+    start_encoder_via_axil,
+)
 
 def rtl_geometry():
     return (
@@ -119,82 +119,6 @@ def av2_rtl_input_stream(data):
                             row_start = (y0 + local_y) * width + x0
                             stream.extend(plane[row_start : row_start + 8])
     return bytes(stream)
-
-
-def write_av2_cycle_metrics(
-    path,
-    width,
-    height,
-    observed_bytes,
-    total_cycles,
-    output_active_cycles,
-    state_counts,
-    leaf_phase_counts,
-    pipeline_counts,
-    pending_push_cycles,
-    entropy_op_cycles,
-    input_sample_cycles,
-):
-    if not path:
-        return
-    bitstream_bits = observed_bytes * 8
-    input_pixels = width * height
-    output_wait_cycles = max(0, total_cycles - output_active_cycles)
-    output_utilization = output_active_cycles / total_cycles if total_cycles else 0.0
-    cycles_per_bit = total_cycles / bitstream_bits if bitstream_bits else 0.0
-    cycles_per_input_pixel = total_cycles / input_pixels if input_pixels else 0.0
-    metrics = {
-        "codec": "av2",
-        "width": width,
-        "height": height,
-        "frames": 1,
-        "bitstream_bytes": observed_bytes,
-        "bitstream_bits": bitstream_bits,
-        "input_pixels": input_pixels,
-        "total_cycles": total_cycles,
-        "output_active_cycles": output_active_cycles,
-        "output_wait_cycles": output_wait_cycles,
-        "output_utilization": output_utilization,
-        "output_bubble_rate": 1.0 - output_utilization,
-        "cycles_per_bit": cycles_per_bit,
-        "cycles_per_input_pixel": cycles_per_input_pixel,
-        "state_cycles": state_counts,
-        "leaf_phase_cycles": leaf_phase_counts,
-        "pipeline_cycles": pipeline_counts,
-        "pending_push_cycles": pending_push_cycles,
-        "entropy_op_cycles": entropy_op_cycles,
-        "input_sample_cycles": input_sample_cycles,
-    }
-    out = Path(path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n")
-
-
-async def drive_input_frame(dut, data):
-    index = 0
-    if not data:
-        dut.s_axis_valid.value = 0
-        dut.s_axis_data.value = 0
-        dut.s_axis_last.value = 0
-        return
-    dut.s_axis_valid.value = 1
-    dut.s_axis_data.value = data[0]
-    dut.s_axis_last.value = 1 if len(data) == 1 else 0
-    while index < len(data):
-        await RisingEdge(dut.clk)
-        if int(dut.s_axis_ready.value) == 1:
-            index += 1
-            if index < len(data):
-                dut.s_axis_valid.value = 1
-                dut.s_axis_data.value = data[index]
-                dut.s_axis_last.value = 1 if index == len(data) - 1 else 0
-            else:
-                dut.s_axis_valid.value = 0
-                dut.s_axis_data.value = 0
-                dut.s_axis_last.value = 0
-    dut.s_axis_valid.value = 0
-    dut.s_axis_data.value = 0
-    dut.s_axis_last.value = 0
 
 
 def av2_rtl_trace_name(
@@ -314,17 +238,10 @@ def av2_trace_spec(name):
 
 
 async def reset_dut(dut):
-    width, height = rtl_geometry()
     cocotb.start_soon(Clock(dut.clk, 1, unit="ns").start())
     dut.rst_n.value = 0
-    dut.start.value = 0
-    dut.visible_width.value = width
-    dut.visible_height.value = height
-    dut.chroma_format_idc.value = 3
-    dut.s_axis_valid.value = 0
-    dut.s_axis_data.value = 0
-    dut.s_axis_last.value = 0
-    dut.m_axis_ready.value = 1
+    reset_axil_signals(dut)
+    reset_axi_memory_signals(dut)
     await RisingEdge(dut.clk)
     await RisingEdge(dut.clk)
     dut.rst_n.value = 1
@@ -332,22 +249,37 @@ async def reset_dut(dut):
 
 
 async def start_encoder(dut):
-    dut.start.value = 1
-    await RisingEdge(dut.clk)
-    dut.start.value = 0
+    await start_encoder_via_axil(dut)
 
 
 @cocotb.test()
 async def av2_encoder_emits_obu_stream(dut):
     await reset_dut(dut)
     input_data = av2_input_frame()
+    width, height = rtl_geometry()
+    area = width * height
+    axi_memory = planar_memory_image(input_data)
+    cocotb.start_soon(axi_read_memory_model(dut, axi_memory))
+    cocotb.start_soon(axi_write_memory_model(dut, axi_memory))
+    await program_encoder_control(
+        dut,
+        width=width,
+        height=height,
+        chroma_format=3,
+        frame_count=1,
+        src_y_base=0,
+        src_u_base=area,
+        src_v_base=area * 2,
+        src_y_stride=width,
+        src_u_stride=width,
+        src_v_stride=width,
+        src_frame_stride=area * 3,
+    )
     await start_encoder(dut)
-    driver = cocotb.start_soon(drive_input_frame(dut, av2_rtl_input_stream(input_data)))
 
     observed = []
     trace_records = []
     completed = False
-    width, height = rtl_geometry()
     total_cycles = 0
     output_active_cycles = 0
     pending_push_cycles = 0
@@ -578,12 +510,11 @@ async def av2_encoder_emits_obu_stream(dut):
                 "analyzer_block_sample": handle_int(dut.palette_analyzer.block_sample_q),
             }
             raise AssertionError(f"AV2 RTL rejected the 4:4:4 input: {details}")
-        if int(dut.m_axis_valid.value) == 1 and int(dut.m_axis_ready.value) == 1:
+        if signal_int(dut, "m_axis_valid") == 1 and signal_int(dut, "m_axis_ready") == 1:
             output_active_cycles += 1
-            observed.append(int(dut.m_axis_data.value))
-            if int(dut.m_axis_last.value) == 1:
-                completed = True
-                break
+        if signal_int(dut, "done") == 1:
+            completed = True
+            break
 
     if not completed:
         details = {
@@ -635,9 +566,14 @@ async def av2_encoder_emits_obu_stream(dut):
             "analyzer_luma_fetch_col": handle_int(dut.palette_analyzer.luma_fetch_txb_col_mi_q),
         }
         raise AssertionError(f"AV2 RTL did not complete an OBU stream: {details}")
+    await RisingEdge(dut.clk)
+    status = await axil_read(dut, REG_STATUS)
+    assert status & STATUS_DONE, f"AXI-Lite STATUS did not report done: 0x{status:08x}"
+    assert not (status & STATUS_INPUT_ERROR), f"AXI-Lite STATUS reported input error: 0x{status:08x}"
+    assert not (status & STATUS_AXI_ERROR), f"AXI-Lite STATUS reported AXI error: 0x{status:08x}"
+    observed_len = await axil_read(dut, REG_ENCODED_BYTE_COUNT)
+    observed = list(read_output_bytes(axi_memory, observed_len))
     assert observed, "AV2 RTL produced an empty OBU stream"
-    await driver
-
     output_path = Path(
         os.environ.get("FRAMEFORGE_RTL_AV2_ENCODER_OUT", "/tmp/frameforge_av2_rtl.av2")
     )
@@ -670,34 +606,74 @@ async def av2_encoder_emits_obu_stream(dut):
 @cocotb.test()
 async def av2_encoder_waits_for_start(dut):
     await reset_dut(dut)
+    width, height = rtl_geometry()
+    area = width * height
+    await program_encoder_control(
+        dut,
+        width=width,
+        height=height,
+        chroma_format=3,
+        frame_count=1,
+        src_y_base=0,
+        src_u_base=area,
+        src_v_base=area * 2,
+        src_y_stride=width,
+        src_u_stride=width,
+        src_v_stride=width,
+        src_frame_stride=area * 3,
+    )
     await ReadOnly()
     assert int(dut.s_axis_ready.value) == 0
     assert int(dut.m_axis_valid.value) == 0
-    assert int(dut.busy.value) == 0
-
     await RisingEdge(dut.clk)
+    assert (await axil_read(dut, REG_STATUS)) == 0
+
     await start_encoder(dut)
-    await ReadOnly()
-    assert int(dut.input_error.value) == 0
+    status = await axil_read(dut, REG_STATUS)
+    assert not (status & STATUS_INPUT_ERROR), f"unexpected input error: 0x{status:08x}"
 
 
 @cocotb.test()
 async def av2_encoder_reports_invalid_geometry(dut):
     await reset_dut(dut)
-    dut.visible_width.value = 0
+    await program_encoder_control(
+        dut,
+        width=0,
+        height=64,
+        chroma_format=3,
+        frame_count=1,
+        src_y_base=0,
+        src_u_base=4096,
+        src_v_base=8192,
+        src_y_stride=64,
+        src_u_stride=64,
+        src_v_stride=64,
+        src_frame_stride=12288,
+    )
     await start_encoder(dut)
-    await ReadOnly()
-    assert int(dut.busy.value) == 0
-    assert int(dut.input_error.value) == 1
+    status = await axil_read(dut, REG_STATUS)
+    assert status & STATUS_INPUT_ERROR, f"missing input error: 0x{status:08x}"
     assert int(dut.m_axis_valid.value) == 0
 
 
 @cocotb.test()
 async def av2_encoder_reports_non_444_input_format(dut):
     await reset_dut(dut)
-    dut.chroma_format_idc.value = 1
+    await program_encoder_control(
+        dut,
+        width=64,
+        height=64,
+        chroma_format=1,
+        frame_count=1,
+        src_y_base=0,
+        src_u_base=4096,
+        src_v_base=5120,
+        src_y_stride=64,
+        src_u_stride=32,
+        src_v_stride=32,
+        src_frame_stride=6144,
+    )
     await start_encoder(dut)
-    await ReadOnly()
-    assert int(dut.busy.value) == 0
-    assert int(dut.input_error.value) == 1
+    status = await axil_read(dut, REG_STATUS)
+    assert status & STATUS_INPUT_ERROR, f"missing input error: 0x{status:08x}"
     assert int(dut.m_axis_valid.value) == 0

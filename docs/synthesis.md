@@ -9,6 +9,11 @@ Codec-specific reports:
 - [VVC synthesis baselines](vvc/synthesis.md)
 - [AV2 synthesis baselines](av2/synthesis.md)
 
+The encoder top-level integration interface is shared across codecs and is
+documented in [rtl/hardware-interface.md](rtl/hardware-interface.md). Synthesis
+reports should continue to be codec-specific because each codec top instantiates
+different syntax and coding-tool logic behind that common interface.
+
 ## Tool Choices
 
 The default open-source flow uses `oss-cad-suite`:

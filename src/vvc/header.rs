@@ -30,8 +30,8 @@ impl VvcPictureKind {
         }
     }
 
-    pub(in crate::vvc) const fn is_cra(self) -> bool {
-        matches!(self, Self::Cra)
+    const fn carries_slice_header_ref_pic_lists(self) -> bool {
+        !matches!(self, Self::Idr)
     }
 }
 
@@ -421,6 +421,28 @@ pub(in crate::vvc) fn write_vvc_picture_header(
     }
 }
 
+pub(in crate::vvc) fn write_vvc_slice_header_byte_alignment(writer: &mut VvcSyntaxWriter) {
+    // H.266 7.3.7 slice_header(): the header terminates with exactly one
+    // byte_alignment() syntax structure before CABAC-coded slice data.
+    writer.write_flag("cabac_alignment_one_bit", true);
+    writer.byte_align_zero("cabac_alignment_zero_bit");
+}
+
+pub(in crate::vvc) fn write_vvc_slice_header_ref_pic_lists(
+    writer: &mut VvcSyntaxWriter,
+    picture_kind: VvcPictureKind,
+) {
+    if picture_kind.carries_slice_header_ref_pic_lists() {
+        // H.266 7.3.7 requires ref_pic_lists() for non-IDR slices when
+        // pps_rpl_info_in_ph_flag is 0. H.266 7.3.9 then only needs
+        // rpl_sps_flag[0] for the current SPS/PPS subset: the SPS carries one
+        // empty RPL0, sps_rpl1_same_as_rpl0_flag=1, and
+        // pps_rpl1_idx_present_flag=0, so the same empty list is used for both
+        // directions without adding any reference pictures.
+        writer.write_flag("rpl_sps_flag[0]", true);
+    }
+}
+
 fn chroma_format_idc(chroma_sampling: ChromaSampling) -> u32 {
     match chroma_sampling {
         ChromaSampling::Monochrome => 0,
@@ -629,6 +651,7 @@ pub(in crate::vvc) fn vvc_slice_rbsp_with_poc(
         );
     }
     writer.write_flag("sh_no_output_of_prior_pics_flag", false);
+    write_vvc_slice_header_ref_pic_lists(&mut writer, picture_kind);
     writer.write_se("sh_qp_delta", 0);
     if tool_flags.dependent_quantization_enabled {
         writer.write_flag("sh_dep_quant_used_flag", true);
@@ -636,11 +659,7 @@ pub(in crate::vvc) fn vvc_slice_rbsp_with_poc(
     if tool_flags.sign_data_hiding_enabled && !tool_flags.dependent_quantization_enabled {
         writer.write_flag("sh_sign_data_hiding_used_flag", true);
     }
-    writer.write_flag("cabac_alignment_one_bit", true);
-    if picture_kind.is_cra() {
-        writer.write_flag("cabac_alignment_one_bit", true);
-    }
-    writer.byte_align_zero("cabac_alignment_zero_bit");
+    write_vvc_slice_header_byte_alignment(&mut writer);
     write_vvc_coding_tree_entropy(&mut writer, ctu_geometry, color, slice_config);
     writer.rbsp_trailing_bits();
     debug_assert!(writer.is_byte_aligned());

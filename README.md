@@ -12,7 +12,8 @@ Current status: experimental, not production-ready. The current VVC software and
 - Clean-room VVC/H.266 first-target modules where exact syntax is known.
 - Local reconstruction concepts and software golden models.
 - Block traversal and trace output for debugging experiments.
-- SystemVerilog RTL blocks using stream-style handshakes.
+- SystemVerilog RTL blocks with a shared AXI4-Lite control plane and AXI4
+  memory-mapped frame/bitstream data plane.
 - cocotb tests with Icarus Verilog as the first open-source simulator target.
 - VTM-backed external decoder validation for the current small VVC subset.
 
@@ -22,7 +23,11 @@ Current status: experimental, not production-ready. The current VVC software and
 - `docs/` - shared process notes plus codec-specific implementation reports.
 - `docs/vvc/` and `docs/av2/` - VVC and AV2 implementation notes, including
   codec-specific synthesis baselines.
+- `docs/rtl/` - shared RTL integration contracts, including the common encoder
+  AXI register map.
 - `scripts/` - helper tools such as optional external decoder validation.
+- `rtl/common/` - codec-independent RTL glue such as AXI control, frame-read,
+  and bitstream-write adapters.
 - `rtl/vvc/` - VVC SystemVerilog RTL blocks.
 - `rtl/av2/` - AV2 SystemVerilog RTL blocks.
 - `tb/vvc/` - VVC cocotb verification fixtures.
@@ -360,7 +365,11 @@ path; treat high-bit-depth coding as future work, not an implemented feature.
 
 Widths and heights must be even. The committed geometry sweeps currently cover 8x8 through 64x64. Larger software encodes are possible by passing `--max-width` and `--max-height`, but RTL validation requires matching `RTL_MAX_VISIBLE_WIDTH` and `RTL_MAX_VISIBLE_HEIGHT` parameters.
 
-The RTL top-level testbench currently feeds input in fixed 8x8 CU/TU order for the validated encoder path. This keeps internal buffering small and is part of the current hardware contract.
+The RTL public top-level interface is AXI-based; see
+[docs/rtl/hardware-interface.md](docs/rtl/hardware-interface.md). Internally,
+the shared frame reader still converts source memory into fixed 8x8 CU/TU
+order for the validated encoder paths. That keeps internal buffering small
+without exposing the block stream as public FPGA integration ports.
 
 ## Troubleshooting
 
