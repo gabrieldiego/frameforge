@@ -2,7 +2,8 @@
 
 module ff_axi4_bitstream_writer #(
   parameter int AXI_ADDR_BITS = 32,
-  parameter int AXI_DATA_BITS = 128
+  parameter int AXI_DATA_BITS = 128,
+  parameter int BURST_MAX_BEATS = 4
 ) (
   input  logic                     clk,
   input  logic                     rst_n,
@@ -37,6 +38,9 @@ module ff_axi4_bitstream_writer #(
 );
   localparam int AXI_BYTES = AXI_DATA_BITS / 8;
   localparam int AXI_BYTE_COUNT_BITS = $clog2(AXI_BYTES + 1);
+  localparam int BURST_COUNT_BITS = $clog2(BURST_MAX_BEATS + 1);
+  localparam int BURST_INDEX_BITS = (BURST_MAX_BEATS <= 1) ? 1 : $clog2(BURST_MAX_BEATS);
+  localparam logic [BURST_COUNT_BITS-1:0] BURST_MAX_BEATS_VALUE = BURST_MAX_BEATS;
   localparam int AXI_BYTE_SHIFT =
     (AXI_BYTES <= 1) ? 0 :
     (AXI_BYTES <= 2) ? 1 :
@@ -58,31 +62,55 @@ module ff_axi4_bitstream_writer #(
   state_t state_q;
   logic [AXI_DATA_BITS-1:0] word_q;
   logic [AXI_BYTES-1:0] strobe_q;
+  logic [AXI_DATA_BITS-1:0] burst_data_q [0:BURST_MAX_BEATS-1];
+  logic [AXI_BYTES-1:0] burst_strobe_q [0:BURST_MAX_BEATS-1];
   logic [AXI_BYTE_COUNT_BITS-1:0] byte_count_q;
-  logic [AXI_BYTE_COUNT_BITS-1:0] write_count_q;
+  logic [BURST_COUNT_BITS-1:0] burst_count_q;
+  logic [BURST_INDEX_BITS-1:0] write_beat_q;
+  logic [31:0] burst_byte_count_q;
   logic pending_last_q;
   logic [31:0] write_offset_q;
   logic capacity_ok_w;
   logic take_byte_w;
   logic flush_word_w;
+  logic flush_burst_w;
   logic [AXI_BYTE_COUNT_BITS-1:0] axi_last_byte_count_w;
   logic [AXI_BYTE_COUNT_BITS-1:0] one_byte_count_w;
+  logic [BURST_COUNT_BITS-1:0] one_burst_count_w;
+  logic [BURST_COUNT_BITS-1:0] next_burst_count_w;
+  logic [31:0] next_burst_byte_count_w;
+  logic [AXI_DATA_BITS-1:0] next_word_w;
+  logic [AXI_BYTES-1:0] next_strobe_w;
 
   assign busy = (state_q != ST_IDLE);
   assign m_axi_awaddr = dst_base + write_offset_q;
-  assign m_axi_awlen = 8'd0;
+  assign m_axi_awlen = {{(8-BURST_COUNT_BITS){1'b0}}, burst_count_q} - 8'd1;
   assign m_axi_awsize = AXI_SIZE;
   assign m_axi_awburst = 2'b01;
-  assign m_axi_wdata = word_q;
-  assign m_axi_wstrb = strobe_q;
-  assign m_axi_wlast = 1'b1;
+  assign m_axi_wdata = burst_data_q[write_beat_q];
+  assign m_axi_wstrb = burst_strobe_q[write_beat_q];
+  assign m_axi_wlast = (write_beat_q == (burst_count_q - one_burst_count_w));
   assign capacity_ok_w = (dst_capacity == 32'd0) || (bytes_written < dst_capacity);
   assign s_axis_ready = (state_q == ST_COLLECT) && capacity_ok_w;
   assign take_byte_w = s_axis_valid && s_axis_ready;
   assign axi_last_byte_count_w = AXI_BYTES - 1;
   assign one_byte_count_w = 1;
+  assign one_burst_count_w = 1;
   assign flush_word_w = take_byte_w &&
     ((byte_count_q == axi_last_byte_count_w) || s_axis_last);
+  assign next_burst_count_w = burst_count_q + one_burst_count_w;
+  assign next_burst_byte_count_w =
+    burst_byte_count_q + {{(32-AXI_BYTE_COUNT_BITS){1'b0}}, byte_count_q + one_byte_count_w};
+  assign flush_burst_w =
+    flush_word_w &&
+    ((next_burst_count_w == BURST_MAX_BEATS_VALUE) || s_axis_last);
+
+  always_comb begin
+    next_word_w = word_q;
+    next_strobe_w = strobe_q;
+    next_word_w[byte_count_q * 8 +: 8] = s_axis_data;
+    next_strobe_w[byte_count_q] = 1'b1;
+  end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -90,7 +118,9 @@ module ff_axi4_bitstream_writer #(
       word_q <= '0;
       strobe_q <= '0;
       byte_count_q <= '0;
-      write_count_q <= '0;
+      burst_count_q <= '0;
+      write_beat_q <= '0;
+      burst_byte_count_q <= 32'd0;
       pending_last_q <= 1'b0;
       write_offset_q <= 32'd0;
       bytes_written <= 32'd0;
@@ -106,7 +136,9 @@ module ff_axi4_bitstream_writer #(
         word_q <= '0;
         strobe_q <= '0;
         byte_count_q <= '0;
-        write_count_q <= '0;
+        burst_count_q <= '0;
+        write_beat_q <= '0;
+        burst_byte_count_q <= 32'd0;
         pending_last_q <= 1'b0;
         write_offset_q <= 32'd0;
         bytes_written <= 32'd0;
@@ -123,16 +155,24 @@ module ff_axi4_bitstream_writer #(
           end
           ST_COLLECT: begin
             if (take_byte_w) begin
-              word_q[byte_count_q * 8 +: 8] <= s_axis_data;
-              strobe_q[byte_count_q] <= 1'b1;
               bytes_written <= bytes_written + 32'd1;
-              pending_last_q <= s_axis_last;
               if (flush_word_w) begin
-                write_count_q <= byte_count_q + one_byte_count_w;
+                burst_data_q[burst_count_q[BURST_INDEX_BITS-1:0]] <= next_word_w;
+                burst_strobe_q[burst_count_q[BURST_INDEX_BITS-1:0]] <= next_strobe_w;
+                burst_count_q <= next_burst_count_w;
+                burst_byte_count_q <= next_burst_byte_count_w;
                 byte_count_q <= '0;
-                m_axi_awvalid <= 1'b1;
-                state_q <= ST_AW;
+                word_q <= '0;
+                strobe_q <= '0;
+                if (flush_burst_w) begin
+                  pending_last_q <= s_axis_last;
+                  write_beat_q <= '0;
+                  m_axi_awvalid <= 1'b1;
+                  state_q <= ST_AW;
+                end
               end else begin
+                word_q <= next_word_w;
+                strobe_q <= next_strobe_w;
                 byte_count_q <= byte_count_q + one_byte_count_w;
               end
             end else if (!capacity_ok_w) begin
@@ -148,18 +188,25 @@ module ff_axi4_bitstream_writer #(
           end
           ST_W: begin
             if (m_axi_wvalid && m_axi_wready) begin
-              m_axi_wvalid <= 1'b0;
-              m_axi_bready <= 1'b1;
-              state_q <= ST_B;
+              if (m_axi_wlast) begin
+                m_axi_wvalid <= 1'b0;
+                m_axi_bready <= 1'b1;
+                state_q <= ST_B;
+              end else begin
+                write_beat_q <= write_beat_q + 1'b1;
+              end
             end
           end
           ST_B: begin
             if (m_axi_bvalid && m_axi_bready) begin
               m_axi_bready <= 1'b0;
-              write_offset_q <= write_offset_q + {{(32-AXI_BYTE_COUNT_BITS){1'b0}}, write_count_q};
+              write_offset_q <= write_offset_q + burst_byte_count_q;
               word_q <= '0;
               strobe_q <= '0;
-              write_count_q <= '0;
+              byte_count_q <= '0;
+              burst_count_q <= '0;
+              write_beat_q <= '0;
+              burst_byte_count_q <= 32'd0;
               if (m_axi_bresp != 2'b00) begin
                 error <= 1'b1;
               end

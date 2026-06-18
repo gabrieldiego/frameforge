@@ -148,17 +148,25 @@ async def axi_read_memory_model(dut, memory):
             dut.m_axi_rvalid.value = 0
             dut.m_axi_rlast.value = 0
         if pending is not None and int(dut.m_axi_rvalid.value) == 0:
-            addr, size = pending
+            addr, size, beat, beats = pending
             word = 0
             for offset in range(size):
                 word |= memory.get(addr + offset, 0) << (8 * offset)
             dut.m_axi_rdata.value = word
             dut.m_axi_rresp.value = 0
-            dut.m_axi_rlast.value = 1
+            dut.m_axi_rlast.value = 1 if beat == beats - 1 else 0
             dut.m_axi_rvalid.value = 1
-            pending = None
+            if beat == beats - 1:
+                pending = None
+            else:
+                pending = (addr + size, size, beat + 1, beats)
         if int(dut.m_axi_arvalid.value) == 1 and int(dut.m_axi_arready.value) == 1:
-            pending = (int(dut.m_axi_araddr.value), 1 << int(dut.m_axi_arsize.value))
+            pending = (
+                int(dut.m_axi_araddr.value),
+                1 << int(dut.m_axi_arsize.value),
+                0,
+                int(dut.m_axi_arlen.value) + 1,
+            )
 
 
 async def axi_write_memory_model(dut, memory, data_bytes=AXI_DATA_BYTES):
@@ -167,18 +175,26 @@ async def axi_write_memory_model(dut, memory, data_bytes=AXI_DATA_BYTES):
     dut.m_axi_bvalid.value = 0
     dut.m_axi_bresp.value = 0
     pending_addr = None
+    pending_beats = 0
+    pending_size = data_bytes
     while True:
         await RisingEdge(dut.clk)
         if int(dut.m_axi_bvalid.value) == 1 and int(dut.m_axi_bready.value) == 1:
             dut.m_axi_bvalid.value = 0
         if int(dut.m_axi_awvalid.value) == 1 and int(dut.m_axi_awready.value) == 1:
             pending_addr = int(dut.m_axi_awaddr.value)
+            pending_beats = int(dut.m_axi_awlen.value) + 1
+            pending_size = 1 << int(dut.m_axi_awsize.value)
         if int(dut.m_axi_wvalid.value) == 1 and int(dut.m_axi_wready.value) == 1:
             assert pending_addr is not None, "AXI write data arrived without an address"
             data = int(dut.m_axi_wdata.value)
             strobe = int(dut.m_axi_wstrb.value)
-            for byte in range(data_bytes):
+            for byte in range(pending_size):
                 if strobe & (1 << byte):
                     memory[pending_addr + byte] = (data >> (8 * byte)) & 0xFF
-            pending_addr = None
-            dut.m_axi_bvalid.value = 1
+            pending_addr += pending_size
+            pending_beats -= 1
+            if int(dut.m_axi_wlast.value) == 1:
+                assert pending_beats == 0, "AXI write burst ended before AWLEN beats"
+                pending_addr = None
+                dut.m_axi_bvalid.value = 1

@@ -54,7 +54,17 @@ module ff_axi4_frame_reader #(
     (SAMPLE_BYTES <= 2) ? 1 :
     (SAMPLE_BYTES <= 4) ? 2 :
     3;
-  localparam logic [2:0] SAMPLE_AXI_SIZE = SAMPLE_BYTE_SHIFT;
+  localparam int AXI_BYTES = AXI_DATA_BITS / 8;
+  localparam int AXI_BYTE_SHIFT =
+    (AXI_BYTES <= 1) ? 0 :
+    (AXI_BYTES <= 2) ? 1 :
+    (AXI_BYTES <= 4) ? 2 :
+    (AXI_BYTES <= 8) ? 3 :
+    (AXI_BYTES <= 16) ? 4 :
+    (AXI_BYTES <= 32) ? 5 :
+    6;
+  localparam int AXI_BYTE_INDEX_BITS = (AXI_BYTES <= 1) ? 1 : $clog2(AXI_BYTES);
+  localparam logic [2:0] AXI_SIZE = AXI_BYTE_SHIFT;
 
   typedef enum logic [2:0] {
     ST_IDLE,
@@ -97,12 +107,19 @@ module ff_axi4_frame_reader #(
   logic [AXI_ADDR_BITS-1:0] plane_offset_w;
   logic [AXI_ADDR_BITS-1:0] row_offset_w;
   logic [AXI_ADDR_BITS-1:0] col_offset_w;
+  logic [AXI_ADDR_BITS-1:0] sample_addr_w;
+  logic [AXI_ADDR_BITS-1:0] axi_word_addr_w;
+  logic [AXI_BYTE_INDEX_BITS-1:0] axi_byte_offset_w;
+  logic cache_valid_q;
+  logic [AXI_ADDR_BITS-1:0] cache_addr_q;
+  logic [AXI_DATA_BITS-1:0] cache_data_q;
+  logic cache_hit_w;
   logic [SAMPLE_BITS-1:0] pad_sample_w;
   logic in_visible_w;
 
   assign busy = (state_q != ST_IDLE);
   assign m_axi_arlen = 8'd0;
-  assign m_axi_arsize = SAMPLE_AXI_SIZE;
+  assign m_axi_arsize = AXI_SIZE;
   assign m_axi_arburst = 2'b01;
 
   assign active_cols_w = (segment_width + 16'd7) >> 3;
@@ -173,7 +190,15 @@ module ff_axi4_frame_reader #(
   assign row_offset_w = {32'd0, plane_y_w} * plane_stride_w;
   assign col_offset_w = {32'd0, plane_x_w} << SAMPLE_BYTE_SHIFT;
   assign plane_offset_w = src_frame_offset + row_offset_w + col_offset_w;
-  assign m_axi_araddr = plane_base_w + plane_offset_w;
+  assign sample_addr_w = plane_base_w + plane_offset_w;
+  assign axi_byte_offset_w =
+    (AXI_BYTES <= 1) ? '0 : sample_addr_w[AXI_BYTE_INDEX_BITS-1:0];
+  assign axi_word_addr_w =
+    (AXI_BYTES <= 1) ?
+      sample_addr_w :
+      {sample_addr_w[AXI_ADDR_BITS-1:AXI_BYTE_INDEX_BITS], {AXI_BYTE_INDEX_BITS{1'b0}}};
+  assign cache_hit_w = cache_valid_q && (cache_addr_q == axi_word_addr_w);
+  assign m_axi_araddr = axi_word_addr_w;
   assign pad_sample_w = (component_q == 2'd0) ? '0 : {{(SAMPLE_BITS-8){1'b0}}, 8'd128};
   assign in_visible_w =
     (sample_x_w < visible_width) &&
@@ -195,6 +220,9 @@ module ff_axi4_frame_reader #(
       sample_valid <= 1'b0;
       sample_data <= '0;
       sample_last <= 1'b0;
+      cache_valid_q <= 1'b0;
+      cache_addr_q <= '0;
+      cache_data_q <= '0;
       done <= 1'b0;
       error <= 1'b0;
     end else begin
@@ -211,6 +239,7 @@ module ff_axi4_frame_reader #(
         m_axi_rready <= 1'b0;
         sample_valid <= 1'b0;
         sample_last <= 1'b0;
+        cache_valid_q <= 1'b0;
         error <= 1'b0;
       end else begin
         if (sample_valid && sample_ready) begin
@@ -253,8 +282,15 @@ module ff_axi4_frame_reader #(
           ST_SKIP: begin
             if (leaf_active_w) begin
               if (in_visible_w) begin
-                m_axi_arvalid <= 1'b1;
-                state_q <= ST_ADDR;
+                if (cache_hit_w) begin
+                  sample_data <= cache_data_q[axi_byte_offset_w * 8 +: SAMPLE_BITS];
+                  sample_last <= output_last_w;
+                  sample_valid <= 1'b1;
+                  state_q <= ST_VALID;
+                end else begin
+                  m_axi_arvalid <= 1'b1;
+                  state_q <= ST_ADDR;
+                end
               end else begin
                 sample_data <= pad_sample_w;
                 sample_last <= output_last_w;
@@ -278,7 +314,10 @@ module ff_axi4_frame_reader #(
           ST_WAIT_R: begin
             if (m_axi_rvalid && m_axi_rready) begin
               m_axi_rready <= 1'b0;
-              sample_data <= m_axi_rdata[SAMPLE_BITS-1:0];
+              cache_valid_q <= 1'b1;
+              cache_addr_q <= axi_word_addr_w;
+              cache_data_q <= m_axi_rdata;
+              sample_data <= m_axi_rdata[axi_byte_offset_w * 8 +: SAMPLE_BITS];
               sample_last <= output_last_w;
               sample_valid <= 1'b1;
               state_q <= ST_VALID;
