@@ -81,6 +81,7 @@ module ff_av2_palette_analyzer_444 #(
   logic [3:0] target_palette_size_q;
   logic [3:0] sort_pass_q;
   logic [2:0] sort_index_q;
+  logic chroma_complete_q;
   logic black_ok_q;
   logic palette_supported_q;
 
@@ -208,6 +209,11 @@ module ff_av2_palette_analyzer_444 #(
   logic above_mode_dc_or_unavailable_w;
   logic left_mode_dc_or_unavailable_w;
   logic terminal_tile_leaf_w;
+  logic chroma_drain_state_w;
+  logic chroma_sample_fire_w;
+  logic chroma_sample_done_w;
+  logic chroma_input_error_w;
+  logic final_black_w;
   logic [5:0] fetch_pred_block_id_w;
   logic [5:0] fetch_pred_local_index_w;
   logic [5:0] fetch_pred_x_w;
@@ -223,7 +229,15 @@ module ff_av2_palette_analyzer_444 #(
   assign sample_u8_w = sample[7:0];
   assign black_sample_ok_w = (sample == {SAMPLE_BITS{1'b0}});
   assign black_next_w = black_ok_q && black_sample_ok_w;
-  assign sample_ready = (state_q == ST_READ) || (state_q == ST_DRAIN_CHROMA);
+  assign chroma_drain_state_w =
+    (state_q == ST_PAD) ||
+    (state_q == ST_SORT) ||
+    (state_q == ST_STORE_COLORS) ||
+    (state_q == ST_MAP) ||
+    (state_q == ST_NEXT_BLOCK) ||
+    (state_q == ST_DRAIN_CHROMA);
+  assign sample_ready =
+    (state_q == ST_READ) || (chroma_drain_state_w && !chroma_complete_q);
 
   // Palette analysis is block-local. The top-level input contract presents each
   // 8x8 block as 64 Y samples, 64 U samples, then 64 V samples. AV2 v1.0.0
@@ -254,6 +268,14 @@ module ff_av2_palette_analyzer_444 #(
   assign fixed_mode_ctx0_w = above_mode_dc_or_unavailable_w && left_mode_dc_or_unavailable_w;
   assign terminal_tile_leaf_w =
     (block_id_q[5:3] == last_block_row_q) && (block_id_q[2:0] == last_block_col_q);
+  assign chroma_sample_fire_w =
+    sample_fire && chroma_drain_state_w && !chroma_complete_q;
+  assign chroma_sample_done_w =
+    chroma_sample_fire_w && (block_chroma_sample_q == 7'd127);
+  assign chroma_input_error_w =
+    chroma_sample_fire_w &&
+    (sample_last != (terminal_tile_leaf_w && (block_chroma_sample_q == 7'd127)));
+  assign final_black_w = chroma_sample_done_w ? black_next_w : black_ok_q;
   assign palette_colors_pack_w = {
     palette_color_q[7],
     palette_color_q[6],
@@ -298,9 +320,9 @@ module ff_av2_palette_analyzer_444 #(
   assign sample_store_read_addr_w = luma_fetch_active_q ? luma_fetch_read_addr_w : chroma_read_addr_w;
   assign luma_write_w = (state_q == ST_READ) && sample_fire;
   assign chroma_write_u_w =
-    (state_q == ST_DRAIN_CHROMA) && sample_fire && !block_chroma_sample_q[6];
+    chroma_sample_fire_w && !block_chroma_sample_q[6];
   assign chroma_write_v_w =
-    (state_q == ST_DRAIN_CHROMA) && sample_fire && block_chroma_sample_q[6];
+    chroma_sample_fire_w && block_chroma_sample_q[6];
   assign fetch_txb_read_addr_w = {fetch_txb_block_id_w, fetch_txb_local_index_w};
   assign fetch_pred_read_addr_w = {fetch_pred_block_id_w, fetch_pred_local_index_w};
 
@@ -578,6 +600,7 @@ module ff_av2_palette_analyzer_444 #(
       target_palette_size_q <= 4'd2;
       sort_pass_q <= 4'd0;
       sort_index_q <= 3'd0;
+      chroma_complete_q <= 1'b0;
       black_ok_q <= 1'b0;
       palette_supported_q <= 1'b0;
       fetch_active_q <= 1'b0;
@@ -651,6 +674,7 @@ module ff_av2_palette_analyzer_444 #(
       target_palette_size_q <= 4'd2;
       sort_pass_q <= 4'd0;
       sort_index_q <= 3'd0;
+      chroma_complete_q <= 1'b0;
       black_ok_q <= 1'b1;
       fetch_active_q <= 1'b0;
       fetch_start_q <= 1'b0;
@@ -696,6 +720,16 @@ module ff_av2_palette_analyzer_444 #(
       black_mode <= 1'b0;
       luma_palette_mode <= 1'b0;
     end else begin
+      if (chroma_sample_fire_w) begin
+        black_ok_q <= black_next_w;
+        sample_index_q <= sample_index_q + 32'd1;
+        if (block_chroma_sample_q == 7'd127) begin
+          chroma_complete_q <= 1'b1;
+        end else begin
+          block_chroma_sample_q <= block_chroma_sample_q + 7'd1;
+        end
+      end
+
       query_start_q <= query_start;
       if (query_start && !query_start_q) begin
         query_active_q <= 1'b1;
@@ -827,136 +861,134 @@ module ff_av2_palette_analyzer_444 #(
         chroma_fetch_done <= 1'b0;
       end
 
-      case (state_q)
-        ST_IDLE: begin
-        end
-        ST_READ: begin
-          if (sample_fire) begin
-            black_ok_q <= black_next_w;
-            sample_index_q <= sample_index_q + 32'd1;
-            block_luma_sample_q[block_sample_q] <= sample_u8_w;
-            if (collect_add_w) begin
-              palette_color_q[collected_count_q] <= collect_sample_w;
-              collected_count_q <= collected_next_count_w;
-            end
-            if (sample_last) begin
-              unsupported <= 1'b1;
-              done <= 1'b1;
-              state_q <= ST_DONE;
-            end else if (block_sample_q == 6'd63) begin
-              if (collected_next_count_w <= 4'd2) begin
-                target_palette_size_q <= 4'd2;
-              end else if (collected_next_count_w <= 4'd4) begin
-                target_palette_size_q <= 4'd4;
-              end else begin
-                target_palette_size_q <= 4'd8;
+      if (chroma_input_error_w) begin
+        unsupported <= 1'b1;
+        done <= 1'b1;
+        state_q <= ST_DONE;
+      end else begin
+        case (state_q)
+          ST_IDLE: begin
+          end
+          ST_READ: begin
+            if (sample_fire) begin
+              black_ok_q <= black_next_w;
+              sample_index_q <= sample_index_q + 32'd1;
+              block_luma_sample_q[block_sample_q] <= sample_u8_w;
+              if (collect_add_w) begin
+                palette_color_q[collected_count_q] <= collect_sample_w;
+                collected_count_q <= collected_next_count_w;
               end
-              candidate_q <= 8'd0;
-              state_q <= ST_PAD;
+              if (sample_last) begin
+                unsupported <= 1'b1;
+                done <= 1'b1;
+                state_q <= ST_DONE;
+              end else if (block_sample_q == 6'd63) begin
+                if (collected_next_count_w <= 4'd2) begin
+                  target_palette_size_q <= 4'd2;
+                end else if (collected_next_count_w <= 4'd4) begin
+                  target_palette_size_q <= 4'd4;
+                end else begin
+                  target_palette_size_q <= 4'd8;
+                end
+                block_chroma_sample_q <= 7'd0;
+                chroma_complete_q <= 1'b0;
+                candidate_q <= 8'd0;
+                state_q <= ST_PAD;
+              end else begin
+                block_sample_q <= block_sample_q + 6'd1;
+              end
+            end
+          end
+          ST_BLOCK_INIT: begin
+            block_sample_q <= 6'd0;
+            candidate_q <= 8'd0;
+            collected_count_q <= 4'd0;
+            target_palette_size_q <= 4'd2;
+            sort_pass_q <= 4'd0;
+            sort_index_q <= 3'd0;
+            current_palette_index_q <= 192'd0;
+            current_row_same_left_q <= 8'd0;
+            current_row_same_above_q <= 8'd0;
+            palette_sad_q <= 16'd0;
+            vertical_sad_q <= 16'd0;
+            horizontal_sad_q <= 16'd0;
+            for (color_index_q = 0; color_index_q < 8; color_index_q = color_index_q + 1) begin
+              palette_color_q[color_index_q] <= 8'd0;
+            end
+            state_q <= ST_READ;
+          end
+          ST_PAD: begin
+            if (collected_count_q < target_palette_size_q) begin
+              if (!candidate_known_w) begin
+                palette_color_q[collected_count_q] <= candidate_q;
+                collected_count_q <= collected_count_q + 4'd1;
+              end
+              candidate_q <= candidate_q + 8'd1;
+            end else begin
+              sort_pass_q <= 4'd0;
+              sort_index_q <= 3'd0;
+              state_q <= ST_SORT;
+            end
+          end
+          ST_SORT: begin
+            if (sort_pass_q < target_palette_size_q) begin
+              if ({1'b0, sort_index_q} + 4'd1 < target_palette_size_q - sort_pass_q) begin
+                if (palette_color_q[sort_index_q] > palette_color_q[sort_index_q + 3'd1]) begin
+                  palette_color_q[sort_index_q] <= palette_color_q[sort_index_q + 3'd1];
+                  palette_color_q[sort_index_q + 3'd1] <= palette_color_q[sort_index_q];
+                end
+                sort_index_q <= sort_index_q + 3'd1;
+              end else begin
+                sort_index_q <= 3'd0;
+                sort_pass_q <= sort_pass_q + 4'd1;
+              end
+            end else begin
+              state_q <= ST_STORE_COLORS;
+            end
+          end
+          ST_STORE_COLORS: begin
+            block_palette_size_q[block_id_q] <= target_palette_size_q;
+            block_palette_cache_size_q[block_id_q] <= block_palette_cache_size_w;
+            block_palette_colors_q[block_id_q] <= palette_colors_pack_w;
+            block_sample_q <= 6'd0;
+            state_q <= ST_MAP;
+          end
+          ST_MAP: begin
+            current_palette_index_q[block_sample_bit_offset_w +: 3] <= nearest_index_w;
+            palette_sad_q <= palette_sad_q + {8'd0, nearest_delta_w};
+            vertical_sad_q <= vertical_sad_q + {8'd0, vertical_abs_delta_w};
+            horizontal_sad_q <= horizontal_sad_q + {8'd0, horizontal_abs_delta_w};
+            if (block_sample_q[2:0] == 3'd0) begin
+              current_row_same_left_q[block_sample_q[5:3]] <= 1'b1;
+              current_row_same_above_q[block_sample_q[5:3]] <= (block_sample_q[5:3] != 3'd0);
+            end else if (nearest_index_w != current_palette_index_q[block_sample_left_bit_offset_w +: 3]) begin
+              current_row_same_left_q[block_sample_q[5:3]] <= 1'b0;
+            end
+            if (block_sample_q[5:3] != 3'd0 && nearest_index_w != current_palette_index_q[block_sample_top_bit_offset_w +: 3]) begin
+              current_row_same_above_q[block_sample_q[5:3]] <= 1'b0;
+            end
+            if (block_sample_q == 6'd63) begin
+              state_q <= ST_NEXT_BLOCK;
             end else begin
               block_sample_q <= block_sample_q + 6'd1;
             end
           end
-        end
-        ST_BLOCK_INIT: begin
-          block_sample_q <= 6'd0;
-          candidate_q <= 8'd0;
-          collected_count_q <= 4'd0;
-          target_palette_size_q <= 4'd2;
-          sort_pass_q <= 4'd0;
-          sort_index_q <= 3'd0;
-          current_palette_index_q <= 192'd0;
-          current_row_same_left_q <= 8'd0;
-          current_row_same_above_q <= 8'd0;
-          palette_sad_q <= 16'd0;
-          vertical_sad_q <= 16'd0;
-          horizontal_sad_q <= 16'd0;
-          for (color_index_q = 0; color_index_q < 8; color_index_q = color_index_q + 1) begin
-            palette_color_q[color_index_q] <= 8'd0;
-          end
-          state_q <= ST_READ;
-        end
-        ST_PAD: begin
-          if (collected_count_q < target_palette_size_q) begin
-            if (!candidate_known_w) begin
-              palette_color_q[collected_count_q] <= candidate_q;
-              collected_count_q <= collected_count_q + 4'd1;
+          ST_NEXT_BLOCK: begin
+            block_palette_index_q[block_id_q] <= current_palette_index_q;
+            block_luma_mode_q[block_id_q] <= selected_luma_mode_w;
+            block_luma_predictor_edge_q[block_id_q] <= selected_luma_predictor_edge_w;
+            block_luma_predictor_inner_edge_q[block_id_q] <= selected_luma_predictor_inner_edge_w;
+            row_same_left_q[block_id_q] <= current_row_same_left_q;
+            row_same_above_q[block_id_q] <= current_row_same_above_q;
+            for (edge_index_q = 0; edge_index_q < 8; edge_index_q = edge_index_q + 1) begin
+              left_predictor_edge_q[edge_index_q * 8 +: 8] <=
+                block_luma_sample_q[edge_index_q * 8 + 7];
+              above_predictor_edge_q[block_id_q[2:0]][edge_index_q * 8 +: 8] <=
+                block_luma_sample_q[56 + edge_index_q];
             end
-            candidate_q <= candidate_q + 8'd1;
-          end else begin
-            sort_pass_q <= 4'd0;
-            sort_index_q <= 3'd0;
-            state_q <= ST_SORT;
-          end
-        end
-        ST_SORT: begin
-          if (sort_pass_q < target_palette_size_q) begin
-            if ({1'b0, sort_index_q} + 4'd1 < target_palette_size_q - sort_pass_q) begin
-              if (palette_color_q[sort_index_q] > palette_color_q[sort_index_q + 3'd1]) begin
-                palette_color_q[sort_index_q] <= palette_color_q[sort_index_q + 3'd1];
-                palette_color_q[sort_index_q + 3'd1] <= palette_color_q[sort_index_q];
-              end
-              sort_index_q <= sort_index_q + 3'd1;
-            end else begin
-              sort_index_q <= 3'd0;
-              sort_pass_q <= sort_pass_q + 4'd1;
-            end
-          end else begin
-            state_q <= ST_STORE_COLORS;
-          end
-        end
-        ST_STORE_COLORS: begin
-          block_palette_size_q[block_id_q] <= target_palette_size_q;
-          block_palette_cache_size_q[block_id_q] <= block_palette_cache_size_w;
-          block_palette_colors_q[block_id_q] <= palette_colors_pack_w;
-          block_sample_q <= 6'd0;
-          state_q <= ST_MAP;
-        end
-        ST_MAP: begin
-          current_palette_index_q[block_sample_bit_offset_w +: 3] <= nearest_index_w;
-          palette_sad_q <= palette_sad_q + {8'd0, nearest_delta_w};
-          vertical_sad_q <= vertical_sad_q + {8'd0, vertical_abs_delta_w};
-          horizontal_sad_q <= horizontal_sad_q + {8'd0, horizontal_abs_delta_w};
-          if (block_sample_q[2:0] == 3'd0) begin
-            current_row_same_left_q[block_sample_q[5:3]] <= 1'b1;
-            current_row_same_above_q[block_sample_q[5:3]] <= (block_sample_q[5:3] != 3'd0);
-          end else if (nearest_index_w != current_palette_index_q[block_sample_left_bit_offset_w +: 3]) begin
-            current_row_same_left_q[block_sample_q[5:3]] <= 1'b0;
-          end
-          if (block_sample_q[5:3] != 3'd0 && nearest_index_w != current_palette_index_q[block_sample_top_bit_offset_w +: 3]) begin
-            current_row_same_above_q[block_sample_q[5:3]] <= 1'b0;
-          end
-          if (block_sample_q == 6'd63) begin
-            state_q <= ST_NEXT_BLOCK;
-          end else begin
-            block_sample_q <= block_sample_q + 6'd1;
-          end
-        end
-        ST_NEXT_BLOCK: begin
-          block_palette_index_q[block_id_q] <= current_palette_index_q;
-          block_luma_mode_q[block_id_q] <= selected_luma_mode_w;
-          block_luma_predictor_edge_q[block_id_q] <= selected_luma_predictor_edge_w;
-          block_luma_predictor_inner_edge_q[block_id_q] <= selected_luma_predictor_inner_edge_w;
-          row_same_left_q[block_id_q] <= current_row_same_left_q;
-          row_same_above_q[block_id_q] <= current_row_same_above_q;
-          for (edge_index_q = 0; edge_index_q < 8; edge_index_q = edge_index_q + 1) begin
-            left_predictor_edge_q[edge_index_q * 8 +: 8] <=
-              block_luma_sample_q[edge_index_q * 8 + 7];
-            above_predictor_edge_q[block_id_q[2:0]][edge_index_q * 8 +: 8] <=
-              block_luma_sample_q[56 + edge_index_q];
-          end
-          block_chroma_sample_q <= 7'd0;
-          state_q <= ST_DRAIN_CHROMA;
-        end
-        ST_DRAIN_CHROMA: begin
-          if (sample_fire) begin
-            black_ok_q <= black_next_w;
-            sample_index_q <= sample_index_q + 32'd1;
-            if (block_chroma_sample_q == 7'd127) begin
-              if (block_id_q[5:3] == last_block_row_q && block_id_q[2:0] == last_block_col_q) begin
-                if (!sample_last) begin
-                  unsupported <= 1'b1;
-                end else if (black_next_w || !palette_supported_q) begin
+            if (chroma_complete_q || chroma_sample_done_w) begin
+              if (terminal_tile_leaf_w) begin
+                if (final_black_w || !palette_supported_q) begin
                   black_mode <= 1'b1;
                   luma_palette_mode <= 1'b0;
                 end else begin
@@ -965,36 +997,57 @@ module ff_av2_palette_analyzer_444 #(
                 end
                 done <= 1'b1;
                 state_q <= ST_DONE;
-              end else if (sample_last) begin
-                unsupported <= 1'b1;
+              end else if (block_id_q[2:0] == last_block_col_q) begin
+                block_id_q <= {block_id_q[5:3] + 3'd1, 3'd0};
+                block_sample_q <= 6'd0;
+                block_chroma_sample_q <= 7'd0;
+                chroma_complete_q <= 1'b0;
+                state_q <= ST_BLOCK_INIT;
+              end else begin
+                block_id_q <= block_id_q + 6'd1;
+                block_sample_q <= 6'd0;
+                block_chroma_sample_q <= 7'd0;
+                chroma_complete_q <= 1'b0;
+                state_q <= ST_BLOCK_INIT;
+              end
+            end else begin
+              state_q <= ST_DRAIN_CHROMA;
+            end
+          end
+          ST_DRAIN_CHROMA: begin
+            if (chroma_complete_q || chroma_sample_done_w) begin
+              if (terminal_tile_leaf_w) begin
+                if (final_black_w || !palette_supported_q) begin
+                  black_mode <= 1'b1;
+                  luma_palette_mode <= 1'b0;
+                end else begin
+                  black_mode <= 1'b0;
+                  luma_palette_mode <= 1'b1;
+                end
                 done <= 1'b1;
                 state_q <= ST_DONE;
               end else if (block_id_q[2:0] == last_block_col_q) begin
                 block_id_q <= {block_id_q[5:3] + 3'd1, 3'd0};
                 block_sample_q <= 6'd0;
                 block_chroma_sample_q <= 7'd0;
+                chroma_complete_q <= 1'b0;
                 state_q <= ST_BLOCK_INIT;
               end else begin
                 block_id_q <= block_id_q + 6'd1;
                 block_sample_q <= 6'd0;
                 block_chroma_sample_q <= 7'd0;
+                chroma_complete_q <= 1'b0;
                 state_q <= ST_BLOCK_INIT;
               end
-            end else if (sample_last) begin
-              unsupported <= 1'b1;
-              done <= 1'b1;
-              state_q <= ST_DONE;
-            end else begin
-              block_chroma_sample_q <= block_chroma_sample_q + 7'd1;
             end
           end
-        end
-        ST_DONE: begin
-        end
-        default: begin
-          state_q <= ST_IDLE;
-        end
-      endcase
+          ST_DONE: begin
+          end
+          default: begin
+            state_q <= ST_IDLE;
+          end
+        endcase
+      end
     end
   end
 

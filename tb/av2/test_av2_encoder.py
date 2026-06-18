@@ -6,6 +6,25 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ReadOnly, RisingEdge
 
+AV2_STATE_NAMES = {
+    0: "idle",
+    1: "tile_start",
+    2: "input_read",
+    3: "seq_load",
+    4: "seq_write",
+    5: "load_block",
+    6: "partition",
+    7: "palette_query",
+    8: "leaf",
+    9: "finish_init",
+    10: "finish_push",
+    11: "chroma_fetch",
+    12: "carry_read",
+    13: "carry_write",
+    14: "payload_prefix",
+    15: "output_prep",
+    16: "output_valid",
+}
 AV2_STATE_PARTITION = 6
 AV2_STATE_LEAF = 8
 AV2_PHASE_INTRA = 0
@@ -94,6 +113,10 @@ def write_av2_cycle_metrics(
     observed_bytes,
     total_cycles,
     output_active_cycles,
+    state_counts,
+    pending_push_cycles,
+    entropy_op_cycles,
+    input_sample_cycles,
 ):
     if not path:
         return
@@ -118,6 +141,10 @@ def write_av2_cycle_metrics(
         "output_bubble_rate": 1.0 - output_utilization,
         "cycles_per_bit": cycles_per_bit,
         "cycles_per_input_pixel": cycles_per_input_pixel,
+        "state_cycles": state_counts,
+        "pending_push_cycles": pending_push_cycles,
+        "entropy_op_cycles": entropy_op_cycles,
+        "input_sample_cycles": input_sample_cycles,
     }
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -304,6 +331,10 @@ async def av2_encoder_emits_obu_stream(dut):
     width, height = rtl_geometry()
     total_cycles = 0
     output_active_cycles = 0
+    pending_push_cycles = 0
+    entropy_op_cycles = 0
+    input_sample_cycles = 0
+    state_counts = {name: 0 for name in AV2_STATE_NAMES.values()}
     default_max_cycles = max(80000, width * height * 3 * 32 + 20000)
     max_cycles = int(os.environ.get("FRAMEFORGE_RTL_AV2_MAX_CYCLES", str(default_max_cycles)))
     for _ in range(max_cycles):
@@ -311,8 +342,18 @@ async def av2_encoder_emits_obu_stream(dut):
         await ReadOnly()
         total_cycles += 1
         state = signal_int(dut, "state_q")
+        state_counts[AV2_STATE_NAMES.get(state, f"unknown_{state}")] = (
+            state_counts.get(AV2_STATE_NAMES.get(state, f"unknown_{state}"), 0) + 1
+        )
         op_valid = signal_int(dut, "op_valid_w")
-        op_consumed = op_valid == 1 and signal_int(dut, "pending_push_valid_q") == 0
+        pending_push = signal_int(dut, "pending_push_valid_q") == 1
+        op_consumed = op_valid == 1 and not pending_push
+        if pending_push:
+            pending_push_cycles += 1
+        if op_consumed:
+            entropy_op_cycles += 1
+        if int(dut.s_axis_valid.value) == 1 and int(dut.s_axis_ready.value) == 1:
+            input_sample_cycles += 1
         if state in (AV2_STATE_PARTITION, AV2_STATE_LEAF) and op_consumed:
             phase = signal_int(dut, "phase_q")
             step = signal_int(dut, "step_q")
@@ -502,6 +543,10 @@ async def av2_encoder_emits_obu_stream(dut):
         len(observed),
         total_cycles,
         output_active_cycles,
+        state_counts,
+        pending_push_cycles,
+        entropy_op_cycles,
+        input_sample_cycles,
     )
     if trace_path := os.environ.get("FRAMEFORGE_RTL_AV2_TRACE_OUT"):
         path = Path(trace_path)

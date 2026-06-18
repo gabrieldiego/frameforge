@@ -350,6 +350,8 @@ module ff_av2_encoder #(
   logic [7:0] partition_update_left_w;
   logic [4:0] leaf_visible_txb_w_w;
   logic [4:0] leaf_visible_txb_h_w;
+  logic luma_residual_enable_w;
+  logic chroma_bdpcm_enable_w;
 
   ff_av2_partition_cdf_lut partition_cdf_lut (
     .split_ctx(partition_split_ctx_w),
@@ -497,9 +499,7 @@ module ff_av2_encoder #(
   ) luma_palette_residual_symbolizer (
     .clk(clk),
     .rst_n(rst_n),
-    .enable(palette_mode_q &&
-            (state_q == ST_LEAF) &&
-            (phase_q == PHASE_Y_COEFF)),
+    .enable(luma_residual_enable_w),
     .advance(luma_residual_advance_w),
     .plane_v(1'b0),
     .skip_ctx(luma_residual_skip_ctx_w),
@@ -525,9 +525,7 @@ module ff_av2_encoder #(
   ) chroma_bdpcm_symbolizer (
     .clk(clk),
     .rst_n(rst_n),
-    .enable(palette_mode_q &&
-            (state_q == ST_LEAF) &&
-            (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF)),
+    .enable(chroma_bdpcm_enable_w),
     .advance(chroma_bdpcm_advance_w),
     .plane_v(phase_q == PHASE_V_COEFF),
     .skip_ctx(chroma_bdpcm_skip_ctx_w),
@@ -641,6 +639,11 @@ module ff_av2_encoder #(
     palette_mode_q &&
     (phase_q == PHASE_Y_COEFF) &&
     luma_residual_op_valid_w;
+  assign luma_residual_enable_w =
+    palette_mode_q &&
+    (phase_q == PHASE_Y_COEFF) &&
+    ((state_q == ST_LEAF) ||
+     ((state_q == ST_CHROMA_FETCH) && luma_fetch_done_w));
   assign chroma_bdpcm_advance_w =
     !start &&
     !pending_push_valid_q &&
@@ -648,6 +651,11 @@ module ff_av2_encoder #(
     palette_mode_q &&
     (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF) &&
     chroma_bdpcm_op_valid_w;
+  assign chroma_bdpcm_enable_w =
+    palette_mode_q &&
+    (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF) &&
+    ((state_q == ST_LEAF) ||
+     ((state_q == ST_CHROMA_FETCH) && chroma_fetch_done_w));
 
   // AV2 4:4:4 bring-up path: traverse one 64x64 superblock, split visible
   // coding leaves down to 8x8, and generate syntax through the range coder.
