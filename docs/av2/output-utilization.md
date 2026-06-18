@@ -23,6 +23,73 @@ Metric definitions:
   writer for these internal counters live in `tb/av2_metrics.py`; they are not
   part of the shared top-level pass/fail contract.
 
+## 2026-06-18 AXI Word Cache And Burst Writer
+
+Measured after optimizing the shared AXI bridge used by every codec target. The
+frame reader now fetches aligned full-width AXI words and reuses adjacent
+samples from a one-word cache. The bitstream writer now packs bytes into AXI
+words and writes up to four words per AXI4 INCR burst. The AV2 codec algorithm,
+bitstreams, and reconstructions are unchanged from the shared AXI interface
+baseline below.
+
+Baseline and current sources:
+
+- Baseline Git SHA: `fda5b7fe85f85bb88c2775927046d443fa2f7fce`
+- Current validated RTL Git SHA: `3bfd06419dc094776c36d417a7868ee19b774632`
+- Baseline mode: shared AXI4-Lite control registers, AXI4 memory-mapped
+  single-beat source reads, and AXI4 memory-mapped packed bitstream writes.
+- Current mode: shared AXI4-Lite control registers, AXI4 memory-mapped aligned
+  source word reads with a one-word cache, and 4-beat packed bitstream write
+  bursts.
+- Delta columns compare against the shared AXI interface baseline below.
+
+Validation commands:
+
+```sh
+make validate-set CODEC=av2 \
+  VALIDATION_SET=screenshot-sweep-444 \
+  VALIDATION_SET_DIR=verification/test_vector_sets/local \
+  VALIDATION_STOP_ON_FAIL=1 \
+  VALIDATION_WITH_SYNTH=0
+
+make validate-set CODEC=av2 \
+  VALIDATION_SET=screenshot-multictu-444 \
+  VALIDATION_SET_DIR=verification/test_vector_sets/local \
+  VALIDATION_STOP_ON_FAIL=1 \
+  VALIDATION_WITH_SYNTH=0
+```
+
+Validation result:
+
+- `screenshot-sweep-444`: OK (64/64)
+- `screenshot-multictu-444`: OK (10/10)
+- All listed vectors matched SW/RTL bitstream checksums and
+  SW/RTL/reference-decoder reconstruction checksums.
+- Bitstream lengths were unchanged, so bitrate deltas remain `+0.0000`.
+
+### Full Screenshot Sweep
+
+Aggregate RTL bits: `770848` (+0).
+Aggregate total cycles: `1277078` (-663520).
+Aggregate output utilization: `0.075450` (+0.025797); bubble rate: `0.924550` (-0.025797).
+Aggregate cycles/bit: `1.656718` (-0.860767); aggregate cycles/input pixel: `15.396870` (-7.999614).
+Per-vector cycles/input pixel range: `9.091580` to `23.919271` (baseline `16.974392` to `32.036458`).
+
+The active output cycles remain `96356`. The improvement comes from reducing
+source-read cycles in the shared frame reader; the burst writer also avoids
+future one-word write-response stalls when the packed output stream is denser.
+
+### Screenshot Multi-CTU And Partial Crops
+
+Aggregate RTL bits: `592008` (+0).
+Aggregate total cycles: `1223391` (-730176).
+Aggregate output utilization: `0.060488` (+0.022608); bubble rate: `0.939512` (-0.022608).
+Aggregate cycles/bit: `2.066511` (-1.233389); aggregate cycles/input pixel: `13.320895` (-7.950523).
+Per-vector cycles/input pixel range: `9.088325` to `18.252170` (baseline `16.971137` to `26.282118`).
+
+The active output cycles remain `74001`. Per-vector metrics are retained in
+`verification/generated/validation_logs/screenshot-multictu-444_*.log`.
+
 ## 2026-06-18 Shared AXI Interface Baseline
 
 Measured after moving the AV2 public top-level interface to the shared AXI4-Lite

@@ -10,11 +10,14 @@ The current public interface is:
 - AXI4 memory-mapped read master for source pixels.
 - AXI4 memory-mapped write master for the encoded bitstream.
 
-The implementation is intentionally conservative. The frame reader issues
-single-beat reads and the bitstream writer issues single-beat writes today so
-the existing encoder cores can be integrated without a large scheduler rewrite.
-Future burst engines should keep the same register map and top-level port
-shape while replacing the simple one-sample read and one-word write glue.
+The implementation is still conservative, but the common data movers use the
+configured AXI data width instead of byte-at-a-time transfers. The frame reader
+issues aligned full-width AXI reads and keeps a one-word cache so adjacent
+samples in the internal 8x8 block stream usually reuse the same read beat. The
+bitstream writer packs output bytes into AXI words and emits short INCR write
+bursts. Future read burst engines should keep the same register map and
+top-level port shape while replacing the simple one-word cached source fetch
+path.
 
 ## Register Map
 
@@ -63,15 +66,19 @@ wire the AXI interfaces.
 ## Bitstream Output
 
 The internal encoder emits bytes. `rtl/common/ff_axi4_bitstream_writer.sv`
-packs those bytes into the configured AXI data width and uses `WSTRB` to mark
-valid lanes in the final partial word. Software should use
-`ENCODED_BYTE_COUNT` to know how many bytes in the destination buffer are part
-of the coded stream.
+packs those bytes into the configured AXI data width, queues up to four packed
+words, and writes them as an AXI4 INCR burst. `WSTRB` marks valid lanes in the
+final partial word. Software should use `ENCODED_BYTE_COUNT` to know how many
+bytes in the destination buffer are part of the coded stream.
 
 ## Current Limitations
 
-- AXI reads are single-beat sample fetches, not burst reads.
-- AXI writes are single-beat packed-word writes, not multi-beat bursts.
+- AXI source reads are aligned full-width single-beat word fetches with a
+  one-word cache. The reader does not yet issue multi-beat read bursts or keep
+  multiple outstanding reads.
+- AXI bitstream writes use a small fixed-depth burst queue. They are not yet a
+  descriptor-driven DMA engine and do not try to coalesce beyond the local
+  burst buffer.
 - AXI IDs, cache/protection/QoS sidebands, interrupts, and descriptor rings are
   not implemented yet.
 - Base-address registers are currently 32-bit.

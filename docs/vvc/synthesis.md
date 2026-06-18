@@ -4,6 +4,120 @@ This file records VVC-specific synthesis measurements and optimization history.
 The shared synthesis process, tool setup, and Vivado flow are documented in
 [../synthesis.md](../synthesis.md).
 
+## 2026-06-18 AXI Word Cache And Burst Writer
+
+Measured after optimizing the shared AXI bridge used by every codec target. The
+frame reader now fetches aligned full-width AXI words with a one-word cache,
+and the bitstream writer now emits up to four packed AXI words per INCR burst.
+The VVC codec algorithm, bitstreams, and reconstructions are unchanged from the
+shared AXI interface baseline below.
+
+Baseline and current sources:
+
+- Baseline Git SHA: `fda5b7fe85f85bb88c2775927046d443fa2f7fce`
+- Current validated RTL Git SHA: `3bfd06419dc094776c36d417a7868ee19b774632`
+- Baseline mode: shared AXI4-Lite control registers, AXI4 memory-mapped
+  single-beat source reads, AXI4 memory-mapped packed bitstream writes, 4:4:4
+  palette enabled, exact-hash IBC disabled by default.
+- Current mode: shared AXI4-Lite control registers, AXI4 memory-mapped aligned
+  source word reads with a one-word cache, 4-beat packed bitstream write
+  bursts, 4:4:4 palette enabled, exact-hash IBC disabled by default.
+- Delta columns compare against the shared AXI interface baseline below.
+
+Validation configuration:
+
+```sh
+make hardware-regression CODEC=vvc HARDWARE_REGRESSION_SYNTH=0
+```
+
+Validation result:
+
+- `smoke`: OK (6/6)
+- `sweep-420`: OK (64/64)
+- `sweep-444`: OK (64/64)
+- Software and RTL bitstreams matched exactly.
+- Software, RTL, and VTM reconstructions matched for every smoke and sweep
+  vector.
+
+Synthesis configuration:
+
+- command: `make synth CODEC=vvc SYNTH_DUT=vvc-encoder`
+- DUT: `vvc-encoder`
+- RTL top: `ff_vvc_encoder`
+- board: `synth/boards/arty-z7-10.env`
+- clock metadata: `25 MHz`
+- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
+- memory limit: 3072 MiB
+- max visible size: 1024x1024
+- 4:4:4 palette support: enabled
+- exact-hash IBC for 4:4:4: disabled (`SYNTH_SUPPORT_EXACT_HASH_IBC_444=0`)
+
+Synthesis result:
+
+- Top `ff_vvc_encoder` synthesis completed in 377.4 seconds with 1969.30 MiB
+  peak child RSS observed by the synthesis runner.
+- Runtime exceeded the 300 second review threshold but stayed inside the 600
+  second hard timeout and 3072 MiB memory limit.
+- Post-synthesis flattened-cell reporting completed in 8.8 seconds.
+- Post-synthesis critical-path reporting completed in 68.2 seconds with peak
+  memory 1969.30 MiB and topological path length 55.
+- The longest topological path remains in `ff_vvc_cabac_syntax_frontend` IBC
+  MVD absolute-value and EG1 prefix generation before `m_axis_data`.
+
+Flattened Xilinx-cell estimate from
+`synth/out/arty-z7-10/ff_vvc_encoder/cell_report.log`:
+
+| Metric | Count |
+|---|---:|
+| Cells | 123613 |
+| Estimated LCs | 46762 |
+| CARRY4 | 3176 |
+| DSP48E1 | 9 |
+| FDCE | 13454 |
+| FDPE | 299 |
+| FDRE | 18172 |
+| FDSE | 4 |
+| LUT1 | 1684 |
+| LUT2 | 18989 |
+| LUT3 | 6039 |
+| LUT4 | 4830 |
+| LUT5 | 7134 |
+| LUT6 | 24699 |
+| MUXF7 | 7036 |
+| MUXF8 | 1388 |
+| RAMB36E1 | 9 |
+
+Delta from the shared AXI interface baseline:
+
+| Metric | Baseline | Current | Delta |
+|---|---:|---:|---:|
+| Synthesis time | 391.0 s | 377.4 s | -13.6 s |
+| Peak synthesis RSS | 1944.9 MiB | 1969.3 MiB | +24.4 MiB |
+| Cell report time | 9.0 s | 8.8 s | -0.2 s |
+| Critical-path report time | 69.6 s | 68.2 s | -1.4 s |
+| Topological path length | 55 | 55 | +0 |
+| Cells | 122311 | 123613 | +1302 |
+| Estimated LCs | 46446 | 46762 | +316 |
+| CARRY4 | 3165 | 3176 | +11 |
+| DSP48E1 | 9 | 9 | +0 |
+| FDCE | 13265 | 13454 | +189 |
+| FDPE | 299 | 299 | +0 |
+| FDRE | 17596 | 18172 | +576 |
+| FDSE | 4 | 4 | +0 |
+| LUT1 | 1584 | 1684 | +100 |
+| LUT2 | 19485 | 18989 | -496 |
+| LUT3 | 5880 | 6039 | +159 |
+| LUT4 | 4892 | 4830 | -62 |
+| LUT5 | 6846 | 7134 | +288 |
+| LUT6 | 24471 | 24699 | +228 |
+| MUXF7 | 6904 | 7036 | +132 |
+| MUXF8 | 1370 | 1388 | +18 |
+| RAMB36E1 | 9 | 9 | +0 |
+
+The common AXI optimization adds the read-word cache and a four-word output
+burst queue. The topological critical path stayed flat, synthesis runtime
+improved, and the estimated-LC increase stayed small for the VVC top.
+
 ## 2026-06-18 Shared AXI Interface Baseline
 
 Measured after moving the VVC top-level integration to the shared AXI4-Lite
