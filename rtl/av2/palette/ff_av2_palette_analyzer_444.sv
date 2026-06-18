@@ -54,7 +54,6 @@ module ff_av2_palette_analyzer_444 #(
   localparam logic [3:0] ST_IDLE = 4'd0;
   localparam logic [3:0] ST_READ = 4'd1;
   localparam logic [3:0] ST_BLOCK_INIT = 4'd2;
-  localparam logic [3:0] ST_COLLECT = 4'd3;
   localparam logic [3:0] ST_PAD = 4'd4;
   localparam logic [3:0] ST_SORT = 4'd5;
   localparam logic [3:0] ST_STORE_COLORS = 4'd6;
@@ -281,7 +280,6 @@ module ff_av2_palette_analyzer_444 #(
   assign luma_fetch_txb_local_base_w =
     {luma_fetch_txb_row_mi_q[0], 5'b00000} + {3'd0, luma_fetch_txb_col_mi_q[0], 2'b00};
   assign chroma_read_addr_w =
-    fetch_read_pending_q ? fetch_read_addr_q :
     (fetch_step_q < 5'd16) ? fetch_txb_read_addr_w : fetch_pred_read_addr_w;
   assign luma_fetch_local_index_w =
     luma_fetch_txb_local_base_w +
@@ -337,7 +335,7 @@ module ff_av2_palette_analyzer_444 #(
   always @* begin
     known_sample_w = 1'b0;
     candidate_known_w = 1'b0;
-    collect_sample_w = block_luma_sample_q[block_sample_q];
+    collect_sample_w = (state_q == ST_READ) ? sample_u8_w : block_luma_sample_q[block_sample_q];
     for (color_index_q = 0; color_index_q < 8; color_index_q = color_index_q + 1) begin
       if (color_index_q < collected_count_q && palette_color_q[color_index_q] == collect_sample_w) begin
         known_sample_w = 1'b1;
@@ -639,7 +637,7 @@ module ff_av2_palette_analyzer_444 #(
       black_mode <= 1'b0;
       luma_palette_mode <= 1'b0;
     end else if (start) begin
-      state_q <= ST_READ;
+      state_q <= ST_BLOCK_INIT;
       area_q <= {16'd0, visible_width} * {16'd0, visible_height};
       frame_samples_q <= ({16'd0, visible_width} * {16'd0, visible_height}) * 32'd3;
       sample_index_q <= 32'd0;
@@ -744,15 +742,19 @@ module ff_av2_palette_analyzer_444 #(
           luma_fetch_txb_samples[luma_fetch_capture_step_q * 8 +: 8] <= luma_read_y_w;
           luma_fetch_predictor_samples[luma_fetch_capture_step_q * 8 +: 8] <=
             luma_fetch_predictor_sample_w;
-          luma_fetch_read_pending_q <= 1'b0;
           if (luma_fetch_capture_step_q == 5'd15) begin
             luma_fetch_active_q <= 1'b0;
+            luma_fetch_read_pending_q <= 1'b0;
             luma_fetch_done <= 1'b1;
           end else begin
-            luma_fetch_step_q <= luma_fetch_capture_step_q + 5'd1;
+            luma_fetch_capture_step_q <= luma_fetch_capture_step_q + 5'd1;
+            if (luma_fetch_capture_step_q < 5'd14) begin
+              luma_fetch_step_q <= luma_fetch_capture_step_q + 5'd2;
+            end
           end
         end else begin
-          luma_fetch_capture_step_q <= luma_fetch_step_q;
+          luma_fetch_capture_step_q <= 5'd0;
+          luma_fetch_step_q <= 5'd1;
           luma_fetch_read_pending_q <= 1'b1;
         end
       end else if (!luma_fetch_start) begin
@@ -773,21 +775,33 @@ module ff_av2_palette_analyzer_444 #(
           if (fetch_read_is_pred_q) begin
             chroma_fetch_predictor_samples[(fetch_capture_step_q - 5'd16) * 8 +: 8] <=
               fetch_plane_v_q ? chroma_read_v_w : chroma_read_u_w;
+            if (fetch_capture_step_q == 5'd19) begin
+              fetch_active_q <= 1'b0;
+              fetch_read_pending_q <= 1'b0;
+              chroma_fetch_done <= 1'b1;
+            end else begin
+              fetch_capture_step_q <= fetch_capture_step_q + 5'd1;
+              if (fetch_capture_step_q < 5'd18) begin
+                fetch_step_q <= fetch_capture_step_q + 5'd2;
+              end
+            end
           end else begin
             chroma_fetch_txb_samples[fetch_capture_step_q * 8 +: 8] <=
               fetch_plane_v_q ? chroma_read_v_w : chroma_read_u_w;
-          end
-          fetch_read_pending_q <= 1'b0;
-          if (fetch_capture_step_q == 5'd19) begin
-            fetch_active_q <= 1'b0;
-            chroma_fetch_done <= 1'b1;
-          end else begin
-            fetch_step_q <= fetch_capture_step_q + 5'd1;
+            if (fetch_capture_step_q < 5'd15) begin
+              fetch_capture_step_q <= fetch_capture_step_q + 5'd1;
+              if (fetch_capture_step_q < 5'd14) begin
+                fetch_step_q <= fetch_capture_step_q + 5'd2;
+              end
+            end else begin
+              fetch_read_pending_q <= 1'b0;
+              fetch_step_q <= 5'd16;
+            end
           end
         end else if (fetch_step_q < 5'd16) begin
-          fetch_read_addr_q <= fetch_txb_read_addr_w;
           fetch_capture_step_q <= fetch_step_q;
           fetch_read_is_pred_q <= 1'b0;
+          fetch_step_q <= fetch_step_q + 5'd1;
           fetch_read_pending_q <= 1'b1;
         end else if (fetch_step_q < 5'd20) begin
           if (fetch_txb_col_mi_q == 5'd0 && fetch_txb_row_mi_q == 5'd0) begin
@@ -802,6 +816,7 @@ module ff_av2_palette_analyzer_444 #(
             fetch_read_addr_q <= fetch_pred_read_addr_w;
             fetch_capture_step_q <= fetch_step_q;
             fetch_read_is_pred_q <= 1'b1;
+            fetch_step_q <= fetch_step_q + 5'd1;
             fetch_read_pending_q <= 1'b1;
           end
         end else begin
@@ -820,13 +835,24 @@ module ff_av2_palette_analyzer_444 #(
             black_ok_q <= black_next_w;
             sample_index_q <= sample_index_q + 32'd1;
             block_luma_sample_q[block_sample_q] <= sample_u8_w;
+            if (collect_add_w) begin
+              palette_color_q[collected_count_q] <= collect_sample_w;
+              collected_count_q <= collected_next_count_w;
+            end
             if (sample_last) begin
               unsupported <= 1'b1;
               done <= 1'b1;
               state_q <= ST_DONE;
             end else if (block_sample_q == 6'd63) begin
-              block_sample_q <= 6'd0;
-              state_q <= ST_BLOCK_INIT;
+              if (collected_next_count_w <= 4'd2) begin
+                target_palette_size_q <= 4'd2;
+              end else if (collected_next_count_w <= 4'd4) begin
+                target_palette_size_q <= 4'd4;
+              end else begin
+                target_palette_size_q <= 4'd8;
+              end
+              candidate_q <= 8'd0;
+              state_q <= ST_PAD;
             end else begin
               block_sample_q <= block_sample_q + 6'd1;
             end
@@ -848,26 +874,7 @@ module ff_av2_palette_analyzer_444 #(
           for (color_index_q = 0; color_index_q < 8; color_index_q = color_index_q + 1) begin
             palette_color_q[color_index_q] <= 8'd0;
           end
-          state_q <= ST_COLLECT;
-        end
-        ST_COLLECT: begin
-          if (collect_add_w) begin
-            palette_color_q[collected_count_q] <= collect_sample_w;
-            collected_count_q <= collected_next_count_w;
-          end
-          if (block_sample_q == 6'd63) begin
-            if (collected_next_count_w <= 4'd2) begin
-              target_palette_size_q <= 4'd2;
-            end else if (collected_next_count_w <= 4'd4) begin
-              target_palette_size_q <= 4'd4;
-            end else begin
-              target_palette_size_q <= 4'd8;
-            end
-            candidate_q <= 8'd0;
-            state_q <= ST_PAD;
-          end else begin
-            block_sample_q <= block_sample_q + 6'd1;
-          end
+          state_q <= ST_READ;
         end
         ST_PAD: begin
           if (collected_count_q < target_palette_size_q) begin
@@ -966,12 +973,12 @@ module ff_av2_palette_analyzer_444 #(
                 block_id_q <= {block_id_q[5:3] + 3'd1, 3'd0};
                 block_sample_q <= 6'd0;
                 block_chroma_sample_q <= 7'd0;
-                state_q <= ST_READ;
+                state_q <= ST_BLOCK_INIT;
               end else begin
                 block_id_q <= block_id_q + 6'd1;
                 block_sample_q <= 6'd0;
                 block_chroma_sample_q <= 7'd0;
-                state_q <= ST_READ;
+                state_q <= ST_BLOCK_INIT;
               end
             end else if (sample_last) begin
               unsupported <= 1'b1;

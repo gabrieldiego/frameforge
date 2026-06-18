@@ -53,8 +53,6 @@ module ff_av2_encoder #(
     ST_CARRY_READ,
     ST_CARRY_WRITE,
     ST_PAYLOAD_PREFIX,
-    ST_PAYLOAD_COPY_READ,
-    ST_PAYLOAD_COPY_WRITE,
     ST_OUTPUT_PREP,
     ST_OUTPUT_VALID
   } state_t;
@@ -90,7 +88,6 @@ module ff_av2_encoder #(
   logic [15:0] precarry_len_q;
   logic [15:0] tile_len_q;
   logic [15:0] payload_len_q;
-  logic [15:0] payload_copy_index_q;
   logic [1:0] payload_prefix_index_q;
   logic [15:0] seq_len_q;
   logic [15:0] stream_index_q;
@@ -202,6 +199,7 @@ module ff_av2_encoder #(
   logic [7:0] seq_stream_byte_w;
   logic [15:0] closed_leb_index_w;
   logic [15:0] stream_lookup_index_w;
+  logic [15:0] payload_tile_start_w;
   logic [7:0] output_byte_w;
   logic [7:0] output_lookup_byte_w;
   logic output_lookup_last_w;
@@ -674,6 +672,7 @@ module ff_av2_encoder #(
   assign tile_samples_w = ({16'd0, tile_width_q} * {16'd0, tile_height_q}) * 32'd3;
   assign tile_is_last_w = (tile_index_q == (tile_count_q - 16'd1));
   assign multi_tile_w = (tile_count_q != 16'd1);
+  assign payload_tile_start_w = payload_len_q + (tile_is_last_w ? 16'd0 : 16'd4);
   assign carry_sum_w = carry_q + precarry_read_data_q;
   assign visible_rows_mi_w = tile_height_q[6:2];
   assign visible_cols_mi_w = tile_width_q[6:2];
@@ -1133,7 +1132,6 @@ module ff_av2_encoder #(
       precarry_len_q <= 16'd0;
       tile_len_q <= 16'd0;
       payload_len_q <= 16'd0;
-      payload_copy_index_q <= 16'd0;
       payload_prefix_index_q <= 2'd0;
       seq_len_q <= 16'd0;
       stream_index_q <= 16'd0;
@@ -1217,7 +1215,6 @@ module ff_av2_encoder #(
           seq_bit_pos_q <= 16'd0;
           seq_len_q <= 16'd0;
           payload_len_q <= 16'd0;
-          payload_copy_index_q <= 16'd0;
           payload_prefix_index_q <= 2'd0;
           seq_mem_q[0] <= 8'd0;
           seq_mem_q[1] <= 8'd0;
@@ -1748,19 +1745,28 @@ module ff_av2_encoder #(
             end
           end
           ST_CARRY_READ: begin
+            if (carry_index_q != 16'd0) begin
+              precarry_read_addr_q <= carry_index_q - 16'd1;
+            end
             state_q <= ST_CARRY_WRITE;
           end
           ST_CARRY_WRITE: begin
             carry_q <= carry_sum_w >> 8;
+            // The carry pass already computes the final tile byte. Stage it in
+            // payload order here and avoid the old post-carry copy sweep.
+            payload_mem_q[payload_tile_start_w + carry_index_q] <= carry_sum_w[7:0];
             if (carry_index_q == 0) begin
               payload_prefix_index_q <= 2'd0;
-              payload_copy_index_q <= 16'd0;
               precarry_read_addr_q <= 16'd0;
               state_q <= ST_PAYLOAD_PREFIX;
             end else begin
               carry_index_q <= carry_index_q - 1;
-              precarry_read_addr_q <= carry_index_q - 16'd1;
-              state_q <= ST_CARRY_READ;
+              if (carry_index_q > 16'd1) begin
+                precarry_read_addr_q <= carry_index_q - 16'd2;
+              end else begin
+                precarry_read_addr_q <= 16'd0;
+              end
+              state_q <= ST_CARRY_WRITE;
             end
           end
           ST_PAYLOAD_PREFIX: begin
@@ -1769,51 +1775,30 @@ module ff_av2_encoder #(
               payload_prefix_index_q <= payload_prefix_index_q + 2'd1;
             end else if (!tile_is_last_w) begin
               payload_mem_q[payload_len_q + 16'd3] <= payload_prefix_byte_w;
-              payload_len_q <= payload_len_q + 16'd4;
-              payload_copy_index_q <= 16'd0;
-              precarry_read_addr_q <= 16'd0;
-              state_q <= ST_PAYLOAD_COPY_READ;
-            end else begin
-              payload_copy_index_q <= 16'd0;
-              precarry_read_addr_q <= 16'd0;
-              state_q <= ST_PAYLOAD_COPY_READ;
-            end
-          end
-          ST_PAYLOAD_COPY_READ: begin
-            state_q <= ST_PAYLOAD_COPY_WRITE;
-          end
-          ST_PAYLOAD_COPY_WRITE: begin
-            payload_mem_q[payload_len_q + payload_copy_index_q] <= precarry_read_data_q[7:0];
-            if (payload_copy_index_q == (tile_len_q - 16'd1)) begin
-              payload_len_q <= payload_len_q + tile_len_q;
-              if (tile_is_last_w) begin
-                stream_index_q <= 16'd0;
-                state_q <= ST_OUTPUT_PREP;
+              payload_len_q <= payload_len_q + 16'd4 + tile_len_q;
+              tile_index_q <= tile_index_q + 16'd1;
+              if (tile_col_q == (tile_cols_q - 16'd1)) begin
+                tile_col_q <= 16'd0;
+                tile_row_q <= tile_row_q + 16'd1;
               end else begin
-                tile_index_q <= tile_index_q + 16'd1;
-                if (tile_col_q == (tile_cols_q - 16'd1)) begin
-                  tile_col_q <= 16'd0;
-                  tile_row_q <= tile_row_q + 16'd1;
-                end else begin
-                  tile_col_q <= tile_col_q + 16'd1;
-                end
-                if (tile_col_q == (tile_cols_q - 16'd1)) begin
-                  tile_width_q <= (tile_cols_q == 16'd1) ? width_q : 16'd64;
-                  tile_height_q <=
-                    ((tile_row_q + 16'd1) == (tile_rows_q - 16'd1)) ?
-                      (height_q - ((tile_row_q + 16'd1) << 6)) : 16'd64;
-                end else begin
-                  tile_width_q <=
-                    ((tile_col_q + 16'd1) == (tile_cols_q - 16'd1)) ?
-                      (width_q - ((tile_col_q + 16'd1) << 6)) : 16'd64;
-                  tile_height_q <= tile_height_q;
-                end
-                state_q <= ST_TILE_START;
+                tile_col_q <= tile_col_q + 16'd1;
               end
+              if (tile_col_q == (tile_cols_q - 16'd1)) begin
+                tile_width_q <= (tile_cols_q == 16'd1) ? width_q : 16'd64;
+                tile_height_q <=
+                  ((tile_row_q + 16'd1) == (tile_rows_q - 16'd1)) ?
+                    (height_q - ((tile_row_q + 16'd1) << 6)) : 16'd64;
+              end else begin
+                tile_width_q <=
+                  ((tile_col_q + 16'd1) == (tile_cols_q - 16'd1)) ?
+                    (width_q - ((tile_col_q + 16'd1) << 6)) : 16'd64;
+                tile_height_q <= tile_height_q;
+              end
+              state_q <= ST_TILE_START;
             end else begin
-              payload_copy_index_q <= payload_copy_index_q + 16'd1;
-              precarry_read_addr_q <= payload_copy_index_q + 16'd1;
-              state_q <= ST_PAYLOAD_COPY_READ;
+              payload_len_q <= payload_len_q + tile_len_q;
+              stream_index_q <= 16'd0;
+              state_q <= ST_OUTPUT_PREP;
             end
           end
           ST_OUTPUT_PREP: begin
