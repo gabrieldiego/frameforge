@@ -124,6 +124,9 @@ module ff_av2_encoder #(
   logic [15:0] txb_count_q;
   logic [4:0] txb_local_row_q;
   logic [4:0] txb_local_col_q;
+  logic txb_prefetch_started_q;
+  logic txb_prefetch_done_q;
+  logic txb_prefetch_chroma_q;
   logic [4:0] visible_rows_mi_q;
   logic [4:0] visible_cols_mi_q;
   logic [4:0] block_row_mi_q;
@@ -213,6 +216,23 @@ module ff_av2_encoder #(
   logic [15:0] txb_count_w;
   logic [15:0] txb_row_w;
   logic [15:0] txb_col_w;
+  logic [4:0] next_txb_local_row_w;
+  logic [4:0] next_txb_local_col_w;
+  logic [15:0] next_txb_row_w;
+  logic [15:0] next_txb_col_w;
+  logic same_phase_has_next_txb_w;
+  logic cross_phase_has_next_txb_w;
+  logic txb_prefetch_cross_phase_w;
+  logic txb_prefetch_first_luma_w;
+  logic txb_prefetch_luma_start_w;
+  logic txb_prefetch_chroma_start_w;
+  logic txb_fetch_done_w;
+  logic txb_prefetch_fetch_done_w;
+  logic [4:0] luma_fetch_req_row_mi_w;
+  logic [4:0] luma_fetch_req_col_mi_w;
+  logic [4:0] chroma_fetch_req_row_mi_w;
+  logic [4:0] chroma_fetch_req_col_mi_w;
+  logic chroma_fetch_req_plane_v_w;
   logic palette_analyzer_start_w;
   logic input_sample_fire_w;
   logic palette_analyzer_sample_ready_w;
@@ -432,12 +452,12 @@ module ff_av2_encoder #(
     .query_col(palette_col_q),
     .query_start(palette_query_start_w),
     .chroma_fetch_start(chroma_fetch_start_w),
-    .chroma_fetch_plane_v(phase_q == PHASE_V_COEFF),
-    .chroma_fetch_txb_row_mi(txb_row_w[4:0]),
-    .chroma_fetch_txb_col_mi(txb_col_w[4:0]),
+    .chroma_fetch_plane_v(chroma_fetch_req_plane_v_w),
+    .chroma_fetch_txb_row_mi(chroma_fetch_req_row_mi_w),
+    .chroma_fetch_txb_col_mi(chroma_fetch_req_col_mi_w),
     .luma_fetch_start(luma_fetch_start_w),
-    .luma_fetch_txb_row_mi(txb_row_w[4:0]),
-    .luma_fetch_txb_col_mi(txb_col_w[4:0]),
+    .luma_fetch_txb_row_mi(luma_fetch_req_row_mi_w),
+    .luma_fetch_txb_col_mi(luma_fetch_req_col_mi_w),
     .done(palette_analyzer_done_w),
     .unsupported(palette_analyzer_unsupported_w),
     .black_mode(palette_analyzer_black_w),
@@ -627,11 +647,17 @@ module ff_av2_encoder #(
   assign palette_query_start_w = (state_q == ST_PALETTE_QUERY);
   assign leaf_luma_palette_w = palette_mode_q && (leaf_luma_mode_q == LUMA_MODE_DC);
   assign chroma_fetch_start_w =
-    (state_q == ST_CHROMA_FETCH) &&
-    (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF);
+    ((state_q == ST_CHROMA_FETCH) &&
+     !txb_prefetch_started_q &&
+     (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF)) ||
+    txb_prefetch_chroma_start_w ||
+    (txb_prefetch_started_q && !txb_prefetch_done_q && txb_prefetch_chroma_q);
   assign luma_fetch_start_w =
-    (state_q == ST_CHROMA_FETCH) &&
-    (phase_q == PHASE_Y_COEFF);
+    ((state_q == ST_CHROMA_FETCH) &&
+     !txb_prefetch_started_q &&
+     (phase_q == PHASE_Y_COEFF)) ||
+    txb_prefetch_luma_start_w ||
+    (txb_prefetch_started_q && !txb_prefetch_done_q && !txb_prefetch_chroma_q);
   assign luma_residual_advance_w =
     !start &&
     !pending_push_valid_q &&
@@ -808,6 +834,66 @@ module ff_av2_encoder #(
   assign txb_count_w = {11'd0, leaf_visible_txb_w_w} * {11'd0, leaf_visible_txb_h_w};
   assign txb_row_w = {11'd0, block_row_mi_q + txb_local_row_q};
   assign txb_col_w = {11'd0, block_col_mi_q + txb_local_col_q};
+  assign same_phase_has_next_txb_w =
+    palette_mode_q &&
+    (phase_q == PHASE_Y_COEFF || phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF) &&
+    (txb_index_q != (txb_count_q - 16'd1));
+  assign cross_phase_has_next_txb_w =
+    palette_mode_q &&
+    (txb_index_q == (txb_count_q - 16'd1)) &&
+    (phase_q == PHASE_Y_COEFF || phase_q == PHASE_U_COEFF);
+  assign next_txb_local_col_w =
+    (txb_local_col_q == (txb_width_q[4:0] - 5'd1)) ? 5'd0 : (txb_local_col_q + 5'd1);
+  assign next_txb_local_row_w =
+    (txb_local_col_q == (txb_width_q[4:0] - 5'd1)) ?
+      (txb_local_row_q + 5'd1) : txb_local_row_q;
+  assign next_txb_row_w = {11'd0, block_row_mi_q + next_txb_local_row_w};
+  assign next_txb_col_w = {11'd0, block_col_mi_q + next_txb_local_col_w};
+  assign txb_fetch_done_w =
+    (phase_q == PHASE_Y_COEFF) ? luma_fetch_done_w :
+    ((phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF) ? chroma_fetch_done_w : 1'b0);
+  assign txb_prefetch_fetch_done_w = luma_fetch_done_w || chroma_fetch_done_w;
+  assign txb_prefetch_luma_start_w =
+    !start &&
+    !pending_push_valid_q &&
+    (state_q == ST_LEAF) &&
+    ((same_phase_has_next_txb_w && (phase_q == PHASE_Y_COEFF)) ||
+     ((phase_q == PHASE_INTRA ||
+       phase_q == PHASE_PALETTE_HEADER ||
+       phase_q == PHASE_PALETTE_MAP) &&
+      palette_mode_q &&
+      (txb_index_q == 16'd0))) &&
+    !txb_prefetch_started_q &&
+    !luma_fetch_done_w;
+  assign txb_prefetch_chroma_start_w =
+    !start &&
+    !pending_push_valid_q &&
+    (state_q == ST_LEAF) &&
+    ((same_phase_has_next_txb_w && (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF)) ||
+     cross_phase_has_next_txb_w) &&
+    !txb_prefetch_started_q &&
+    !chroma_fetch_done_w;
+  assign txb_prefetch_cross_phase_w =
+    txb_prefetch_chroma_start_w &&
+    cross_phase_has_next_txb_w &&
+    !(same_phase_has_next_txb_w && (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF));
+  assign txb_prefetch_first_luma_w =
+    txb_prefetch_luma_start_w &&
+    (phase_q == PHASE_INTRA || phase_q == PHASE_PALETTE_HEADER || phase_q == PHASE_PALETTE_MAP);
+  assign luma_fetch_req_row_mi_w =
+    txb_prefetch_first_luma_w ? block_row_mi_q :
+    (txb_prefetch_luma_start_w ? next_txb_row_w[4:0] : txb_row_w[4:0]);
+  assign luma_fetch_req_col_mi_w =
+    txb_prefetch_first_luma_w ? block_col_mi_q :
+    (txb_prefetch_luma_start_w ? next_txb_col_w[4:0] : txb_col_w[4:0]);
+  assign chroma_fetch_req_row_mi_w =
+    txb_prefetch_cross_phase_w ? block_row_mi_q :
+    (txb_prefetch_chroma_start_w ? next_txb_row_w[4:0] : txb_row_w[4:0]);
+  assign chroma_fetch_req_col_mi_w =
+    txb_prefetch_cross_phase_w ? block_col_mi_q :
+    (txb_prefetch_chroma_start_w ? next_txb_col_w[4:0] : txb_col_w[4:0]);
+  assign chroma_fetch_req_plane_v_w =
+    txb_prefetch_cross_phase_w ? (phase_q == PHASE_U_COEFF) : (phase_q == PHASE_V_COEFF);
   assign luma_residual_top_level_w =
     ((y_txb_above_q[txb_col_w[4:0]] & 8'd7) > 8'd4) ?
       3'd4 : y_txb_above_q[txb_col_w[4:0]][2:0];
@@ -1174,6 +1260,9 @@ module ff_av2_encoder #(
       txb_count_q <= 16'd0;
       txb_local_row_q <= 5'd0;
       txb_local_col_q <= 5'd0;
+      txb_prefetch_started_q <= 1'b0;
+      txb_prefetch_done_q <= 1'b0;
+      txb_prefetch_chroma_q <= 1'b0;
       last_u_txb_nonzero_q <= 1'b0;
       visible_rows_mi_q <= 5'd0;
       visible_cols_mi_q <= 5'd0;
@@ -1272,6 +1361,9 @@ module ff_av2_encoder #(
           txb_count_q <= 16'd0;
           txb_local_row_q <= 5'd0;
           txb_local_col_q <= 5'd0;
+          txb_prefetch_started_q <= 1'b0;
+          txb_prefetch_done_q <= 1'b0;
+          txb_prefetch_chroma_q <= 1'b0;
           last_u_txb_nonzero_q <= 1'b0;
           visible_rows_mi_q <= visible_rows_mi_w;
           visible_cols_mi_q <= visible_cols_mi_w;
@@ -1289,6 +1381,9 @@ module ff_av2_encoder #(
       end else if (pending_push_valid_q) begin
         precarry_len_q <= precarry_len_q + 16'd1;
         pending_push_valid_q <= 1'b0;
+        if (txb_prefetch_started_q && txb_prefetch_fetch_done_w) begin
+          txb_prefetch_done_q <= 1'b1;
+        end
       end else begin
         case (state_q)
           ST_IDLE: begin
@@ -1340,6 +1435,9 @@ module ff_av2_encoder #(
                 txb_count_q <= 16'd0;
                 txb_local_row_q <= 5'd0;
                 txb_local_col_q <= 5'd0;
+                txb_prefetch_started_q <= 1'b0;
+                txb_prefetch_done_q <= 1'b0;
+                txb_prefetch_chroma_q <= 1'b0;
                 last_u_txb_nonzero_q <= 1'b0;
                 visible_rows_mi_q <= visible_rows_mi_w;
                 visible_cols_mi_q <= visible_cols_mi_w;
@@ -1441,6 +1539,8 @@ module ff_av2_encoder #(
                 last_u_txb_nonzero_q <= 1'b0;
                 txb_width_q <= txb_width_w;
                 txb_count_q <= txb_count_w;
+                txb_prefetch_started_q <= 1'b0;
+                txb_prefetch_done_q <= 1'b0;
                 state_q <= frame_ibc_mode_q ? ST_LEAF :
                            (palette_mode_q ? ST_PALETTE_QUERY : ST_LEAF);
               end else if (partition_q == PARTITION_HORZ) begin
@@ -1481,6 +1581,8 @@ module ff_av2_encoder #(
               last_u_txb_nonzero_q <= 1'b0;
               txb_width_q <= txb_width_w;
               txb_count_q <= txb_count_w;
+              txb_prefetch_started_q <= 1'b0;
+              txb_prefetch_done_q <= 1'b0;
               state_q <= frame_ibc_mode_q ? ST_LEAF :
                          (palette_mode_q ? ST_PALETTE_QUERY : ST_LEAF);
             end else if (partition_q == PARTITION_HORZ) begin
@@ -1510,6 +1612,14 @@ module ff_av2_encoder #(
             end
           end
           ST_LEAF: begin
+            if (txb_prefetch_luma_start_w || txb_prefetch_chroma_start_w) begin
+              txb_prefetch_started_q <= 1'b1;
+              txb_prefetch_done_q <= 1'b0;
+              txb_prefetch_chroma_q <= txb_prefetch_chroma_start_w;
+            end else if (txb_prefetch_started_q && txb_prefetch_fetch_done_w) begin
+              txb_prefetch_done_q <= 1'b1;
+            end
+
             if (op_valid_w) begin
               if (norm_push_count_w != 2'd0) begin
                 precarry_len_q <= precarry_len_q + 16'd1;
@@ -1559,6 +1669,8 @@ module ff_av2_encoder #(
                   step_q <= step_q + 5'd1;
                 end
               end else if (op_last_w) begin
+                txb_prefetch_started_q <= 1'b0;
+                txb_prefetch_done_q <= 1'b0;
                 state_q <= ST_FINISH_INIT;
               end else if (phase_q == PHASE_INTRA) begin
                 if (step_q == 5'd2 && !leaf_fsc_symbol_w) begin
@@ -1574,7 +1686,18 @@ module ff_av2_encoder #(
                   txb_local_col_q <= 5'd0;
                   last_u_txb_nonzero_q <= 1'b0;
                   if (palette_mode_q && !leaf_luma_palette_w) begin
-                    state_q <= ST_CHROMA_FETCH;
+                    if (txb_prefetch_done_q) begin
+                      txb_prefetch_started_q <= 1'b0;
+                      txb_prefetch_done_q <= 1'b0;
+                      state_q <= ST_LEAF;
+                    end else begin
+                      txb_prefetch_started_q <= txb_prefetch_started_q;
+                      txb_prefetch_done_q <= txb_prefetch_done_q;
+                      state_q <= ST_CHROMA_FETCH;
+                    end
+                  end else if (!palette_mode_q) begin
+                    txb_prefetch_started_q <= 1'b0;
+                    txb_prefetch_done_q <= 1'b0;
                   end
                 end else begin
                   step_q <= step_q + 5'd1;
@@ -1602,7 +1725,15 @@ module ff_av2_encoder #(
                     txb_index_q <= 16'd0;
                     txb_local_row_q <= 5'd0;
                     txb_local_col_q <= 5'd0;
-                    state_q <= ST_CHROMA_FETCH;
+                    if (txb_prefetch_done_q) begin
+                      txb_prefetch_started_q <= 1'b0;
+                      txb_prefetch_done_q <= 1'b0;
+                      state_q <= ST_LEAF;
+                    end else begin
+                      txb_prefetch_started_q <= txb_prefetch_started_q;
+                      txb_prefetch_done_q <= txb_prefetch_done_q;
+                      state_q <= ST_CHROMA_FETCH;
+                    end
                   end else begin
                     palette_row_q <= palette_row_q + 6'd1;
                     palette_col_q <= 6'd0;
@@ -1617,7 +1748,15 @@ module ff_av2_encoder #(
                   txb_index_q <= 16'd0;
                   txb_local_row_q <= 5'd0;
                   txb_local_col_q <= 5'd0;
-                  state_q <= ST_CHROMA_FETCH;
+                  if (txb_prefetch_done_q) begin
+                    txb_prefetch_started_q <= 1'b0;
+                    txb_prefetch_done_q <= 1'b0;
+                    state_q <= ST_LEAF;
+                  end else begin
+                    txb_prefetch_started_q <= txb_prefetch_started_q;
+                    txb_prefetch_done_q <= txb_prefetch_done_q;
+                    state_q <= ST_CHROMA_FETCH;
+                  end
                 end else begin
                   palette_row_q <= palette_row_q + 6'd1;
                   palette_col_q <= 6'd0;
@@ -1635,9 +1774,17 @@ module ff_av2_encoder #(
                     txb_index_q <= 16'd0;
                     txb_local_row_q <= 5'd0;
                     txb_local_col_q <= 5'd0;
+                    txb_prefetch_started_q <= 1'b0;
+                    txb_prefetch_done_q <= 1'b0;
                     last_u_txb_nonzero_q <= 1'b0;
                     if (palette_mode_q) begin
-                      state_q <= ST_CHROMA_FETCH;
+                      if (txb_prefetch_done_q) begin
+                        state_q <= ST_LEAF;
+                      end else begin
+                        txb_prefetch_started_q <= txb_prefetch_started_q;
+                        txb_prefetch_done_q <= txb_prefetch_done_q;
+                        state_q <= ST_CHROMA_FETCH;
+                      end
                     end
                   end else begin
                     step_q <= 5'd0;
@@ -1649,7 +1796,13 @@ module ff_av2_encoder #(
                       txb_local_col_q <= txb_local_col_q + 5'd1;
                     end
                     if (palette_mode_q) begin
-                      state_q <= ST_CHROMA_FETCH;
+                      if (txb_prefetch_done_q) begin
+                        txb_prefetch_started_q <= 1'b0;
+                        txb_prefetch_done_q <= 1'b0;
+                        state_q <= ST_LEAF;
+                      end else begin
+                        state_q <= ST_CHROMA_FETCH;
+                      end
                     end
                   end
                 end else begin
@@ -1674,8 +1827,16 @@ module ff_av2_encoder #(
                       txb_index_q <= 16'd0;
                       txb_local_row_q <= 5'd0;
                       txb_local_col_q <= 5'd0;
+                      txb_prefetch_started_q <= 1'b0;
+                      txb_prefetch_done_q <= 1'b0;
                       if (palette_mode_q) begin
-                        state_q <= ST_CHROMA_FETCH;
+                        if (txb_prefetch_done_q) begin
+                          state_q <= ST_LEAF;
+                        end else begin
+                          txb_prefetch_started_q <= txb_prefetch_started_q;
+                          txb_prefetch_done_q <= txb_prefetch_done_q;
+                          state_q <= ST_CHROMA_FETCH;
+                        end
                       end
                     end else begin
                       for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
@@ -1689,6 +1850,8 @@ module ff_av2_encoder #(
                         end
                       end
                       if (stack_sp_q != 5'd0) begin
+                        txb_prefetch_started_q <= 1'b0;
+                        txb_prefetch_done_q <= 1'b0;
                         block_row_mi_q <= stack_row_mi_q[stack_sp_q - 5'd1];
                         block_col_mi_q <= stack_col_mi_q[stack_sp_q - 5'd1];
                         block_w_mi_q <= stack_w_mi_q[stack_sp_q - 5'd1];
@@ -1696,6 +1859,8 @@ module ff_av2_encoder #(
                         stack_sp_q <= stack_sp_q - 5'd1;
                         state_q <= ST_LOAD_BLOCK;
                       end else begin
+                        txb_prefetch_started_q <= 1'b0;
+                        txb_prefetch_done_q <= 1'b0;
                         state_q <= ST_FINISH_INIT;
                       end
                     end
@@ -1709,7 +1874,13 @@ module ff_av2_encoder #(
                       txb_local_col_q <= txb_local_col_q + 5'd1;
                     end
                     if (palette_mode_q) begin
-                      state_q <= ST_CHROMA_FETCH;
+                      if (txb_prefetch_done_q) begin
+                        txb_prefetch_started_q <= 1'b0;
+                        txb_prefetch_done_q <= 1'b0;
+                        state_q <= ST_LEAF;
+                      end else begin
+                        state_q <= ST_CHROMA_FETCH;
+                      end
                     end
                   end
                 end else begin
@@ -1719,9 +1890,12 @@ module ff_av2_encoder #(
             end
           end
           ST_CHROMA_FETCH: begin
-            if ((phase_q == PHASE_Y_COEFF && luma_fetch_done_w) ||
+            if (txb_prefetch_done_q ||
+                (phase_q == PHASE_Y_COEFF && luma_fetch_done_w) ||
                 ((phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF) && chroma_fetch_done_w)) begin
               step_q <= 5'd0;
+              txb_prefetch_started_q <= 1'b0;
+              txb_prefetch_done_q <= 1'b0;
               state_q <= ST_LEAF;
             end
           end

@@ -509,6 +509,14 @@ async def av2_encoder_emits_obu_stream(dut):
             "palette_row": signal_int(dut, "palette_row_q"),
             "palette_col": signal_int(dut, "palette_col_q"),
             "txb_index": signal_int(dut, "txb_index_q"),
+            "txb_prefetch_started": signal_int(dut, "txb_prefetch_started_q"),
+            "txb_prefetch_done": signal_int(dut, "txb_prefetch_done_q"),
+            "txb_prefetch_chroma": signal_int(dut, "txb_prefetch_chroma_q"),
+            "txb_fetch_done": signal_int(dut, "txb_fetch_done_w"),
+            "luma_fetch_start": signal_int(dut, "luma_fetch_start_w"),
+            "chroma_fetch_start": signal_int(dut, "chroma_fetch_start_w"),
+            "luma_fetch_done": signal_int(dut, "luma_fetch_done_w"),
+            "chroma_fetch_done": signal_int(dut, "chroma_fetch_done_w"),
             "precarry_len": signal_int(dut, "precarry_len_q"),
             "tile_len": signal_int(dut, "tile_len_q"),
             "stream_index": signal_int(dut, "stream_index_q"),
@@ -522,6 +530,21 @@ async def av2_encoder_emits_obu_stream(dut):
             "analyzer_collected_count": handle_int(dut.palette_analyzer.collected_count_q),
             "analyzer_target_palette_size": handle_int(dut.palette_analyzer.target_palette_size_q),
             "analyzer_candidate": handle_int(dut.palette_analyzer.candidate_q),
+            "analyzer_fetch_active": handle_int(dut.palette_analyzer.fetch_active_q),
+            "analyzer_fetch_start_q": handle_int(dut.palette_analyzer.fetch_start_q),
+            "analyzer_fetch_step": handle_int(dut.palette_analyzer.fetch_step_q),
+            "analyzer_fetch_pending": handle_int(dut.palette_analyzer.fetch_read_pending_q),
+            "analyzer_fetch_row": handle_int(dut.palette_analyzer.fetch_txb_row_mi_q),
+            "analyzer_fetch_col": handle_int(dut.palette_analyzer.fetch_txb_col_mi_q),
+            "analyzer_fetch_plane_v": handle_int(dut.palette_analyzer.fetch_plane_v_q),
+            "analyzer_luma_fetch_active": handle_int(dut.palette_analyzer.luma_fetch_active_q),
+            "analyzer_luma_fetch_start_q": handle_int(dut.palette_analyzer.luma_fetch_start_q),
+            "analyzer_luma_fetch_step": handle_int(dut.palette_analyzer.luma_fetch_step_q),
+            "analyzer_luma_fetch_pending": handle_int(
+                dut.palette_analyzer.luma_fetch_read_pending_q
+            ),
+            "analyzer_luma_fetch_row": handle_int(dut.palette_analyzer.luma_fetch_txb_row_mi_q),
+            "analyzer_luma_fetch_col": handle_int(dut.palette_analyzer.luma_fetch_txb_col_mi_q),
         }
         raise AssertionError(f"AV2 RTL did not complete an OBU stream: {details}")
     assert observed, "AV2 RTL produced an empty OBU stream"
