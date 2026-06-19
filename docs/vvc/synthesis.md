@@ -4,6 +4,142 @@ This file records VVC-specific synthesis measurements and optimization history.
 The shared synthesis process, tool setup, and Vivado flow are documented in
 [../synthesis.md](../synthesis.md).
 
+## 2026-06-19 Source Cache And Luma AC Throughput
+
+Measured after adding the shared AXI frame-reader direct plane-row cache and
+speeding up the VVC luma 8x8 residual AC coefficient path. The bitstream writer
+configuration is unchanged from the previous AXI writer FIFO checkpoint.
+
+Baseline and current sources:
+
+- Baseline Git SHA: `f0fc6dd70d0aacccc6a8474560c14f5118defd14`
+- Current validated RTL Git SHA: `ffb4179caa0de4a4a4e52f4a21eaf9ddb39efc64`
+- Baseline mode: shared AXI4-Lite control registers, AXI4 memory-mapped
+  aligned source word reads with a one-word cache, an eight-word bitstream
+  writer FIFO, 4:4:4 palette enabled, exact-hash IBC disabled by default.
+- Current mode: direct plane-row source cache, same bitstream writer FIFO, and
+  one-cycle-per-coefficient VVC luma AC residual datapath; 4:4:4 palette
+  enabled, exact-hash IBC disabled by default.
+- Delta columns compare against the previous AXI writer FIFO checkpoint.
+
+Validation configuration:
+
+```sh
+make validate-set CODEC=vvc \
+  VALIDATION_SET=screenshot-sweep-444 \
+  VALIDATION_SET_DIR=verification/test_vector_sets/local \
+  VALIDATION_STOP_ON_FAIL=1 \
+  VALIDATION_WITH_SYNTH=0
+
+make validate-set CODEC=vvc \
+  VALIDATION_SET=screenshot-multictu-444 \
+  VALIDATION_SET_DIR=verification/test_vector_sets/local \
+  VALIDATION_STOP_ON_FAIL=1 \
+  VALIDATION_WITH_SYNTH=0
+
+make validate-set CODEC=vvc \
+  VALIDATION_SET=racehorses-sweep-420 \
+  VALIDATION_SET_DIR=verification/test_vector_sets/local \
+  VALIDATION_STOP_ON_FAIL=1 \
+  VALIDATION_WITH_SYNTH=0
+
+make validate-set CODEC=vvc \
+  VALIDATION_SET=racehorses-multictu-420 \
+  VALIDATION_SET_DIR=verification/test_vector_sets/local \
+  VALIDATION_STOP_ON_FAIL=1 \
+  VALIDATION_WITH_SYNTH=0
+```
+
+Validation result:
+
+- `screenshot-sweep-444`: OK (64/64)
+- `screenshot-multictu-444`: OK (10/10)
+- `racehorses-sweep-420`: OK (64/64)
+- `racehorses-multictu-420`: OK (10/10)
+- Software and RTL bitstreams matched exactly.
+- Software, RTL, and VTM reconstructions matched for every listed vector.
+
+Synthesis configuration:
+
+- command: `make synth CODEC=vvc SYNTH_DUT=vvc-encoder`
+- DUT: `vvc-encoder`
+- RTL top: `ff_vvc_encoder`
+- board: `synth/boards/arty-z7-10.env`
+- clock metadata: `25 MHz`
+- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
+- memory limit: 3072 MiB
+- max visible size: 1024x1024
+- 4:4:4 palette support: enabled
+- exact-hash IBC for 4:4:4: disabled (`SYNTH_SUPPORT_EXACT_HASH_IBC_444=0`)
+
+Synthesis result:
+
+- Top `ff_vvc_encoder` synthesis completed in 410.8 seconds with 1993.60 MiB
+  peak child RSS observed by the synthesis runner.
+- Runtime exceeded the 300 second review threshold but stayed inside the 600
+  second hard timeout and 3072 MiB memory limit.
+- Post-synthesis flattened-cell reporting completed in 9.8 seconds.
+- Post-synthesis critical-path reporting completed in 72.0 seconds with peak
+  memory 1993.60 MiB and topological path length 55.
+- The longest topological path remains in `ff_vvc_cabac_syntax_frontend` IBC
+  MVD absolute-value and EG1 prefix generation before `m_axis_data`.
+
+Flattened Xilinx-cell estimate from
+`synth/out/arty-z7-10/ff_vvc_encoder/cell_report.log`:
+
+| Metric | Count |
+|---|---:|
+| Cells | 131750 |
+| Estimated LCs | 49378 |
+| CARRY4 | 3283 |
+| DSP48E1 | 9 |
+| FDCE | 13294 |
+| FDPE | 299 |
+| FDRE | 22492 |
+| FDSE | 4 |
+| LUT1 | 1461 |
+| LUT2 | 19886 |
+| LUT3 | 6510 |
+| LUT4 | 5352 |
+| LUT5 | 7111 |
+| LUT6 | 26393 |
+| MUXF7 | 7535 |
+| MUXF8 | 1394 |
+| RAMB36E1 | 9 |
+
+Delta from the previous AXI writer FIFO checkpoint:
+
+| Metric | Baseline | Current | Delta |
+|---|---:|---:|---:|
+| Synthesis time | 380.6 s | 410.8 s | +30.2 s |
+| Peak synthesis RSS | 1935.25 MiB | 1993.60 MiB | +58.35 MiB |
+| Cell report time | 8.9 s | 9.8 s | +0.9 s |
+| Critical-path report time | 68.4 s | 72.0 s | +3.6 s |
+| Topological path length | 55 | 55 | +0 |
+| Cells | 123744 | 131750 | +8006 |
+| Estimated LCs | 46881 | 49378 | +2497 |
+| CARRY4 | 3170 | 3283 | +113 |
+| DSP48E1 | 9 | 9 | +0 |
+| FDCE | 13431 | 13294 | -137 |
+| FDPE | 299 | 299 | +0 |
+| FDRE | 18748 | 22492 | +3744 |
+| FDSE | 4 | 4 | +0 |
+| LUT1 | 1362 | 1461 | +99 |
+| LUT2 | 19417 | 19886 | +469 |
+| LUT3 | 6275 | 6510 | +235 |
+| LUT4 | 4806 | 5352 | +546 |
+| LUT5 | 6900 | 7111 | +211 |
+| LUT6 | 24732 | 26393 | +1661 |
+| MUXF7 | 6570 | 7535 | +965 |
+| MUXF8 | 1308 | 1394 | +86 |
+| RAMB36E1 | 9 | 9 | +0 |
+
+The throughput work keeps the reported topological critical path flat. Area
+increases are concentrated in the direct plane-row source cache and the
+parallel luma AC accumulation tree. The cache payload/address registers are
+valid-bit guarded and intentionally not reset, which reduced the first
+post-change estimate before this documented run.
+
 ## 2026-06-18 AXI Writer FIFO
 
 Measured after optimizing the shared AXI bridge used by every codec target. The

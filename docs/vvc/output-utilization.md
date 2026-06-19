@@ -22,6 +22,86 @@ AV2 has additional codec-internal counters for state, leaf phase, and pipeline
 profiling. Those remain AV2-specific instrumentation and are documented only in
 the AV2 utilization report.
 
+## 2026-06-19 Source Cache And Luma AC Throughput
+
+Measured after two VVC throughput changes:
+
+- The shared AXI frame reader now keeps a small direct plane-row cache indexed
+  by component and local block row, so adjacent horizontal 8x8 blocks can reuse
+  source read beats.
+- The VVC luma 8x8 residual path now computes each supported AC coefficient in
+  one cycle instead of serializing the 16 cell terms across 16 cycles. The
+  coefficient values, bitstream syntax, and reconstructions are unchanged.
+
+Baseline and current sources:
+
+- Baseline Git SHA: `f0fc6dd70d0aacccc6a8474560c14f5118defd14`
+- Current validated RTL Git SHA: `ffb4179caa0de4a4a4e52f4a21eaf9ddb39efc64`
+- Current mode: shared AXI4-Lite control registers, AXI4 memory-mapped source
+  reads with a direct plane-row cache, 4-beat packed bitstream write bursts,
+  and the faster VVC luma AC residual datapath.
+- This is the first documented VVC utilization baseline for the local
+  screenshot and RaceHorses crop sets. Future changes should compare against
+  these aggregate numbers.
+
+Validation commands:
+
+```sh
+make validate-set CODEC=vvc \
+  VALIDATION_SET=screenshot-sweep-444 \
+  VALIDATION_SET_DIR=verification/test_vector_sets/local \
+  VALIDATION_STOP_ON_FAIL=1 \
+  VALIDATION_WITH_SYNTH=0
+
+make validate-set CODEC=vvc \
+  VALIDATION_SET=screenshot-multictu-444 \
+  VALIDATION_SET_DIR=verification/test_vector_sets/local \
+  VALIDATION_STOP_ON_FAIL=1 \
+  VALIDATION_WITH_SYNTH=0
+
+make validate-set CODEC=vvc \
+  VALIDATION_SET=racehorses-sweep-420 \
+  VALIDATION_SET_DIR=verification/test_vector_sets/local \
+  VALIDATION_STOP_ON_FAIL=1 \
+  VALIDATION_WITH_SYNTH=0
+
+make validate-set CODEC=vvc \
+  VALIDATION_SET=racehorses-multictu-420 \
+  VALIDATION_SET_DIR=verification/test_vector_sets/local \
+  VALIDATION_STOP_ON_FAIL=1 \
+  VALIDATION_WITH_SYNTH=0
+```
+
+Validation result:
+
+- `screenshot-sweep-444`: OK (64/64)
+- `screenshot-multictu-444`: OK (10/10)
+- `racehorses-sweep-420`: OK (64/64)
+- `racehorses-multictu-420`: OK (10/10)
+- All listed vectors matched SW/RTL bitstream checksums and SW/RTL/VTM
+  reconstruction checksums.
+- Bitstream lengths were unchanged, so bitrate deltas remain `+0.0000`.
+
+Aggregate top-level RTL utilization:
+
+| Set | Cases | RTL bits | Total cycles | Active cycles | Output util | Bubble rate | Cycles/bit | Cycles/pixel | Cycles/pixel range |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| screenshot-sweep-444 | 64 | 398840 | 1581091 | 49855 | 0.031532 | 0.968468 | 3.964224 | 19.062150 | 9.565430-35.325521 |
+| screenshot-multictu-444 | 10 | 319168 | 1483255 | 39896 | 0.026898 | 0.973102 | 4.647255 | 16.150601 | 9.439019-22.691176 |
+| racehorses-sweep-420 | 64 | 113168 | 1170183 | 14146 | 0.012089 | 0.987911 | 10.340229 | 14.108109 | 13.618490-23.859375 |
+| racehorses-multictu-420 | 10 | 92920 | 1251691 | 11615 | 0.009279 | 0.990721 | 13.470631 | 13.629040 | 13.277018-14.036265 |
+
+Per-vector metrics are retained in:
+
+- `verification/generated/validation_logs/screenshot-sweep-444_*.log`
+- `verification/generated/validation_logs/screenshot-multictu-444_*.log`
+- `verification/generated/validation_logs/racehorses-sweep-420_*.log`
+- `verification/generated/validation_logs/racehorses-multictu-420_*.log`
+
+The 4:2:0 RaceHorses sets exercise the luma residual acceleration directly.
+The 4:4:4 screenshot sets mostly measure the shared source-cache behavior,
+because their current VVC path is dominated by lossless screen-content coding.
+
 ## 2026-06-18 AXI Writer FIFO
 
 Measured after optimizing the shared AXI bridge used by every codec target. The

@@ -12,12 +12,12 @@ The current public interface is:
 
 The implementation is still conservative, but the common data movers use the
 configured AXI data width instead of byte-at-a-time transfers. The frame reader
-issues aligned full-width AXI reads and keeps a one-word cache so adjacent
-samples in the internal 8x8 block stream usually reuse the same read beat. The
-bitstream writer packs output bytes into AXI words and emits short INCR write
-bursts. Future read burst engines should keep the same register map and
-top-level port shape while replacing the simple one-word cached source fetch
-path.
+issues aligned full-width AXI reads and keeps a small direct plane-row cache
+indexed by component and local block row so adjacent horizontal blocks can reuse
+the same read beats. The bitstream writer packs output bytes into AXI words and
+emits short INCR write bursts. Future read burst engines should keep the same
+register map and top-level port shape while replacing the simple cached source
+fetch path.
 
 ## Register Map
 
@@ -74,9 +74,9 @@ buffer are part of the coded stream.
 
 ## Current Limitations
 
-- AXI source reads are aligned full-width single-beat word fetches with a
-  one-word cache. The reader does not yet issue multi-beat read bursts or keep
-  multiple outstanding reads.
+- AXI source reads are aligned full-width single-beat word fetches with a small
+  direct plane-row cache. The reader does not yet issue multi-beat read bursts
+  or keep multiple outstanding reads.
 - AXI bitstream writes use a small fixed-depth FIFO and four-beat bursts. They
   are not yet a descriptor-driven DMA engine and do not try to coalesce beyond
   the local burst buffer.
