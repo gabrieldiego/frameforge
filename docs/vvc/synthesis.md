@@ -4,6 +4,117 @@ This file records VVC-specific synthesis measurements and optimization history.
 The shared synthesis process, tool setup, and Vivado flow are documented in
 [../synthesis.md](../synthesis.md).
 
+## 2026-06-19 CABAC Emission Throughput
+
+Measured after reducing VVC CABAC/output-path bubbles in the bit writer,
+stream-writer handoff, residual symbol emitter, and top-level CABAC input
+handoff. The bitstream syntax, reconstructed samples, AXI control/data-plane
+wiring, palette support, and exact-hash IBC synthesis setting are unchanged
+from the previous documented baseline.
+
+Baseline and current sources:
+
+- Baseline report Git SHA: `66e19ca20cf480a0353b211bf535cdcb2d384bbd`
+- Baseline validated RTL Git SHA: `999bbcf91ddd45845a2b32c20add79e940c4ca40`
+- Current validated RTL Git SHA: `7d54a8c42552942b9b7be5ac3941b1a7518bd4af`
+- Baseline mode: previous VVC residual-throughput checkpoint.
+- Current mode: same bitstream syntax, plus faster CABAC bit emission,
+  stream-writer handoff, residual symbol scheduling, and top-level CABAC input
+  handoff.
+
+Validation result:
+
+- `screenshot-sweep-444`: OK (64/64)
+- `screenshot-multictu-444`: OK (10/10)
+- `racehorses-sweep-420`: OK (64/64)
+- `racehorses-multictu-420`: OK (10/10)
+- Software and RTL bitstreams matched exactly.
+- Software, RTL, and VTM reconstructions matched for every listed vector.
+
+Synthesis configuration:
+
+- command: `make synth CODEC=vvc SYNTH_DUT=vvc-encoder`
+- DUT: `vvc-encoder`
+- RTL top: `ff_vvc_encoder`
+- board: `synth/boards/arty-z7-10.env`
+- clock metadata: `25 MHz`
+- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
+- memory limit: 3072 MiB
+- max visible size: 1024x1024
+- 4:4:4 palette support: enabled
+- exact-hash IBC for 4:4:4: disabled (`SYNTH_SUPPORT_EXACT_HASH_IBC_444=0`)
+
+Synthesis result:
+
+- Top `ff_vvc_encoder` synthesis completed in 456.3 seconds with 2165.60 MiB
+  peak child RSS observed by the synthesis runner.
+- Runtime exceeded the 300 second review threshold but stayed inside the 600
+  second hard timeout and 3072 MiB memory limit.
+- Post-synthesis flattened-cell reporting completed in 10.8 seconds.
+- Post-synthesis critical-path reporting completed in 78.0 seconds with peak
+  memory 2165.60 MiB and topological path length 55.
+- The longest topological path remains in `ff_vvc_cabac_syntax_frontend` IBC
+  MVD absolute-value and EG1 prefix generation before `m_axis_data`, so the
+  CABAC/output throughput changes did not become the reported timing limiter.
+
+Flattened Xilinx-cell estimate from
+`synth/out/arty-z7-10/ff_vvc_encoder/cell_report.log`:
+
+| Metric | Count |
+|---|---:|
+| Cells | 139333 |
+| Estimated LCs | 53485 |
+| CARRY4 | 4046 |
+| DSP48E1 | 9 |
+| FDCE | 13156 |
+| FDPE | 299 |
+| FDRE | 22492 |
+| FDSE | 4 |
+| LUT1 | 1443 |
+| LUT2 | 20522 |
+| LUT3 | 7308 |
+| LUT4 | 5553 |
+| LUT5 | 8354 |
+| LUT6 | 28439 |
+| MUXF7 | 8392 |
+| MUXF8 | 1629 |
+| RAMB36E1 | 9 |
+
+Delta from the previous VVC residual-throughput checkpoint:
+
+| Metric | Baseline | Current | Delta |
+|---|---:|---:|---:|
+| Synthesis time | 439.1 s | 456.3 s | +17.2 s |
+| Peak synthesis RSS | 2146.46 MiB | 2165.60 MiB | +19.14 MiB |
+| Cell report time | 10.7 s | 10.8 s | +0.1 s |
+| Critical-path report time | 74.5 s | 78.0 s | +3.5 s |
+| Topological path length | 55 | 55 | +0 |
+| Cells | 139497 | 139333 | -164 |
+| Estimated LCs | 53283 | 53485 | +202 |
+| CARRY4 | 4039 | 4046 | +7 |
+| DSP48E1 | 9 | 9 | +0 |
+| FDCE | 13154 | 13156 | +2 |
+| FDPE | 299 | 299 | +0 |
+| FDRE | 22492 | 22492 | +0 |
+| FDSE | 4 | 4 | +0 |
+| LUT1 | 1590 | 1443 | -147 |
+| LUT2 | 21025 | 20522 | -503 |
+| LUT3 | 7075 | 7308 | +233 |
+| LUT4 | 5798 | 5553 | -245 |
+| LUT5 | 8254 | 8354 | +100 |
+| LUT6 | 28080 | 28439 | +359 |
+| MUXF7 | 8335 | 8392 | +57 |
+| MUXF8 | 1647 | 1629 | -18 |
+| RAMB36E1 | 9 | 9 | +0 |
+
+The area and critical-path impact is small: total flattened cells decreased by
+164, estimated LCs rose by 202, and the topological critical-path length stayed
+at 55. In return, the 4:4:4 screenshot sweep aggregate drops from 1,581,091 to
+1,098,761 cycles, screenshot multi-CTU drops from 1,483,255 to 1,090,477 cycles,
+4:2:0 RaceHorses sweep drops from 806,007 to 624,212 cycles, and 4:2:0
+RaceHorses multi-CTU drops from 848,456 to 659,650 cycles, with no bitrate or
+reconstruction changes.
+
 ## 2026-06-19 Residual Throughput Follow-Up
 
 Measured after reducing VVC 4:2:0 residual-path bubbles in the luma and chroma
