@@ -66,19 +66,20 @@ wire the AXI interfaces.
 ## Bitstream Output
 
 The internal encoder emits bytes. `rtl/common/ff_axi4_bitstream_writer.sv`
-packs those bytes into the configured AXI data width, queues up to four packed
-words, and writes them as an AXI4 INCR burst. `WSTRB` marks valid lanes in the
-final partial word. Software should use `ENCODED_BYTE_COUNT` to know how many
-bytes in the destination buffer are part of the coded stream.
+packs those bytes into the configured AXI data width, stores up to eight packed
+words in a small FIFO, and writes bursts of up to four words as AXI4 INCR
+transactions. `WSTRB` marks valid lanes in the final partial word. Software
+should use `ENCODED_BYTE_COUNT` to know how many bytes in the destination
+buffer are part of the coded stream.
 
 ## Current Limitations
 
 - AXI source reads are aligned full-width single-beat word fetches with a
   one-word cache. The reader does not yet issue multi-beat read bursts or keep
   multiple outstanding reads.
-- AXI bitstream writes use a small fixed-depth burst queue. They are not yet a
-  descriptor-driven DMA engine and do not try to coalesce beyond the local
-  burst buffer.
+- AXI bitstream writes use a small fixed-depth FIFO and four-beat bursts. They
+  are not yet a descriptor-driven DMA engine and do not try to coalesce beyond
+  the local burst buffer.
 - AXI IDs, cache/protection/QoS sidebands, interrupts, and descriptor rings are
   not implemented yet.
 - Base-address registers are currently 32-bit.

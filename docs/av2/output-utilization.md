@@ -23,25 +23,24 @@ Metric definitions:
   writer for these internal counters live in `tb/av2_metrics.py`; they are not
   part of the shared top-level pass/fail contract.
 
-## 2026-06-18 AXI Word Cache And Burst Writer
+## 2026-06-18 AXI Writer FIFO
 
 Measured after optimizing the shared AXI bridge used by every codec target. The
-frame reader now fetches aligned full-width AXI words and reuses adjacent
-samples from a one-word cache. The bitstream writer now packs bytes into AXI
-words and writes up to four words per AXI4 INCR burst. The AV2 codec algorithm,
-bitstreams, and reconstructions are unchanged from the shared AXI interface
-baseline below.
+frame reader keeps the previous aligned one-word source cache. The bitstream
+writer now has an eight-word FIFO in front of the AXI write channel and emits
+bursts of up to four packed AXI words. The AV2 codec algorithm, bitstreams, and
+reconstructions are unchanged from the previous AXI word-cache checkpoint.
 
 Baseline and current sources:
 
-- Baseline Git SHA: `fda5b7fe85f85bb88c2775927046d443fa2f7fce`
-- Current validated RTL Git SHA: `3bfd06419dc094776c36d417a7868ee19b774632`
+- Baseline Git SHA: `3bfd06419dc094776c36d417a7868ee19b774632`
+- Current validated RTL Git SHA: `f0fc6dd70d0aacccc6a8474560c14f5118defd14`
 - Baseline mode: shared AXI4-Lite control registers, AXI4 memory-mapped
-  single-beat source reads, and AXI4 memory-mapped packed bitstream writes.
-- Current mode: shared AXI4-Lite control registers, AXI4 memory-mapped aligned
-  source word reads with a one-word cache, and 4-beat packed bitstream write
-  bursts.
-- Delta columns compare against the shared AXI interface baseline below.
+  aligned source word reads with a one-word cache, and 4-beat packed bitstream
+  write bursts.
+- Current mode: same source word cache, plus an eight-word bitstream writer
+  FIFO that can keep accepting packed words while a previous burst is draining.
+- Delta columns compare against the previous AXI word-cache checkpoint.
 
 Validation commands:
 
@@ -70,22 +69,22 @@ Validation result:
 ### Full Screenshot Sweep
 
 Aggregate RTL bits: `770848` (+0).
-Aggregate total cycles: `1277078` (-663520).
-Aggregate output utilization: `0.075450` (+0.025797); bubble rate: `0.924550` (-0.025797).
-Aggregate cycles/bit: `1.656718` (-0.860767); aggregate cycles/input pixel: `15.396870` (-7.999614).
-Per-vector cycles/input pixel range: `9.091580` to `23.919271` (baseline `16.974392` to `32.036458`).
+Aggregate total cycles: `1268285` (-8793).
+Aggregate output utilization: `0.075973` (+0.000523); bubble rate: `0.924027` (-0.000523).
+Aggregate cycles/bit: `1.645311` (-0.011407); aggregate cycles/input pixel: `15.290859` (-0.106011).
+Per-vector cycles/input pixel range: `9.083767` to `23.684896` (baseline `9.091580` to `23.919271`).
 
 The active output cycles remain `96356`. The improvement comes from reducing
-source-read cycles in the shared frame reader; the burst writer also avoids
-future one-word write-response stalls when the packed output stream is denser.
+write-side stalls in the shared bitstream writer. The source-read path is
+unchanged from the previous checkpoint.
 
 ### Screenshot Multi-CTU And Partial Crops
 
 Aggregate RTL bits: `592008` (+0).
-Aggregate total cycles: `1223391` (-730176).
-Aggregate output utilization: `0.060488` (+0.022608); bubble rate: `0.939512` (-0.022608).
-Aggregate cycles/bit: `2.066511` (-1.233389); aggregate cycles/input pixel: `13.320895` (-7.950523).
-Per-vector cycles/input pixel range: `9.088325` to `18.252170` (baseline `16.971137` to `26.282118`).
+Aggregate total cycles: `1216483` (-6908).
+Aggregate output utilization: `0.060832` (+0.000344); bubble rate: `0.939168` (-0.000344).
+Aggregate cycles/bit: `2.054842` (-0.011669); aggregate cycles/input pixel: `13.245677` (-0.075218).
+Per-vector cycles/input pixel range: `9.081380` to `18.097222` (baseline `9.088325` to `18.252170`).
 
 The active output cycles remain `74001`. Per-vector metrics are retained in
 `verification/generated/validation_logs/screenshot-multictu-444_*.log`.
