@@ -38,6 +38,13 @@ module ff_vvc_cabac_bit_writer (
   logic out_last_q;
   logic command_last_q;
   logic [12:0] total_bit_count_q;
+  logic [3:0] partial_space_w;
+  logic [5:0] consume_count_w;
+  logic [5:0] remaining_bits_w;
+  logic [31:0] consume_mask_w;
+  logic [31:0] consume_chunk_w;
+  logic [8:0] partial_next_w;
+  logic [3:0] partial_count_next_w;
 
   assign s_axis_ready = (state_q == ST_IDLE);
   assign m_axis_valid = (state_q == ST_OUT);
@@ -46,6 +53,25 @@ module ff_vvc_cabac_bit_writer (
   assign total_bit_count = total_bit_count_q;
   assign partial_bit_count = partial_count_q;
   assign idle = (state_q == ST_IDLE) && !m_axis_valid;
+
+  always @* begin
+    partial_space_w = 4'd8 - {1'b0, partial_count_q};
+    if (bits_left_q == 6'd0) begin
+      consume_count_w = 6'd0;
+    end else if (bits_left_q < {2'd0, partial_space_w}) begin
+      consume_count_w = bits_left_q;
+    end else begin
+      consume_count_w = {2'd0, partial_space_w};
+    end
+
+    remaining_bits_w = bits_left_q - consume_count_w;
+    consume_mask_w =
+      (consume_count_w == 6'd0) ? 32'd0 : ((32'd1 << consume_count_w) - 32'd1);
+    consume_chunk_w = (value_q >> remaining_bits_w) & consume_mask_w;
+    partial_next_w =
+      ({1'b0, partial_byte_q} << consume_count_w) | {1'b0, consume_chunk_w[7:0]};
+    partial_count_next_w = {1'b0, partial_count_q} + consume_count_w[3:0];
+  end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -97,19 +123,21 @@ module ff_vvc_cabac_bit_writer (
         end
 
         ST_BITS: begin
-          partial_byte_q <= (partial_byte_q << 1) | {7'd0, value_q[bits_left_q - 6'd1]};
-          partial_count_q <= partial_count_q + 3'd1;
-          total_bit_count_q <= total_bit_count_q + 13'd1;
-          bits_left_q <= bits_left_q - 6'd1;
+          total_bit_count_q <= total_bit_count_q + {7'd0, consume_count_w};
+          bits_left_q <= remaining_bits_w;
 
-          if (partial_count_q == 3'd7) begin
-            out_byte_q <= (partial_byte_q << 1) | {7'd0, value_q[bits_left_q - 6'd1]};
-            out_last_q <= command_last_q && (bits_left_q == 6'd1);
+          if (partial_count_next_w == 4'd8) begin
+            out_byte_q <= partial_next_w[7:0];
+            out_last_q <= command_last_q && (remaining_bits_w == 6'd0);
             partial_byte_q <= 8'd0;
             partial_count_q <= 3'd0;
             state_q <= ST_OUT;
-          end else if (bits_left_q == 6'd1) begin
-            state_q <= ST_IDLE;
+          end else begin
+            partial_byte_q <= partial_next_w[7:0];
+            partial_count_q <= partial_count_next_w[2:0];
+            if (remaining_bits_w == 6'd0) begin
+              state_q <= ST_IDLE;
+            end
           end
         end
 

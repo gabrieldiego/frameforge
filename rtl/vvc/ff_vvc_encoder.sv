@@ -998,7 +998,8 @@ module ff_vvc_encoder #(
     ((palette_mux_state_q == PALETTE_MUX_CU) ? palette_stream_last : ctu_symbol_last) :
     ctu_symbol_last;
   assign source_symbol_ready =
-    (generated_out_state_q == GENERATED_OUT_CABAC) && !cabac_start_q && !cabac_input_valid_q;
+    (generated_out_state_q == GENERATED_OUT_CABAC) && !cabac_start_q &&
+    (!cabac_input_valid_q || cabac_symbol_ready);
   assign palette_stream_ready =
     ctu_has_palette_cu && (palette_mux_state_q == PALETTE_MUX_CU) && source_symbol_ready;
 
@@ -1739,13 +1740,13 @@ module ff_vvc_encoder #(
         cabac_input_last_q <= 1'b0;
         palette_mux_state_q <= PALETTE_MUX_PARTITION;
         palette_current_pred_ibc_ctx_q <= 3'd0;
-      end else if (cabac_input_valid_q && cabac_symbol_ready) begin
-        cabac_input_valid_q <= 1'b0;
-      end else if (!cabac_input_valid_q && source_symbol_valid && source_symbol_ready) begin
+      end else if (source_symbol_valid && source_symbol_ready) begin
         cabac_input_valid_q <= 1'b1;
         cabac_input_kind_q <= source_symbol_kind;
         cabac_input_data_q <= source_symbol_data;
         cabac_input_last_q <= source_symbol_last;
+      end else if (cabac_input_valid_q && cabac_symbol_ready) begin
+        cabac_input_valid_q <= 1'b0;
       end
       if (ctu_has_palette_cu && !cabac_start_q &&
           (generated_out_state_q == GENERATED_OUT_CABAC)) begin

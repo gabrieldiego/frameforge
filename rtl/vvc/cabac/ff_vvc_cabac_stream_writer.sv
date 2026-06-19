@@ -447,7 +447,9 @@ module ff_vvc_cabac_stream_writer #(
           end
 
           ST_WAIT_EMIT: begin
-            if (!emit_valid_q && bit_writer_idle) begin
+            if (emit_valid_q && bit_writer_ready && !emit_last_q) begin
+              state_q <= return_state_q;
+            end else if (!emit_valid_q && bit_writer_idle) begin
               if (return_state_q == ST_RUN) begin
                 done <= emit_last_q;
               end

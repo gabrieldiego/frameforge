@@ -914,10 +914,89 @@ async def collect_stream(
     }
     syntax_state_names = {
         0: "idle",
-        1: "run",
-        2: "bypass",
-        3: "finish",
-        4: "terminate",
+        1: "pal_cu_skip",
+        2: "pal_pred_mode_ibc",
+        3: "pal_pred_mode",
+        4: "pal_predictor_run",
+        5: "pal_predictor_run_suffix",
+        6: "pal_entry_count",
+        7: "pal_entry_count_suffix",
+        8: "pal_escape_flag",
+        9: "pal_index_transpose",
+        10: "pal_index_run_flag",
+        11: "pal_index_copy_above",
+        12: "pal_index_level",
+        13: "pal_escape_prefix",
+        14: "pal_escape_suffix",
+        15: "ibc_cu_skip",
+        16: "ibc_pred_mode",
+        17: "ibc_general_merge",
+        18: "ibc_mvd_gt0_x",
+        19: "ibc_mvd_gt0_y",
+        20: "ibc_mvd_gt1_x",
+        21: "ibc_mvd_gt1_y",
+        22: "ibc_mvd_minus2_x_prefix",
+        23: "ibc_mvd_minus2_x_suffix",
+        24: "ibc_mvd_sign_x",
+        25: "ibc_mvd_minus2_y_prefix",
+        26: "ibc_mvd_minus2_y_suffix",
+        27: "ibc_mvd_sign_y",
+        28: "ibc_cu_coded",
+        29: "ts_cbf_cb",
+        30: "ts_cbf_cr",
+        31: "ts_cbf_y",
+        32: "ts_select_component",
+        33: "ts_collect_component",
+        34: "ts_skip_component",
+        35: "ts_flag",
+        36: "ts_start_residual",
+        37: "ts_wait_residual",
+        38: "bdpcm_cu_skip",
+        39: "bdpcm_pred_mode_ibc",
+        40: "bdpcm_pred_mode_plt",
+        41: "bdpcm_luma_flag",
+        42: "bdpcm_luma_dir",
+        43: "bdpcm_chroma_flag",
+        44: "bdpcm_chroma_dir",
+        45: "pal_terminate",
+    }
+    residual_emitter_state_names = {
+        0: "idle",
+        1: "last_x",
+        2: "last_y",
+        3: "scan",
+        4: "second",
+        5: "sign",
+        6: "rem",
+    }
+    residual_subphase_names = {
+        0: "sig",
+        1: "gt1",
+        2: "par",
+        3: "gt3",
+        4: "rem_prefix",
+        5: "rem_suffix",
+        6: "sign_accum",
+        7: "rem_prep",
+    }
+    stream_writer_state_names = {
+        0: "run",
+        1: "write_out",
+        2: "emit_byte",
+        3: "emit_repeat",
+        4: "finish_decide",
+        5: "finish_buffered",
+        6: "finish_repeat",
+        7: "finish_final_bits",
+        8: "finish_flush",
+        9: "bins_ep_cont",
+        10: "wait_emit",
+    }
+    bit_writer_state_names = {
+        0: "idle",
+        1: "bits",
+        2: "flush",
+        3: "out",
     }
     state_counts = {}
     pipeline_counts = {}
@@ -1019,6 +1098,51 @@ async def collect_stream(
                     state_counts,
                     f"syntax_{syntax_state_names.get(syntax_state, f'unknown_{syntax_state}')}",
                 )
+            ctu_residual_state = signal_int("ctu_symbols.residual_symbol_emitter_i.state_q")
+            if ctu_residual_state is not None:
+                increment_counter(
+                    state_counts,
+                    "ctu_residual_"
+                    f"{residual_emitter_state_names.get(ctu_residual_state, f'unknown_{ctu_residual_state}')}",
+                )
+            ctu_residual_subphase = signal_int("ctu_symbols.residual_symbol_emitter_i.subphase_q")
+            if ctu_residual_subphase is not None and ctu_residual_state not in (None, 0):
+                increment_counter(
+                    state_counts,
+                    "ctu_residual_sub_"
+                    f"{residual_subphase_names.get(ctu_residual_subphase, f'unknown_{ctu_residual_subphase}')}",
+                )
+            ts_residual_state = signal_int(
+                "cabac_writer.streamed_cabac.syntax_frontend.ts_residual_symbol_emitter.state_q"
+            )
+            if ts_residual_state is not None:
+                increment_counter(
+                    state_counts,
+                    "syntax_ts_residual_"
+                    f"{residual_emitter_state_names.get(ts_residual_state, f'unknown_{ts_residual_state}')}",
+                )
+            ts_residual_subphase = signal_int(
+                "cabac_writer.streamed_cabac.syntax_frontend.ts_residual_symbol_emitter.subphase_q"
+            )
+            if ts_residual_subphase is not None and ts_residual_state not in (None, 0):
+                increment_counter(
+                    state_counts,
+                    "syntax_ts_residual_sub_"
+                    f"{residual_subphase_names.get(ts_residual_subphase, f'unknown_{ts_residual_subphase}')}",
+                )
+            stream_writer_state = signal_int("cabac_writer.streamed_cabac.stream_writer.state_q")
+            if stream_writer_state is not None:
+                increment_counter(
+                    state_counts,
+                    "stream_writer_"
+                    f"{stream_writer_state_names.get(stream_writer_state, f'unknown_{stream_writer_state}')}",
+                )
+            bit_writer_state = signal_int("cabac_writer.streamed_cabac.stream_writer.bit_writer.state_q")
+            if bit_writer_state is not None:
+                increment_counter(
+                    state_counts,
+                    f"bit_writer_{bit_writer_state_names.get(bit_writer_state, f'unknown_{bit_writer_state}')}",
+                )
 
             if hasattr(dut, "s_axis_valid") and value_is_one(dut.s_axis_valid, "s_axis_valid"):
                 if value_is_one(dut.s_axis_ready, "s_axis_ready"):
@@ -1064,6 +1188,35 @@ async def collect_stream(
                     increment_counter(pipeline_counts, "bin_accept")
                 else:
                     increment_counter(pipeline_counts, "bin_backpressure")
+            if signal_int("cabac_writer.streamed_cabac.stream_writer.emit_valid_q") == 1:
+                if signal_int("cabac_writer.streamed_cabac.stream_writer.bit_writer_ready") == 1:
+                    increment_counter(pipeline_counts, "stream_emit_accept")
+                else:
+                    increment_counter(pipeline_counts, "stream_emit_pending")
+            if signal_int("cabac_writer.streamed_cabac.stream_writer.state_q") == 10:
+                if signal_int("cabac_writer.streamed_cabac.stream_writer.bit_writer_idle") == 1:
+                    increment_counter(pipeline_counts, "stream_wait_emit_idle")
+                else:
+                    increment_counter(pipeline_counts, "stream_wait_emit_busy")
+            if signal_int("cabac_writer.streamed_cabac.stream_writer.bit_writer.state_q") == 1:
+                increment_counter(pipeline_counts, "bit_writer_bits_active")
+            if signal_int("cabac_writer.streamed_cabac.stream_writer.bit_writer.m_axis_valid") == 1:
+                if signal_int("cabac_writer.streamed_cabac.stream_writer.bit_writer.m_axis_ready") == 1:
+                    increment_counter(pipeline_counts, "bit_writer_output_accept")
+                else:
+                    increment_counter(pipeline_counts, "bit_writer_output_backpressure")
+            if signal_int("ctu_symbols.residual_axis_valid") == 1:
+                if signal_int("ctu_symbols.residual_axis_ready") == 1:
+                    increment_counter(pipeline_counts, "ctu_residual_symbol_accept")
+                else:
+                    increment_counter(pipeline_counts, "ctu_residual_symbol_backpressure")
+            if signal_int(
+                "cabac_writer.streamed_cabac.syntax_frontend.residual_axis_valid"
+            ) == 1:
+                if signal_int("cabac_writer.streamed_cabac.syntax_frontend.residual_axis_ready") == 1:
+                    increment_counter(pipeline_counts, "syntax_ts_residual_symbol_accept")
+                else:
+                    increment_counter(pipeline_counts, "syntax_ts_residual_symbol_backpressure")
             if signal_int("cabac_stream_valid") == 1:
                 if signal_int("cabac_stream_ready") == 1:
                     increment_counter(pipeline_counts, "cabac_byte_accept")
