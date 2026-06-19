@@ -65,6 +65,8 @@ module ff_axi4_frame_reader #(
     6;
   localparam int AXI_BYTE_INDEX_BITS = (AXI_BYTES <= 1) ? 1 : $clog2(AXI_BYTES);
   localparam logic [2:0] AXI_SIZE = AXI_BYTE_SHIFT;
+  localparam int CACHE_WORDS = 24;
+  localparam int CACHE_INDEX_BITS = 5;
 
   typedef enum logic [2:0] {
     ST_IDLE,
@@ -110,10 +112,12 @@ module ff_axi4_frame_reader #(
   logic [AXI_ADDR_BITS-1:0] sample_addr_w;
   logic [AXI_ADDR_BITS-1:0] axi_word_addr_w;
   logic [AXI_BYTE_INDEX_BITS-1:0] axi_byte_offset_w;
-  logic cache_valid_q;
-  logic [AXI_ADDR_BITS-1:0] cache_addr_q;
-  logic [AXI_DATA_BITS-1:0] cache_data_q;
+  logic [CACHE_WORDS-1:0] cache_valid_q;
+  logic [AXI_ADDR_BITS-1:0] cache_addr_q [0:CACHE_WORDS-1];
+  logic [AXI_DATA_BITS-1:0] cache_data_q [0:CACHE_WORDS-1];
+  logic [CACHE_INDEX_BITS-1:0] cache_index_w;
   logic cache_hit_w;
+  logic [AXI_DATA_BITS-1:0] cache_hit_data_w;
   logic [SAMPLE_BITS-1:0] pad_sample_w;
   logic in_visible_w;
 
@@ -197,7 +201,16 @@ module ff_axi4_frame_reader #(
     (AXI_BYTES <= 1) ?
       sample_addr_w :
       {sample_addr_w[AXI_ADDR_BITS-1:AXI_BYTE_INDEX_BITS], {AXI_BYTE_INDEX_BITS{1'b0}}};
-  assign cache_hit_w = cache_valid_q && (cache_addr_q == axi_word_addr_w);
+  always @* begin
+    case (component_q)
+      2'd0: cache_index_w = {2'd0, local_y_w[2:0]};
+      2'd1: cache_index_w = {2'd1, local_y_w[2:0]};
+      default: cache_index_w = {2'd2, local_y_w[2:0]};
+    endcase
+  end
+  assign cache_hit_w =
+    cache_valid_q[cache_index_w] && (cache_addr_q[cache_index_w] == axi_word_addr_w);
+  assign cache_hit_data_w = cache_data_q[cache_index_w];
   assign m_axi_araddr = axi_word_addr_w;
   assign pad_sample_w = (component_q == 2'd0) ? '0 : {{(SAMPLE_BITS-8){1'b0}}, 8'd128};
   assign in_visible_w =
@@ -220,9 +233,7 @@ module ff_axi4_frame_reader #(
       sample_valid <= 1'b0;
       sample_data <= '0;
       sample_last <= 1'b0;
-      cache_valid_q <= 1'b0;
-      cache_addr_q <= '0;
-      cache_data_q <= '0;
+      cache_valid_q <= '0;
       done <= 1'b0;
       error <= 1'b0;
     end else begin
@@ -239,7 +250,7 @@ module ff_axi4_frame_reader #(
         m_axi_rready <= 1'b0;
         sample_valid <= 1'b0;
         sample_last <= 1'b0;
-        cache_valid_q <= 1'b0;
+        cache_valid_q <= '0;
         error <= 1'b0;
       end else begin
         if (sample_valid && sample_ready) begin
@@ -283,7 +294,7 @@ module ff_axi4_frame_reader #(
             if (leaf_active_w) begin
               if (in_visible_w) begin
                 if (cache_hit_w) begin
-                  sample_data <= cache_data_q[axi_byte_offset_w * 8 +: SAMPLE_BITS];
+                  sample_data <= cache_hit_data_w[axi_byte_offset_w * 8 +: SAMPLE_BITS];
                   sample_last <= output_last_w;
                   sample_valid <= 1'b1;
                   state_q <= ST_VALID;
@@ -314,9 +325,9 @@ module ff_axi4_frame_reader #(
           ST_WAIT_R: begin
             if (m_axi_rvalid && m_axi_rready) begin
               m_axi_rready <= 1'b0;
-              cache_valid_q <= 1'b1;
-              cache_addr_q <= axi_word_addr_w;
-              cache_data_q <= m_axi_rdata;
+              cache_valid_q[cache_index_w] <= 1'b1;
+              cache_addr_q[cache_index_w] <= axi_word_addr_w;
+              cache_data_q[cache_index_w] <= m_axi_rdata;
               sample_data <= m_axi_rdata[axi_byte_offset_w * 8 +: SAMPLE_BITS];
               sample_last <= output_last_w;
               sample_valid <= 1'b1;

@@ -40,7 +40,6 @@ module ff_vvc_luma_quant_recon_8x8 (
   logic [2:0] state_q;
   logic [5:0] sample_index_q;
   logic [3:0] ac_coeff_q;
-  logic [3:0] ac_cell_q;
   logic [1:0] vertical_k_q;
   logic [3:0] recon_edge_q;
   logic [1:0] recon_k_q;
@@ -72,14 +71,14 @@ module ff_vvc_luma_quant_recon_8x8 (
   logic signed [31:0] dc_level_w;
   logic [31:0] abs_dc_level_w;
 
-  logic [1:0] ac_cell_x_w;
-  logic [1:0] ac_cell_y_w;
   logic [1:0] ac_coeff_x_w;
   logic [1:0] ac_coeff_y_w;
+  logic [1:0] ac_sum_cell_x_w;
+  logic [1:0] ac_sum_cell_y_w;
   logic ac_basis_x_negative_w;
   logic ac_basis_y_negative_w;
   logic signed [31:0] ac_term_w;
-  logic signed [31:0] ac_acc_next_w;
+  logic signed [31:0] ac_acc_full_w;
   logic signed [31:0] ac_abs_w;
   logic signed [31:0] ac_rounded_w;
   logic signed [7:0] ac_level_w;
@@ -100,6 +99,7 @@ module ff_vvc_luma_quant_recon_8x8 (
   logic [7:0] recon_clipped_w;
 
   integer init_i;
+  integer ac_sum_i;
 
   assign busy = (state_q != ST_IDLE) && (state_q != ST_DONE);
   assign done = (state_q == ST_DONE);
@@ -171,36 +171,48 @@ module ff_vvc_luma_quant_recon_8x8 (
     abs_dc_level_w = (dc_level_w < 32'sd0) ? -dc_level_w : dc_level_w;
   end
 
-  assign ac_cell_x_w = ac_cell_q[1:0];
-  assign ac_cell_y_w = ac_cell_q[3:2];
   assign ac_coeff_x_w = ac_coeff_q[1:0];
   assign ac_coeff_y_w = ac_coeff_q[3:2];
 
   always @* begin
-    case (ac_coeff_x_w)
-      2'd1: ac_basis_x_negative_w = (ac_cell_x_w >= 2);
-      2'd2: ac_basis_x_negative_w = (ac_cell_x_w == 2'd1) || (ac_cell_x_w == 2'd2);
-      2'd3: ac_basis_x_negative_w = (ac_cell_x_w == 2'd1) || (ac_cell_x_w == 2'd3);
-      default: ac_basis_x_negative_w = 1'b0;
-    endcase
-    case (ac_coeff_y_w)
-      2'd1: ac_basis_y_negative_w = (ac_cell_y_w >= 2);
-      2'd2: ac_basis_y_negative_w = (ac_cell_y_w == 2'd1) || (ac_cell_y_w == 2'd2);
-      2'd3: ac_basis_y_negative_w = (ac_cell_y_w == 2'd1) || (ac_cell_y_w == 2'd3);
-      default: ac_basis_y_negative_w = 1'b0;
-    endcase
-    ac_term_w = $signed(cell_sum_q[ac_cell_q]);
-    if (ac_basis_x_negative_w ^ ac_basis_y_negative_w) begin
-      ac_term_w = -ac_term_w;
+    ac_acc_full_w = 32'sd0;
+    ac_sum_cell_x_w = 2'd0;
+    ac_sum_cell_y_w = 2'd0;
+    ac_basis_x_negative_w = 1'b0;
+    ac_basis_y_negative_w = 1'b0;
+    ac_term_w = 32'sd0;
+    for (ac_sum_i = 0; ac_sum_i < LUMA_COEFF_COUNT; ac_sum_i = ac_sum_i + 1) begin
+      ac_sum_cell_x_w = ac_sum_i[1:0];
+      ac_sum_cell_y_w = ac_sum_i[3:2];
+      case (ac_coeff_x_w)
+        2'd1: ac_basis_x_negative_w = (ac_sum_cell_x_w >= 2);
+        2'd2: ac_basis_x_negative_w =
+          (ac_sum_cell_x_w == 2'd1) || (ac_sum_cell_x_w == 2'd2);
+        2'd3: ac_basis_x_negative_w =
+          (ac_sum_cell_x_w == 2'd1) || (ac_sum_cell_x_w == 2'd3);
+        default: ac_basis_x_negative_w = 1'b0;
+      endcase
+      case (ac_coeff_y_w)
+        2'd1: ac_basis_y_negative_w = (ac_sum_cell_y_w >= 2);
+        2'd2: ac_basis_y_negative_w =
+          (ac_sum_cell_y_w == 2'd1) || (ac_sum_cell_y_w == 2'd2);
+        2'd3: ac_basis_y_negative_w =
+          (ac_sum_cell_y_w == 2'd1) || (ac_sum_cell_y_w == 2'd3);
+        default: ac_basis_y_negative_w = 1'b0;
+      endcase
+      ac_term_w = $signed(cell_sum_q[ac_sum_i]);
+      if (ac_basis_x_negative_w ^ ac_basis_y_negative_w) begin
+        ac_term_w = -ac_term_w;
+      end
+      ac_acc_full_w = ac_acc_full_w + ac_term_w;
     end
-    ac_acc_next_w = ((ac_cell_q == 4'd0) ? 32'sd0 : acc_q) + ac_term_w;
-    ac_abs_w = ac_acc_next_w[31] ? -ac_acc_next_w : ac_acc_next_w;
+    ac_abs_w = ac_acc_full_w[31] ? -ac_acc_full_w : ac_acc_full_w;
     ac_rounded_w = (ac_abs_w + 32'sd128) >>> 8;
     if (ac_rounded_w > 32'sd2) begin
       ac_rounded_w = 32'sd2;
     end
     ac_level_w =
-      ac_acc_next_w[31] ?
+      ac_acc_full_w[31] ?
       -$signed({5'd0, ac_rounded_w[2:0]}) :
       $signed({5'd0, ac_rounded_w[2:0]});
   end
@@ -333,7 +345,6 @@ module ff_vvc_luma_quant_recon_8x8 (
       state_q <= ST_IDLE;
       sample_index_q <= 6'd0;
       ac_coeff_q <= 4'd1;
-      ac_cell_q <= 4'd0;
       vertical_k_q <= 2'd0;
       recon_edge_q <= 4'd0;
       recon_k_q <= 2'd0;
@@ -354,7 +365,6 @@ module ff_vvc_luma_quant_recon_8x8 (
       state_q <= ST_IDLE;
       sample_index_q <= 6'd0;
       ac_coeff_q <= 4'd1;
-      ac_cell_q <= 4'd0;
       vertical_k_q <= 2'd0;
       recon_edge_q <= 4'd0;
       recon_k_q <= 2'd0;
@@ -378,7 +388,6 @@ module ff_vvc_luma_quant_recon_8x8 (
             state_q <= ST_SAMPLES;
             sample_index_q <= 6'd0;
             ac_coeff_q <= 4'd1;
-            ac_cell_q <= 4'd0;
             vertical_k_q <= 2'd0;
             recon_edge_q <= 4'd0;
             recon_k_q <= 2'd0;
@@ -414,7 +423,6 @@ module ff_vvc_luma_quant_recon_8x8 (
             negative <= (abs_dc_level_w != 32'd0) && (dc_level_w < 32'sd0);
             state_q <= ST_AC;
             ac_coeff_q <= 4'd1;
-            ac_cell_q <= 4'd0;
             acc_q <= 32'sd0;
           end else begin
             sample_index_q <= sample_index_q + 6'd1;
@@ -422,24 +430,17 @@ module ff_vvc_luma_quant_recon_8x8 (
         end
 
         ST_AC: begin
-          acc_q <= ac_acc_next_w;
-          if (ac_cell_q == 4'd15) begin
-            coeff_level_q[ac_coeff_q] <= {ac_level_w[7], ac_level_w};
-            ac_levels[((15 - ac_coeff_q) * 4) +: 4] <= ac_level_w[3:0];
-            if (ac_coeff_q == 4'd15) begin
-              state_q <= ST_RECON;
-              recon_edge_q <= 4'd0;
-              recon_k_q <= 2'd0;
-              vertical_k_q <= 2'd0;
-              acc_q <= 32'sd0;
-              recon_horizontal_acc_q <= 32'sd0;
-            end else begin
-              ac_coeff_q <= ac_coeff_q + 4'd1;
-              ac_cell_q <= 4'd0;
-              acc_q <= 32'sd0;
-            end
+          coeff_level_q[ac_coeff_q] <= {ac_level_w[7], ac_level_w};
+          ac_levels[((15 - ac_coeff_q) * 4) +: 4] <= ac_level_w[3:0];
+          if (ac_coeff_q == 4'd15) begin
+            state_q <= ST_RECON;
+            recon_edge_q <= 4'd0;
+            recon_k_q <= 2'd0;
+            vertical_k_q <= 2'd0;
+            acc_q <= 32'sd0;
+            recon_horizontal_acc_q <= 32'sd0;
           end else begin
-            ac_cell_q <= ac_cell_q + 4'd1;
+            ac_coeff_q <= ac_coeff_q + 4'd1;
           end
         end
 
