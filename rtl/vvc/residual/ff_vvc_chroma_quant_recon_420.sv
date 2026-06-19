@@ -26,8 +26,7 @@ module ff_vvc_chroma_quant_recon_420 (
   localparam logic [2:0] ST_LOAD = 3'd1;
   localparam logic [2:0] ST_SAMPLES = 3'd2;
   localparam logic [2:0] ST_QUANT = 3'd3;
-  localparam logic [2:0] ST_RECON_VERTICAL = 3'd4;
-  localparam logic [2:0] ST_RECON_SAMPLE = 3'd5;
+  localparam logic [2:0] ST_RECON_SAMPLE = 3'd4;
   localparam logic [2:0] ST_DONE = 3'd6;
 
   logic [2:0] state_q;
@@ -46,8 +45,6 @@ module ff_vvc_chroma_quant_recon_420 (
   logic signed [17:0] dequant_10_q;
   logic signed [17:0] dequant_01_q;
   logic signed [17:0] dequant_11_q;
-  logic signed [17:0] vertical_0_q;
-  logic signed [17:0] vertical_1_q;
 
   logic [31:0] dc_ref_sum_w;
   logic [1:0] sample_x_w;
@@ -99,8 +96,6 @@ module ff_vvc_chroma_quant_recon_420 (
   logic signed [31:0] dequant_10_q_wide;
   logic signed [31:0] dequant_01_q_wide;
   logic signed [31:0] dequant_11_q_wide;
-  logic signed [31:0] vertical_0_q_wide;
-  logic signed [31:0] vertical_1_q_wide;
   logic signed [31:0] recon_basis_y_w;
   logic signed [31:0] recon_basis_xy_w;
   logic signed [31:0] vertical_0_w;
@@ -236,8 +231,6 @@ module ff_vvc_chroma_quant_recon_420 (
   assign dequant_10_q_wide = dequant_10_q;
   assign dequant_01_q_wide = dequant_01_q;
   assign dequant_11_q_wide = dequant_11_q;
-  assign vertical_0_q_wide = vertical_0_q;
-  assign vertical_1_q_wide = vertical_1_q;
 
   always @* begin
     if (recon_bottom_edge_w) begin
@@ -273,12 +266,12 @@ module ff_vvc_chroma_quant_recon_420 (
       (`FF_VVC_CHROMA_MUL64(dequant_10_q_wide) + $signed(recon_basis_xy_w[31:0]) + 32'sd64) >>> 7;
 
     case (recon_x_w)
-      2'd0: recon_basis_x_w = `FF_VVC_CHROMA_MUL83(vertical_1_q_wide);
-      2'd1: recon_basis_x_w = `FF_VVC_CHROMA_MUL36(vertical_1_q_wide);
-      2'd2: recon_basis_x_w = -`FF_VVC_CHROMA_MUL36(vertical_1_q_wide);
-      default: recon_basis_x_w = -`FF_VVC_CHROMA_MUL83(vertical_1_q_wide);
+      2'd0: recon_basis_x_w = `FF_VVC_CHROMA_MUL83(vertical_1_w);
+      2'd1: recon_basis_x_w = `FF_VVC_CHROMA_MUL36(vertical_1_w);
+      2'd2: recon_basis_x_w = -`FF_VVC_CHROMA_MUL36(vertical_1_w);
+      default: recon_basis_x_w = -`FF_VVC_CHROMA_MUL83(vertical_1_w);
     endcase
-    recon_sum_w = $signed(`FF_VVC_CHROMA_MUL64(vertical_0_q_wide)) + $signed(recon_basis_x_w);
+    recon_sum_w = $signed(`FF_VVC_CHROMA_MUL64(vertical_0_w)) + $signed(recon_basis_x_w);
     recon_residual_w = (recon_sum_w + 32'sd2048) >>> 12;
     recon_sample_w = $signed({24'd0, recon_predicted_w}) + recon_residual_w;
     if (recon_sample_w < 32'sd0) begin
@@ -307,8 +300,6 @@ module ff_vvc_chroma_quant_recon_420 (
       dequant_10_q <= 18'sd0;
       dequant_01_q <= 18'sd0;
       dequant_11_q <= 18'sd0;
-      vertical_0_q <= 18'sd0;
-      vertical_1_q <= 18'sd0;
       dc_level <= 9'sd0;
       ac_levels <= '0;
       bottom_ref <= '0;
@@ -329,8 +320,6 @@ module ff_vvc_chroma_quant_recon_420 (
       dequant_10_q <= 18'sd0;
       dequant_01_q <= 18'sd0;
       dequant_11_q <= 18'sd0;
-      vertical_0_q <= 18'sd0;
-      vertical_1_q <= 18'sd0;
       dc_level <= 9'sd0;
       ac_levels <= '0;
       bottom_ref <= '0;
@@ -354,8 +343,6 @@ module ff_vvc_chroma_quant_recon_420 (
             dequant_10_q <= 18'sd0;
             dequant_01_q <= 18'sd0;
             dequant_11_q <= 18'sd0;
-            vertical_0_q <= 18'sd0;
-            vertical_1_q <= 18'sd0;
             dc_level <= 9'sd0;
             ac_levels <= '0;
             bottom_ref <= '0;
@@ -399,12 +386,6 @@ module ff_vvc_chroma_quant_recon_420 (
           dequant_01_q <= dequant_01_w;
           dequant_11_q <= dequant_11_w;
           recon_edge_q <= 3'd0;
-          state_q <= ST_RECON_VERTICAL;
-        end
-
-        ST_RECON_VERTICAL: begin
-          vertical_0_q <= vertical_0_w;
-          vertical_1_q <= vertical_1_w;
           state_q <= ST_RECON_SAMPLE;
         end
 
@@ -418,7 +399,6 @@ module ff_vvc_chroma_quant_recon_420 (
             state_q <= ST_DONE;
           end else begin
             recon_edge_q <= recon_edge_q + 3'd1;
-            state_q <= ST_RECON_VERTICAL;
           end
         end
 

@@ -274,7 +274,9 @@ def extract_cycle_metrics(output: str) -> dict[str, float]:
 def format_cycle_metric(value: float | None) -> str:
     if value is None:
         return "n/a"
-    return f"{value:.6f}"
+    if 0.1 <= abs(value) < 1.0:
+        return f"{value:.3f}"
+    return f"{value:.3g}"
 
 
 if __name__ == "__main__":

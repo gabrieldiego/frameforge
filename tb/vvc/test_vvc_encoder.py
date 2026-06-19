@@ -259,7 +259,18 @@ def software_input_byte_count(frames):
     return frame_samples() * frames * sample_bytes
 
 
-def write_vvc_cycle_metrics(path, width, height, frames, observed_bytes, total_cycles, output_active_cycles):
+def write_vvc_cycle_metrics(
+    path,
+    width,
+    height,
+    frames,
+    observed_bytes,
+    total_cycles,
+    output_active_cycles,
+    state_counts=None,
+    pipeline_counts=None,
+    handshake_counts=None,
+):
     if not path:
         return
     bitstream_bits = observed_bytes * 8
@@ -284,9 +295,19 @@ def write_vvc_cycle_metrics(path, width, height, frames, observed_bytes, total_c
         "cycles_per_bit": cycles_per_bit,
         "cycles_per_input_pixel": cycles_per_input_pixel,
     }
+    if state_counts is not None:
+        metrics["state_cycles"] = state_counts
+    if pipeline_counts is not None:
+        metrics["pipeline_cycles"] = pipeline_counts
+    if handshake_counts is not None:
+        metrics["handshake_counts"] = handshake_counts
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n")
+
+
+def increment_counter(counters, name, value=1):
+    counters[name] = counters.get(name, 0) + value
 
 
 def signed_value(value, bits):
@@ -840,6 +861,66 @@ async def collect_stream(
         "frontend_terminate_state": 0,
     }
     handshake_tail = []
+    generated_state_names = {
+        0: "idle",
+        1: "preamble",
+        2: "cabac",
+        3: "slice_start",
+        4: "picture_header",
+    }
+    frame_reader_state_names = {
+        0: "idle",
+        1: "skip",
+        2: "addr",
+        3: "wait_r",
+        4: "pad",
+        5: "valid",
+    }
+    ctu_symbolizer_state_names = {
+        0: "idle",
+        1: "pop",
+        2: "dispatch",
+        3: "split_flag",
+        4: "split_qt",
+        5: "split_mtt",
+        6: "split_bin",
+        7: "split_push",
+        8: "luma_split",
+        9: "luma_mrl",
+        10: "luma_mpm",
+        11: "luma_mode",
+        12: "luma_cbf",
+        13: "luma_residual",
+        14: "chroma_split",
+        15: "chroma_cclm",
+        16: "chroma_mode",
+        17: "chroma_cbf_cb",
+        18: "chroma_cbf_cr",
+        19: "chroma_residual",
+        20: "done",
+        21: "palette_leaf",
+        22: "luma_mpm_idx",
+        23: "clear_neighbours",
+    }
+    palette_state_names = {
+        0: "input",
+        1: "wait_cu",
+        2: "feed_read",
+        3: "feed_cu",
+        4: "select_cu",
+        5: "drain_cu",
+        6: "drain_ts_start",
+        7: "drain_ts_coeff",
+    }
+    syntax_state_names = {
+        0: "idle",
+        1: "run",
+        2: "bypass",
+        3: "finish",
+        4: "terminate",
+    }
+    state_counts = {}
+    pipeline_counts = {}
 
     if data_path is not None:
         source_bytes = Path(data_path).read_bytes()[: software_input_byte_count(frames)]
@@ -908,6 +989,96 @@ async def collect_stream(
             total_cycles = cycle + 1
             await RisingEdge(dut.clk)
             await ReadOnly()
+            generated_state = signal_int("generated_out_state_q")
+            if generated_state is not None:
+                increment_counter(
+                    state_counts,
+                    f"generated_{generated_state_names.get(generated_state, f'unknown_{generated_state}')}",
+                )
+            frame_reader_state = signal_int("frame_reader.state_q")
+            if frame_reader_state is not None:
+                increment_counter(
+                    state_counts,
+                    f"frame_reader_{frame_reader_state_names.get(frame_reader_state, f'unknown_{frame_reader_state}')}",
+                )
+            ctu_state = signal_int("ctu_symbols.state_q")
+            if ctu_state is not None:
+                increment_counter(
+                    state_counts,
+                    f"ctu_{ctu_symbolizer_state_names.get(ctu_state, f'unknown_{ctu_state}')}",
+                )
+            palette_state = signal_int("gen_palette_symbolizer.palette_symbolizer.state_q")
+            if palette_state is not None:
+                increment_counter(
+                    state_counts,
+                    f"palette_{palette_state_names.get(palette_state, f'unknown_{palette_state}')}",
+                )
+            syntax_state = signal_int("cabac_writer.streamed_cabac.syntax_frontend.state_q")
+            if syntax_state is not None:
+                increment_counter(
+                    state_counts,
+                    f"syntax_{syntax_state_names.get(syntax_state, f'unknown_{syntax_state}')}",
+                )
+
+            if hasattr(dut, "s_axis_valid") and value_is_one(dut.s_axis_valid, "s_axis_valid"):
+                if value_is_one(dut.s_axis_ready, "s_axis_ready"):
+                    increment_counter(pipeline_counts, "source_sample_accept")
+                else:
+                    increment_counter(pipeline_counts, "source_backpressure")
+            if hasattr(dut, "m_axis_valid") and value_is_one(dut.m_axis_valid, "m_axis_valid"):
+                if value_is_one(dut.m_axis_ready, "m_axis_ready"):
+                    increment_counter(pipeline_counts, "output_accept")
+                else:
+                    increment_counter(pipeline_counts, "output_backpressure")
+            if signal_int("input_active_q") == 1:
+                increment_counter(pipeline_counts, "input_active")
+            if signal_int("pending_output_q") == 1:
+                increment_counter(pipeline_counts, "pending_output")
+            if signal_int("resume_input_q") == 1:
+                increment_counter(pipeline_counts, "resume_input")
+            if signal_int("luma_tu_quant_pending_q") == 1:
+                increment_counter(pipeline_counts, "luma_quant_pending")
+            if signal_int("luma_quant_active_q") == 1:
+                increment_counter(pipeline_counts, "luma_quant_active")
+            if signal_int("chroma_tu_quant_pending_q") == 1:
+                increment_counter(pipeline_counts, "chroma_quant_pending")
+            if signal_int("chroma_quant_active_q") == 1:
+                increment_counter(pipeline_counts, "chroma_quant_active")
+            if signal_int("palette_stream_valid") == 1:
+                if signal_int("palette_stream_ready") == 1:
+                    increment_counter(pipeline_counts, "palette_stream_accept")
+                else:
+                    increment_counter(pipeline_counts, "palette_stream_backpressure")
+            if signal_int("ctu_symbol_valid") == 1:
+                if signal_int("ctu_symbol_ready") == 1:
+                    increment_counter(pipeline_counts, "ctu_symbol_accept")
+                else:
+                    increment_counter(pipeline_counts, "ctu_symbol_backpressure")
+            if signal_int("cabac_writer.streamed_cabac.syntax_valid") == 1:
+                if signal_int("cabac_writer.streamed_cabac.syntax_ready") == 1:
+                    increment_counter(pipeline_counts, "syntax_accept")
+                else:
+                    increment_counter(pipeline_counts, "syntax_backpressure")
+            if signal_int("cabac_writer.streamed_cabac.bin_valid") == 1:
+                if signal_int("cabac_writer.streamed_cabac.bin_ready") == 1:
+                    increment_counter(pipeline_counts, "bin_accept")
+                else:
+                    increment_counter(pipeline_counts, "bin_backpressure")
+            if signal_int("cabac_stream_valid") == 1:
+                if signal_int("cabac_stream_ready") == 1:
+                    increment_counter(pipeline_counts, "cabac_byte_accept")
+                else:
+                    increment_counter(pipeline_counts, "cabac_byte_backpressure")
+            if signal_int("rbsp_payload_valid") == 1:
+                if signal_int("rbsp_payload_ready") == 1:
+                    increment_counter(pipeline_counts, "rbsp_payload_accept")
+                else:
+                    increment_counter(pipeline_counts, "rbsp_payload_backpressure")
+            if signal_int("slice_stream_valid") == 1:
+                if signal_int("slice_stream_ready") == 1:
+                    increment_counter(pipeline_counts, "slice_stream_accept")
+                else:
+                    increment_counter(pipeline_counts, "slice_stream_backpressure")
             if (
                 hasattr(dut, "ctu_symbol_valid")
                 and value_is_one(dut.ctu_symbol_valid, "ctu_symbol_valid")
@@ -1243,6 +1414,9 @@ async def collect_stream(
         len(axi_observed),
         total_cycles,
         output_active_cycles,
+        state_counts,
+        pipeline_counts,
+        handshake_counts,
     )
 
     if output_path is not None:
