@@ -4,6 +4,115 @@ This file records VVC-specific synthesis measurements and optimization history.
 The shared synthesis process, tool setup, and Vivado flow are documented in
 [../synthesis.md](../synthesis.md).
 
+## 2026-06-19 Residual Throughput Follow-Up
+
+Measured after reducing VVC 4:2:0 residual-path bubbles in the luma and chroma
+quant/reconstruction blocks. The bitstream syntax, reconstructed samples, AXI
+control/data-plane wiring, palette support, and exact-hash IBC synthesis setting
+are unchanged from the previous documented baseline.
+
+Baseline and current sources:
+
+- Baseline Git SHA: `ce93d8129d77ab64c032b6c6d71c0aaf66ca995a`
+- Current validated RTL Git SHA: `999bbcf91ddd45845a2b32c20add79e940c4ca40`
+- Baseline mode: source-cache and luma-AC-throughput checkpoint with detailed
+  VVC utilization rows restored in documentation.
+- Current mode: same bitstream syntax, plus one-2x2-cell-per-cycle luma
+  residual accumulation and one-cycle residual edge reconstruction for luma and
+  chroma.
+
+Validation result:
+
+- `screenshot-sweep-444`: OK (64/64)
+- `screenshot-multictu-444`: OK (10/10)
+- `racehorses-sweep-420`: OK (64/64)
+- `racehorses-multictu-420`: OK (10/10)
+- Software and RTL bitstreams matched exactly.
+- Software, RTL, and VTM reconstructions matched for every listed vector.
+
+Synthesis configuration:
+
+- command: `make synth CODEC=vvc SYNTH_DUT=vvc-encoder`
+- DUT: `vvc-encoder`
+- RTL top: `ff_vvc_encoder`
+- board: `synth/boards/arty-z7-10.env`
+- clock metadata: `25 MHz`
+- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
+- memory limit: 3072 MiB
+- max visible size: 1024x1024
+- 4:4:4 palette support: enabled
+- exact-hash IBC for 4:4:4: disabled (`SYNTH_SUPPORT_EXACT_HASH_IBC_444=0`)
+
+Synthesis result:
+
+- Top `ff_vvc_encoder` synthesis completed in 439.1 seconds with 2146.46 MiB
+  peak child RSS observed by the synthesis runner.
+- Runtime exceeded the 300 second review threshold but stayed inside the 600
+  second hard timeout and 3072 MiB memory limit.
+- Post-synthesis flattened-cell reporting completed in 10.7 seconds.
+- Post-synthesis critical-path reporting completed in 74.5 seconds with peak
+  memory 2146.46 MiB and topological path length 55.
+- The longest topological path remains in `ff_vvc_cabac_syntax_frontend` IBC
+  MVD absolute-value and EG1 prefix generation before `m_axis_data`, so the
+  faster residual datapath did not become the reported timing limiter.
+
+Flattened Xilinx-cell estimate from
+`synth/out/arty-z7-10/ff_vvc_encoder/cell_report.log`:
+
+| Metric | Count |
+|---|---:|
+| Cells | 139497 |
+| Estimated LCs | 53283 |
+| CARRY4 | 4039 |
+| DSP48E1 | 9 |
+| FDCE | 13154 |
+| FDPE | 299 |
+| FDRE | 22492 |
+| FDSE | 4 |
+| LUT1 | 1590 |
+| LUT2 | 21025 |
+| LUT3 | 7075 |
+| LUT4 | 5798 |
+| LUT5 | 8254 |
+| LUT6 | 28080 |
+| MUXF7 | 8335 |
+| MUXF8 | 1647 |
+| RAMB36E1 | 9 |
+
+Delta from the previous source-cache and luma-AC-throughput checkpoint:
+
+| Metric | Baseline | Current | Delta |
+|---|---:|---:|---:|
+| Synthesis time | 410.8 s | 439.1 s | +28.3 s |
+| Peak synthesis RSS | 1993.60 MiB | 2146.46 MiB | +152.86 MiB |
+| Cell report time | 9.8 s | 10.7 s | +0.9 s |
+| Critical-path report time | 72.0 s | 74.5 s | +2.5 s |
+| Topological path length | 55 | 55 | +0 |
+| Cells | 131750 | 139497 | +7747 |
+| Estimated LCs | 49378 | 53283 | +3905 |
+| CARRY4 | 3283 | 4039 | +756 |
+| DSP48E1 | 9 | 9 | +0 |
+| FDCE | 13294 | 13154 | -140 |
+| FDPE | 299 | 299 | +0 |
+| FDRE | 22492 | 22492 | +0 |
+| FDSE | 4 | 4 | +0 |
+| LUT1 | 1461 | 1590 | +129 |
+| LUT2 | 19886 | 21025 | +1139 |
+| LUT3 | 6510 | 7075 | +565 |
+| LUT4 | 5352 | 5798 | +446 |
+| LUT5 | 7111 | 8254 | +1143 |
+| LUT6 | 26393 | 28080 | +1687 |
+| MUXF7 | 7535 | 8335 | +800 |
+| MUXF8 | 1394 | 1647 | +253 |
+| RAMB36E1 | 9 | 9 | +0 |
+
+The area increase is the cost of moving residual reconstruction work out of
+serial control states. In return, the 4:2:0 RaceHorses sweep aggregate drops
+from 1,170,183 to 806,007 cycles, and the multi-CTU set drops from 1,251,691 to
+848,456 cycles, with no bitrate or reconstruction changes. The synthesis
+critical path remains unchanged, but the synthesis time and RSS increases should
+be watched in the next VVC optimization cycle.
+
 ## 2026-06-19 Source Cache And Luma AC Throughput
 
 Measured after adding the shared AXI frame-reader direct plane-row cache and
