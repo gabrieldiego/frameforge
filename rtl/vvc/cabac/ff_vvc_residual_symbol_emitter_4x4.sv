@@ -68,12 +68,12 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
   logic [31:0] rem_suffix_pattern_q;
   logic rem_emit_needed_q;
   logic has_rem_coeff_q;
+  logic [4:0] max_rem_scan_pos_q;
 
   logic [(9 * 16) - 1:0] load_coeff_abs;
   logic [(9 * 16) - 1:0] load_coeff_template_abs;
   logic [15:0] load_coeff_negative;
   logic load_has_coeff;
-  logic load_has_rem_coeff;
   integer load_i;
   logic signed [8:0] load_level_tmp;
   logic [8:0] load_abs_tmp;
@@ -117,6 +117,9 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
   logic [9:0] regular_bins_after_par_w;
   logic [9:0] regular_bins_after_gt3_w;
   logic [2:0] after_regular_state_w;
+  logic regular_rem_seen_current_w;
+  logic after_regular_has_rem_w;
+  logic [4:0] after_regular_scan_pos_w;
   logic [9:0] sig_ctx_w;
   logic [9:0] level_ctx_inc_w;
   logic [9:0] gt1_ctx_w;
@@ -161,7 +164,6 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
     load_coeff_template_abs = {(9 * 16){1'b0}};
     load_coeff_negative = 16'd0;
     load_has_coeff = 1'b0;
-    load_has_rem_coeff = 1'b0;
     load_level_tmp = 9'sd0;
     load_abs_tmp = 9'd0;
     for (load_i = 0; load_i < 16; load_i = load_i + 1) begin
@@ -203,9 +205,6 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
         load_abs_tmp : (9'd4 + {8'd0, load_abs_tmp[0]});
       if (load_abs_tmp != 9'd0) begin
         load_has_coeff = 1'b1;
-      end
-      if (load_abs_tmp > 9'd3) begin
-        load_has_rem_coeff = 1'b1;
       end
     end
   end
@@ -463,9 +462,16 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
   assign regular_bins_after_gt3_w =
     ((coeff_abs_w > 9'd1) && (regular_bins_left_q != 10'd0)) ?
     (regular_bins_left_q - 10'd1) : regular_bins_left_q;
+  assign regular_rem_seen_current_w =
+    scan_regular_active_q && (subphase_q == SUB_GT3) && (coeff_abs_w > 9'd3);
+  assign after_regular_has_rem_w = has_rem_coeff_q || regular_rem_seen_current_w;
   assign after_regular_state_w =
-    has_rem_coeff_q ? ST_REM :
+    after_regular_has_rem_w ? ST_REM :
     ((mode_q && (min_pos_2nd_pass_q >= 0)) ? ST_SECOND : ST_SIGN);
+  assign after_regular_scan_pos_w =
+    after_regular_has_rem_w ?
+    (has_rem_coeff_q ? max_rem_scan_pos_q : scan_pos_q) :
+    last_scan_pos_w;
 
   always @* begin
     sum_bucket_w = (loc_sum_abs_w[7:0] + 8'd1) >> 1;
@@ -866,6 +872,7 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
       rem_suffix_pattern_q <= 32'd0;
       rem_emit_needed_q <= 1'b0;
       has_rem_coeff_q <= 1'b0;
+      max_rem_scan_pos_q <= 5'd0;
       done <= 1'b0;
     end else if (clear) begin
       state_q <= ST_IDLE;
@@ -884,6 +891,7 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
       rem_suffix_pattern_q <= 32'd0;
       rem_emit_needed_q <= 1'b0;
       has_rem_coeff_q <= 1'b0;
+      max_rem_scan_pos_q <= 5'd0;
       done <= 1'b0;
     end else begin
       if (state_q == ST_IDLE) begin
@@ -912,7 +920,8 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
           rem_suffix_count_q <= 6'd0;
           rem_suffix_pattern_q <= 32'd0;
           rem_emit_needed_q <= 1'b0;
-          has_rem_coeff_q <= load_has_rem_coeff;
+          has_rem_coeff_q <= 1'b0;
+          max_rem_scan_pos_q <= 5'd0;
           if (load_has_coeff) begin
             state_q <= ST_LAST_X;
           end else begin
@@ -945,7 +954,7 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
           ST_SCAN: begin
             if (!scan_regular_active_q) begin
               if (scan_pos_q == 5'd0) begin
-                scan_pos_q <= last_scan_pos_w;
+                scan_pos_q <= after_regular_scan_pos_w;
                 subphase_q <= SUB_REM_PREP;
                 scan_regular_active_q <= 1'b0;
                 // H.266 7.3.11.11 residual_coding_subblock(): abs_remainder
@@ -954,7 +963,7 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
                 state_q <= after_regular_state_w;
               end else if (mode_q && (regular_bins_left_q < 10'd4) &&
                            (scan_pos_q <= last_scan_pos_w)) begin
-                scan_pos_q <= last_scan_pos_w;
+                scan_pos_q <= after_regular_scan_pos_w;
                 subphase_q <= SUB_REM_PREP;
                 scan_regular_active_q <= 1'b0;
                 state_q <= after_regular_state_w;
@@ -974,7 +983,7 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
                   regular_bins_left_q <= regular_bins_after_sig_w;
                   if (coeff_abs_w == 9'd0) begin
                     if (scan_pos_q == 5'd0) begin
-                      scan_pos_q <= last_scan_pos_w;
+                      scan_pos_q <= after_regular_scan_pos_w;
                       subphase_q <= SUB_REM_PREP;
                       scan_regular_active_q <= 1'b0;
                       state_q <= after_regular_state_w;
@@ -1000,7 +1009,7 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
                     sign_count_q <= sign_count_q + 6'd1;
                     num_nonzero_q <= num_nonzero_q + 6'd1;
                     if (scan_pos_q == 5'd0) begin
-                      scan_pos_q <= last_scan_pos_w;
+                      scan_pos_q <= after_regular_scan_pos_w;
                       subphase_q <= SUB_REM_PREP;
                       scan_regular_active_q <= 1'b0;
                       state_q <= after_regular_state_w;
@@ -1021,6 +1030,10 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
                 end
                 SUB_GT3: begin
                   regular_bins_left_q <= regular_bins_after_gt3_w;
+                  if ((coeff_abs_w > 9'd3) && !has_rem_coeff_q) begin
+                    has_rem_coeff_q <= 1'b1;
+                    max_rem_scan_pos_q <= scan_pos_q;
+                  end
                   if (sign_count_q != 6'd0) begin
                     sign_bits_q <= (sign_bits_q << 1) | {31'd0, coeff_negative_w};
                   end else begin
@@ -1029,7 +1042,7 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
                   sign_count_q <= sign_count_q + 6'd1;
                   num_nonzero_q <= num_nonzero_q + 6'd1;
                   if (scan_pos_q == 5'd0) begin
-                    scan_pos_q <= last_scan_pos_w;
+                    scan_pos_q <= after_regular_scan_pos_w;
                     subphase_q <= SUB_REM_PREP;
                     scan_regular_active_q <= 1'b0;
                     state_q <= after_regular_state_w;
@@ -1058,7 +1071,7 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
                     num_nonzero_q <= num_nonzero_q + 6'd1;
                   end
                   if (scan_pos_q == 5'd0) begin
-                    scan_pos_q <= last_scan_pos_w;
+                    scan_pos_q <= after_regular_scan_pos_w;
                     subphase_q <= SUB_REM_PREP;
                     scan_regular_active_q <= 1'b0;
                     state_q <= after_regular_state_w;
