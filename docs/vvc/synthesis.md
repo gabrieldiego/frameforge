@@ -4,6 +4,110 @@ This file records VVC-specific synthesis measurements and optimization history.
 The shared synthesis process, tool setup, and Vivado flow are documented in
 [../synthesis.md](../synthesis.md).
 
+## 2026-06-19 Residual Remainder Scan Trim
+
+Measured after trimming the VVC 4:2:0 residual `abs_remainder` scan in the
+4x4 residual symbol emitter. The bitstream syntax, reconstructed samples, AXI
+control/data-plane wiring, palette support, and exact-hash IBC synthesis setting
+are unchanged from the previous documented baseline.
+
+Baseline and current sources:
+
+- Baseline report Git SHA: `9ccd873d6407a9f112492ef1a153e82d3550e216`
+- Baseline validated RTL Git SHA: `7d54a8c42552942b9b7be5ac3941b1a7518bd4af`
+- Current validated RTL Git SHA: `65812b2f1d0d2050cbe69c97b981496a8825fd47`
+- Baseline mode: previous VVC CABAC emission-throughput checkpoint.
+- Current mode: same bitstream syntax, plus residual remainder-scan trimming.
+
+Validation result:
+
+- `racehorses-sweep-420`: OK (64/64)
+- `racehorses-multictu-420`: OK (10/10)
+- Focused 4:4:4 screenshot smoke check: OK.
+- Software and RTL bitstreams matched exactly for all listed RaceHorses vectors.
+- Software, RTL, and VTM reconstructions matched for all listed RaceHorses vectors.
+
+Synthesis configuration:
+
+- command: `make synth CODEC=vvc SYNTH_DUT=vvc-encoder`
+- DUT: `vvc-encoder`
+- RTL top: `ff_vvc_encoder`
+- board: `synth/boards/arty-z7-10.env`
+- clock metadata: `25 MHz`
+- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
+- memory limit: 3072 MiB
+- max visible size: 1024x1024
+- 4:4:4 palette support: enabled
+- exact-hash IBC for 4:4:4: disabled (`SYNTH_SUPPORT_EXACT_HASH_IBC_444=0`)
+
+Synthesis result:
+
+- Top `ff_vvc_encoder` synthesis completed in 469.9 seconds with 2165.48 MiB
+  peak child RSS observed by the synthesis runner.
+- Runtime exceeded the 300 second review threshold but stayed inside the 600
+  second hard timeout and 3072 MiB memory limit.
+- Post-synthesis flattened-cell reporting completed in 11.0 seconds.
+- Post-synthesis critical-path reporting completed in 80.0 seconds with peak
+  memory 2165.48 MiB and topological path length 55.
+- The longest topological path remains in `ff_vvc_cabac_syntax_frontend` IBC
+  MVD absolute-value and EG1 prefix generation before `m_axis_data`; the
+  residual scan trim did not become the reported timing limiter.
+
+Flattened Xilinx-cell estimate from
+`synth/out/arty-z7-10/ff_vvc_encoder/cell_report.log`:
+
+| Metric | Count |
+|---|---:|
+| Cells | 140116 |
+| Estimated LCs | 53471 |
+| CARRY4 | 4046 |
+| DSP48E1 | 9 |
+| FDCE | 13166 |
+| FDPE | 299 |
+| FDRE | 22492 |
+| FDSE | 4 |
+| LUT1 | 1633 |
+| LUT2 | 20491 |
+| LUT3 | 7315 |
+| LUT4 | 6056 |
+| LUT5 | 8055 |
+| LUT6 | 28485 |
+| MUXF7 | 8705 |
+| MUXF8 | 1650 |
+| RAMB36E1 | 9 |
+
+Delta from the previous VVC CABAC emission-throughput checkpoint:
+
+| Metric | Baseline | Current | Delta |
+|---|---:|---:|---:|
+| Synthesis time | 456.3 s | 469.9 s | +13.6 s |
+| Peak synthesis RSS | 2165.60 MiB | 2165.48 MiB | -0.12 MiB |
+| Cell report time | 10.8 s | 11.0 s | +0.2 s |
+| Critical-path report time | 78.0 s | 80.0 s | +2.0 s |
+| Topological path length | 55 | 55 | +0 |
+| Cells | 139333 | 140116 | +783 |
+| Estimated LCs | 53485 | 53471 | -14 |
+| CARRY4 | 4046 | 4046 | +0 |
+| DSP48E1 | 9 | 9 | +0 |
+| FDCE | 13156 | 13166 | +10 |
+| FDPE | 299 | 299 | +0 |
+| FDRE | 22492 | 22492 | +0 |
+| FDSE | 4 | 4 | +0 |
+| LUT1 | 1443 | 1633 | +190 |
+| LUT2 | 20522 | 20491 | -31 |
+| LUT3 | 7308 | 7315 | +7 |
+| LUT4 | 5553 | 6056 | +503 |
+| LUT5 | 8354 | 8055 | -299 |
+| LUT6 | 28439 | 28485 | +46 |
+| MUXF7 | 8392 | 8705 | +313 |
+| MUXF8 | 1629 | 1650 | +21 |
+| RAMB36E1 | 9 | 9 | +0 |
+
+The critical-path length stayed at 55 and estimated LCs decreased slightly by
+14. Total flattened cells increased by 783, mainly in LUT packing around the
+residual symbol emitter control, which is acceptable for the measured 4:2:0
+throughput improvement.
+
 ## 2026-06-19 CABAC Emission Throughput
 
 Measured after reducing VVC CABAC/output-path bubbles in the bit writer,
