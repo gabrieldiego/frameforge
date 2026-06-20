@@ -17,6 +17,7 @@ module ff_av2_entropy_op_mux (
   input  logic        leaf_fsc_symbol,
   input  logic [31:0] leaf_fsc_fh,
   input  logic        palette_mode,
+  input  logic        residual_mode,
   input  logic        leaf_luma_palette,
   input  logic        palette_op_valid,
   input  logic        palette_op_literal,
@@ -235,7 +236,7 @@ module ff_av2_entropy_op_mux (
         op_fl_inc = palette_op_fl_inc;
         op_fh_inc = palette_op_fh_inc;
       end else if (phase == PHASE_Y_COEFF) begin
-        if (palette_mode) begin
+        if (residual_mode) begin
           op_valid = luma_residual_op_valid;
           op_literal = luma_residual_op_literal;
           op_literal_value = luma_residual_op_literal_value;
@@ -266,7 +267,7 @@ module ff_av2_entropy_op_mux (
             default: op_valid = 1'b0;
           endcase
         end
-      end else if (palette_mode) begin
+      end else if (residual_mode) begin
         op_valid = chroma_bdpcm_op_valid;
         op_literal = chroma_bdpcm_op_literal;
         op_literal_value = chroma_bdpcm_op_literal_value;
@@ -302,7 +303,7 @@ module ff_av2_entropy_op_mux (
     op_last = leaf_active &&
               (phase == PHASE_V_COEFF) &&
               (txb_index == (txb_count - 16'd1)) &&
-              ((palette_mode && chroma_bdpcm_txb_done) || (!palette_mode && step == 7'd7)) &&
+              ((residual_mode && chroma_bdpcm_txb_done) || (!residual_mode && step == 7'd7)) &&
               stack_empty;
   end
 

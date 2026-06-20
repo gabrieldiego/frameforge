@@ -1,7 +1,8 @@
 `timescale 1ns/1ps
 
 module ff_av2_chroma_bdpcm_symbolizer #(
-  parameter int LUMA_PALETTE_RESIDUAL = 0
+  parameter int LUMA_PALETTE_RESIDUAL = 0,
+  parameter int DC_DELTA_ONLY = 0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -13,6 +14,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   input  logic [127:0] txb_samples,
   input  logic [31:0] predictor_samples,
   input  logic [127:0] predictor_txb_samples,
+  input  logic signed [9:0] dc_delta,
   input  logic        known_zero_txb,
   output logic        op_valid,
   output logic        op_literal,
@@ -95,6 +97,8 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   logic [3:0] cul_oct_sat_w [0:1];
   logic [4:0] cul_final_sum_w;
   logic signed [15:0] dc_value_w;
+  logic signed [15:0] dc_delta_ext_w;
+  logic [15:0] dc_delta_abs_w;
   logic [4:0] eob_pre_w;
   logic [3:0] eob_pt_pre_w;
   logic [3:0] eob_extra_pre_w;
@@ -110,6 +114,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   logic current_base_lf_w;
   logic current_high_range_w;
   logic [15:0] current_high_value_w;
+  logic current_plane_v_w;
   logic [2:0] hr_m_w;
   logic [2:0] hr_k_w;
   logic [3:0] hr_cmax_w;
@@ -146,6 +151,10 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   logic signed [15:0] c1_w;
   logic signed [15:0] d1_w;
   logic signed [15:0] e1_w;
+
+  assign dc_delta_ext_w = {{6{dc_delta[9]}}, dc_delta};
+  assign dc_delta_abs_w = (dc_delta_ext_w < 0) ? -dc_delta_ext_w : dc_delta_ext_w;
+  assign current_plane_v_w = start_op_w ? plane_v : plane_v_q;
 
   always @* begin
     for (sample_index_w = 0; sample_index_w < 16; sample_index_w = sample_index_w + 1) begin
@@ -211,14 +220,27 @@ module ff_av2_chroma_bdpcm_symbolizer #(
     cul_context_level_w = 4'd0;
     dc_value_w = 16'sd0;
     for (sample_index_w = 0; sample_index_w < 16; sample_index_w = sample_index_w + 1) begin
-      if (coeff_w[sample_index_w] < 0) begin
-        abs_coeff_w = -coeff_w[sample_index_w];
-        coeff_negative_pre_w[sample_index_w] = 1'b1;
+      if (DC_DELTA_ONLY != 0) begin
+        // AV2 v1.0.0 Section 5.20.7.27 coeffs(): the staged 4:2:0 lossy
+        // path emits one DC coefficient whose level is abs(delta) * 4,
+        // matching the Rust model's write_*_dc_delta_txb helpers.
+        if (sample_index_w == 0) begin
+          level_pre_w[sample_index_w] = dc_delta_abs_w << 2;
+          coeff_negative_pre_w[sample_index_w] = (dc_delta_ext_w < 0);
+        end else begin
+          level_pre_w[sample_index_w] = 16'd0;
+          coeff_negative_pre_w[sample_index_w] = 1'b0;
+        end
       end else begin
-        abs_coeff_w = coeff_w[sample_index_w];
-        coeff_negative_pre_w[sample_index_w] = 1'b0;
+        if (coeff_w[sample_index_w] < 0) begin
+          abs_coeff_w = -coeff_w[sample_index_w];
+          coeff_negative_pre_w[sample_index_w] = 1'b1;
+        end else begin
+          abs_coeff_w = coeff_w[sample_index_w];
+          coeff_negative_pre_w[sample_index_w] = 1'b0;
+        end
+        level_pre_w[sample_index_w] = abs_coeff_w >> 3;
       end
-      level_pre_w[sample_index_w] = abs_coeff_w >> 3;
     end
 
     for (scan_index_w = 0; scan_index_w < 16; scan_index_w = scan_index_w + 1) begin
@@ -661,9 +683,12 @@ module ff_av2_chroma_bdpcm_symbolizer #(
             4'd3: cdf0_w = 32'd32588;
             4'd4: cdf0_w = 32'd16384;
             4'd5: cdf0_w = 32'd16384;
-            4'd6: cdf0_w = 32'd23870;
-            4'd7: cdf0_w = 32'd19113;
-            4'd8: cdf0_w = 32'd10420;
+            // AV2 v1.0.0 Section 5.20.7.27 coeffs(): V-plane TXB skip
+            // contexts include the retained U-plane nonzero flag, but still
+            // use V-plane CDF rows. The 4:2:0 path reaches ctx6..8 here.
+            4'd6: cdf0_w = current_plane_v_w ? 32'd25120 : 32'd23870;
+            4'd7: cdf0_w = current_plane_v_w ? 32'd16620 : 32'd19113;
+            4'd8: cdf0_w = current_plane_v_w ? 32'd8203 : 32'd10420;
             4'd9: cdf0_w = 32'd16384;
             4'd10: cdf0_w = 32'd16384;
             4'd11: cdf0_w = 32'd16384;

@@ -191,6 +191,7 @@ module ff_av2_palette_analyzer_444 #(
   logic [5:0] fetch_txb_block_id_w;
   logic [5:0] fetch_txb_local_base_w;
   logic [5:0] fetch_txb_local_index_w;
+  logic [5:0] fetch_chroma_txb_local_index_w;
   logic [5:0] luma_fetch_txb_block_id_w;
   logic [5:0] luma_fetch_txb_local_base_w;
   logic [5:0] luma_fetch_local_index_w;
@@ -323,6 +324,13 @@ module ff_av2_palette_analyzer_444 #(
     {fetch_txb_row_mi_q[0], 5'b00000} + {3'd0, fetch_txb_col_mi_q[0], 2'b00};
   assign fetch_txb_local_index_w =
     fetch_txb_local_base_w + {fetch_step_q[3:2], 3'b000} + {4'd0, fetch_step_q[1:0]};
+  // 4:4:4 chroma samples share the luma 8x8 packet layout, but 4:2:0 chroma
+  // packets are compact 4x4 TXBs. AV2 v1.0.0 residual syntax still scans a
+  // TX_4X4, so subsampled fetches must use a 4-sample row stride.
+  assign fetch_chroma_txb_local_index_w =
+    (chroma_format_idc == 2'd1) ?
+      {2'd0, fetch_step_q[3:0]} :
+      fetch_txb_local_index_w;
   assign fetch_above_pred_y_w = {fetch_txb_row_mi_q, 2'b00} - 6'd1;
   assign chroma_write_addr_w = {block_id_q, block_chroma_local_sample_w};
   assign luma_fetch_txb_block_id_w = {luma_fetch_txb_row_mi_q[3:1], luma_fetch_txb_col_mi_q[3:1]};
@@ -350,7 +358,7 @@ module ff_av2_palette_analyzer_444 #(
     chroma_sample_fire_w && !block_chroma_plane_v_w;
   assign chroma_write_v_w =
     chroma_sample_fire_w && block_chroma_plane_v_w;
-  assign fetch_txb_read_addr_w = {fetch_txb_block_id_w, fetch_txb_local_index_w};
+  assign fetch_txb_read_addr_w = {fetch_txb_block_id_w, fetch_chroma_txb_local_index_w};
   assign fetch_pred_read_addr_w = {fetch_pred_block_id_w, fetch_pred_local_index_w};
 
   ff_av2_chroma_sample_store chroma_sample_store (
@@ -1041,13 +1049,8 @@ module ff_av2_palette_analyzer_444 #(
             end
             if (chroma_complete_q || chroma_sample_done_w) begin
               if (terminal_tile_leaf_w) begin
-                if (final_black_w || !palette_supported_q) begin
-                  black_mode <= 1'b1;
-                  luma_palette_mode <= 1'b0;
-                end else begin
-                  black_mode <= 1'b0;
-                  luma_palette_mode <= 1'b1;
-                end
+                black_mode <= final_black_w;
+                luma_palette_mode <= palette_supported_q && !final_black_w;
                 done <= 1'b1;
                 state_q <= ST_DONE;
               end else if (block_id_q[2:0] == last_block_col_q) begin
@@ -1070,13 +1073,8 @@ module ff_av2_palette_analyzer_444 #(
           ST_DRAIN_CHROMA: begin
             if (chroma_complete_q || chroma_sample_done_w) begin
               if (terminal_tile_leaf_w) begin
-                if (final_black_w || !palette_supported_q) begin
-                  black_mode <= 1'b1;
-                  luma_palette_mode <= 1'b0;
-                end else begin
-                  black_mode <= 1'b0;
-                  luma_palette_mode <= 1'b1;
-                end
+                black_mode <= final_black_w;
+                luma_palette_mode <= palette_supported_q && !final_black_w;
                 done <= 1'b1;
                 state_q <= ST_DONE;
               end else if (block_id_q[2:0] == last_block_col_q) begin

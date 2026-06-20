@@ -123,10 +123,129 @@ def av2_input_frame():
 def av2_palette_reconstruction(data):
     expected_len = av2_frame_layout()["length"]
     assert len(data) == expected_len
-    # AV2 luma palette only predicts the luma plane. The current RTL then emits
-    # lossless luma coefficients plus lossless chroma BDPCM, so the internal
-    # reconstruction is the input frame once the residual path is enabled.
+    if rtl_chroma_format_idc() == 1:
+        return av2_lossy_420_reconstruction(data)
+    # AV2 luma palette only predicts the luma plane. The current 4:4:4 RTL then
+    # emits lossless luma coefficients plus lossless chroma BDPCM, so the
+    # internal reconstruction is the input frame once the residual path is
+    # enabled.
     return data
+
+
+def av2_round_div(value, divisor):
+    assert divisor > 0
+    if value >= 0:
+        return (value + divisor // 2) // divisor
+    return -((-value + divisor // 2) // divisor)
+
+
+def av2_quantize_to_step(value, step):
+    return av2_round_div(value, step) * step
+
+
+def av2_lossy_420_predictor(recon_plane, plane_width, tile_x, tile_y, x0, y0):
+    have_left = x0 > tile_x
+    have_top = y0 > tile_y
+    if not have_left and not have_top:
+        return 128
+    total = 0
+    count = 0
+    if have_top:
+        top_base = (y0 - 1) * plane_width
+        for x in range(x0, x0 + 4):
+            total += recon_plane[top_base + x]
+            count += 1
+    if have_left:
+        for y in range(y0, y0 + 4):
+            total += recon_plane[y * plane_width + x0 - 1]
+            count += 1
+    return (total + count // 2) // count
+
+
+def av2_lossy_420_fill_txb(source_plane, recon_plane, plane_width, plane_height, tile_x, tile_y, x0, y0):
+    predictor = av2_lossy_420_predictor(recon_plane, plane_width, tile_x, tile_y, x0, y0)
+    total = 0
+    for local_y in range(4):
+        y = y0 + local_y
+        if y >= plane_height:
+            continue
+        row_base = y * plane_width
+        for local_x in range(4):
+            x = x0 + local_x
+            if x < plane_width:
+                total += source_plane[row_base + x] - predictor
+    average = av2_round_div(total, 16)
+    delta = max(-255, min(255, av2_quantize_to_step(average, 8)))
+    sample = max(0, min(255, predictor + delta))
+    for local_y in range(4):
+        y = y0 + local_y
+        if y >= plane_height:
+            continue
+        row_base = y * plane_width
+        for local_x in range(4):
+            x = x0 + local_x
+            if x < plane_width:
+                recon_plane[row_base + x] = sample
+
+
+def av2_lossy_420_reconstruction(data):
+    width, height = rtl_geometry()
+    layout = av2_frame_layout()
+    area = layout["area"]
+    chroma_area = layout["chroma_area"]
+    chroma_width = width // 2
+    chroma_height = height // 2
+    y_source = data[:area]
+    u_source = data[layout["src_u_base"] : layout["src_u_base"] + chroma_area]
+    v_source = data[layout["src_v_base"] : layout["src_v_base"] + chroma_area]
+    y_recon = bytearray(area)
+    u_recon = bytearray(chroma_area)
+    v_recon = bytearray(chroma_area)
+
+    for tile_y in range(0, height, 64):
+        tile_h = min(64, height - tile_y)
+        for tile_x in range(0, width, 64):
+            tile_w = min(64, width - tile_x)
+            for y0 in range(tile_y, tile_y + tile_h, 8):
+                for x0 in range(tile_x, tile_x + tile_w, 8):
+                    for dy in (0, 4):
+                        for dx in (0, 4):
+                            av2_lossy_420_fill_txb(
+                                y_source,
+                                y_recon,
+                                width,
+                                height,
+                                tile_x,
+                                tile_y,
+                                x0 + dx,
+                                y0 + dy,
+                            )
+                    chroma_tile_x = tile_x // 2
+                    chroma_tile_y = tile_y // 2
+                    cx0 = x0 // 2
+                    cy0 = y0 // 2
+                    av2_lossy_420_fill_txb(
+                        u_source,
+                        u_recon,
+                        chroma_width,
+                        chroma_height,
+                        chroma_tile_x,
+                        chroma_tile_y,
+                        cx0,
+                        cy0,
+                    )
+                    av2_lossy_420_fill_txb(
+                        v_source,
+                        v_recon,
+                        chroma_width,
+                        chroma_height,
+                        chroma_tile_x,
+                        chroma_tile_y,
+                        cx0,
+                        cy0,
+                    )
+
+    return bytes(y_recon + u_recon + v_recon)
 
 
 def av2_rtl_input_stream(data):
@@ -510,31 +629,48 @@ async def av2_encoder_emits_obu_stream(dut):
                         ),
                     }
                 )
-            if phase in (AV2_PHASE_U_COEFF, AV2_PHASE_V_COEFF) and palette_mode:
-                coeff_pos = handle_int(dut.chroma_bdpcm_symbolizer.coeff_pos_w)
+            lossy_420_mode = signal_int(dut, "lossy_420_mode_q") == 1
+            if phase in (AV2_PHASE_U_COEFF, AV2_PHASE_V_COEFF) and (palette_mode or lossy_420_mode):
+                chroma_symbolizer = (
+                    dut.lossy420_chroma_bdpcm_symbolizer
+                    if lossy_420_mode
+                    else dut.chroma_bdpcm_symbolizer
+                )
+                coeff_pos = handle_int(chroma_symbolizer.coeff_pos_w)
                 record.update(
                     {
                         "chroma_residual_emit_state": handle_int(
-                            dut.chroma_bdpcm_symbolizer.emit_state_q
+                            chroma_symbolizer.emit_state_q
                         ),
                         "chroma_residual_scan": handle_int(
-                            dut.chroma_bdpcm_symbolizer.scan_q
+                            chroma_symbolizer.scan_q
                         ),
                         "chroma_residual_coeff_pos": coeff_pos,
                         "chroma_residual_level": handle_int(
-                            dut.chroma_bdpcm_symbolizer.level_q[coeff_pos]
+                            chroma_symbolizer.level_q[coeff_pos]
                         ),
                         "chroma_residual_hr_avg": handle_int(
-                            dut.chroma_bdpcm_symbolizer.hr_avg_q
+                            chroma_symbolizer.hr_avg_q
                         ),
                         "chroma_residual_hr_m": handle_int(
-                            dut.chroma_bdpcm_symbolizer.hr_m_w
+                            chroma_symbolizer.hr_m_w
                         ),
                         "chroma_residual_high_value": handle_int(
-                            dut.chroma_bdpcm_symbolizer.current_high_value_w
+                            chroma_symbolizer.current_high_value_w
                         ),
                         "chroma_residual_hr_q": handle_int(
-                            dut.chroma_bdpcm_symbolizer.hr_q_w
+                            chroma_symbolizer.hr_q_w
+                        ),
+                    }
+                )
+            if phase in (AV2_PHASE_U_COEFF, AV2_PHASE_V_COEFF):
+                record.update(
+                    {
+                        "chroma_fetch_txb_samples": signal_int(dut, "chroma_fetch_txb_samples_w"),
+                        "chroma_bdpcm_txb_samples": signal_int(dut, "chroma_bdpcm_txb_samples_w"),
+                        "lossy420_chroma_delta": signal_int(dut, "lossy420_chroma_delta_w"),
+                        "lossy420_chroma_known_zero": signal_int(
+                            dut, "lossy420_chroma_known_zero_w"
                         ),
                     }
                 )
