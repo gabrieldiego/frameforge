@@ -439,9 +439,9 @@ def validate_av2_fixed_black_path(
     rtl_internal_recon = out_dir / f"{stem}_rtl_internal_rec.yuv"
     rtl_trace = out_dir / f"{stem}_rtl_trace.jsonl"
     rtl_metrics = out_dir / f"{stem}_rtl_cycle_metrics.json"
-    if av2_mvp_444_expected_reconstruction(info, validation_input_path) is None:
+    if av2_mvp_expected_reconstruction(info, validation_input_path) is None:
         print(
-            "FAIL: AV2 software validation only supports one yuv444p8 "
+            "FAIL: AV2 software validation only supports one yuv420p8 or yuv444p8 "
             "frame with dimensions in 8-pixel steps",
             file=sys.stderr,
         )
@@ -595,17 +595,23 @@ def validate_av2_fixed_black_path(
             file=sys.stderr,
         )
         return 1
-    if digests["software_internal_recon"] != digests["input_yuv"]:
+    if (
+        normalize_format(info.fmt) == "yuv444p8"
+        and digests["software_internal_recon"] != digests["input_yuv"]
+    ):
         print(
-            "FAIL: AV2 software reconstruction differs from input; current AV2 subset is expected to be lossless",
+            "FAIL: AV2 4:4:4 software reconstruction differs from input; current 4:4:4 subset is expected to be lossless",
             file=sys.stderr,
         )
         return 1
     print(
         f"OK: AV2 software bitstream decodes to the software reconstruction at "
-        f"{info.width}x{info.height} yuv444p8"
+        f"{info.width}x{info.height} {info.fmt}"
     )
-    print("OK: AV2 software reconstruction is lossless for this input")
+    if digests["software_internal_recon"] == digests["input_yuv"]:
+        print("OK: AV2 software reconstruction is lossless for this input")
+    else:
+        print("OK: AV2 software reconstruction is lossy relative to input")
     print(f"AV2 software trace: {sw_trace}")
     if ran_rtl:
         print(f"AV2 RTL trace: {rtl_trace}")
@@ -630,10 +636,10 @@ def validate_av2_fixed_black_path(
     return 0
 
 
-def av2_mvp_444_expected_reconstruction(info: InputInfo, input_path: Path) -> bytes | None:
+def av2_mvp_expected_reconstruction(info: InputInfo, input_path: Path) -> bytes | None:
     if info.frames != 1:
         return None
-    if normalize_format(info.fmt) != "yuv444p8":
+    if normalize_format(info.fmt) not in {"yuv420p8", "yuv444p8"}:
         return None
     if not (info.width >= 8 and info.height >= 8 and info.width % 8 == 0 and info.height % 8 == 0):
         return None

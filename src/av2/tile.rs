@@ -1,4 +1,4 @@
-use super::{Av2Black444MvpProfile, Av2VideoGeometry};
+use super::{Av2Black444MvpProfile, Av2ChromaFormat, Av2VideoGeometry};
 use crate::av2::entropy::{Av2EntropyPayload, Av2EntropyWriter};
 use crate::av2::ibc::Av2LeftIbc444;
 use crate::av2::palette::{
@@ -450,9 +450,15 @@ const DEFAULT_TXB_SKIP_U_TX4X4_CTX6_CDF: [u16; 6] = [
 ];
 const DEFAULT_TXB_SKIP_U_TX4X4_CTX7_CDF: [u16; 6] = avm_cdf2(13655, 0, 0, -1);
 const DEFAULT_TXB_SKIP_U_TX4X4_CTX8_CDF: [u16; 6] = avm_cdf2(22348, 0, 0, 0);
+const DEFAULT_V_TXB_SKIP_TX4X4_CTX0_CDF: [u16; 6] = avm_cdf2(1439, 1, 0, 1);
+const DEFAULT_V_TXB_SKIP_TX4X4_CTX1_CDF: [u16; 6] = avm_cdf2(6191, 0, 0, 0);
+const DEFAULT_V_TXB_SKIP_TX4X4_CTX2_CDF: [u16; 6] = avm_cdf2(14610, 0, 0, -1);
 const DEFAULT_V_TXB_SKIP_TX4X4_CTX3_CDF: [u16; 6] = avm_cdf2(180, -2, 0, 0);
 const DEFAULT_V_TXB_SKIP_TX4X4_CTX4_CDF: [u16; 6] = avm_cdf2(16384, 0, 0, 0);
 const DEFAULT_V_TXB_SKIP_TX4X4_CTX5_CDF: [u16; 6] = avm_cdf2(16384, 0, 0, 0);
+const DEFAULT_V_TXB_SKIP_TX4X4_CTX6_CDF: [u16; 6] = avm_cdf2(7648, 1, 1, 0);
+const DEFAULT_V_TXB_SKIP_TX4X4_CTX7_CDF: [u16; 6] = avm_cdf2(16148, 1, 1, 0);
+const DEFAULT_V_TXB_SKIP_TX4X4_CTX8_CDF: [u16; 6] = avm_cdf2(24565, 1, 1, 0);
 const DEFAULT_V_TXB_SKIP_TX4X4_CTX9_CDF: [u16; 6] = avm_cdf2(16384, 0, 0, 0);
 const DEFAULT_V_TXB_SKIP_TX4X4_CTX10_CDF: [u16; 6] = avm_cdf2(16384, 0, 0, 0);
 const DEFAULT_V_TXB_SKIP_TX4X4_CTX11_CDF: [u16; 6] = avm_cdf2(16384, 0, 0, 0);
@@ -869,6 +875,7 @@ struct Av2Black444TilePlan {
     decisions: Vec<Av2TileDecision>,
     origin_x: usize,
     origin_y: usize,
+    chroma_format: Av2ChromaFormat,
     visible_rows_mi: usize,
     visible_cols_mi: usize,
     luma_palette: bool,
@@ -1011,7 +1018,16 @@ pub(crate) fn av2_black_444_tile_entropy_payload_for_region(
     region: Av2TileRegion,
     profile: Av2Black444MvpProfile,
 ) -> Av2EntropyPayload {
-    let plan = Av2Black444TilePlan::for_region(region, profile, false, false, None, None);
+    av2_black_tile_entropy_payload_for_region(region, profile, Av2ChromaFormat::Yuv444)
+}
+
+pub(crate) fn av2_black_tile_entropy_payload_for_region(
+    region: Av2TileRegion,
+    profile: Av2Black444MvpProfile,
+    chroma_format: Av2ChromaFormat,
+) -> Av2EntropyPayload {
+    let plan =
+        Av2Black444TilePlan::for_region(region, profile, chroma_format, false, false, None, None);
     let mut writer = Av2EntropyWriter::new();
     plan.write_entropy(&mut writer, None, None);
     writer.finish()
@@ -1026,6 +1042,7 @@ pub(crate) fn av2_luma_palette_444_tile_entropy_payload_for_region(
     let plan = Av2Black444TilePlan::for_region(
         region,
         profile,
+        Av2ChromaFormat::Yuv444,
         true,
         // AV2 v1.0.0 read_intrabc_params() makes allow_intrabc a frame
         // header flag. FrameForge's streaming RTL cannot know whether a later
@@ -1045,6 +1062,7 @@ impl Av2Black444TilePlan {
     fn for_region(
         region: Av2TileRegion,
         profile: Av2Black444MvpProfile,
+        chroma_format: Av2ChromaFormat,
         luma_palette: bool,
         allow_intrabc: bool,
         ibc: Option<&Av2LeftIbc444>,
@@ -1079,6 +1097,7 @@ impl Av2Black444TilePlan {
             decisions: Vec::new(),
             origin_x: region.origin_x,
             origin_y: region.origin_y,
+            chroma_format,
             visible_rows_mi,
             visible_cols_mi,
             luma_palette,
@@ -1367,6 +1386,7 @@ impl Av2Black444TilePlan {
                         *decision,
                         self.visible_rows_mi,
                         self.visible_cols_mi,
+                        self.chroma_format,
                         &mut txb_contexts,
                     );
                     intrabc_context.update_leaf(
@@ -2215,6 +2235,7 @@ fn write_black_dc_residual_coefficients(
     decision: Av2TileDecision,
     visible_rows_mi: usize,
     visible_cols_mi: usize,
+    chroma_format: Av2ChromaFormat,
     contexts: &mut Av2TxbEntropyContexts,
 ) {
     // AV2 v1.0.0 Section 5.20.7.23 residual() sets lossless residuals to
@@ -2247,10 +2268,12 @@ fn write_black_dc_residual_coefficients(
         }
     }
 
-    for row in 0..txb_height {
-        let abs_row = decision.row + row;
-        for col in 0..txb_width {
-            let abs_col = decision.col + col;
+    let chroma_span = chroma_tx4x4_span(decision, visible_rows_mi, visible_cols_mi, chroma_format);
+
+    for row in 0..chroma_span.height {
+        let abs_row = chroma_span.row + row;
+        for col in 0..chroma_span.width {
+            let abs_col = chroma_span.col + col;
             let skip_ctx =
                 chroma_txb_skip_base_context(contexts.u_above[abs_col], contexts.u_left[abs_row])
                     + 6;
@@ -2260,19 +2283,68 @@ fn write_black_dc_residual_coefficients(
         }
     }
 
-    let last_u_txb_nonzero = txb_width != 0 && txb_height != 0;
-    for row in 0..txb_height {
-        let abs_row = decision.row + row;
-        for col in 0..txb_width {
-            let abs_col = decision.col + col;
-            let skip_ctx = v_txb_skip_context(
+    let last_u_txb_nonzero = chroma_span.width != 0 && chroma_span.height != 0;
+    for row in 0..chroma_span.height {
+        let abs_row = chroma_span.row + row;
+        for col in 0..chroma_span.width {
+            let abs_col = chroma_span.col + col;
+            let skip_ctx = v_txb_skip_context_for_chroma_format(
                 contexts.v_above[abs_col],
                 contexts.v_left[abs_row],
                 last_u_txb_nonzero,
+                chroma_format,
             );
             write_v_black_dc_txb(writer, skip_ctx);
             contexts.v_above[abs_col] = NONZERO_NEGATIVE_DC_ENTROPY_CONTEXT;
             contexts.v_left[abs_row] = NONZERO_NEGATIVE_DC_ENTROPY_CONTEXT;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Av2ChromaTx4x4Span {
+    row: usize,
+    col: usize,
+    width: usize,
+    height: usize,
+}
+
+fn chroma_tx4x4_span(
+    decision: Av2TileDecision,
+    visible_rows_mi: usize,
+    visible_cols_mi: usize,
+    chroma_format: Av2ChromaFormat,
+) -> Av2ChromaTx4x4Span {
+    match chroma_format {
+        Av2ChromaFormat::Yuv444 => Av2ChromaTx4x4Span {
+            row: decision.row,
+            col: decision.col,
+            width: decision
+                .block_size
+                .tx4x4_width()
+                .min(visible_cols_mi.saturating_sub(decision.col)),
+            height: decision
+                .block_size
+                .tx4x4_height()
+                .min(visible_rows_mi.saturating_sub(decision.row)),
+        },
+        Av2ChromaFormat::Yuv420 => {
+            // AV2 v1.0.0 residual() uses chroma transform units in chroma
+            // sample coordinates. FrameForge's first 4:2:0 milestone keeps
+            // 8x8 luma leaves, so each leaf maps to one 4x4 U TXB and one
+            // 4x4 V TXB.
+            let row = decision.row / 2;
+            let col = decision.col / 2;
+            let visible_rows = visible_rows_mi / 2;
+            let visible_cols = visible_cols_mi / 2;
+            Av2ChromaTx4x4Span {
+                row,
+                col,
+                width: (decision.block_size.tx4x4_width() / 2)
+                    .min(visible_cols.saturating_sub(col)),
+                height: (decision.block_size.tx4x4_height() / 2)
+                    .min(visible_rows.saturating_sub(row)),
+            }
         }
     }
 }
@@ -3244,6 +3316,18 @@ fn write_u_txb_nonzero(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
 
 fn write_v_txb_nonzero(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
     let (name, mut cdf) = match skip_ctx {
+        0 => (
+            "tile.coeff.v.txb_nonzero_tx4x4_ctx0",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX0_CDF,
+        ),
+        1 => (
+            "tile.coeff.v.txb_nonzero_tx4x4_ctx1",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX1_CDF,
+        ),
+        2 => (
+            "tile.coeff.v.txb_nonzero_tx4x4_ctx2",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX2_CDF,
+        ),
         3 => (
             "tile.coeff.v.txb_nonzero_tx4x4_ctx3",
             DEFAULT_V_TXB_SKIP_TX4X4_CTX3_CDF,
@@ -3255,6 +3339,18 @@ fn write_v_txb_nonzero(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
         5 => (
             "tile.coeff.v.txb_nonzero_tx4x4_ctx5",
             DEFAULT_V_TXB_SKIP_TX4X4_CTX5_CDF,
+        ),
+        6 => (
+            "tile.coeff.v.txb_nonzero_tx4x4_ctx6",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX6_CDF,
+        ),
+        7 => (
+            "tile.coeff.v.txb_nonzero_tx4x4_ctx7",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX7_CDF,
+        ),
+        8 => (
+            "tile.coeff.v.txb_nonzero_tx4x4_ctx8",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX8_CDF,
         ),
         9 => (
             "tile.coeff.v.txb_nonzero_tx4x4_ctx9",
@@ -3294,6 +3390,18 @@ fn write_u_txb_all_zero(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
 
 fn write_v_txb_all_zero(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
     let (name, mut cdf) = match skip_ctx {
+        0 => (
+            "tile.coeff.v.txb_all_zero_tx4x4_ctx0",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX0_CDF,
+        ),
+        1 => (
+            "tile.coeff.v.txb_all_zero_tx4x4_ctx1",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX1_CDF,
+        ),
+        2 => (
+            "tile.coeff.v.txb_all_zero_tx4x4_ctx2",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX2_CDF,
+        ),
         3 => (
             "tile.coeff.v.txb_all_zero_tx4x4_ctx3",
             DEFAULT_V_TXB_SKIP_TX4X4_CTX3_CDF,
@@ -3305,6 +3413,18 @@ fn write_v_txb_all_zero(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
         5 => (
             "tile.coeff.v.txb_all_zero_tx4x4_ctx5",
             DEFAULT_V_TXB_SKIP_TX4X4_CTX5_CDF,
+        ),
+        6 => (
+            "tile.coeff.v.txb_all_zero_tx4x4_ctx6",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX6_CDF,
+        ),
+        7 => (
+            "tile.coeff.v.txb_all_zero_tx4x4_ctx7",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX7_CDF,
+        ),
+        8 => (
+            "tile.coeff.v.txb_all_zero_tx4x4_ctx8",
+            DEFAULT_V_TXB_SKIP_TX4X4_CTX8_CDF,
         ),
         9 => (
             "tile.coeff.v.txb_all_zero_tx4x4_ctx9",
@@ -3502,6 +3622,24 @@ fn v_txb_skip_context(above: u8, left: u8, last_u_txb_nonzero: bool) -> u8 {
     chroma_txb_skip_base_context(above, left) + 3 + if last_u_txb_nonzero { 6 } else { 0 }
 }
 
+fn v_txb_skip_context_for_chroma_format(
+    above: u8,
+    left: u8,
+    last_u_txb_nonzero: bool,
+    chroma_format: Av2ChromaFormat,
+) -> u8 {
+    // AV2 v1.0.0 get_txb_ctx() adds half of V_TXB_SKIP_CONTEXT_OFFSET only
+    // when the chroma coding block is larger than the TXB. 8x8 luma leaves are
+    // 8x8 chroma blocks in 4:4:4, but only 4x4 chroma blocks in 4:2:0.
+    let block_larger_than_txb_offset = match chroma_format {
+        Av2ChromaFormat::Yuv444 => 3,
+        Av2ChromaFormat::Yuv420 => 0,
+    };
+    chroma_txb_skip_base_context(above, left)
+        + block_larger_than_txb_offset
+        + if last_u_txb_nonzero { 6 } else { 0 }
+}
+
 fn dc_sign_context(above: u8, left: u8) -> u8 {
     let mut sign_sum = entropy_context_dc_sign(above) + entropy_context_dc_sign(left);
     sign_sum = sign_sum.clamp(-32, 32);
@@ -3556,6 +3694,7 @@ mod tests {
                 height: 64,
             }),
             Av2Black444MvpProfile::current(),
+            Av2ChromaFormat::Yuv444,
             false,
             false,
             None,
