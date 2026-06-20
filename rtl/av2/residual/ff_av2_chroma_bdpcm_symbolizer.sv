@@ -15,6 +15,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   input  logic [31:0] predictor_samples,
   input  logic [127:0] predictor_txb_samples,
   input  logic signed [9:0] dc_delta,
+  input  logic [7:0]  dc_recon_sample,
   input  logic        known_zero_txb,
   output logic        op_valid,
   output logic        op_literal,
@@ -26,7 +27,8 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   output logic [4:0]  op_fh_inc,
   output logic        txb_done,
   output logic        txb_nonzero,
-  output logic [7:0]  entropy_context
+  output logic [7:0]  entropy_context,
+  output logic [7:0]  latched_dc_recon_sample
 );
 
   localparam logic [3:0] TABLE_NONE = 4'd0;
@@ -74,6 +76,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   logic plane_v_q;
   logic [3:0] skip_ctx_q;
   logic [1:0] dc_sign_ctx_q;
+  logic [7:0] dc_recon_sample_q;
   logic [15:0] level_q [0:15];
   logic coeff_negative_q [0:15];
   logic [4:0] coeff_ctx_q [0:15];
@@ -680,6 +683,12 @@ module ff_av2_chroma_bdpcm_symbolizer #(
           endcase
         end else begin
           case (table_ctx_w)
+            // AV2 v1.0.0 Section 5.20.7.23 read_tx_block(): 4:2:0 V
+            // chroma blocks are one TX_4X4, so get_txb_ctx() can select
+            // V-plane skip contexts 0..2 before the retained U EOB offset.
+            4'd0: cdf0_w = current_plane_v_w ? 32'd31329 : 32'd16384;
+            4'd1: cdf0_w = current_plane_v_w ? 32'd26577 : 32'd16384;
+            4'd2: cdf0_w = current_plane_v_w ? 32'd18158 : 32'd16384;
             4'd3: cdf0_w = 32'd32588;
             4'd4: cdf0_w = 32'd16384;
             4'd5: cdf0_w = 32'd16384;
@@ -948,6 +957,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   assign txb_done = (active_q || start_op_w) && op_valid && op_done_w;
   assign txb_nonzero = start_op_w ? 1'b0 : txb_nonzero_q;
   assign entropy_context = start_op_w ? 8'd0 : entropy_context_q;
+  assign latched_dc_recon_sample = start_op_w ? dc_recon_sample : dc_recon_sample_q;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -964,6 +974,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
       plane_v_q <= 1'b0;
       skip_ctx_q <= 4'd0;
       dc_sign_ctx_q <= 2'd0;
+      dc_recon_sample_q <= 8'd0;
       hr_avg_q <= 16'd0;
       for (sample_index_w = 0; sample_index_w < 16; sample_index_w = sample_index_w + 1) begin
         level_q[sample_index_w] <= 16'd0;
@@ -990,6 +1001,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
       plane_v_q <= plane_v;
       skip_ctx_q <= skip_ctx;
       dc_sign_ctx_q <= dc_sign_ctx;
+      dc_recon_sample_q <= dc_recon_sample;
       hr_avg_q <= 16'd0;
       for (sample_index_w = 0; sample_index_w < 16; sample_index_w = sample_index_w + 1) begin
         level_q[sample_index_w] <= 16'd0;
@@ -1011,6 +1023,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
       plane_v_q <= plane_v;
       skip_ctx_q <= skip_ctx;
       dc_sign_ctx_q <= dc_sign_ctx;
+      dc_recon_sample_q <= dc_recon_sample;
       hr_avg_q <= 16'd0;
       for (sample_index_w = 0; sample_index_w < 16; sample_index_w = sample_index_w + 1) begin
         level_q[sample_index_w] <= level_pre_w[sample_index_w];

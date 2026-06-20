@@ -630,6 +630,39 @@ async def av2_encoder_emits_obu_stream(dut):
                     }
                 )
             lossy_420_mode = signal_int(dut, "lossy_420_mode_q") == 1
+            if phase == AV2_PHASE_Y_COEFF and lossy_420_mode:
+                luma_symbolizer = dut.lossy420_luma_residual_symbolizer
+                coeff_pos = handle_int(luma_symbolizer.coeff_pos_w)
+                record.update(
+                    {
+                        "luma_residual_emit_state": handle_int(
+                            luma_symbolizer.emit_state_q
+                        ),
+                        "luma_residual_scan": handle_int(luma_symbolizer.scan_q),
+                        "luma_residual_coeff_pos": coeff_pos,
+                        "luma_residual_level": handle_int(
+                            luma_symbolizer.level_q[coeff_pos]
+                        ),
+                        "luma_residual_hr_avg": handle_int(luma_symbolizer.hr_avg_q),
+                        "luma_residual_hr_m": handle_int(luma_symbolizer.hr_m_w),
+                        "luma_residual_high_value": handle_int(
+                            luma_symbolizer.current_high_value_w
+                        ),
+                        "luma_residual_hr_q": handle_int(luma_symbolizer.hr_q_w),
+                        "luma_fetch_txb_samples": signal_int(
+                            dut, "luma_fetch_txb_samples_w"
+                        ),
+                        "lossy420_luma_predictor": signal_int(
+                            dut, "lossy420_luma_predictor_w"
+                        ),
+                        "lossy420_luma_delta": signal_int(
+                            dut, "lossy420_luma_delta_w"
+                        ),
+                        "lossy420_luma_known_zero": signal_int(
+                            dut, "lossy420_luma_known_zero_w"
+                        ),
+                    }
+                )
             if phase in (AV2_PHASE_U_COEFF, AV2_PHASE_V_COEFF) and (palette_mode or lossy_420_mode):
                 chroma_symbolizer = (
                     dut.lossy420_chroma_bdpcm_symbolizer
@@ -668,6 +701,33 @@ async def av2_encoder_emits_obu_stream(dut):
                     {
                         "chroma_fetch_txb_samples": signal_int(dut, "chroma_fetch_txb_samples_w"),
                         "chroma_bdpcm_txb_samples": signal_int(dut, "chroma_bdpcm_txb_samples_w"),
+                        "chroma_fetch_start": signal_int(dut, "chroma_fetch_start_w"),
+                        "chroma_fetch_done": signal_int(dut, "chroma_fetch_done_w"),
+                        "chroma_fetch_req_cross_phase": signal_int(
+                            dut, "chroma_fetch_req_cross_phase_w"
+                        ),
+                        "chroma_fetch_req_next_txb": signal_int(
+                            dut, "chroma_fetch_req_next_txb_w"
+                        ),
+                        "chroma_fetch_req_row_mi": signal_int(
+                            dut, "chroma_fetch_req_row_mi_w"
+                        ),
+                        "chroma_fetch_req_col_mi": signal_int(
+                            dut, "chroma_fetch_req_col_mi_w"
+                        ),
+                        "chroma_fetch_req_plane_v": signal_int(
+                            dut, "chroma_fetch_req_plane_v_w"
+                        ),
+                        "txb_prefetch_started": signal_int(
+                            dut, "txb_prefetch_started_q"
+                        ),
+                        "txb_prefetch_done": signal_int(dut, "txb_prefetch_done_q"),
+                        "txb_prefetch_chroma": signal_int(
+                            dut, "txb_prefetch_chroma_q"
+                        ),
+                        "txb_prefetch_plane_v": signal_int(
+                            dut, "txb_prefetch_plane_v_q"
+                        ),
                         "lossy420_chroma_delta": signal_int(dut, "lossy420_chroma_delta_w"),
                         "lossy420_chroma_known_zero": signal_int(
                             dut, "lossy420_chroma_known_zero_w"

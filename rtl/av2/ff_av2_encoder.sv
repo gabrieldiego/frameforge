@@ -359,6 +359,10 @@ module ff_av2_encoder #(
   logic [4:0] luma_fetch_req_col_mi_w;
   logic [4:0] chroma_fetch_req_row_mi_w;
   logic [4:0] chroma_fetch_req_col_mi_w;
+  logic [4:0] chroma_fetch_current_storage_row_mi_w;
+  logic [4:0] chroma_fetch_current_storage_col_mi_w;
+  logic [4:0] chroma_fetch_next_storage_row_mi_w;
+  logic [4:0] chroma_fetch_next_storage_col_mi_w;
   logic chroma_fetch_req_plane_v_w;
   logic palette_analyzer_start_w;
   logic input_sample_fire_w;
@@ -439,6 +443,7 @@ module ff_av2_encoder #(
   logic [4:0] lossy420_luma_residual_op_fh_inc_w;
   logic lossy420_luma_residual_txb_done_w;
   logic [7:0] lossy420_luma_residual_entropy_context_w;
+  logic [7:0] lossy420_luma_residual_recon_sample_w;
   logic luma_residual_op_valid_w;
   logic luma_residual_op_literal_w;
   logic [31:0] luma_residual_op_literal_value_w;
@@ -475,6 +480,7 @@ module ff_av2_encoder #(
   logic lossy420_chroma_bdpcm_txb_done_w;
   logic lossy420_chroma_bdpcm_txb_nonzero_w;
   logic [7:0] lossy420_chroma_bdpcm_entropy_context_w;
+  logic [7:0] lossy420_chroma_bdpcm_recon_sample_w;
   logic chroma_bdpcm_op_valid_w;
   logic chroma_bdpcm_op_literal_w;
   logic [31:0] chroma_bdpcm_op_literal_value_w;
@@ -492,10 +498,39 @@ module ff_av2_encoder #(
   logic [127:0] chroma_bdpcm_txb_samples_w;
   logic [31:0] chroma_bdpcm_predictor_samples_w;
   logic [7:0] lossy420_luma_recon_q [0:3];
+  logic [7:0] lossy420_luma_above_q [0:15];
+  logic [15:0] lossy420_luma_above_valid_q;
+  logic [7:0] lossy420_luma_left_top_q [0:15];
+  logic [7:0] lossy420_luma_left_bottom_q [0:15];
+  logic [4:0] lossy420_luma_left_col_mi_q [0:15];
+  logic [15:0] lossy420_luma_left_valid_q;
   logic [7:0] lossy420_luma_predictor_w;
+  logic lossy420_luma_have_left_w;
+  logic lossy420_luma_have_top_w;
+  logic lossy420_luma_external_left_valid_w;
+  logic [3:0] lossy420_luma_left_row_index_w;
+  logic [7:0] lossy420_luma_left_sample_w;
+  logic [7:0] lossy420_luma_top_sample_w;
   logic signed [9:0] lossy420_luma_delta_w;
   logic [7:0] lossy420_luma_recon_sample_w;
   logic lossy420_luma_known_zero_w;
+  logic [7:0] lossy420_u_above_q [0:15];
+  logic [7:0] lossy420_v_above_q [0:15];
+  logic [15:0] lossy420_u_above_valid_q;
+  logic [15:0] lossy420_v_above_valid_q;
+  logic [7:0] lossy420_u_left_q [0:15];
+  logic [7:0] lossy420_v_left_q [0:15];
+  logic [4:0] lossy420_u_left_col_mi_q [0:15];
+  logic [4:0] lossy420_v_left_col_mi_q [0:15];
+  logic [15:0] lossy420_u_left_valid_q;
+  logic [15:0] lossy420_v_left_valid_q;
+  logic [7:0] lossy420_chroma_predictor_w;
+  logic lossy420_chroma_have_left_w;
+  logic lossy420_chroma_have_top_w;
+  logic lossy420_chroma_external_left_valid_w;
+  logic [3:0] lossy420_chroma_left_row_index_w;
+  logic [7:0] lossy420_chroma_left_sample_w;
+  logic [7:0] lossy420_chroma_top_sample_w;
   logic signed [9:0] lossy420_chroma_delta_w;
   logic [7:0] lossy420_chroma_recon_sample_w;
   logic lossy420_chroma_known_zero_w;
@@ -861,6 +896,7 @@ module ff_av2_encoder #(
     .predictor_samples(32'd0),
     .predictor_txb_samples(luma_fetch_predictor_samples_w),
     .dc_delta(10'sd0),
+    .dc_recon_sample(8'd0),
     .known_zero_txb(palette_luma_residual_zero_w),
     .op_valid(palette_luma_residual_op_valid_w),
     .op_literal(palette_luma_residual_op_literal_w),
@@ -872,7 +908,8 @@ module ff_av2_encoder #(
     .op_fh_inc(palette_luma_residual_op_fh_inc_w),
     .txb_done(palette_luma_residual_txb_done_w),
     .txb_nonzero(),
-    .entropy_context(palette_luma_residual_entropy_context_w)
+    .entropy_context(palette_luma_residual_entropy_context_w),
+    .latched_dc_recon_sample()
   );
 
   ff_av2_lossy420_dc_estimator lossy420_luma_dc_estimator (
@@ -897,6 +934,7 @@ module ff_av2_encoder #(
     .predictor_samples(32'd0),
     .predictor_txb_samples(128'd0),
     .dc_delta(lossy420_luma_delta_w),
+    .dc_recon_sample(lossy420_luma_recon_sample_w),
     .known_zero_txb(lossy420_luma_known_zero_w),
     .op_valid(lossy420_luma_residual_op_valid_w),
     .op_literal(lossy420_luma_residual_op_literal_w),
@@ -908,7 +946,8 @@ module ff_av2_encoder #(
     .op_fh_inc(lossy420_luma_residual_op_fh_inc_w),
     .txb_done(lossy420_luma_residual_txb_done_w),
     .txb_nonzero(),
-    .entropy_context(lossy420_luma_residual_entropy_context_w)
+    .entropy_context(lossy420_luma_residual_entropy_context_w),
+    .latched_dc_recon_sample(lossy420_luma_residual_recon_sample_w)
   );
 
   ff_av2_chroma_bdpcm_symbolizer #(
@@ -925,6 +964,7 @@ module ff_av2_encoder #(
     .predictor_samples(chroma_bdpcm_predictor_samples_w),
     .predictor_txb_samples(128'd0),
     .dc_delta(10'sd0),
+    .dc_recon_sample(8'd0),
     .known_zero_txb(1'b0),
     .op_valid(palette_chroma_bdpcm_op_valid_w),
     .op_literal(palette_chroma_bdpcm_op_literal_w),
@@ -936,12 +976,13 @@ module ff_av2_encoder #(
     .op_fh_inc(palette_chroma_bdpcm_op_fh_inc_w),
     .txb_done(palette_chroma_bdpcm_txb_done_w),
     .txb_nonzero(palette_chroma_bdpcm_txb_nonzero_w),
-    .entropy_context(palette_chroma_bdpcm_entropy_context_w)
+    .entropy_context(palette_chroma_bdpcm_entropy_context_w),
+    .latched_dc_recon_sample()
   );
 
   ff_av2_lossy420_dc_estimator lossy420_chroma_dc_estimator (
     .samples(chroma_bdpcm_txb_samples_w),
-    .predictor(8'd128),
+    .predictor(lossy420_chroma_predictor_w),
     .delta(lossy420_chroma_delta_w),
     .recon_sample(lossy420_chroma_recon_sample_w)
   );
@@ -961,6 +1002,7 @@ module ff_av2_encoder #(
     .predictor_samples(32'd0),
     .predictor_txb_samples(128'd0),
     .dc_delta(lossy420_chroma_delta_w),
+    .dc_recon_sample(lossy420_chroma_recon_sample_w),
     .known_zero_txb(lossy420_chroma_known_zero_w),
     .op_valid(lossy420_chroma_bdpcm_op_valid_w),
     .op_literal(lossy420_chroma_bdpcm_op_literal_w),
@@ -972,7 +1014,8 @@ module ff_av2_encoder #(
     .op_fh_inc(lossy420_chroma_bdpcm_op_fh_inc_w),
     .txb_done(lossy420_chroma_bdpcm_txb_done_w),
     .txb_nonzero(lossy420_chroma_bdpcm_txb_nonzero_w),
-    .entropy_context(lossy420_chroma_bdpcm_entropy_context_w)
+    .entropy_context(lossy420_chroma_bdpcm_entropy_context_w),
+    .latched_dc_recon_sample(lossy420_chroma_bdpcm_recon_sample_w)
   );
 
   ff_av2_entropy_coder entropy_coder (
@@ -1058,11 +1101,66 @@ module ff_av2_encoder #(
   assign palette_query_start_w = (state_q == ST_PALETTE_QUERY);
   assign leaf_luma_palette_w = palette_mode_q && (leaf_luma_mode_q == LUMA_MODE_DC);
   assign residual_mode_w = palette_mode_q || lossy_420_mode_q;
+  assign lossy420_luma_left_row_index_w = block_row_mi_q[3:0];
+  assign lossy420_luma_external_left_valid_w =
+    lossy420_luma_left_valid_q[lossy420_luma_left_row_index_w] &&
+    ((lossy420_luma_left_col_mi_q[lossy420_luma_left_row_index_w] + 5'd2) ==
+      block_col_mi_q);
+  assign lossy420_luma_have_left_w =
+    (txb_col_w[4:0] != 5'd0) &&
+    (txb_index_q[0] || lossy420_luma_external_left_valid_w);
+  assign lossy420_luma_have_top_w =
+    (txb_row_w[4:0] != 5'd0) &&
+    (txb_index_q[1] || lossy420_luma_above_valid_q[txb_col_w[3:0]]);
+  assign lossy420_luma_left_sample_w =
+    txb_index_q[0] ?
+      lossy420_luma_recon_q[txb_index_q[1:0] - 2'd1] :
+      (txb_index_q[1] ?
+        lossy420_luma_left_bottom_q[lossy420_luma_left_row_index_w] :
+        lossy420_luma_left_top_q[lossy420_luma_left_row_index_w]);
+  assign lossy420_luma_top_sample_w =
+    txb_index_q[1] ?
+      lossy420_luma_recon_q[txb_index_q[1:0] - 2'd2] :
+      lossy420_luma_above_q[txb_col_w[3:0]];
   assign lossy420_luma_predictor_w =
-    (txb_index_q[1:0] == 2'd0) ? 8'd128 :
-    (txb_index_q[1:0] == 2'd1) ? lossy420_luma_recon_q[0] :
-    (txb_index_q[1:0] == 2'd2) ? lossy420_luma_recon_q[0] :
-      (({1'b0, lossy420_luma_recon_q[1]} + {1'b0, lossy420_luma_recon_q[2]} + 9'd1) >> 1);
+    (lossy420_luma_have_left_w && lossy420_luma_have_top_w) ?
+      (({1'b0, lossy420_luma_left_sample_w} +
+        {1'b0, lossy420_luma_top_sample_w} + 9'd1) >> 1) :
+    lossy420_luma_have_left_w ? lossy420_luma_left_sample_w :
+    lossy420_luma_have_top_w ? lossy420_luma_top_sample_w :
+      8'd128;
+  assign lossy420_chroma_left_row_index_w = txb_row_w[3:0];
+  assign lossy420_chroma_external_left_valid_w =
+    (phase_q == PHASE_V_COEFF) ?
+      (lossy420_v_left_valid_q[lossy420_chroma_left_row_index_w] &&
+       ((lossy420_v_left_col_mi_q[lossy420_chroma_left_row_index_w] + 5'd1) ==
+        txb_col_w[4:0])) :
+      (lossy420_u_left_valid_q[lossy420_chroma_left_row_index_w] &&
+       ((lossy420_u_left_col_mi_q[lossy420_chroma_left_row_index_w] + 5'd1) ==
+        txb_col_w[4:0]));
+  assign lossy420_chroma_have_left_w =
+    (txb_col_w[4:0] != 5'd0) &&
+    lossy420_chroma_external_left_valid_w;
+  assign lossy420_chroma_have_top_w =
+    (txb_row_w[4:0] != 5'd0) &&
+    ((phase_q == PHASE_V_COEFF) ?
+      lossy420_v_above_valid_q[txb_col_w[3:0]] :
+      lossy420_u_above_valid_q[txb_col_w[3:0]]);
+  assign lossy420_chroma_left_sample_w =
+    (phase_q == PHASE_V_COEFF) ?
+      lossy420_v_left_q[lossy420_chroma_left_row_index_w] :
+      lossy420_u_left_q[lossy420_chroma_left_row_index_w];
+  assign lossy420_chroma_top_sample_w =
+    (phase_q == PHASE_V_COEFF) ?
+      lossy420_v_above_q[txb_col_w[3:0]] :
+      lossy420_u_above_q[txb_col_w[3:0]];
+  assign lossy420_chroma_predictor_w =
+    (lossy420_chroma_have_left_w && lossy420_chroma_have_top_w) ?
+      (({1'b0, lossy420_chroma_left_sample_w} +
+        {1'b0, lossy420_chroma_top_sample_w} + 9'd1) >> 1) :
+    lossy420_chroma_have_left_w ? lossy420_chroma_left_sample_w :
+    lossy420_chroma_have_top_w ? lossy420_chroma_top_sample_w :
+      8'd128;
   assign lossy420_luma_known_zero_w = (lossy420_luma_delta_w == 10'sd0);
   assign lossy420_chroma_known_zero_w = (lossy420_chroma_delta_w == 10'sd0);
   assign luma_residual_op_valid_w =
@@ -1458,12 +1556,32 @@ module ff_av2_encoder #(
   assign luma_fetch_req_col_mi_w =
     txb_prefetch_first_luma_w ? block_col_mi_q :
     (txb_prefetch_luma_start_w ? next_txb_col_w[4:0] : txb_col_w[4:0]);
+  assign chroma_fetch_current_storage_row_mi_w =
+    (chroma_format_idc == 2'd1) ?
+      (block_row_mi_q + (txb_local_row_q << 1)) :
+      txb_row_w[4:0];
+  assign chroma_fetch_current_storage_col_mi_w =
+    (chroma_format_idc == 2'd1) ?
+      (block_col_mi_q + (txb_local_col_q << 1)) :
+      txb_col_w[4:0];
+  assign chroma_fetch_next_storage_row_mi_w =
+    (chroma_format_idc == 2'd1) ?
+      (block_row_mi_q + (next_txb_local_row_w << 1)) :
+      next_txb_row_w[4:0];
+  assign chroma_fetch_next_storage_col_mi_w =
+    (chroma_format_idc == 2'd1) ?
+      (block_col_mi_q + (next_txb_local_col_w << 1)) :
+      next_txb_col_w[4:0];
   assign chroma_fetch_req_row_mi_w =
     chroma_fetch_req_cross_phase_w ? block_row_mi_q :
-    (chroma_fetch_req_next_txb_w ? next_txb_row_w[4:0] : txb_row_w[4:0]);
+    (chroma_fetch_req_next_txb_w ?
+      chroma_fetch_next_storage_row_mi_w :
+      chroma_fetch_current_storage_row_mi_w);
   assign chroma_fetch_req_col_mi_w =
     chroma_fetch_req_cross_phase_w ? block_col_mi_q :
-    (chroma_fetch_req_next_txb_w ? next_txb_col_w[4:0] : txb_col_w[4:0]);
+    (chroma_fetch_req_next_txb_w ?
+      chroma_fetch_next_storage_col_mi_w :
+      chroma_fetch_current_storage_col_mi_w);
   assign chroma_fetch_req_plane_v_w =
     chroma_fetch_req_cross_phase_w ? (phase_q == PHASE_U_COEFF) : (phase_q == PHASE_V_COEFF);
   assign chroma_left_source_index_w = txb_index_q[1:0] - 2'd1;
@@ -1934,6 +2052,12 @@ module ff_av2_encoder #(
       lossy420_luma_recon_q[1] <= 8'd128;
       lossy420_luma_recon_q[2] <= 8'd128;
       lossy420_luma_recon_q[3] <= 8'd128;
+      lossy420_luma_left_valid_q <= 16'd0;
+      lossy420_luma_above_valid_q <= 16'd0;
+      lossy420_u_left_valid_q <= 16'd0;
+      lossy420_v_left_valid_q <= 16'd0;
+      lossy420_u_above_valid_q <= 16'd0;
+      lossy420_v_above_valid_q <= 16'd0;
       txb_index_q <= 16'd0;
       txb_width_q <= 16'd0;
       txb_count_q <= 16'd0;
@@ -1987,6 +2111,16 @@ module ff_av2_encoder #(
         ibc_left_q[context_index_q] <= 1'b0;
         skip_above_q[context_index_q] <= 1'b0;
         skip_left_q[context_index_q] <= 1'b0;
+        lossy420_luma_above_q[context_index_q] <= 8'd128;
+        lossy420_luma_left_top_q[context_index_q] <= 8'd128;
+        lossy420_luma_left_bottom_q[context_index_q] <= 8'd128;
+        lossy420_luma_left_col_mi_q[context_index_q] <= 5'd0;
+        lossy420_u_above_q[context_index_q] <= 8'd128;
+        lossy420_v_above_q[context_index_q] <= 8'd128;
+        lossy420_u_left_q[context_index_q] <= 8'd128;
+        lossy420_v_left_q[context_index_q] <= 8'd128;
+        lossy420_u_left_col_mi_q[context_index_q] <= 5'd0;
+        lossy420_v_left_col_mi_q[context_index_q] <= 5'd0;
       end
     end else begin
       input_error <= 1'b0;
@@ -2068,6 +2202,12 @@ module ff_av2_encoder #(
           lossy420_luma_recon_q[1] <= 8'd128;
           lossy420_luma_recon_q[2] <= 8'd128;
           lossy420_luma_recon_q[3] <= 8'd128;
+          lossy420_luma_left_valid_q <= 16'd0;
+          lossy420_luma_above_valid_q <= 16'd0;
+          lossy420_u_left_valid_q <= 16'd0;
+          lossy420_v_left_valid_q <= 16'd0;
+          lossy420_u_above_valid_q <= 16'd0;
+          lossy420_v_above_valid_q <= 16'd0;
           txb_index_q <= 16'd0;
           txb_width_q <= 16'd0;
           txb_count_q <= 16'd0;
@@ -2163,6 +2303,12 @@ module ff_av2_encoder #(
                 lossy420_luma_recon_q[1] <= 8'd128;
                 lossy420_luma_recon_q[2] <= 8'd128;
                 lossy420_luma_recon_q[3] <= 8'd128;
+                lossy420_luma_left_valid_q <= 16'd0;
+                lossy420_luma_above_valid_q <= 16'd0;
+                lossy420_u_left_valid_q <= 16'd0;
+                lossy420_v_left_valid_q <= 16'd0;
+                lossy420_u_above_valid_q <= 16'd0;
+                lossy420_v_above_valid_q <= 16'd0;
                 txb_index_q <= 16'd0;
                 txb_width_q <= 16'd0;
                 txb_count_q <= 16'd0;
@@ -2209,6 +2355,16 @@ module ff_av2_encoder #(
                   ibc_left_q[context_index_q] <= 1'b0;
                   skip_above_q[context_index_q] <= 1'b0;
                   skip_left_q[context_index_q] <= 1'b0;
+                  lossy420_luma_above_q[context_index_q] <= 8'd128;
+                  lossy420_luma_left_top_q[context_index_q] <= 8'd128;
+                  lossy420_luma_left_bottom_q[context_index_q] <= 8'd128;
+                  lossy420_luma_left_col_mi_q[context_index_q] <= 5'd0;
+                  lossy420_u_above_q[context_index_q] <= 8'd128;
+                  lossy420_v_above_q[context_index_q] <= 8'd128;
+                  lossy420_u_left_q[context_index_q] <= 8'd128;
+                  lossy420_v_left_q[context_index_q] <= 8'd128;
+                  lossy420_u_left_col_mi_q[context_index_q] <= 5'd0;
+                  lossy420_v_left_col_mi_q[context_index_q] <= 5'd0;
                 end
                 state_q <= (tile_index_q == 16'd0) ? ST_SEQ_LOAD : ST_LOAD_BLOCK;
               end
@@ -2537,7 +2693,23 @@ module ff_av2_encoder #(
                     y_txb_left_q[txb_row_w[4:0]] <= luma_residual_entropy_context_w;
                   end
                   if (lossy_420_mode_q) begin
-                    lossy420_luma_recon_q[txb_index_q[1:0]] <= lossy420_luma_recon_sample_w;
+                    lossy420_luma_recon_q[txb_index_q[1:0]] <=
+                      lossy420_luma_residual_recon_sample_w;
+                    lossy420_luma_above_q[txb_col_w[3:0]] <=
+                      lossy420_luma_residual_recon_sample_w;
+                    lossy420_luma_above_valid_q[txb_col_w[3:0]] <= 1'b1;
+                    if (txb_index_q[0]) begin
+                      if (txb_index_q[1]) begin
+                        lossy420_luma_left_bottom_q[lossy420_luma_left_row_index_w] <=
+                          lossy420_luma_residual_recon_sample_w;
+                        lossy420_luma_left_valid_q[lossy420_luma_left_row_index_w] <= 1'b1;
+                        lossy420_luma_left_col_mi_q[lossy420_luma_left_row_index_w] <=
+                          block_col_mi_q;
+                      end else begin
+                        lossy420_luma_left_top_q[lossy420_luma_left_row_index_w] <=
+                          lossy420_luma_residual_recon_sample_w;
+                      end
+                    end
                   end
                   if (txb_index_q == (txb_count_q - 16'd1)) begin
                     phase_q <= PHASE_U_COEFF;
@@ -2591,9 +2763,29 @@ module ff_av2_encoder #(
                       u_txb_above_q[txb_col_w[4:0]] <= chroma_bdpcm_entropy_context_w;
                       u_txb_left_q[txb_row_w[4:0]] <= chroma_bdpcm_entropy_context_w;
                       last_u_txb_nonzero_q <= chroma_bdpcm_txb_nonzero_w;
+                      if (lossy_420_mode_q) begin
+                        lossy420_u_above_q[txb_col_w[3:0]] <=
+                          lossy420_chroma_bdpcm_recon_sample_w;
+                        lossy420_u_above_valid_q[txb_col_w[3:0]] <= 1'b1;
+                        lossy420_u_left_q[lossy420_chroma_left_row_index_w] <=
+                          lossy420_chroma_bdpcm_recon_sample_w;
+                        lossy420_u_left_col_mi_q[lossy420_chroma_left_row_index_w] <=
+                          txb_col_w[4:0];
+                        lossy420_u_left_valid_q[lossy420_chroma_left_row_index_w] <= 1'b1;
+                      end
                     end else begin
                       v_txb_above_q[txb_col_w[4:0]] <= chroma_bdpcm_entropy_context_w;
                       v_txb_left_q[txb_row_w[4:0]] <= chroma_bdpcm_entropy_context_w;
+                      if (lossy_420_mode_q) begin
+                        lossy420_v_above_q[txb_col_w[3:0]] <=
+                          lossy420_chroma_bdpcm_recon_sample_w;
+                        lossy420_v_above_valid_q[txb_col_w[3:0]] <= 1'b1;
+                        lossy420_v_left_q[lossy420_chroma_left_row_index_w] <=
+                          lossy420_chroma_bdpcm_recon_sample_w;
+                        lossy420_v_left_col_mi_q[lossy420_chroma_left_row_index_w] <=
+                          txb_col_w[4:0];
+                        lossy420_v_left_valid_q[lossy420_chroma_left_row_index_w] <= 1'b1;
+                      end
                     end
                   end
                   if (txb_index_q == (txb_count_q - 16'd1)) begin
