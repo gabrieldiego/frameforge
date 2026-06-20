@@ -4,11 +4,15 @@ This file records VVC-specific synthesis measurements and optimization history.
 The shared synthesis process, tool setup, and Vivado flow are documented in
 [../synthesis.md](../synthesis.md).
 
+Note: current VVC top-level synthesis always includes the 4:4:4 exact-hash IBC
+matcher. Older entries below preserve the historical configuration they
+measured, including runs before this matcher was always enabled.
+
 ## 2026-06-19 Residual Remainder Scan Trim
 
 Measured after trimming the VVC 4:2:0 residual `abs_remainder` scan in the
 4x4 residual symbol emitter. The bitstream syntax, reconstructed samples, AXI
-control/data-plane wiring, palette support, and exact-hash IBC synthesis setting
+control/data-plane wiring, palette support, and exact-hash IBC configuration
 are unchanged from the previous documented baseline.
 
 Baseline and current sources:
@@ -38,7 +42,7 @@ Synthesis configuration:
 - memory limit: 3072 MiB
 - max visible size: 1024x1024
 - 4:4:4 palette support: enabled
-- exact-hash IBC for 4:4:4: disabled (`SYNTH_SUPPORT_EXACT_HASH_IBC_444=0`)
+- exact-hash IBC for 4:4:4: disabled in this historical run
 
 Synthesis result:
 
@@ -113,7 +117,7 @@ throughput improvement.
 Measured after reducing VVC CABAC/output-path bubbles in the bit writer,
 stream-writer handoff, residual symbol emitter, and top-level CABAC input
 handoff. The bitstream syntax, reconstructed samples, AXI control/data-plane
-wiring, palette support, and exact-hash IBC synthesis setting are unchanged
+wiring, palette support, and exact-hash IBC configuration are unchanged
 from the previous documented baseline.
 
 Baseline and current sources:
@@ -146,7 +150,7 @@ Synthesis configuration:
 - memory limit: 3072 MiB
 - max visible size: 1024x1024
 - 4:4:4 palette support: enabled
-- exact-hash IBC for 4:4:4: disabled (`SYNTH_SUPPORT_EXACT_HASH_IBC_444=0`)
+- exact-hash IBC for 4:4:4: disabled in this historical run
 
 Synthesis result:
 
@@ -223,7 +227,7 @@ reconstruction changes.
 
 Measured after reducing VVC 4:2:0 residual-path bubbles in the luma and chroma
 quant/reconstruction blocks. The bitstream syntax, reconstructed samples, AXI
-control/data-plane wiring, palette support, and exact-hash IBC synthesis setting
+control/data-plane wiring, palette support, and exact-hash IBC configuration
 are unchanged from the previous documented baseline.
 
 Baseline and current sources:
@@ -256,7 +260,7 @@ Synthesis configuration:
 - memory limit: 3072 MiB
 - max visible size: 1024x1024
 - 4:4:4 palette support: enabled
-- exact-hash IBC for 4:4:4: disabled (`SYNTH_SUPPORT_EXACT_HASH_IBC_444=0`)
+- exact-hash IBC for 4:4:4: disabled in this historical run
 
 Synthesis result:
 
@@ -340,10 +344,10 @@ Baseline and current sources:
 - Current validated RTL Git SHA: `ffb4179caa0de4a4a4e52f4a21eaf9ddb39efc64`
 - Baseline mode: shared AXI4-Lite control registers, AXI4 memory-mapped
   aligned source word reads with a one-word cache, an eight-word bitstream
-  writer FIFO, 4:4:4 palette enabled, exact-hash IBC disabled by default.
+  writer FIFO, 4:4:4 palette enabled, exact-hash IBC disabled in that historical run.
 - Current mode: direct plane-row source cache, same bitstream writer FIFO, and
   one-cycle-per-coefficient VVC luma AC residual datapath; 4:4:4 palette
-  enabled, exact-hash IBC disabled by default.
+  enabled, exact-hash IBC disabled in that historical run.
 - Delta columns compare against the previous AXI writer FIFO checkpoint.
 
 Validation configuration:
@@ -394,7 +398,7 @@ Synthesis configuration:
 - memory limit: 3072 MiB
 - max visible size: 1024x1024
 - 4:4:4 palette support: enabled
-- exact-hash IBC for 4:4:4: disabled (`SYNTH_SUPPORT_EXACT_HASH_IBC_444=0`)
+- exact-hash IBC for 4:4:4: disabled in this historical run
 
 Synthesis result:
 
@@ -479,10 +483,10 @@ Baseline and current sources:
 - Current validated RTL Git SHA: `f0fc6dd70d0aacccc6a8474560c14f5118defd14`
 - Baseline mode: shared AXI4-Lite control registers, AXI4 memory-mapped
   aligned source word reads with a one-word cache, 4-beat packed bitstream
-  write bursts, 4:4:4 palette enabled, exact-hash IBC disabled by default.
+  write bursts, 4:4:4 palette enabled, exact-hash IBC disabled in that historical run.
 - Current mode: same source word cache, plus an eight-word bitstream writer
   FIFO that can keep accepting packed words while a previous burst is draining;
-  4:4:4 palette enabled, exact-hash IBC disabled by default.
+  4:4:4 palette enabled, exact-hash IBC disabled in that historical run.
 - Delta columns compare against the previous AXI word-cache checkpoint.
 
 Validation configuration:
@@ -511,7 +515,7 @@ Synthesis configuration:
 - memory limit: 3072 MiB
 - max visible size: 1024x1024
 - 4:4:4 palette support: enabled
-- exact-hash IBC for 4:4:4: disabled (`SYNTH_SUPPORT_EXACT_HASH_IBC_444=0`)
+- exact-hash IBC for 4:4:4: disabled in this historical run
 
 Synthesis result:
 
@@ -593,7 +597,7 @@ Baseline and current sources:
 - Source base Git SHA for this run: `c6bcfcfae062a8671c4194d3e062f9b195134012`
 - Current mode: shared AXI4-Lite control registers, AXI4 memory-mapped single
   beat source reads, AXI4 memory-mapped packed bitstream writes, 4:4:4 palette
-  enabled, exact-hash IBC disabled by default.
+  enabled, exact-hash IBC disabled in that historical run.
 
 Validation configuration:
 
@@ -621,7 +625,7 @@ Synthesis configuration:
 - memory limit: 3072 MiB
 - max visible size: 1024x1024
 - 4:4:4 palette support: enabled
-- exact-hash IBC for 4:4:4: disabled (`SYNTH_SUPPORT_EXACT_HASH_IBC_444=0`)
+- exact-hash IBC for 4:4:4: disabled in this historical run
 
 Synthesis result:
 
@@ -1468,7 +1472,7 @@ Configuration:
 - clock metadata: 25 MHz
 - max visible size: 1024x1024
 - 4:4:4 palette support: enabled
-- exact-hash IBC for 4:4:4: disabled (`SYNTH_SUPPORT_EXACT_HASH_IBC_444=0`)
+- exact-hash IBC for 4:4:4: disabled in this historical run
 - synthesis timeout: 600 seconds, with a 300 second review threshold
 - synthesis memory cap: 3072 MiB
 
@@ -1483,8 +1487,7 @@ Result:
   generation before `m_axis_data`.
 - Post-synth netlist restat reported 114,656 total cells and 44,106 estimated
   LCs. Compared with the CTU-local IBC hash matcher baseline, total cells
-  decreased by 11,343 and estimated LCs decreased by 2,167 because the inactive
-  exact-hash matcher is no longer synthesized by default.
+  decreased by 11,343 and estimated LCs decreased by 2,167 in that historical configuration.
 - Compared with an intermediate ungated transform-skip run, the default gate
   removed 24,945 cells and 8,695 estimated LCs, reduced Yosys synthesis time
   from 470.8 to 386.4 seconds, and reduced peak child RSS from 2058.77 to
@@ -1492,7 +1495,7 @@ Result:
 - Compared with the lossless palette escape baseline, total cells are still up
   by 16,072 and estimated LCs are up by 8,039. The growth comes from
   transform-skip residual packet collection/emission and IBC syntax expansion in
-  the CABAC frontend, not from the disabled exact-hash matcher.
+  the CABAC frontend.
 - Restat reported the largest local blocks as the CABAC context model at
   29,478 cells and 12,293 estimated LCs, the CABAC syntax frontend at 12,934
   cells and 4,590 estimated LCs, the CTU residual symbolizer at 6,831 cells and
@@ -1530,7 +1533,7 @@ Configuration:
 - clock metadata: 25 MHz
 - max visible size: 1024x1024
 - 4:4:4 palette support: enabled
-- exact-hash IBC for 4:4:4: disabled (`SYNTH_SUPPORT_EXACT_HASH_IBC_444=0`)
+- exact-hash IBC for 4:4:4: disabled in this historical run
 - synthesis timeout: 600 seconds, with a 300 second review threshold
 - synthesis memory cap: 3072 MiB
 

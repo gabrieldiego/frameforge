@@ -772,14 +772,7 @@ fn append_vvc_palette_444_8x8_cu_with_events(
 }
 
 fn vvc_exact_hash_ibc_444_enabled(frame: &VvcSampledFrame) -> bool {
-    let _ = frame;
-    // H.266 8.6.2.2 constructs the IBC BVP list from decoded neighbouring IBC
-    // CUs and HMVP entries. The RTL exact-hash matcher currently precomputes
-    // BVDs before the later transform-skip residual path can mark a CU as IBC,
-    // which leaves subsequent exact-hash CUs with stale predictors. Keep the
-    // encoder on palette / runtime left-IBC residual modes until the matcher
-    // can make exact decisions against the final runtime IBC state.
-    false
+    frame.format.chroma_sampling == ChromaSampling::Cs444
 }
 
 fn append_vvc_ibc_444_8x8_cu(

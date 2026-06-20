@@ -23,6 +23,7 @@ module ff_vvc_palette_symbolizer #(
   input  logic [15:0] cu_request_origin_x,
   input  logic [15:0] cu_request_origin_y,
   input  logic        cu_request_last,
+  input  logic        cu_request_prior_ibc_seen,
   input  logic        s_axis_valid,
   output logic        s_axis_ready,
   input  logic [1:0]  s_axis_plane,
@@ -477,11 +478,11 @@ module ff_vvc_palette_symbolizer #(
                 ((cu_request_origin_y + 16'd8) <= ctu_visible_height) &&
                 // H.266 8.6.2.2 builds the IBC BVP list from A1/B1/HMVP/zero.
                 // This first TS-residual subset hardcodes MVD -8,0, so allow
-                // it only while the local BVP history is still zero. The
-                // symbolizer runs in coding-tree order, so this bit tracks
-                // whether a prior runtime TS-residual IBC CU has populated
-                // HMVP before the current request.
+                // it only while the local BVP history is still zero. Exact-hash
+                // IBC CUs are emitted by the top partition mux, so the request
+                // carries whether any prior coded IBC CU has populated HMVP.
                 !request_cu_left_ibc_w && !request_cu_above_ibc_w &&
+                !cu_request_prior_ibc_seen &&
                 !prior_runtime_ibc_seen_q;
               bdpcm_candidate_q <=
                 (cu_request_origin_x >= 16'd8) &&

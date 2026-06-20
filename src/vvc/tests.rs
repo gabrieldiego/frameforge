@@ -1901,13 +1901,13 @@ fn vvc_palette_444_uses_ibc_for_repeated_8x8_block() {
 
     let ctx_bins = vvc_palette_444_cabac_context_bins(&frame);
     assert!(
-        !ctx_bins.contains(&(
+        ctx_bins.contains(&(
             VvcCabacContext::PredModeIbcFlag(0)
                 .rtl_context_id()
                 .unwrap(),
             true
         )),
-        "exact-hash MODE_IBC is disabled while runtime TS-residual IBC updates BVP/HMVP"
+        "exact-hash MODE_IBC should be emitted for repeated 4:4:4 8x8 CUs"
     );
 }
 

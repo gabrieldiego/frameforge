@@ -15,7 +15,6 @@ module ff_av2_encoder #(
   parameter int AXI_ADDR_BITS = 32,
   parameter int AXI_DATA_BITS = 128,
   parameter int SUPPORT_PALETTE_444 = 1,
-  parameter int SUPPORT_EXACT_HASH_IBC_444 = 1,
   // TODO(av2): replace this staged carry/tile buffer with a streaming carry
   // resolver. Lossless high-colour 64x64 4:4:4 vectors need about 20 KiB
   // today, while larger future pictures must not scale this buffer by frame.
@@ -780,8 +779,7 @@ module ff_av2_encoder #(
   );
 
   ff_av2_local_hash_matcher_444 #(
-    .SAMPLE_BITS(SAMPLE_BITS),
-    .SUPPORT_EXACT_HASH_IBC_444(SUPPORT_EXACT_HASH_IBC_444)
+    .SAMPLE_BITS(SAMPLE_BITS)
   ) local_hash_ibc (
     .clk(clk),
     .rst_n(rst_n),

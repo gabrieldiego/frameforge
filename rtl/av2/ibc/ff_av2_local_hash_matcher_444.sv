@@ -1,8 +1,7 @@
 `timescale 1ns/1ps
 
 module ff_av2_local_hash_matcher_444 #(
-  parameter int SAMPLE_BITS = 8,
-  parameter int SUPPORT_EXACT_HASH_IBC_444 = 1
+  parameter int SAMPLE_BITS = 8
 ) (
   input  logic       clk,
   input  logic       rst_n,
@@ -85,7 +84,7 @@ module ff_av2_local_hash_matcher_444 #(
   logic candidate_above_w;
   logic enabled_w;
 
-  assign enabled_w = (SUPPORT_EXACT_HASH_IBC_444 != 0) && (SAMPLE_BITS == 8);
+  assign enabled_w = (SAMPLE_BITS == 8);
   assign hash_after_xor_w = current_hash_q ^ {24'd0, sample[7:0]};
   assign hash_after_mix0_w = hash_after_xor_w ^ (hash_after_xor_w << 13);
   assign hash_after_mix1_w = hash_after_mix0_w ^ (hash_after_mix0_w >> 17);
