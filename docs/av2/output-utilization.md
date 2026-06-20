@@ -23,6 +23,45 @@ Metric definitions:
   writer for these internal counters live in `tb/av2_metrics.py`; they are not
   part of the shared top-level pass/fail contract.
 
+## 2026-06-20 Local Hash IntraBC Candidate Expansion
+
+Measured after widening the AV2 4:4:4 exact-hash IntraBC matcher from
+immediate-left-only to local above-or-left terminal 8x8 candidates. The matcher
+still operates from local per-tile hash storage and does not insert any
+external-memory context fetch into the pipeline.
+
+Baseline and current sources:
+
+- Baseline Git SHA: `ffb4179caa0de4a4a4e52f4a21eaf9ddb39efc64`
+- Current validated RTL Git SHA:
+  `576fe0a4e863c95d80f4823b104cad5cb31d9d63`
+- Baseline mode: last detailed AV2 4:4:4 output-utilization report.
+- Current mode: same path plus above/left terminal hash IntraBC candidate
+  selection.
+- Delta columns compare against the last detailed AV2 4:4:4
+  output-utilization report.
+
+Validation result:
+
+- `screenshot-sweep-444`: OK (64/64).
+- `screenshot-multictu-444`: OK (10/10).
+- All listed vectors matched SW/RTL bitstream checksums and
+  SW/RTL/reference-decoder reconstruction checksums.
+
+Aggregate top-level RTL utilization:
+
+| Set | Cases | RTL bits (delta) | Total cycles (delta) | Active cycles (delta) | Wait cycles (delta) | Output util (delta) | Bubble rate (delta) | Cycles/bit (delta) | Cycles/pixel (delta) | Cycles/pixel range |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| screenshot-sweep-444 | 64 | 770424 (-424) | 1227561 (-548) | 96303 (-53) | 1131258 (-495) | 0.0785 (~0) | 0.922 (~0) | 1.59 (~0) | 14.8 (-0.0066) | 8.521-23.122 |
+| screenshot-multictu-444 | 10 | 592008 (+0) | 1168279 (+0) | 74001 (+0) | 1094278 (+0) | 0.0633 (+0) | 0.937 (+0) | 1.97 (+0) | 12.7 (+0) | 8.519-17.660 |
+
+Only the two shorter sweep bitstreams changed per-vector timing:
+
+| Vector | Status | RTL bits (delta) | Total cycles (delta) | Active cycles (delta) | Wait cycles (delta) | Output util (delta) | Bubble rate (delta) | Cycles/bit (delta) | Cycles/pixel (delta) |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| screenshot_640_sweep_8x48_1f_yuv444p8.yuv | PASS | 640 (-24) | 3687 (-104) | 80 (-3) | 3607 (-101) | 0.0217 (~0) | 0.978 (~0) | 5.76 (+0.052) | 9.60 (-0.27) |
+| screenshot_640_sweep_56x48_1f_yuv444p8.yuv | PASS | 13160 (-400) | 31869 (-444) | 1645 (-50) | 30224 (-394) | 0.0516 (-0.0008) | 0.948 (+0.0008) | 2.42 (+0.039) | 11.9 (-0.17) |
+
 ## 2026-06-19 4:2:0 Lossy Residual Baseline
 
 Measured after extending the AV2 `yuv420p8` residual RTL to all RaceHorses

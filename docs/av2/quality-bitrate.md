@@ -10,6 +10,43 @@ AV2 reference path used here is decode-only; these validation runs do not
 invoke `avmenc`, `aomenc`, or `vpenc`, and reference-encoder bitrates are
 not tracked in this report.
 
+## 2026-06-20 Local Hash IntraBC Candidate Expansion
+
+Baseline and current sources:
+
+- Baseline Git SHA: `17ff78397917f320a13809216e957826acd9cbc7`
+- Current validated source Git SHA:
+  `576fe0a4e863c95d80f4823b104cad5cb31d9d63`
+- Baseline mode: last detailed AV2 4:4:4 quality report with immediate-left
+  terminal hash IBC.
+- Current mode: local exact-hash IntraBC can select the above terminal 8x8
+  default-BV candidate or the left terminal 8x8 default-BV candidate while
+  still storing only 32-bit hashes inside the current 64x64 tile.
+- Delta columns compare against the last detailed AV2 4:4:4 quality report.
+
+Validation result:
+
+- `screenshot-sweep-444`: 64/64 PASS.
+- `screenshot-multictu-444`: 10/10 PASS.
+- All listed vectors matched SW/RTL bitstream checksums and
+  SW/RTL/reference-decoder reconstruction checksums.
+- The screenshot 4:4:4 path remains lossless; PSNR is `inf` for every listed
+  vector.
+
+Aggregate results:
+
+| Set | Cases | Status | SW bits (delta) | SW bpp (delta) | PSNR |
+|---|---:|---|---:|---:|---|
+| screenshot-sweep-444 | 64 | PASS | 770424 (-424) | 9.2885 (-0.0051) | inf |
+| screenshot-multictu-444 | 10 | PASS | 592008 (+0) | 6.4461 (+0.0000) | inf |
+
+Only two sweep vectors changed bit count in this checkpoint:
+
+| Vector | Status | SW bits (delta) | SW bpp (delta) | PSNR |
+|---|---|---:|---:|---:|
+| screenshot_640_sweep_8x48_1f_yuv444p8.yuv | PASS | 640 (-24) | 1.6667 (-0.0625) | inf |
+| screenshot_640_sweep_56x48_1f_yuv444p8.yuv | PASS | 13160 (-400) | 4.8958 (-0.1488) | inf |
+
 ## 2026-06-19 4:2:0 Lossy Residual Baseline
 
 Baseline and current sources:

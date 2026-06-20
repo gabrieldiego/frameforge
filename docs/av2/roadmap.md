@@ -63,8 +63,8 @@ reducing cost rather than proving the plumbing again:
 - Lossless luma residual coefficient coding after palette or non-DC luma intra
   prediction.
 - Lossless horizontal chroma BDPCM plus coefficient coding for 4:4:4 chroma.
-- First exact-hash IntraBC path using the immediate-left 8x8 block as a
-  candidate.
+- Exact-hash IntraBC path using local 8x8 hashes for terminal above/left
+  default-BV candidates inside the current 64x64 tile.
 - First restricted luma intra prediction path with DC, vertical, and horizontal
   modes where the currently implemented context model is valid.
 - Strict SW/RTL/reference-decoder checksum validation and per-milestone
@@ -79,7 +79,7 @@ reducing cost rather than proving the plumbing again:
 
 1. Baseline pass
    - Done: freeze current working lossless 4:4:4 palette + luma residual +
-     chroma BDPCM + left-hash IBC + restricted H/V intra path.
+     chroma BDPCM + local above/left hash IBC + restricted H/V intra path.
    - Keep 8-bit, fixed 8x8 coding leaves, and synthesis-visible geometry
      ceilings that do not create resolution-sized line buffers.
    - Required checks remain `screenshot-sweep-444` + `screenshot-multictu-444`.
@@ -101,7 +101,7 @@ reducing cost rather than proving the plumbing again:
 1. Prediction decision block
    - Add a small SW/RTL decision block that chooses between the currently
      implemented predictors: luma palette+residual, DC residual, H/V intra
-     residual, and left-hash IBC.
+     residual, and local hash IBC.
    - Keep the first version simple: deterministic priority or rough bit-count
      estimates are acceptable; exact RDO can come later.
    - The block should emit explicit trace labels explaining why each 8x8 leaf
@@ -115,12 +115,16 @@ reducing cost rather than proving the plumbing again:
    - Keep residual coding lossless so a bad predictor only costs bitrate.
 
 3. IntraBC candidate block
-   - Expand the current immediate-left hash candidate into a small candidate
-     module that can also test above and above-left 8x8 blocks.
+   - Done: expand the immediate-left hash candidate into a local above/left
+     terminal candidate module using AVM default-BV DRL entries 2 and 3.
    - Store hashes and candidate metadata, not whole blocks, unless a later
      exact-compare stage proves necessary.
    - Keep the search local and deterministic first; full virtual-buffer/window
      behavior can be staged after the candidate syntax is stable.
+   - Next: model the full AVM block-vector predictor stack before enabling
+     non-terminal copies or additional candidates such as above-left. A
+     fixed-DRL non-terminal experiment was rejected by the reference decoder at
+     `screenshot_640_sweep_24x8_1f_yuv444p8.yuv`.
 
 4. Chroma prediction/BDPCM expansion
    - Add vertical chroma BDPCM beside the current horizontal path.
@@ -218,7 +222,10 @@ reducing cost rather than proving the plumbing again:
   auditable module instead of being spread across palette analysis and tile
   emission.
 - [ ] Add vertical chroma BDPCM and a tiny direction chooser.
-- [ ] Expand IBC from immediate-left only to a small hash-candidate set.
+- ✅ Expand IBC from immediate-left only to a small local above/left
+  hash-candidate set.
+- [ ] Model the AVM IntraBC BVP stack so non-terminal and wider local IBC
+  candidates can be enabled safely.
 - [ ] Reduce active critical path in luma-palette delta coding and measure with
   `docs/av2/synthesis.md` after the next functional block lands.
 - [ ] Add one end-to-end “screen scene” baseline (single source screenshot crop
@@ -235,7 +242,8 @@ Use this as the recurring feature checklist for each active development cycle:
   - Residual path coverage for all 8x8 leaves (palette residual + BDPCM variants)
   - Additional predictor modes with strict fallback ordering
   - Intra prediction context and mode expansion for screen content
-  - IBC hash-candidate expansion beyond immediate-left only
+  - IBC BVP-stack modeling and hash-candidate expansion beyond terminal
+    above/left only
   - Block-tree and partition decision support
   - Optional entropy/range-coder context/state updates once correctness is stable
   - Chroma-robust fallback policy (no silent failures on non-palette blocks)
