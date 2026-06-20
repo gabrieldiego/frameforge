@@ -10,19 +10,21 @@ AV2 reference path used here is decode-only; these validation runs do not
 invoke `avmenc`, `aomenc`, or `vpenc`, and reference-encoder bitrates are
 not tracked in this report.
 
-## 2026-06-20 Local Hash IntraBC Candidate Expansion
+## 2026-06-20 AVM-Valid Local Hash IntraBC
 
 Baseline and current sources:
 
-- Baseline Git SHA: `17ff78397917f320a13809216e957826acd9cbc7`
-- Current validated source Git SHA:
-  `576fe0a4e863c95d80f4823b104cad5cb31d9d63`
-- Baseline mode: last detailed AV2 4:4:4 quality report with immediate-left
-  terminal hash IBC.
-- Current mode: local exact-hash IntraBC can select the above terminal 8x8
-  default-BV candidate or the left terminal 8x8 default-BV candidate while
-  still storing only 32-bit hashes inside the current 64x64 tile.
-- Delta columns compare against the last detailed AV2 4:4:4 quality report.
+- Baseline Git SHA: `576fe0a4e863c95d80f4823b104cad5cb31d9d63`
+- Current validated source Git SHA: `fecba0947c6b46f801f0394a8e0699f68c1c542f`
+- Baseline mode: previous documented AV2 4:4:4 local-hash IntraBC candidate
+  expansion checkpoint.
+- Current mode: AVM-valid local exact-hash IntraBC with 32-bit hashes for
+  each 8x8 block in the current 64x64 tile, DRL-aware left-copy selection,
+  and palette-cache masking for IBC-coded leaves. Above-copy candidates are
+  counted but not selected until the full AVM `is_mi_coded`/BVP availability
+  model is implemented.
+- Delta columns in the aggregate table compare against the previous documented
+  AV2 4:4:4 quality checkpoint.
 
 Validation result:
 
@@ -35,17 +37,101 @@ Validation result:
 
 Aggregate results:
 
-| Set | Cases | Status | SW bits (delta) | SW bpp (delta) | PSNR |
-|---|---:|---|---:|---:|---|
-| screenshot-sweep-444 | 64 | PASS | 770424 (-424) | 9.2885 (-0.0051) | inf |
-| screenshot-multictu-444 | 10 | PASS | 592008 (+0) | 6.4461 (+0.0000) | inf |
+| Set | Cases | Status | SW bits (delta) | SW bpp (delta) | Selected IBC copies | PSNR |
+|---|---:|---|---:|---:|---:|---|
+| screenshot-sweep-444 | 64 | PASS | 755352 (-15072) | 9.1068 (-0.1817) | 358 | inf |
+| screenshot-multictu-444 | 10 | PASS | 570512 (-21496) | 6.2120 (-0.2341) | 676 | inf |
 
-Only two sweep vectors changed bit count in this checkpoint:
+IBC candidate summary:
 
-| Vector | Status | SW bits (delta) | SW bpp (delta) | PSNR |
+| Set | 8x8 blocks | Raw above matches | Raw left matches | Direct above matches | Direct left matches | Selected above copies | Selected left copies |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| screenshot-sweep-444 | 1296 | 311 | 480 | 80 | 440 | 0 | 358 |
+| screenshot-multictu-444 | 1435 | 578 | 796 | 84 | 756 | 0 | 676 |
+
+### Full Screenshot Sweep
+
+| Vector | Status | SW bits | SW bpp | PSNR |
 |---|---|---:|---:|---:|
-| screenshot_640_sweep_8x48_1f_yuv444p8.yuv | PASS | 640 (-24) | 1.6667 (-0.0625) | inf |
-| screenshot_640_sweep_56x48_1f_yuv444p8.yuv | PASS | 13160 (-400) | 4.8958 (-0.1488) | inf |
+| screenshot_640_sweep_8x8_1f_yuv444p8.yuv | PASS | 344 | 5.3750 | inf |
+| screenshot_640_sweep_16x8_1f_yuv444p8.yuv | PASS | 1984 | 15.5000 | inf |
+| screenshot_640_sweep_24x8_1f_yuv444p8.yuv | PASS | 416 | 2.1667 | inf |
+| screenshot_640_sweep_32x8_1f_yuv444p8.yuv | PASS | 736 | 2.8750 | inf |
+| screenshot_640_sweep_40x8_1f_yuv444p8.yuv | PASS | 480 | 1.5000 | inf |
+| screenshot_640_sweep_48x8_1f_yuv444p8.yuv | PASS | 520 | 1.3542 | inf |
+| screenshot_640_sweep_56x8_1f_yuv444p8.yuv | PASS | 6864 | 15.3214 | inf |
+| screenshot_640_sweep_64x8_1f_yuv444p8.yuv | PASS | 6816 | 13.3125 | inf |
+| screenshot_640_sweep_8x16_1f_yuv444p8.yuv | PASS | 1824 | 14.2500 | inf |
+| screenshot_640_sweep_16x16_1f_yuv444p8.yuv | PASS | 4616 | 18.0312 | inf |
+| screenshot_640_sweep_24x16_1f_yuv444p8.yuv | PASS | 472 | 1.2292 | inf |
+| screenshot_640_sweep_32x16_1f_yuv444p8.yuv | PASS | 512 | 1.0000 | inf |
+| screenshot_640_sweep_40x16_1f_yuv444p8.yuv | PASS | 9744 | 15.2250 | inf |
+| screenshot_640_sweep_48x16_1f_yuv444p8.yuv | PASS | 608 | 0.7917 | inf |
+| screenshot_640_sweep_56x16_1f_yuv444p8.yuv | PASS | 10648 | 11.8839 | inf |
+| screenshot_640_sweep_64x16_1f_yuv444p8.yuv | PASS | 696 | 0.6797 | inf |
+| screenshot_640_sweep_8x24_1f_yuv444p8.yuv | PASS | 3536 | 18.4167 | inf |
+| screenshot_640_sweep_16x24_1f_yuv444p8.yuv | PASS | 2728 | 7.1042 | inf |
+| screenshot_640_sweep_24x24_1f_yuv444p8.yuv | PASS | 7000 | 12.1528 | inf |
+| screenshot_640_sweep_32x24_1f_yuv444p8.yuv | PASS | 14664 | 19.0938 | inf |
+| screenshot_640_sweep_40x24_1f_yuv444p8.yuv | PASS | 15360 | 16.0000 | inf |
+| screenshot_640_sweep_48x24_1f_yuv444p8.yuv | PASS | 680 | 0.5903 | inf |
+| screenshot_640_sweep_56x24_1f_yuv444p8.yuv | PASS | 720 | 0.5357 | inf |
+| screenshot_640_sweep_64x24_1f_yuv444p8.yuv | PASS | 23320 | 15.1823 | inf |
+| screenshot_640_sweep_8x32_1f_yuv444p8.yuv | PASS | 3016 | 11.7812 | inf |
+| screenshot_640_sweep_16x32_1f_yuv444p8.yuv | PASS | 1328 | 2.5938 | inf |
+| screenshot_640_sweep_24x32_1f_yuv444p8.yuv | PASS | 1728 | 2.2500 | inf |
+| screenshot_640_sweep_32x32_1f_yuv444p8.yuv | PASS | 11112 | 10.8516 | inf |
+| screenshot_640_sweep_40x32_1f_yuv444p8.yuv | PASS | 688 | 0.5375 | inf |
+| screenshot_640_sweep_48x32_1f_yuv444p8.yuv | PASS | 22176 | 14.4375 | inf |
+| screenshot_640_sweep_56x32_1f_yuv444p8.yuv | PASS | 27264 | 15.2143 | inf |
+| screenshot_640_sweep_64x32_1f_yuv444p8.yuv | PASS | 856 | 0.4180 | inf |
+| screenshot_640_sweep_8x40_1f_yuv444p8.yuv | PASS | 5952 | 18.6000 | inf |
+| screenshot_640_sweep_16x40_1f_yuv444p8.yuv | PASS | 13240 | 20.6875 | inf |
+| screenshot_640_sweep_24x40_1f_yuv444p8.yuv | PASS | 1640 | 1.7083 | inf |
+| screenshot_640_sweep_32x40_1f_yuv444p8.yuv | PASS | 21832 | 17.0562 | inf |
+| screenshot_640_sweep_40x40_1f_yuv444p8.yuv | PASS | 21976 | 13.7350 | inf |
+| screenshot_640_sweep_48x40_1f_yuv444p8.yuv | PASS | 1552 | 0.8083 | inf |
+| screenshot_640_sweep_56x40_1f_yuv444p8.yuv | PASS | 20568 | 9.1821 | inf |
+| screenshot_640_sweep_64x40_1f_yuv444p8.yuv | PASS | 1144 | 0.4469 | inf |
+| screenshot_640_sweep_8x48_1f_yuv444p8.yuv | PASS | 664 | 1.7292 | inf |
+| screenshot_640_sweep_16x48_1f_yuv444p8.yuv | PASS | 15856 | 20.6458 | inf |
+| screenshot_640_sweep_24x48_1f_yuv444p8.yuv | PASS | 15112 | 13.1181 | inf |
+| screenshot_640_sweep_32x48_1f_yuv444p8.yuv | PASS | 15728 | 10.2396 | inf |
+| screenshot_640_sweep_40x48_1f_yuv444p8.yuv | PASS | 30328 | 15.7958 | inf |
+| screenshot_640_sweep_48x48_1f_yuv444p8.yuv | PASS | 880 | 0.3819 | inf |
+| screenshot_640_sweep_56x48_1f_yuv444p8.yuv | PASS | 13248 | 4.9286 | inf |
+| screenshot_640_sweep_64x48_1f_yuv444p8.yuv | PASS | 1240 | 0.4036 | inf |
+| screenshot_640_sweep_8x56_1f_yuv444p8.yuv | PASS | 6952 | 15.5179 | inf |
+| screenshot_640_sweep_16x56_1f_yuv444p8.yuv | PASS | 9808 | 10.9464 | inf |
+| screenshot_640_sweep_24x56_1f_yuv444p8.yuv | PASS | 11976 | 8.9107 | inf |
+| screenshot_640_sweep_32x56_1f_yuv444p8.yuv | PASS | 18864 | 10.5268 | inf |
+| screenshot_640_sweep_40x56_1f_yuv444p8.yuv | PASS | 37184 | 16.6000 | inf |
+| screenshot_640_sweep_48x56_1f_yuv444p8.yuv | PASS | 22544 | 8.3869 | inf |
+| screenshot_640_sweep_56x56_1f_yuv444p8.yuv | PASS | 57760 | 18.4184 | inf |
+| screenshot_640_sweep_64x56_1f_yuv444p8.yuv | PASS | 28200 | 7.8683 | inf |
+| screenshot_640_sweep_8x64_1f_yuv444p8.yuv | PASS | 5344 | 10.4375 | inf |
+| screenshot_640_sweep_16x64_1f_yuv444p8.yuv | PASS | 15448 | 15.0859 | inf |
+| screenshot_640_sweep_24x64_1f_yuv444p8.yuv | PASS | 13496 | 8.7865 | inf |
+| screenshot_640_sweep_32x64_1f_yuv444p8.yuv | PASS | 32040 | 15.6445 | inf |
+| screenshot_640_sweep_40x64_1f_yuv444p8.yuv | PASS | 2096 | 0.8187 | inf |
+| screenshot_640_sweep_48x64_1f_yuv444p8.yuv | PASS | 50160 | 16.3281 | inf |
+| screenshot_640_sweep_56x64_1f_yuv444p8.yuv | PASS | 2512 | 0.7009 | inf |
+| screenshot_640_sweep_64x64_1f_yuv444p8.yuv | PASS | 76552 | 18.6895 | inf |
+
+### Screenshot Multi-CTU And Partial Crops
+
+| Vector | Status | SW bits | SW bpp | PSNR |
+|---|---|---:|---:|---:|
+| screenshot_640_multictu_h2_128x64_1f_yuv444p8.yuv | PASS | 88520 | 10.8057 | inf |
+| screenshot_640_multictu_v2_64x128_1f_yuv444p8.yuv | PASS | 43960 | 5.3662 | inf |
+| screenshot_640_multictu_grid2_128x128_1f_yuv444p8.yuv | PASS | 10168 | 0.6206 | inf |
+| screenshot_640_multictu_h3_192x64_1f_yuv444p8.yuv | PASS | 45768 | 3.7246 | inf |
+| screenshot_640_multictu_v3_64x192_1f_yuv444p8.yuv | PASS | 101472 | 8.2578 | inf |
+| screenshot_640_partial_h2_72x64_1f_yuv444p8.yuv | PASS | 60568 | 13.1441 | inf |
+| screenshot_640_partial_v2_64x72_1f_yuv444p8.yuv | PASS | 1664 | 0.3611 | inf |
+| screenshot_640_partial_grid2_72x72_1f_yuv444p8.yuv | PASS | 3000 | 0.5787 | inf |
+| screenshot_640_partial_wide_136x80_1f_yuv444p8.yuv | PASS | 135600 | 12.4632 | inf |
+| screenshot_640_partial_tall_72x128_1f_yuv444p8.yuv | PASS | 79792 | 8.6580 | inf |
 
 ## 2026-06-19 4:2:0 Lossy Residual Baseline
 
@@ -154,130 +240,3 @@ Aggregate results:
 | racehorses_partial_wide_136x80_1f_yuv420p8.yuv | PASS | 22552 | 2.0728 | 22.81 |
 | racehorses_partial_tall_72x128_1f_yuv420p8.yuv | PASS | 19104 | 2.0729 | 22.40 |
 | racehorses_partial_grid2_72x72_1f_yuv420p8.yuv | PASS | 11384 | 2.1960 | 22.92 |
-
-## 2026-06-16 Luma Intra + IntraBC Syntax Fix Delta
-
-Baseline and current sources:
-
-- Baseline Git SHA: `d04435fd29ec73e18181c54c2452b869add56b87`
-- Current validated source Git SHA: `17ff78397917f320a13809216e957826acd9cbc7`
-- Baseline mode: previously documented AV2 left-hash IBC checkpoint.
-- Current mode: AV2 software/RTL/reference-decoder validation after fixing
-  frame-level `allow_intrabc` and per-leaf `use_intrabc` syntax parity.
-- Delta columns compare the current FrameForge software bitstream against
-  the baseline FrameForge software bitstream for the same vector.
-
-Validation commands:
-
-```sh
-make validate-set CODEC=av2 \
-  VALIDATION_SET=screenshot-sweep-444 \
-  VALIDATION_SET_DIR=verification/test_vector_sets/local \
-  VALIDATION_STOP_ON_FAIL=1 \
-  VALIDATION_WITH_SYNTH=0
-
-make validate-set CODEC=av2 \
-  VALIDATION_SET=screenshot-multictu-444 \
-  VALIDATION_SET_DIR=verification/test_vector_sets/local \
-  VALIDATION_STOP_ON_FAIL=1 \
-  VALIDATION_WITH_SYNTH=0
-```
-
-Results:
-
-```text
-screenshot-sweep-444:    64/64 PASS
-screenshot-multictu-444: 10/10 PASS
-```
-
-### Full Screenshot Sweep
-
-Aggregate SW bits: `770848` (+96).
-Aggregate SW bpp: `9.2936` (+0.0012).
-
-| Vector | Status | SW bits (delta) | SW bpp (delta) | PSNR |
-|---|---|---:|---:|---:|
-| screenshot_640_sweep_8x8_1f_yuv444p8.yuv | PASS | 344 (0) | 5.3750 (0.0000) | inf |
-| screenshot_640_sweep_16x8_1f_yuv444p8.yuv | PASS | 1984 (0) | 15.5000 (0.0000) | inf |
-| screenshot_640_sweep_24x8_1f_yuv444p8.yuv | PASS | 392 (0) | 2.0417 (0.0000) | inf |
-| screenshot_640_sweep_32x8_1f_yuv444p8.yuv | PASS | 712 (0) | 2.7812 (0.0000) | inf |
-| screenshot_640_sweep_40x8_1f_yuv444p8.yuv | PASS | 456 (0) | 1.4250 (0.0000) | inf |
-| screenshot_640_sweep_48x8_1f_yuv444p8.yuv | PASS | 496 (0) | 1.2917 (0.0000) | inf |
-| screenshot_640_sweep_56x8_1f_yuv444p8.yuv | PASS | 6864 (0) | 15.3214 (0.0000) | inf |
-| screenshot_640_sweep_64x8_1f_yuv444p8.yuv | PASS | 6816 (0) | 13.3125 (0.0000) | inf |
-| screenshot_640_sweep_8x16_1f_yuv444p8.yuv | PASS | 1824 (0) | 14.2500 (0.0000) | inf |
-| screenshot_640_sweep_16x16_1f_yuv444p8.yuv | PASS | 4616 (0) | 18.0312 (0.0000) | inf |
-| screenshot_640_sweep_24x16_1f_yuv444p8.yuv | PASS | 504 (0) | 1.3125 (0.0000) | inf |
-| screenshot_640_sweep_32x16_1f_yuv444p8.yuv | PASS | 576 (0) | 1.1250 (0.0000) | inf |
-| screenshot_640_sweep_40x16_1f_yuv444p8.yuv | PASS | 9744 (0) | 15.2250 (0.0000) | inf |
-| screenshot_640_sweep_48x16_1f_yuv444p8.yuv | PASS | 720 (0) | 0.9375 (0.0000) | inf |
-| screenshot_640_sweep_56x16_1f_yuv444p8.yuv | PASS | 10648 (0) | 11.8839 (0.0000) | inf |
-| screenshot_640_sweep_64x16_1f_yuv444p8.yuv | PASS | 872 (0) | 0.8516 (0.0000) | inf |
-| screenshot_640_sweep_8x24_1f_yuv444p8.yuv | PASS | 3536 (0) | 18.4167 (0.0000) | inf |
-| screenshot_640_sweep_16x24_1f_yuv444p8.yuv | PASS | 2728 (0) | 7.1042 (0.0000) | inf |
-| screenshot_640_sweep_24x24_1f_yuv444p8.yuv | PASS | 7000 (0) | 12.1528 (0.0000) | inf |
-| screenshot_640_sweep_32x24_1f_yuv444p8.yuv | PASS | 14664 (0) | 19.0938 (0.0000) | inf |
-| screenshot_640_sweep_40x24_1f_yuv444p8.yuv | PASS | 15360 (0) | 16.0000 (0.0000) | inf |
-| screenshot_640_sweep_48x24_1f_yuv444p8.yuv | PASS | 944 (0) | 0.8194 (0.0000) | inf |
-| screenshot_640_sweep_56x24_1f_yuv444p8.yuv | PASS | 1048 (0) | 0.7798 (0.0000) | inf |
-| screenshot_640_sweep_64x24_1f_yuv444p8.yuv | PASS | 23320 (+8) | 15.1823 (+0.0052) | inf |
-| screenshot_640_sweep_8x32_1f_yuv444p8.yuv | PASS | 3016 (0) | 11.7812 (0.0000) | inf |
-| screenshot_640_sweep_16x32_1f_yuv444p8.yuv | PASS | 1408 (0) | 2.7500 (0.0000) | inf |
-| screenshot_640_sweep_24x32_1f_yuv444p8.yuv | PASS | 1808 (0) | 2.3542 (0.0000) | inf |
-| screenshot_640_sweep_32x32_1f_yuv444p8.yuv | PASS | 11152 (0) | 10.8906 (0.0000) | inf |
-| screenshot_640_sweep_40x32_1f_yuv444p8.yuv | PASS | 1008 (0) | 0.7875 (0.0000) | inf |
-| screenshot_640_sweep_48x32_1f_yuv444p8.yuv | PASS | 22176 (0) | 14.4375 (0.0000) | inf |
-| screenshot_640_sweep_56x32_1f_yuv444p8.yuv | PASS | 27264 (0) | 15.2143 (0.0000) | inf |
-| screenshot_640_sweep_64x32_1f_yuv444p8.yuv | PASS | 1456 (0) | 0.7109 (0.0000) | inf |
-| screenshot_640_sweep_8x40_1f_yuv444p8.yuv | PASS | 5952 (0) | 18.6000 (0.0000) | inf |
-| screenshot_640_sweep_16x40_1f_yuv444p8.yuv | PASS | 13240 (0) | 20.6875 (0.0000) | inf |
-| screenshot_640_sweep_24x40_1f_yuv444p8.yuv | PASS | 1792 (0) | 1.8667 (0.0000) | inf |
-| screenshot_640_sweep_32x40_1f_yuv444p8.yuv | PASS | 21832 (0) | 17.0562 (0.0000) | inf |
-| screenshot_640_sweep_40x40_1f_yuv444p8.yuv | PASS | 22480 (0) | 14.0500 (0.0000) | inf |
-| screenshot_640_sweep_48x40_1f_yuv444p8.yuv | PASS | 2152 (0) | 1.1208 (0.0000) | inf |
-| screenshot_640_sweep_56x40_1f_yuv444p8.yuv | PASS | 20944 (0) | 9.3500 (0.0000) | inf |
-| screenshot_640_sweep_64x40_1f_yuv444p8.yuv | PASS | 2016 (0) | 0.7875 (0.0000) | inf |
-| screenshot_640_sweep_8x48_1f_yuv444p8.yuv | PASS | 664 (0) | 1.7292 (0.0000) | inf |
-| screenshot_640_sweep_16x48_1f_yuv444p8.yuv | PASS | 15856 (0) | 20.6458 (0.0000) | inf |
-| screenshot_640_sweep_24x48_1f_yuv444p8.yuv | PASS | 15152 (0) | 13.1528 (0.0000) | inf |
-| screenshot_640_sweep_32x48_1f_yuv444p8.yuv | PASS | 15832 (0) | 10.3073 (0.0000) | inf |
-| screenshot_640_sweep_40x48_1f_yuv444p8.yuv | PASS | 30400 (0) | 15.8333 (0.0000) | inf |
-| screenshot_640_sweep_48x48_1f_yuv444p8.yuv | PASS | 1600 (0) | 0.6944 (0.0000) | inf |
-| screenshot_640_sweep_56x48_1f_yuv444p8.yuv | PASS | 13560 (0) | 5.0446 (0.0000) | inf |
-| screenshot_640_sweep_64x48_1f_yuv444p8.yuv | PASS | 2304 (0) | 0.7500 (0.0000) | inf |
-| screenshot_640_sweep_8x56_1f_yuv444p8.yuv | PASS | 6952 (0) | 15.5179 (0.0000) | inf |
-| screenshot_640_sweep_16x56_1f_yuv444p8.yuv | PASS | 9864 (0) | 11.0089 (0.0000) | inf |
-| screenshot_640_sweep_24x56_1f_yuv444p8.yuv | PASS | 12088 (0) | 8.9940 (0.0000) | inf |
-| screenshot_640_sweep_32x56_1f_yuv444p8.yuv | PASS | 19168 (0) | 10.6964 (0.0000) | inf |
-| screenshot_640_sweep_40x56_1f_yuv444p8.yuv | PASS | 37216 (0) | 16.6143 (0.0000) | inf |
-| screenshot_640_sweep_48x56_1f_yuv444p8.yuv | PASS | 27016 (0) | 10.0506 (0.0000) | inf |
-| screenshot_640_sweep_56x56_1f_yuv444p8.yuv | PASS | 57760 (+8) | 18.4184 (+0.0026) | inf |
-| screenshot_640_sweep_64x56_1f_yuv444p8.yuv | PASS | 29264 (0) | 8.1652 (0.0000) | inf |
-| screenshot_640_sweep_8x64_1f_yuv444p8.yuv | PASS | 5344 (0) | 10.4375 (0.0000) | inf |
-| screenshot_640_sweep_16x64_1f_yuv444p8.yuv | PASS | 15448 (0) | 15.0859 (0.0000) | inf |
-| screenshot_640_sweep_24x64_1f_yuv444p8.yuv | PASS | 13744 (+24) | 8.9479 (+0.0156) | inf |
-| screenshot_640_sweep_32x64_1f_yuv444p8.yuv | PASS | 32136 (+32) | 15.6914 (+0.0156) | inf |
-| screenshot_640_sweep_40x64_1f_yuv444p8.yuv | PASS | 2856 (+16) | 1.1156 (+0.0063) | inf |
-| screenshot_640_sweep_48x64_1f_yuv444p8.yuv | PASS | 50264 (+8) | 16.3620 (+0.0026) | inf |
-| screenshot_640_sweep_56x64_1f_yuv444p8.yuv | PASS | 3840 (0) | 1.0714 (0.0000) | inf |
-| screenshot_640_sweep_64x64_1f_yuv444p8.yuv | PASS | 76656 (0) | 18.7148 (0.0000) | inf |
-
-### Screenshot Multi-CTU And Partial Crops
-
-Aggregate SW bits: `592008` (+312).
-Aggregate SW bpp: `6.4461` (+0.0034).
-
-| Vector | Status | SW bits (delta) | SW bpp (delta) | PSNR |
-|---|---|---:|---:|---:|
-| screenshot_640_multictu_h2_128x64_1f_yuv444p8.yuv | PASS | 89904 (+16) | 10.9746 (+0.0020) | inf |
-| screenshot_640_multictu_v2_64x128_1f_yuv444p8.yuv | PASS | 46184 (+24) | 5.6377 (+0.0029) | inf |
-| screenshot_640_multictu_grid2_128x128_1f_yuv444p8.yuv | PASS | 16384 (+96) | 1.0000 (+0.0059) | inf |
-| screenshot_640_multictu_h3_192x64_1f_yuv444p8.yuv | PASS | 48696 (+64) | 3.9629 (+0.0052) | inf |
-| screenshot_640_multictu_v3_64x192_1f_yuv444p8.yuv | PASS | 104056 (+40) | 8.4681 (+0.0033) | inf |
-| screenshot_640_partial_h2_72x64_1f_yuv444p8.yuv | PASS | 61016 (+24) | 13.2413 (+0.0052) | inf |
-| screenshot_640_partial_v2_64x72_1f_yuv444p8.yuv | PASS | 3096 (+16) | 0.6719 (+0.0035) | inf |
-| screenshot_640_partial_grid2_72x72_1f_yuv444p8.yuv | PASS | 4488 (+16) | 0.8657 (+0.0031) | inf |
-| screenshot_640_partial_wide_136x80_1f_yuv444p8.yuv | PASS | 136880 (0) | 12.5809 (0.0000) | inf |
-| screenshot_640_partial_tall_72x128_1f_yuv444p8.yuv | PASS | 81304 (+16) | 8.8220 (+0.0017) | inf |
-
-All listed vectors matched SW/RTL bitstream checksums and SW/RTL/reference-decoder reconstruction checksums. The `inf` PSNR entries indicate lossless reconstruction against the integer-valued source vectors.

@@ -8,23 +8,24 @@ Older bring-up and intermediate optimization checkpoints are intentionally kept
 out of this report so the document remains focused on the current validated
 baseline and its immediate delta. Use git history for retired measurements.
 
-## 2026-06-20 Local Hash IntraBC Candidate Expansion
+## 2026-06-20 AVM-Valid Local Hash IntraBC
 
-Measured after widening the AV2 4:4:4 exact-hash IntraBC path from the
-immediate-left terminal 8x8 block to a local above-or-left terminal candidate
-selection. The matcher still stores only one 32-bit hash per 8x8 block inside
-the current 64x64 tile and does not fetch any IBC context from external memory.
-Non-terminal IBC copies remain gated until the full AVM block-vector predictor
-stack is modeled.
+Measured after correcting the AV2 4:4:4 exact-hash IntraBC path to use the
+AVM-valid local left-copy subset while preserving the local hash table,
+DRL-aware syntax emission, and IBC-aware palette cache masking. The matcher
+still stores only one 32-bit hash per 8x8 block inside the current 64x64 tile
+and does not fetch any IBC context from external memory. Above-copy candidates
+are counted but not selected until the full AVM `is_mi_coded`/BVP availability
+model is implemented.
 
 Baseline and current sources:
 
-- Baseline Git SHA: `3b644b32e731840bb1da774312c5a0c70298f040`
-- Current validated RTL Git SHA: `576fe0a4e863c95d80f4823b104cad5cb31d9d63`
-- Baseline mode: AV2 RTL with 4:4:4 screen-content tools, immediate-left
-  terminal hash IBC, and multi-leaf 4:2:0 residual support.
-- Current mode: same baseline plus local above/left terminal hash IBC candidate
-  selection.
+- Baseline Git SHA: `576fe0a4e863c95d80f4823b104cad5cb31d9d63`
+- Current validated RTL Git SHA: `fecba0947c6b46f801f0394a8e0699f68c1c542f`
+- Baseline mode: previous documented AV2 local hash IBC candidate expansion
+  checkpoint.
+- Current mode: same screen-content baseline with AVM-valid DRL-aware
+  left-copy IBC selection and palette-cache masking for IBC leaves.
 - Delta columns compare against the previous documented AV2 synthesis
   checkpoint.
 
@@ -33,9 +34,7 @@ Validation result:
 - `screenshot-sweep-444`: OK (64/64), strict SW/RTL bitstream parity and
   SW/RTL/reference-decoder lossless reconstruction parity.
 - `screenshot-multictu-444`: OK (10/10), same parity checks.
-- A temporary non-terminal fixed-DRL experiment was rejected by the reference
-  decoder at `screenshot_640_sweep_24x8_1f_yuv444p8.yuv`; the committed RTL/SW
-  keeps the terminal-leaf guard until the full BVP stack is implemented.
+- `cargo test av2 --lib`: OK (24/24).
 
 Synthesis configuration:
 
@@ -52,72 +51,72 @@ Synthesis configuration:
 
 Synthesis result:
 
-- Yosys synthesis passed in 410.0 seconds.
-- Peak child RSS observed by the synthesis runner was 1661.18 MiB.
+- Yosys synthesis passed in 357.0 seconds.
+- Peak child RSS observed by the synthesis runner was 1660.32 MiB.
 - Runtime exceeded the 300 second review threshold but completed inside the
   600 second hard timeout and 3072 MiB memory limit.
-- Post-synthesis flattened-cell reporting completed in 7.9 seconds.
-- Post-synthesis critical-path reporting completed in 111.6 seconds.
+- Post-synthesis flattened-cell reporting completed in 7.2 seconds.
+- Post-synthesis critical-path reporting completed in 93.5 seconds.
 - The isolated `ff_av2_chroma_sample_store` path length remains 1.
-- The top `ff_av2_encoder` topological path length remains 80.
+- The top `ff_av2_encoder` topological path length improved from 80 to 63.
 
 Flattened Xilinx-cell estimate from
 `synth/out/arty-z7-10/ff_av2_encoder/cell_report.log`:
 
 | Metric | Count |
 |---|---:|
-| Cells | 101340 |
-| Estimated LCs | 34145 |
-| CARRY4 | 2654 |
+| Cells | 102708 |
+| Estimated LCs | 35901 |
+| CARRY4 | 2582 |
 | DSP48E1 | 13 |
-| FDCE | 4304 |
+| FDCE | 4502 |
 | FDPE | 35 |
-| FDRE | 37743 |
+| FDRE | 37423 |
 | FDSE | 129 |
-| LUT1 | 401 |
-| LUT2 | 8402 |
-| LUT3 | 6225 |
-| LUT4 | 3611 |
-| LUT5 | 3766 |
-| LUT6 | 20543 |
-| MUXF7 | 3802 |
-| MUXF8 | 614 |
+| LUT1 | 332 |
+| LUT2 | 7675 |
+| LUT3 | 6778 |
+| LUT4 | 4535 |
+| LUT5 | 3936 |
+| LUT6 | 20652 |
+| MUXF7 | 4304 |
+| MUXF8 | 671 |
 | RAMB36E1 | 19 |
 | RAM32M | 10 |
 | RAM64M | 1536 |
 
-Delta from the multi-leaf 4:2:0 residual checkpoint:
+Delta from the previous documented AV2 synthesis checkpoint:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| Synthesis time | 369.1 s | 410.0 s | +40.9 s |
-| Peak synthesis RSS | 1641.88 MiB | 1661.18 MiB | +19.30 MiB |
-| Topological path length | 80 | 80 | +0 |
-| Cells | 102429 | 101340 | -1089 |
-| Estimated LCs | 33984 | 34145 | +161 |
-| CARRY4 | 2652 | 2654 | +2 |
+| Synthesis time | 410.0 s | 357.0 s | -53.0 s |
+| Peak synthesis RSS | 1661.18 MiB | 1660.32 MiB | -0.86 MiB |
+| Topological path length | 80 | 63 | -17 |
+| Cells | 101340 | 102708 | +1368 |
+| Estimated LCs | 34145 | 35901 | +1756 |
+| CARRY4 | 2654 | 2582 | -72 |
 | DSP48E1 | 13 | 13 | +0 |
-| FDCE | 6352 | 4304 | -2048 |
+| FDCE | 4304 | 4502 | +198 |
 | FDPE | 35 | 35 | +0 |
-| FDRE | 35695 | 37743 | +2048 |
+| FDRE | 37743 | 37423 | -320 |
 | FDSE | 129 | 129 | +0 |
-| LUT1 | 419 | 401 | -18 |
-| LUT2 | 7853 | 8402 | +549 |
-| LUT3 | 6463 | 6225 | -238 |
-| LUT4 | 3518 | 3611 | +93 |
-| LUT5 | 4167 | 3766 | -401 |
-| LUT6 | 19836 | 20543 | +707 |
-| MUXF7 | 3681 | 3802 | +121 |
-| MUXF8 | 616 | 614 | -2 |
+| LUT1 | 401 | 332 | -69 |
+| LUT2 | 8402 | 7675 | -727 |
+| LUT3 | 6225 | 6778 | +553 |
+| LUT4 | 3611 | 4535 | +924 |
+| LUT5 | 3766 | 3936 | +170 |
+| LUT6 | 20543 | 20652 | +109 |
+| MUXF7 | 3802 | 4304 | +502 |
+| MUXF8 | 614 | 671 | +57 |
 | RAMB36E1 | 19 | 19 | +0 |
 | RAM32M | 10 | 10 | +0 |
 | RAM64M | 1536 | 1536 | +0 |
 
-The final matcher removes the redundant hash-valid register bank because the
-8x8 raster tile scan writes every above/left hash before it can be read. The
-result preserves the previous topological path length and memory class while
-adding only a small LUT/LC movement. Synthesis time is longer and should be
-watched in the next optimization pass.
+The corrected IBC path improves the topological path length and synthesis
+runtime compared with the previous documented candidate-expansion checkpoint.
+Area rises by 1,756 estimated LCs, mostly from the DRL-aware decision table and
+IBC-aware palette-cache selection logic. This is acceptable for the functional
+checkpoint, but area remains a target for the next IBC optimization pass.
 
 ## 2026-06-19 4:2:0 Multi-Leaf Residual Path
 

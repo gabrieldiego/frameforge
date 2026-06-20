@@ -63,8 +63,9 @@ reducing cost rather than proving the plumbing again:
 - Lossless luma residual coefficient coding after palette or non-DC luma intra
   prediction.
 - Lossless horizontal chroma BDPCM plus coefficient coding for 4:4:4 chroma.
-- Exact-hash IntraBC path using local 8x8 hashes for terminal above/left
-  default-BV candidates inside the current 64x64 tile.
+- Exact-hash IntraBC path using local 8x8 hashes for AVM-valid left-copy
+  candidates inside the current 64x64 tile. Above candidates are instrumented
+  but deferred until the full AVM availability/BVP stack is modeled.
 - First restricted luma intra prediction path with DC, vertical, and horizontal
   modes where the currently implemented context model is valid.
 - Strict SW/RTL/reference-decoder checksum validation and per-milestone
@@ -79,7 +80,7 @@ reducing cost rather than proving the plumbing again:
 
 1. Baseline pass
    - Done: freeze current working lossless 4:4:4 palette + luma residual +
-     chroma BDPCM + local above/left hash IBC + restricted H/V intra path.
+     chroma BDPCM + local left-copy hash IBC + restricted H/V intra path.
    - Keep 8-bit, fixed 8x8 coding leaves, and synthesis-visible geometry
      ceilings that do not create resolution-sized line buffers.
    - Required checks remain `screenshot-sweep-444` + `screenshot-multictu-444`.
@@ -115,8 +116,8 @@ reducing cost rather than proving the plumbing again:
    - Keep residual coding lossless so a bad predictor only costs bitrate.
 
 3. IntraBC candidate block
-   - Done: expand the immediate-left hash candidate into a local above/left
-     terminal candidate module using AVM default-BV DRL entries 2 and 3.
+   - Done: expand immediate-left hash IBC into a local, DRL-aware left-copy
+     candidate module while tracking above matches for future enablement.
    - Store hashes and candidate metadata, not whole blocks, unless a later
      exact-compare stage proves necessary.
    - Keep the search local and deterministic first; full virtual-buffer/window
@@ -222,8 +223,8 @@ reducing cost rather than proving the plumbing again:
   auditable module instead of being spread across palette analysis and tile
   emission.
 - [ ] Add vertical chroma BDPCM and a tiny direction chooser.
-- ✅ Expand IBC from immediate-left only to a small local above/left
-  hash-candidate set.
+- ✅ Expand IBC from immediate-left only to a local DRL-aware left-copy
+  hash-candidate set, with above candidates counted but not selected yet.
 - [ ] Model the AVM IntraBC BVP stack so non-terminal and wider local IBC
   candidates can be enabled safely.
 - [ ] Reduce active critical path in luma-palette delta coding and measure with
@@ -242,8 +243,7 @@ Use this as the recurring feature checklist for each active development cycle:
   - Residual path coverage for all 8x8 leaves (palette residual + BDPCM variants)
   - Additional predictor modes with strict fallback ordering
   - Intra prediction context and mode expansion for screen content
-  - IBC BVP-stack modeling and hash-candidate expansion beyond terminal
-    above/left only
+  - IBC BVP-stack modeling and hash-candidate expansion beyond left-copy only
   - Block-tree and partition decision support
   - Optional entropy/range-coder context/state updates once correctness is stable
   - Chroma-robust fallback policy (no silent failures on non-palette blocks)
