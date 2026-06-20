@@ -10,6 +10,7 @@ module ff_av2_palette_analyzer_444 #(
   input  logic       sample_fire,
   input  logic [15:0] visible_width,
   input  logic [15:0] visible_height,
+  input  logic [1:0]  chroma_format_idc,
   input  logic [SAMPLE_BITS - 1:0] sample,
   input  logic       sample_last,
   output logic       sample_ready,
@@ -223,6 +224,10 @@ module ff_av2_palette_analyzer_444 #(
   logic chroma_sample_fire_w;
   logic chroma_sample_done_w;
   logic chroma_input_error_w;
+  logic [6:0] block_chroma_sample_last_w;
+  logic [6:0] block_chroma_plane_samples_w;
+  logic [5:0] block_chroma_local_sample_w;
+  logic block_chroma_plane_v_w;
   logic final_black_w;
   logic [5:0] fetch_pred_block_id_w;
   logic [5:0] fetch_pred_local_index_w;
@@ -250,10 +255,11 @@ module ff_av2_palette_analyzer_444 #(
     (state_q == ST_READ) || (chroma_drain_state_w && !chroma_complete_q);
 
   // Palette analysis is block-local. The top-level input contract presents each
-  // 8x8 block as 64 Y samples, 64 U samples, then 64 V samples. AV2 v1.0.0
-  // Sections 5.20.8.1 and 5.20.8.4 signal palette syntax only for luma; the
-  // chroma samples are still consumed in the same block packet so the external
-  // interface matches the VVC 4:4:4 8x8-leaf packing without a frame buffer.
+  // 8x8 block as 64 Y samples followed by the matching U and V samples: 16+16
+  // samples for 4:2:0, 64+64 samples for 4:4:4. AV2 v1.0.0 Sections 5.20.8.1
+  // and 5.20.8.4 signal palette syntax only for luma; chroma is still consumed
+  // in the same packet so the external interface matches VVC's 8x8 leaf stream
+  // contract without a frame buffer.
   // AV2 8x8 palette leaves are addressed by 3-bit block row/column indices
   // inside the 64x64 superblock. The MI origin is in 4x4 units, so [3:1]
   // converts it to 8x8 block coordinates without truncating high row bits.
@@ -280,11 +286,22 @@ module ff_av2_palette_analyzer_444 #(
     (block_id_q[5:3] == last_block_row_q) && (block_id_q[2:0] == last_block_col_q);
   assign chroma_sample_fire_w =
     sample_fire && chroma_drain_state_w && !chroma_complete_q;
+  assign block_chroma_sample_last_w =
+    (chroma_format_idc == 2'd1) ? 7'd31 : 7'd127;
+  assign block_chroma_plane_samples_w =
+    (chroma_format_idc == 2'd1) ? 7'd16 : 7'd64;
+  assign block_chroma_plane_v_w =
+    block_chroma_sample_q >= block_chroma_plane_samples_w;
+  assign block_chroma_local_sample_w =
+    (chroma_format_idc == 2'd1) ?
+      {2'd0, block_chroma_sample_q[3:0]} :
+      block_chroma_sample_q[5:0];
   assign chroma_sample_done_w =
-    chroma_sample_fire_w && (block_chroma_sample_q == 7'd127);
+    chroma_sample_fire_w && (block_chroma_sample_q == block_chroma_sample_last_w);
   assign chroma_input_error_w =
     chroma_sample_fire_w &&
-    (sample_last != (terminal_tile_leaf_w && (block_chroma_sample_q == 7'd127)));
+    (sample_last !=
+      (terminal_tile_leaf_w && (block_chroma_sample_q == block_chroma_sample_last_w)));
   assign final_black_w = chroma_sample_done_w ? black_next_w : black_ok_q;
   assign palette_colors_pack_w = {
     palette_color_q[7],
@@ -307,7 +324,7 @@ module ff_av2_palette_analyzer_444 #(
   assign fetch_txb_local_index_w =
     fetch_txb_local_base_w + {fetch_step_q[3:2], 3'b000} + {4'd0, fetch_step_q[1:0]};
   assign fetch_above_pred_y_w = {fetch_txb_row_mi_q, 2'b00} - 6'd1;
-  assign chroma_write_addr_w = {block_id_q, block_chroma_sample_q[5:0]};
+  assign chroma_write_addr_w = {block_id_q, block_chroma_local_sample_w};
   assign luma_fetch_txb_block_id_w = {luma_fetch_txb_row_mi_q[3:1], luma_fetch_txb_col_mi_q[3:1]};
   assign luma_fetch_txb_local_base_w =
     {luma_fetch_txb_row_mi_q[0], 5'b00000} + {3'd0, luma_fetch_txb_col_mi_q[0], 2'b00};
@@ -330,9 +347,9 @@ module ff_av2_palette_analyzer_444 #(
   assign sample_store_read_addr_w = luma_fetch_active_q ? luma_fetch_read_addr_w : chroma_read_addr_w;
   assign luma_write_w = (state_q == ST_READ) && sample_fire;
   assign chroma_write_u_w =
-    chroma_sample_fire_w && !block_chroma_sample_q[6];
+    chroma_sample_fire_w && !block_chroma_plane_v_w;
   assign chroma_write_v_w =
-    chroma_sample_fire_w && block_chroma_sample_q[6];
+    chroma_sample_fire_w && block_chroma_plane_v_w;
   assign fetch_txb_read_addr_w = {fetch_txb_block_id_w, fetch_txb_local_index_w};
   assign fetch_pred_read_addr_w = {fetch_pred_block_id_w, fetch_pred_local_index_w};
 
@@ -680,7 +697,11 @@ module ff_av2_palette_analyzer_444 #(
     end else if (start) begin
       state_q <= ST_BLOCK_INIT;
       area_q <= {16'd0, visible_width} * {16'd0, visible_height};
-      frame_samples_q <= ({16'd0, visible_width} * {16'd0, visible_height}) * 32'd3;
+      frame_samples_q <=
+        (chroma_format_idc == 2'd1) ?
+          (({16'd0, visible_width} * {16'd0, visible_height}) +
+           (({16'd0, visible_width} * {16'd0, visible_height}) >> 1)) :
+          (({16'd0, visible_width} * {16'd0, visible_height}) * 32'd3);
       sample_index_q <= 32'd0;
       last_block_col_q <= (visible_width == 16'd64) ? 3'd7 : (visible_width[5:3] - 3'd1);
       last_block_row_q <= (visible_height == 16'd64) ? 3'd7 : (visible_height[5:3] - 3'd1);
@@ -727,6 +748,7 @@ module ff_av2_palette_analyzer_444 #(
       end
       palette_supported_q <=
         (SUPPORT_PALETTE_444 != 0) &&
+        (chroma_format_idc == 2'd3) &&
         (SAMPLE_BITS == 8) &&
         (visible_width != 16'd0) &&
         (visible_height != 16'd0) &&
@@ -742,7 +764,7 @@ module ff_av2_palette_analyzer_444 #(
       if (chroma_sample_fire_w) begin
         black_ok_q <= black_next_w;
         sample_index_q <= sample_index_q + 32'd1;
-        if (block_chroma_sample_q == 7'd127) begin
+        if (block_chroma_sample_q == block_chroma_sample_last_w) begin
           chroma_complete_q <= 1'b1;
         end else begin
           block_chroma_sample_q <= block_chroma_sample_q + 7'd1;

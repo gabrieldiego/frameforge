@@ -44,6 +44,42 @@ def rtl_geometry():
     )
 
 
+def rtl_chroma_format_idc():
+    return int(os.environ.get("RTL_CHROMA_FORMAT_IDC", "3"))
+
+
+def av2_frame_layout():
+    width, height = rtl_geometry()
+    chroma_format = rtl_chroma_format_idc()
+    area = width * height
+    if chroma_format == 1:
+        chroma_width = width // 2
+        chroma_height = height // 2
+        chroma_area = chroma_width * chroma_height
+        return {
+            "area": area,
+            "chroma_area": chroma_area,
+            "length": area + 2 * chroma_area,
+            "src_u_base": area,
+            "src_v_base": area + chroma_area,
+            "src_y_stride": width,
+            "src_u_stride": chroma_width,
+            "src_v_stride": chroma_width,
+            "src_frame_stride": area + 2 * chroma_area,
+        }
+    return {
+        "area": area,
+        "chroma_area": area,
+        "length": area * 3,
+        "src_u_base": area,
+        "src_v_base": area * 2,
+        "src_y_stride": width,
+        "src_u_stride": width,
+        "src_v_stride": width,
+        "src_frame_stride": area * 3,
+    }
+
+
 def signal_int(dut, name):
     try:
         return int(getattr(dut, name).value)
@@ -73,8 +109,7 @@ def handle_int(handle):
 
 
 def av2_input_frame():
-    width, height = rtl_geometry()
-    expected_len = width * height * 3
+    expected_len = av2_frame_layout()["length"]
     input_path = os.environ.get("FRAMEFORGE_RTL_AV2_ENCODER_INPUT")
     if input_path:
         data = Path(input_path).read_bytes()
@@ -86,8 +121,7 @@ def av2_input_frame():
 
 
 def av2_palette_reconstruction(data):
-    width, height = rtl_geometry()
-    expected_len = width * height * 3
+    expected_len = av2_frame_layout()["length"]
     assert len(data) == expected_len
     # AV2 luma palette only predicts the luma plane. The current RTL then emits
     # lossless luma coefficients plus lossless chroma BDPCM, so the internal
@@ -97,27 +131,39 @@ def av2_palette_reconstruction(data):
 
 def av2_rtl_input_stream(data):
     width, height = rtl_geometry()
-    expected_len = width * height * 3
+    layout = av2_frame_layout()
+    expected_len = layout["length"]
     assert len(data) == expected_len
-    area = width * height
+    area = layout["area"]
+    chroma_area = layout["chroma_area"]
     y_plane = data[:area]
-    u_plane = data[area : 2 * area]
-    v_plane = data[2 * area :]
+    u_plane = data[layout["src_u_base"] : layout["src_u_base"] + chroma_area]
+    v_plane = data[layout["src_v_base"] : layout["src_v_base"] + chroma_area]
     stream = bytearray()
     # The AV2 top module accepts visible 8x8 block packets in 64x64
-    # superblock/tile order. Each packet is 64 Y samples, then 64 U samples,
-    # then 64 V samples. This avoids a full-frame input buffer in RTL while
-    # keeping the public block packet shape aligned with VVC 4:4:4.
+    # superblock/tile order: 64 Y samples followed by U/V samples for the
+    # configured chroma format. This avoids a full-frame input buffer in RTL
+    # while keeping the public block packet shape aligned with VVC.
     for tile_y in range(0, height, 64):
         tile_h = min(64, height - tile_y)
         for tile_x in range(0, width, 64):
             tile_w = min(64, width - tile_x)
             for y0 in range(tile_y, tile_y + tile_h, 8):
                 for x0 in range(tile_x, tile_x + tile_w, 8):
-                    for plane in (y_plane, u_plane, v_plane):
-                        for local_y in range(8):
-                            row_start = (y0 + local_y) * width + x0
-                            stream.extend(plane[row_start : row_start + 8])
+                    for local_y in range(8):
+                        row_start = (y0 + local_y) * width + x0
+                        stream.extend(y_plane[row_start : row_start + 8])
+                    if rtl_chroma_format_idc() == 1:
+                        chroma_width = width // 2
+                        for plane in (u_plane, v_plane):
+                            for local_y in range(4):
+                                row_start = ((y0 // 2) + local_y) * chroma_width + (x0 // 2)
+                                stream.extend(plane[row_start : row_start + 4])
+                    else:
+                        for plane in (u_plane, v_plane):
+                            for local_y in range(8):
+                                row_start = (y0 + local_y) * width + x0
+                                stream.extend(plane[row_start : row_start + 8])
     return bytes(stream)
 
 
@@ -257,7 +303,7 @@ async def av2_encoder_emits_obu_stream(dut):
     await reset_dut(dut)
     input_data = av2_input_frame()
     width, height = rtl_geometry()
-    area = width * height
+    layout = av2_frame_layout()
     axi_memory = planar_memory_image(input_data)
     cocotb.start_soon(axi_read_memory_model(dut, axi_memory))
     cocotb.start_soon(axi_write_memory_model(dut, axi_memory))
@@ -265,15 +311,15 @@ async def av2_encoder_emits_obu_stream(dut):
         dut,
         width=width,
         height=height,
-        chroma_format=3,
+        chroma_format=rtl_chroma_format_idc(),
         frame_count=1,
         src_y_base=0,
-        src_u_base=area,
-        src_v_base=area * 2,
-        src_y_stride=width,
-        src_u_stride=width,
-        src_v_stride=width,
-        src_frame_stride=area * 3,
+        src_u_base=layout["src_u_base"],
+        src_v_base=layout["src_v_base"],
+        src_y_stride=layout["src_y_stride"],
+        src_u_stride=layout["src_u_stride"],
+        src_v_stride=layout["src_v_stride"],
+        src_frame_stride=layout["src_frame_stride"],
     )
     await start_encoder(dut)
 
@@ -509,7 +555,7 @@ async def av2_encoder_emits_obu_stream(dut):
                 "analyzer_block_id": handle_int(dut.palette_analyzer.block_id_q),
                 "analyzer_block_sample": handle_int(dut.palette_analyzer.block_sample_q),
             }
-            raise AssertionError(f"AV2 RTL rejected the 4:4:4 input: {details}")
+            raise AssertionError(f"AV2 RTL rejected the input: {details}")
         if signal_int(dut, "m_axis_valid") == 1 and signal_int(dut, "m_axis_ready") == 1:
             output_active_cycles += 1
         if signal_int(dut, "done") == 1:
@@ -607,20 +653,20 @@ async def av2_encoder_emits_obu_stream(dut):
 async def av2_encoder_waits_for_start(dut):
     await reset_dut(dut)
     width, height = rtl_geometry()
-    area = width * height
+    layout = av2_frame_layout()
     await program_encoder_control(
         dut,
         width=width,
         height=height,
-        chroma_format=3,
+        chroma_format=rtl_chroma_format_idc(),
         frame_count=1,
         src_y_base=0,
-        src_u_base=area,
-        src_v_base=area * 2,
-        src_y_stride=width,
-        src_u_stride=width,
-        src_v_stride=width,
-        src_frame_stride=area * 3,
+        src_u_base=layout["src_u_base"],
+        src_v_base=layout["src_v_base"],
+        src_y_stride=layout["src_y_stride"],
+        src_u_stride=layout["src_u_stride"],
+        src_v_stride=layout["src_v_stride"],
+        src_frame_stride=layout["src_frame_stride"],
     )
     await ReadOnly()
     assert int(dut.s_axis_ready.value) == 0
@@ -657,13 +703,13 @@ async def av2_encoder_reports_invalid_geometry(dut):
 
 
 @cocotb.test()
-async def av2_encoder_reports_non_444_input_format(dut):
+async def av2_encoder_reports_unsupported_422_input_format(dut):
     await reset_dut(dut)
     await program_encoder_control(
         dut,
         width=64,
         height=64,
-        chroma_format=1,
+        chroma_format=2,
         frame_count=1,
         src_y_base=0,
         src_u_base=4096,

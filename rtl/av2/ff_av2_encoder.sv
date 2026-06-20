@@ -263,6 +263,7 @@ module ff_av2_encoder #(
   logic [15:0] tile_rows_w;
   logic [15:0] tile_width_w;
   logic [15:0] tile_height_w;
+  logic [31:0] tile_luma_samples_w;
   logic [31:0] tile_samples_w;
   logic tile_input_last_w;
   logic tile_is_last_w;
@@ -301,6 +302,8 @@ module ff_av2_encoder #(
   logic [31:0] leaf_fsc_fh_w;
   logic [15:0] txb_width_w;
   logic [15:0] txb_count_w;
+  logic [15:0] chroma_txb_width_w;
+  logic [15:0] chroma_txb_count_w;
   logic [15:0] txb_row_w;
   logic [15:0] txb_col_w;
   logic [4:0] next_txb_local_row_w;
@@ -504,6 +507,7 @@ module ff_av2_encoder #(
   logic [4:0] leaf_visible_txb_h_w;
   logic luma_residual_enable_w;
   logic chroma_bdpcm_enable_w;
+  logic chroma_subsampled_phase_w;
 
   ff_av2_partition_cdf_lut partition_cdf_lut (
     .split_ctx(partition_split_ctx_w),
@@ -557,8 +561,9 @@ module ff_av2_encoder #(
   );
 
   // Public SoC data-plane glue. The control pins model the values that an
-  // AXI4-Lite register bank will carry; the reader fetches planar 4:4:4 frame
-  // data through AXI4-MM and emits the existing 8x8 tile-local block stream.
+  // AXI4-Lite register bank will carry; the reader fetches planar 4:2:0 or
+  // 4:4:4 frame data through AXI4-MM and emits the existing 8x8 tile-local
+  // block stream.
   ff_axi4_frame_reader #(
     .AXI_ADDR_BITS(AXI_ADDR_BITS),
     .AXI_DATA_BITS(AXI_DATA_BITS),
@@ -643,6 +648,7 @@ module ff_av2_encoder #(
     .height(height_q),
     .width_bits(width_bits_q),
     .height_bits(height_bits_q),
+    .chroma_format_idc(chroma_format_idc),
     .seq_op(seq_op_q),
     .seq_bit_pos(seq_bit_pos_q),
     .frame_palette_mode(frame_palette_mode_q),
@@ -680,7 +686,7 @@ module ff_av2_encoder #(
   ) left_hash_ibc (
     .clk(clk),
     .rst_n(rst_n),
-    .start(palette_analyzer_start_w),
+    .start(palette_analyzer_start_w && (chroma_format_idc == 2'd3)),
     .sample_fire(input_sample_fire_w),
     .visible_width(tile_width_q),
     .visible_height(tile_height_q),
@@ -701,6 +707,7 @@ module ff_av2_encoder #(
     .sample_fire(input_sample_fire_w),
     .visible_width(tile_width_q),
     .visible_height(tile_height_q),
+    .chroma_format_idc(chroma_format_idc),
     .sample(s_axis_data),
     .sample_last(tile_input_last_w),
     .sample_ready(palette_analyzer_sample_ready_w),
@@ -898,7 +905,7 @@ module ff_av2_encoder #(
   );
 
   assign start_invalid_w =
-    (chroma_format_idc != 2'd3) ||
+    !((chroma_format_idc == 2'd1) || (chroma_format_idc == 2'd3)) ||
     (frame_count == 32'd0) ||
     (visible_width == 16'd0) ||
     (visible_height == 16'd0) ||
@@ -977,7 +984,11 @@ module ff_av2_encoder #(
   assign tile_height_w =
     (tile_row_q == (tile_rows_q - 16'd1)) ?
       (height_q - (tile_row_q << 6)) : 16'd64;
-  assign tile_samples_w = ({16'd0, tile_width_q} * {16'd0, tile_height_q}) * 32'd3;
+  assign tile_luma_samples_w = {16'd0, tile_width_q} * {16'd0, tile_height_q};
+  assign tile_samples_w =
+    (chroma_format_idc == 2'd1) ?
+      (tile_luma_samples_w + (tile_luma_samples_w >> 1)) :
+      (tile_luma_samples_w * 32'd3);
   assign tile_is_last_w = (tile_index_q == (tile_count_q - 16'd1));
   assign multi_tile_w = (tile_count_q != 16'd1);
   assign payload_tile_start_w = payload_len_q + (tile_is_last_w ? 16'd0 : 16'd4);
@@ -1106,8 +1117,15 @@ module ff_av2_encoder #(
   assign partition_raw_ctx_w = {partition_left_bit_w, partition_above_bit_w};
   assign txb_width_w = {11'd0, leaf_visible_txb_w_w};
   assign txb_count_w = {11'd0, leaf_visible_txb_w_w} * {11'd0, leaf_visible_txb_h_w};
-  assign txb_row_w = {11'd0, block_row_mi_q + txb_local_row_q};
-  assign txb_col_w = {11'd0, block_col_mi_q + txb_local_col_q};
+  assign chroma_subsampled_phase_w =
+    (chroma_format_idc == 2'd1) &&
+    (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF);
+  assign txb_row_w = chroma_subsampled_phase_w ?
+    {11'd0, (block_row_mi_q >> 1) + txb_local_row_q} :
+    {11'd0, block_row_mi_q + txb_local_row_q};
+  assign txb_col_w = chroma_subsampled_phase_w ?
+    {11'd0, (block_col_mi_q >> 1) + txb_local_col_q} :
+    {11'd0, block_col_mi_q + txb_local_col_q};
   assign same_phase_has_next_txb_w =
     palette_mode_q &&
     (phase_q == PHASE_Y_COEFF || phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF) &&
@@ -1388,6 +1406,12 @@ module ff_av2_encoder #(
   assign leaf_visible_txb_h_w =
     ((block_row_mi_q + block_h_mi_q) > visible_rows_mi_q) ?
       (visible_rows_mi_q - block_row_mi_q) : block_h_mi_q;
+  assign chroma_txb_width_w =
+    (chroma_format_idc == 2'd1) ? {11'd0, leaf_visible_txb_w_w[4:1]} : txb_width_w;
+  assign chroma_txb_count_w =
+    (chroma_format_idc == 2'd1) ?
+      ({11'd0, leaf_visible_txb_w_w[4:1]} * {11'd0, leaf_visible_txb_h_w[4:1]}) :
+      txb_count_w;
 
   always @* begin
     precarry_write_valid_w = 1'b0;
@@ -1644,17 +1668,21 @@ module ff_av2_encoder #(
     if (txb_row_w == 16'd0 && txb_col_w == 16'd0) begin
       y_txb_nonzero_fh_w = 32'd31669;
       u_txb_nonzero_fh_w = 32'd23870;
-      v_txb_nonzero_fh_w = 32'd16384;
+      // AV2 v1.0.0 read_tx_block()/get_txb_ctx(): V TXB skip contexts use
+      // the retained U-plane EOB flag. 4:4:4 adds the chroma-block-larger-
+      // than-TXB offset, landing on ctx9..11 here; 4:2:0 chroma is exactly
+      // one 4x4 TXB per 8x8 luma block, landing on ctx6..8 instead.
+      v_txb_nonzero_fh_w = (chroma_format_idc == 2'd1) ? 32'd25120 : 32'd16384;
       y_dc_sign_fl_w = 32'd16937;
     end else if (txb_row_w == 16'd0 || txb_col_w == 16'd0) begin
       y_txb_nonzero_fh_w = 32'd24824;
       u_txb_nonzero_fh_w = 32'd19113;
-      v_txb_nonzero_fh_w = 32'd16384;
+      v_txb_nonzero_fh_w = (chroma_format_idc == 2'd1) ? 32'd16620 : 32'd16384;
       y_dc_sign_fl_w = 32'd19136;
     end else begin
       y_txb_nonzero_fh_w = 32'd3692;
       u_txb_nonzero_fh_w = 32'd10420;
-      v_txb_nonzero_fh_w = 32'd16384;
+      v_txb_nonzero_fh_w = (chroma_format_idc == 2'd1) ? 32'd8203 : 32'd16384;
       y_dc_sign_fl_w = 32'd19136;
     end
   end
@@ -2291,6 +2319,8 @@ module ff_av2_encoder #(
                     phase_q <= PHASE_U_COEFF;
                     step_q <= 5'd0;
                     txb_index_q <= 16'd0;
+                    txb_width_q <= chroma_txb_width_w;
+                    txb_count_q <= chroma_txb_count_w;
                     txb_local_row_q <= 5'd0;
                     txb_local_col_q <= 5'd0;
                     txb_prefetch_started_q <= 1'b0;
@@ -2346,6 +2376,8 @@ module ff_av2_encoder #(
                       phase_q <= PHASE_V_COEFF;
                       step_q <= 5'd0;
                       txb_index_q <= 16'd0;
+                      txb_width_q <= chroma_txb_width_w;
+                      txb_count_q <= chroma_txb_count_w;
                       txb_local_row_q <= 5'd0;
                       txb_local_col_q <= 5'd0;
                       txb_prefetch_started_q <= 1'b0;

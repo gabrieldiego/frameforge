@@ -510,7 +510,8 @@ def validate_av2_fixed_black_path(
         ran_rtl = True
         print("FrameForge validate: AV2 RTL OBU stream", flush=True)
         env = os.environ.copy()
-        env["RTL_CHROMA_FORMAT_IDC"] = "3"
+        rtl_chroma_idc = rtl_chroma_format_idc(info)
+        env["RTL_CHROMA_FORMAT_IDC"] = str(rtl_chroma_idc)
         env["FRAMEFORGE_RTL_AV2_ENCODER_INPUT"] = str(validation_input_path)
         env["FRAMEFORGE_RTL_AV2_ENCODER_OUT"] = str(rtl_bitstream)
         env["FRAMEFORGE_RTL_AV2_ENCODER_RECON_OUT"] = str(rtl_internal_recon)
@@ -528,7 +529,7 @@ def validate_av2_fixed_black_path(
                 "DUT=av2-encoder",
                 f"RTL_VISIBLE_WIDTH={info.width}",
                 f"RTL_VISIBLE_HEIGHT={info.height}",
-                "RTL_CHROMA_FORMAT_IDC=3",
+                f"RTL_CHROMA_FORMAT_IDC={rtl_chroma_idc}",
             ],
             cwd=REPO_ROOT,
             env=env,

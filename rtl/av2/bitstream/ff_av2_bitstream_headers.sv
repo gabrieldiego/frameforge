@@ -5,6 +5,7 @@ module ff_av2_bitstream_headers (
   input  logic [15:0] height,
   input  logic [4:0]  width_bits,
   input  logic [4:0]  height_bits,
+  input  logic [1:0]  chroma_format_idc,
   input  logic [7:0]  seq_op,
   input  logic [15:0] seq_bit_pos,
   input  logic        frame_palette_mode,
@@ -58,7 +59,18 @@ module ff_av2_bitstream_headers (
       8'd1: begin seq_load_value = 64'd4; seq_load_bits = 7'd5; end
       8'd2: begin seq_load_value = 64'd1; seq_load_bits = 7'd1; end
       8'd3: begin seq_load_value = 64'd0; seq_load_bits = 7'd5; end
-      8'd4: begin seq_load_value = 64'd3; seq_load_bits = 7'd3; end
+      8'd4: begin
+        // AV2 v1.0.0 sequence_header_obu(): seq_chroma_format_idc is UVLC.
+        // The shared AXI control register uses 1/2/3 for 4:2:0/4:2:2/4:4:4,
+        // while AV2 codes CHROMA_FORMAT_420 as 0 and CHROMA_FORMAT_444 as 2.
+        if (chroma_format_idc == 2'd1) begin
+          seq_load_value = 64'd1;
+          seq_load_bits = 7'd1;
+        end else begin
+          seq_load_value = 64'd3;
+          seq_load_bits = 7'd3;
+        end
+      end
       8'd5: begin seq_load_value = 64'd2; seq_load_bits = 7'd3; end
       8'd6: begin seq_load_value = {60'd0, width_bits[3:0] - 4'd1}; seq_load_bits = 7'd4; end
       8'd7: begin seq_load_value = {60'd0, height_bits[3:0] - 4'd1}; seq_load_bits = 7'd4; end
