@@ -13,6 +13,7 @@ use palette::Av2LumaPalette444;
 use syntax::{Av2SyntaxPayload, Av2SyntaxWriter};
 use tile::{
     av2_black_444_tile_entropy_payload_for_region, av2_black_tile_entropy_payload_for_region,
+    av2_lossy_420_tile_entropy_payload_for_region,
     av2_luma_palette_444_tile_entropy_payload_for_region, Av2TileRegion,
 };
 
@@ -380,19 +381,20 @@ pub fn av2_encode_fixed_black_444(
         .map_err(|err| format!("failed to read AV2 MVP input frame: {err}"))?;
     if chroma_format == Av2ChromaFormat::Yuv420 {
         let black = av2_black_reconstruction_for_geometry(geometry, chroma_format);
-        if frame != black {
-            return Err(
-                "AV2 yuv420p8 milestone currently supports only black residual smoke frames"
-                    .to_string(),
-            );
-        }
-        let bitstream = av2_black_bitstream_for_geometry(geometry, chroma_format);
+        let (bitstream, reconstruction) = if frame == black {
+            (
+                av2_black_bitstream_for_geometry(geometry, chroma_format),
+                black,
+            )
+        } else {
+            av2_lossy_420_bitstream_and_reconstruction_for_frame(geometry, &frame)
+        };
         output
             .write_all(&bitstream)
             .map_err(|err| format!("failed to write AV2 bitstream: {err}"))?;
         if let Some(recon) = recon {
             recon
-                .write_all(&black)
+                .write_all(&reconstruction)
                 .map_err(|err| format!("failed to write AV2 reconstruction: {err}"))?;
         }
         return Ok(());
@@ -441,6 +443,41 @@ fn av2_black_bitstream_for_geometry(
     out
 }
 
+fn av2_lossy_420_bitstream_and_reconstruction_for_frame(
+    geometry: Av2VideoGeometry,
+    frame: &[u8],
+) -> (Vec<u8>, Vec<u8>) {
+    let expected_len =
+        Picture::expected_len(geometry.width, geometry.height, PixelFormat::Yuv420p8);
+    assert_eq!(
+        frame.len(),
+        expected_len,
+        "AV2 4:2:0 lossy input length must match geometry"
+    );
+    let mut reconstruction = vec![0; expected_len];
+    let mut out = Vec::new();
+    append_obu(
+        &mut out,
+        Av2ObuType::TemporalDelimiter,
+        &Av2SyntaxPayload::default(),
+    );
+    append_obu(
+        &mut out,
+        Av2ObuType::SequenceHeader,
+        &av2_mvp_sequence_header_payload(
+            geometry,
+            Av2Black444MvpProfile::current(),
+            Av2ChromaFormat::Yuv420,
+        ),
+    );
+    append_obu(
+        &mut out,
+        Av2ObuType::ClosedLoopKey,
+        &av2_lossy_420_closed_loop_key_payload(geometry, frame, &mut reconstruction),
+    );
+    (out, reconstruction)
+}
+
 fn av2_mvp_444_bitstream_for_mode(
     geometry: Av2VideoGeometry,
     frame_mode: &Av2Mvp444FrameMode,
@@ -475,10 +512,7 @@ pub fn av2_mvp_444_trace_jsonl_for_frame(
     if chroma_format == Av2ChromaFormat::Yuv420 {
         let black = av2_black_reconstruction_for_geometry(geometry, chroma_format);
         if frame != black {
-            return Err(
-                "AV2 yuv420p8 trace currently supports only black residual smoke frames"
-                    .to_string(),
-            );
+            return av2_lossy_420_trace_jsonl_for_frame(geometry, frame);
         }
         return av2_black_trace_jsonl_for_chroma_format(geometry, chroma_format);
     }
@@ -566,6 +600,86 @@ fn av2_black_trace_jsonl_for_chroma_format(
         .regions
         .iter()
         .map(|&region| av2_black_tile_entropy_payload_for_region(region, profile, chroma_format))
+        .collect();
+    let mut lines = String::new();
+
+    push_av2_trace_line(
+        &mut lines,
+        "obu",
+        "obu.temporal_delimiter",
+        "AV2 v1.0.0 Section 5.4 OBU syntax",
+        "header+payload",
+        0,
+        16,
+    );
+    for field in &sequence.fields {
+        push_av2_trace_line(
+            &mut lines,
+            "sequence_header",
+            field.name,
+            av2_spec_section_for_syntax_field(field.name),
+            &format!("{:?}", field.code),
+            field.bit_offset,
+            field.bit_count,
+        );
+    }
+    push_av2_trace_line(
+        &mut lines,
+        "obu",
+        "obu.closed_loop_key",
+        "AV2 v1.0.0 Sections 5.19 and 5.20.1 tile group syntax",
+        "header",
+        0,
+        8,
+    );
+    for field in &closed_loop_header.fields {
+        push_av2_trace_line(
+            &mut lines,
+            "closed_loop_key_header",
+            field.name,
+            av2_spec_section_for_syntax_field(field.name),
+            &format!("{:?}", field.code),
+            field.bit_offset,
+            field.bit_count,
+        );
+    }
+    for (tile_index, entropy) in entropy.iter().enumerate() {
+        for field in &entropy.fields {
+            push_av2_entropy_trace_line(&mut lines, tile_index, field);
+        }
+    }
+    Ok(lines)
+}
+
+fn av2_lossy_420_trace_jsonl_for_frame(
+    geometry: Av2VideoGeometry,
+    frame: &[u8],
+) -> Result<String, String> {
+    let expected_len =
+        Picture::expected_len(geometry.width, geometry.height, PixelFormat::Yuv420p8);
+    if frame.len() != expected_len {
+        return Err(format!(
+            "AV2 yuv420p8 trace input length mismatch: expected {expected_len}, got {}",
+            frame.len()
+        ));
+    }
+    let tile_layout = Av2TileLayout::for_geometry(geometry);
+    let profile = Av2Black444MvpProfile::current();
+    let sequence = av2_mvp_sequence_header_payload(geometry, profile, Av2ChromaFormat::Yuv420);
+    let closed_loop_header = av2_mvp_444_closed_loop_key_header_payload(false, false, &tile_layout);
+    let mut reconstruction = vec![0; expected_len];
+    let entropy: Vec<_> = tile_layout
+        .regions
+        .iter()
+        .map(|&region| {
+            av2_lossy_420_tile_entropy_payload_for_region(
+                region,
+                profile,
+                geometry,
+                frame,
+                &mut reconstruction,
+            )
+        })
         .collect();
     let mut lines = String::new();
 
@@ -985,6 +1099,39 @@ fn av2_black_closed_loop_key_payload(
     payload
 }
 
+fn av2_lossy_420_closed_loop_key_payload(
+    geometry: Av2VideoGeometry,
+    frame: &[u8],
+    reconstruction: &mut [u8],
+) -> Av2SyntaxPayload {
+    let tile_layout = Av2TileLayout::for_geometry(geometry);
+    let profile = Av2Black444MvpProfile::current();
+    let mut payload = av2_mvp_444_closed_loop_key_header_payload(false, false, &tile_layout);
+    let tile_payloads: Vec<_> = tile_layout
+        .regions
+        .iter()
+        .map(|&region| {
+            av2_lossy_420_tile_entropy_payload_for_region(
+                region,
+                profile,
+                geometry,
+                frame,
+                reconstruction,
+            )
+        })
+        .collect();
+    let tile_payload = tile_group_payload_from_entropy(&tile_payloads);
+    let bit_offset = payload.bytes.len() * 8;
+    payload.fields.push(syntax::Av2SyntaxField {
+        name: "tile_group.tile_entropy_payload",
+        code: syntax::Av2SyntaxCode::TileEntropyPayload,
+        bit_offset,
+        bit_count: tile_payload.len() * 8,
+    });
+    payload.bytes.extend_from_slice(&tile_payload);
+    payload
+}
+
 fn av2_mvp_444_closed_loop_key_payload(
     geometry: Av2VideoGeometry,
     frame_mode: &Av2Mvp444FrameMode,
@@ -1296,6 +1443,43 @@ mod tests {
             Av2SyntaxCode::Uvlc,
             12,
             1,
+        );
+    }
+
+    #[test]
+    fn av2_yuv420_nonblack_uses_lossy_residual_reconstruction() {
+        let geometry = Av2VideoGeometry {
+            width: 8,
+            height: 8,
+        };
+        let request = Av2EncodeRequest {
+            params: Av2EncodeParams { frames: 1 },
+            geometry,
+            format: PixelFormat::Yuv420p8,
+        };
+        let mut input =
+            vec![0; Picture::expected_len(geometry.width, geometry.height, PixelFormat::Yuv420p8,)];
+        for (index, sample) in input.iter_mut().enumerate() {
+            *sample = (17 + index * 5) as u8;
+        }
+        let mut source = input.as_slice();
+        let mut output = Vec::new();
+        let mut recon = Vec::new();
+
+        av2_encode_fixed_black_444(&mut source, &mut output, Some(&mut recon), request)
+            .expect("AV2 4:2:0 lossy residual encode should succeed");
+
+        assert_ne!(
+            output,
+            av2_black_bitstream_for_geometry(geometry, Av2ChromaFormat::Yuv420)
+        );
+        assert_ne!(recon, input);
+        assert_eq!(recon.len(), input.len());
+        let trace = av2_mvp_444_trace_jsonl_for_frame(&input, request)
+            .expect("AV2 4:2:0 lossy residual trace should be emitted");
+        assert!(
+            trace.contains("tile.coeff.y.txb_nonzero_tx4x4_ctx"),
+            "non-black 4:2:0 inputs should emit residual coefficient syntax"
         );
     }
 

@@ -1058,6 +1058,28 @@ pub(crate) fn av2_luma_palette_444_tile_entropy_payload_for_region(
     writer.finish()
 }
 
+pub(crate) fn av2_lossy_420_tile_entropy_payload_for_region(
+    region: Av2TileRegion,
+    profile: Av2Black444MvpProfile,
+    geometry: Av2VideoGeometry,
+    source: &[u8],
+    recon: &mut [u8],
+) -> Av2EntropyPayload {
+    let plan = Av2Black444TilePlan::for_region(
+        region,
+        profile,
+        Av2ChromaFormat::Yuv420,
+        false,
+        false,
+        None,
+        None,
+    );
+    let mut writer = Av2EntropyWriter::new();
+    let mut lossy = Av2Lossy420TileState::new(geometry, region, source, recon);
+    plan.write_lossy_420_entropy(&mut writer, &mut lossy);
+    writer.finish()
+}
+
 impl Av2Black444TilePlan {
     fn for_region(
         region: Av2TileRegion,
@@ -1422,6 +1444,67 @@ impl Av2Black444TilePlan {
 
     fn profile_max_ref_bv_count(&self) -> usize {
         self.max_ref_bv_count
+    }
+
+    fn write_lossy_420_entropy(
+        &self,
+        writer: &mut Av2EntropyWriter,
+        lossy: &mut Av2Lossy420TileState<'_>,
+    ) {
+        let mut partition_context = Av2PartitionContext::new();
+        let mut txb_contexts = Av2TxbEntropyContexts::new();
+        let mut intrabc_context = Av2IntrabcContext::new();
+        for decision in &self.decisions {
+            match decision.kind {
+                Av2TileDecisionKind::Partition(partition) => {
+                    write_partition(
+                        writer,
+                        *decision,
+                        partition,
+                        &partition_context,
+                        self.visible_rows_mi,
+                        self.visible_cols_mi,
+                    );
+                    if partition == Av2MvpPartition::None {
+                        partition_context.update_leaf(
+                            decision.row,
+                            decision.col,
+                            decision.block_size,
+                        );
+                    }
+                }
+                Av2TileDecisionKind::IntraLumaMode(mode) => {
+                    write_intra_luma_mode(writer, *decision, mode);
+                }
+                Av2TileDecisionKind::IntraChromaDc => {
+                    write_intra_chroma_mode(writer, *decision, false);
+                }
+                Av2TileDecisionKind::BlackDcResidualCoefficients => {
+                    write_lossy_420_residual_coefficients(
+                        writer,
+                        *decision,
+                        self.visible_rows_mi,
+                        self.visible_cols_mi,
+                        &mut txb_contexts,
+                        lossy,
+                    );
+                    intrabc_context.update_leaf(
+                        decision.row,
+                        decision.col,
+                        decision.block_size,
+                        false,
+                        false,
+                    );
+                }
+                Av2TileDecisionKind::IntrabcFlag(_)
+                | Av2TileDecisionKind::LeftIntrabcCopy
+                | Av2TileDecisionKind::LumaPaletteModeInfo
+                | Av2TileDecisionKind::LumaPaletteColorMap
+                | Av2TileDecisionKind::LumaPaletteResidualCoefficients => {
+                    unreachable!("AV2 4:2:0 residual path disables palette and IntraBC")
+                }
+            }
+        }
     }
 }
 
@@ -2349,6 +2432,249 @@ fn chroma_tx4x4_span(
     }
 }
 
+struct Av2Lossy420TileState<'a> {
+    geometry: Av2VideoGeometry,
+    region: Av2TileRegion,
+    source: &'a [u8],
+    recon: &'a mut [u8],
+    y_len: usize,
+    c_width: usize,
+    c_height: usize,
+    c_len: usize,
+}
+
+impl<'a> Av2Lossy420TileState<'a> {
+    fn new(
+        geometry: Av2VideoGeometry,
+        region: Av2TileRegion,
+        source: &'a [u8],
+        recon: &'a mut [u8],
+    ) -> Self {
+        let y_len = geometry.width * geometry.height;
+        let c_width = geometry.width / 2;
+        let c_height = geometry.height / 2;
+        let c_len = c_width * c_height;
+        assert_eq!(
+            source.len(),
+            y_len + 2 * c_len,
+            "AV2 4:2:0 residual source length must match geometry"
+        );
+        assert_eq!(
+            recon.len(),
+            source.len(),
+            "AV2 4:2:0 residual reconstruction length must match source"
+        );
+        Self {
+            geometry,
+            region,
+            source,
+            recon,
+            y_len,
+            c_width,
+            c_height,
+            c_len,
+        }
+    }
+
+    fn plane_geometry(&self, plane: Av2Lossy420Plane) -> (usize, usize) {
+        match plane {
+            Av2Lossy420Plane::Y => (self.geometry.width, self.geometry.height),
+            Av2Lossy420Plane::U | Av2Lossy420Plane::V => (self.c_width, self.c_height),
+        }
+    }
+
+    fn plane_origin(&self, plane: Av2Lossy420Plane) -> (usize, usize) {
+        match plane {
+            Av2Lossy420Plane::Y => (self.region.origin_x, self.region.origin_y),
+            Av2Lossy420Plane::U | Av2Lossy420Plane::V => {
+                (self.region.origin_x / 2, self.region.origin_y / 2)
+            }
+        }
+    }
+
+    fn txb_origin(&self, plane: Av2Lossy420Plane, col: usize, row: usize) -> (usize, usize) {
+        let (origin_x, origin_y) = self.plane_origin(plane);
+        (origin_x + col * TX4X4_SIZE, origin_y + row * TX4X4_SIZE)
+    }
+
+    fn offset(&self, plane: Av2Lossy420Plane, x: usize, y: usize) -> usize {
+        match plane {
+            Av2Lossy420Plane::Y => y * self.geometry.width + x,
+            Av2Lossy420Plane::U => self.y_len + y * self.c_width + x,
+            Av2Lossy420Plane::V => self.y_len + self.c_len + y * self.c_width + x,
+        }
+    }
+
+    fn source_sample(&self, plane: Av2Lossy420Plane, x: usize, y: usize) -> u8 {
+        self.source[self.offset(plane, x, y)]
+    }
+
+    fn recon_sample(&self, plane: Av2Lossy420Plane, x: usize, y: usize) -> u8 {
+        self.recon[self.offset(plane, x, y)]
+    }
+
+    fn set_recon_sample(&mut self, plane: Av2Lossy420Plane, x: usize, y: usize, sample: u8) {
+        let offset = self.offset(plane, x, y);
+        self.recon[offset] = sample;
+    }
+
+    fn dc_predictor(&self, plane: Av2Lossy420Plane, x0: usize, y0: usize) -> u8 {
+        let (tile_origin_x, tile_origin_y) = self.plane_origin(plane);
+        let have_left = x0 > tile_origin_x;
+        let have_top = y0 > tile_origin_y;
+        if !have_left && !have_top {
+            return LOSSLESS_DC_PREDICTOR;
+        }
+
+        let mut sum = 0u32;
+        let mut count = 0u32;
+        if have_top {
+            for x in x0..(x0 + TX4X4_SIZE) {
+                sum += u32::from(self.recon_sample(plane, x, y0 - 1));
+                count += 1;
+            }
+        }
+        if have_left {
+            for y in y0..(y0 + TX4X4_SIZE) {
+                sum += u32::from(self.recon_sample(plane, x0 - 1, y));
+                count += 1;
+            }
+        }
+        ((sum + count / 2) / count) as u8
+    }
+
+    fn quantized_dc_delta(&self, plane: Av2Lossy420Plane, x0: usize, y0: usize) -> i16 {
+        let predictor = i32::from(self.dc_predictor(plane, x0, y0));
+        let mut sum = 0i32;
+        for local_y in 0..TX4X4_SIZE {
+            for local_x in 0..TX4X4_SIZE {
+                sum += i32::from(self.source_sample(plane, x0 + local_x, y0 + local_y)) - predictor;
+            }
+        }
+        let average = round_div_i32(sum, TX4X4_SAMPLES as i32);
+        quantize_i32_to_step(average, AV2_LOSSY_420_DC_QUANT_STEP).clamp(-255, 255) as i16
+    }
+
+    fn fill_recon_txb(&mut self, plane: Av2Lossy420Plane, x0: usize, y0: usize, delta: i16) {
+        let predictor = i16::from(self.dc_predictor(plane, x0, y0));
+        let sample = (predictor + delta).clamp(0, 255) as u8;
+        let (plane_width, plane_height) = self.plane_geometry(plane);
+        for local_y in 0..TX4X4_SIZE {
+            let y = y0 + local_y;
+            if y >= plane_height {
+                continue;
+            }
+            for local_x in 0..TX4X4_SIZE {
+                let x = x0 + local_x;
+                if x < plane_width {
+                    self.set_recon_sample(plane, x, y, sample);
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Av2Lossy420Plane {
+    Y,
+    U,
+    V,
+}
+
+const AV2_LOSSY_420_DC_QUANT_STEP: i32 = 8;
+
+fn round_div_i32(value: i32, divisor: i32) -> i32 {
+    debug_assert!(divisor > 0);
+    if value >= 0 {
+        (value + divisor / 2) / divisor
+    } else {
+        -((-value + divisor / 2) / divisor)
+    }
+}
+
+fn quantize_i32_to_step(value: i32, step: i32) -> i32 {
+    debug_assert!(step > 0);
+    round_div_i32(value, step) * step
+}
+
+fn write_lossy_420_residual_coefficients(
+    writer: &mut Av2EntropyWriter,
+    decision: Av2TileDecision,
+    visible_rows_mi: usize,
+    visible_cols_mi: usize,
+    contexts: &mut Av2TxbEntropyContexts,
+    lossy: &mut Av2Lossy420TileState<'_>,
+) {
+    let txb_width = decision
+        .block_size
+        .tx4x4_width()
+        .min(visible_cols_mi.saturating_sub(decision.col));
+    let txb_height = decision
+        .block_size
+        .tx4x4_height()
+        .min(visible_rows_mi.saturating_sub(decision.row));
+    for row in 0..txb_height {
+        let abs_row = decision.row + row;
+        for col in 0..txb_width {
+            let abs_col = decision.col + col;
+            let skip_ctx =
+                luma_txb_skip_context(contexts.y_above[abs_col], contexts.y_left[abs_row]);
+            let dc_sign_ctx = dc_sign_context(contexts.y_above[abs_col], contexts.y_left[abs_row]);
+            let (x0, y0) = lossy.txb_origin(Av2Lossy420Plane::Y, abs_col, abs_row);
+            let delta = lossy.quantized_dc_delta(Av2Lossy420Plane::Y, x0, y0);
+            let context = write_y_dc_delta_txb(writer, skip_ctx, dc_sign_ctx, delta);
+            lossy.fill_recon_txb(Av2Lossy420Plane::Y, x0, y0, delta);
+            contexts.y_above[abs_col] = context;
+            contexts.y_left[abs_row] = context;
+        }
+    }
+
+    let chroma_span = chroma_tx4x4_span(
+        decision,
+        visible_rows_mi,
+        visible_cols_mi,
+        Av2ChromaFormat::Yuv420,
+    );
+    let mut last_u_txb_nonzero = false;
+    for row in 0..chroma_span.height {
+        let abs_row = chroma_span.row + row;
+        for col in 0..chroma_span.width {
+            let abs_col = chroma_span.col + col;
+            let skip_ctx =
+                chroma_txb_skip_base_context(contexts.u_above[abs_col], contexts.u_left[abs_row])
+                    + 6;
+            let (x0, y0) = lossy.txb_origin(Av2Lossy420Plane::U, abs_col, abs_row);
+            let delta = lossy.quantized_dc_delta(Av2Lossy420Plane::U, x0, y0);
+            let (context, nonzero) =
+                write_chroma_dc_delta_txb(writer, Av2ChromaPlane::U, skip_ctx, delta);
+            lossy.fill_recon_txb(Av2Lossy420Plane::U, x0, y0, delta);
+            contexts.u_above[abs_col] = context;
+            contexts.u_left[abs_row] = context;
+            last_u_txb_nonzero = nonzero;
+        }
+    }
+
+    for row in 0..chroma_span.height {
+        let abs_row = chroma_span.row + row;
+        for col in 0..chroma_span.width {
+            let abs_col = chroma_span.col + col;
+            let skip_ctx = v_txb_skip_context_for_chroma_format(
+                contexts.v_above[abs_col],
+                contexts.v_left[abs_row],
+                last_u_txb_nonzero,
+                Av2ChromaFormat::Yuv420,
+            );
+            let (x0, y0) = lossy.txb_origin(Av2Lossy420Plane::V, abs_col, abs_row);
+            let delta = lossy.quantized_dc_delta(Av2Lossy420Plane::V, x0, y0);
+            let (context, _) =
+                write_chroma_dc_delta_txb(writer, Av2ChromaPlane::V, skip_ctx, delta);
+            lossy.fill_recon_txb(Av2Lossy420Plane::V, x0, y0, delta);
+            contexts.v_above[abs_col] = context;
+            contexts.v_left[abs_row] = context;
+        }
+    }
+}
+
 fn write_luma_palette_residual_coefficients(
     writer: &mut Av2EntropyWriter,
     decision: Av2TileDecision,
@@ -2451,6 +2777,25 @@ fn write_y_black_dc_txb(writer: &mut Av2EntropyWriter, skip_ctx: u8, dc_sign_ctx
     write_y_dc_high_range(writer, BLACK_LOSSLESS_DC_LEVEL);
 }
 
+fn write_y_dc_delta_txb(
+    writer: &mut Av2EntropyWriter,
+    skip_ctx: u8,
+    dc_sign_ctx: u8,
+    delta: i16,
+) -> u8 {
+    if delta == 0 {
+        write_y_txb_all_zero(writer, skip_ctx);
+        return 0;
+    }
+    let level = dc_delta_level(delta);
+    write_y_txb_nonzero(writer, skip_ctx);
+    write_eob_one_y(writer);
+    write_y_dc_level(writer, level);
+    write_y_dc_sign(writer, delta < 0, dc_sign_ctx);
+    write_y_dc_high_range(writer, level);
+    lossless_entropy_context(u32::from(level), i32::from(delta.signum()))
+}
+
 fn write_u_black_dc_txb(writer: &mut Av2EntropyWriter, skip_ctx: u8) {
     let context = write_u_lossless_dc_txb(writer, skip_ctx, 0);
     assert_eq!(context, NONZERO_NEGATIVE_DC_ENTROPY_CONTEXT);
@@ -2487,6 +2832,43 @@ fn write_v_lossless_dc_txb(writer: &mut Av2EntropyWriter, skip_ctx: u8, sample: 
     writer.write_literal("tile.coeff.v.dc_sign_negative", u32::from(negative), 1);
     write_uv_dc_high_range(writer, level);
     nonzero_dc_entropy_context(negative)
+}
+
+fn write_chroma_dc_delta_txb(
+    writer: &mut Av2EntropyWriter,
+    plane: Av2ChromaPlane,
+    skip_ctx: u8,
+    delta: i16,
+) -> (u8, bool) {
+    if delta == 0 {
+        match plane {
+            Av2ChromaPlane::U => write_u_txb_all_zero(writer, skip_ctx),
+            Av2ChromaPlane::V => write_v_txb_all_zero(writer, skip_ctx),
+        }
+        return (0, false);
+    }
+
+    let level = dc_delta_level(delta);
+    match plane {
+        Av2ChromaPlane::U => write_u_txb_nonzero(writer, skip_ctx),
+        Av2ChromaPlane::V => write_v_txb_nonzero(writer, skip_ctx),
+    }
+    write_eob_one_uv(writer);
+    write_uv_dc_level(writer, level);
+    let sign_name = match plane {
+        Av2ChromaPlane::U => "tile.coeff.u.dc_sign_negative",
+        Av2ChromaPlane::V => "tile.coeff.v.dc_sign_negative",
+    };
+    writer.write_literal(sign_name, u32::from(delta < 0), 1);
+    write_uv_dc_high_range(writer, level);
+    (
+        lossless_entropy_context(u32::from(level), i32::from(delta.signum())),
+        true,
+    )
+}
+
+fn dc_delta_level(delta: i16) -> u16 {
+    (i32::from(delta).unsigned_abs() as u16) * 4
 }
 
 fn luma_palette_tx4x4_coefficients(
