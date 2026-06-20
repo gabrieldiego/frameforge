@@ -11,9 +11,10 @@ See the [AV2 roadmap](roadmap.md) for the next planned milestones.
 ## Current State
 
 - `CODEC=av2` is accepted by the shared script codec registry.
-- `scripts/reference_encode_av2.py` adapts raw planar YUV to Y4M, invokes the
-  AVM encoder, decodes the resulting reference bitstream, and writes a raw
-  reconstruction for checksum, bitrate, and PSNR reporting.
+- `scripts/reference_encode_av2.py` adapts raw planar YUV to Y4M for the AVM
+  decoder path and writes a raw reconstruction for checksum, bitrate, and PSNR
+  reporting. FrameForge AV2 validation is decode-only against AVM; it does not
+  use AVM as a bitrate reference encoder.
 - `make decoder-setup CODEC=av2` finds or builds AVM under
   `verification/codecs/av2/reference/avm` unless an external path is configured.
 - `src/av2/` contains a named-field writer for the initial sequence header,
@@ -53,6 +54,11 @@ See the [AV2 roadmap](roadmap.md) for the next planned milestones.
   luma residual that follows palette prediction. The analyzer fetches each 4x4
   TXB through a RAM-backed sample window before the symbolizer runs, avoiding a
   full-superblock combinational sample mux.
+- The `yuv420p8` path now mirrors the VVC-style lossy residual milestone: 8x8
+  visible luma leaves and 4x4 chroma transform blocks are encoded with local
+  neighbor prediction, quantized residual coefficients, and matched software,
+  RTL, and AVM-decoded reconstructions. The current AV2 4:2:0 residual subset
+  is intentionally quality-first rather than bitrate-optimized.
 - `tb/av2/test_av2_encoder.py` drives the AV2 RTL block-packet stream and
   compares the RTL bitstream checksum against the software-generated bitstream
   through the shared validation path.
@@ -175,15 +181,22 @@ Last checked on 2026-06-15:
   SW/RTL/REF reconstructions. The representative 64x64 vector generated a
   19937-byte FrameForge bitstream at 38.9395 bits per luma pixel; all reported
   PSNR values were infinite.
-- `make synth CODEC=av2`: passed Yosys synthesis for the luma-palette plus
-  lossless residual path. The detailed baseline is recorded in
+- `make synth CODEC=av2`: passed Yosys synthesis for the luma-palette,
+  lossless 4:4:4 residual path, and the current lossy 4:2:0 residual path. The
+  detailed baseline is recorded in
   [synthesis.md](synthesis.md), and quality/bitrate measurements are recorded
   in [quality-bitrate.md](quality-bitrate.md).
+- The AV2 `racehorses-sweep-420` local validation set passed all 64 geometries
+  from 8x8 through 64x64 with strict software/RTL bitstream parity and matching
+  software, RTL, and AVM-decoded reconstructions. The current sweep average is
+  2.1998 bits per luma pixel and 24.08 dB PSNR.
 
 ## Next Steps
 
 - Validate the local screenshot crop set again as a real screen-content
   workload now that the generated high-color sweep is lossless.
+- Use the 4:2:0 RaceHorses residual baseline as the next video-content guard
+  when changing shared residual, entropy, or top-level AXI behavior.
 - Optimize the current luma-palette symbolizer path; synthesis reports the
   palette delta-bit calculation through the range coder as the current
   topological critical path.

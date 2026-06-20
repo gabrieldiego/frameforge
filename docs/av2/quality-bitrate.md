@@ -10,6 +10,114 @@ AV2 reference path used here is decode-only; these validation runs do not
 invoke `avmenc`, `aomenc`, or `vpenc`, and reference-encoder bitrates are
 not tracked in this report.
 
+## 2026-06-19 4:2:0 Lossy Residual Baseline
+
+Baseline and current sources:
+
+- Baseline Git SHA: none; this is the first AV2 `yuv420p8` residual baseline.
+- Current validated source Git SHA:
+  `3b644b32e731840bb1da774312c5a0c70298f040`
+- Current mode: AV2 lossy 4:2:0 residual path with 8x8 visible luma leaves,
+  colocated 4x4 chroma transform blocks, local neighbor prediction, and strict
+  SW/RTL/reference-decoder reconstruction parity.
+- Delta columns are intentionally omitted for this first 4:2:0 checkpoint.
+
+Validation result:
+
+- `racehorses-sweep-420`: 64/64 PASS.
+- Larger 4:2:0 smoke vectors: 7/7 PASS.
+- All listed vectors matched SW/RTL bitstream checksums and
+  SW/RTL/reference-decoder reconstruction checksums.
+- Finite PSNR is expected: this AV2 4:2:0 path is intentionally lossy.
+
+Aggregate results:
+
+| Set | Cases | Status | SW bits | SW bpp | PSNR |
+|---|---:|---|---:|---:|---|
+| racehorses-sweep-420 | 64 | PASS | 182464 | 2.1998 | avg 24.08 dB, range 22.47-33.31 dB |
+| larger RaceHorses 4:2:0 smoke | 7 | PASS | 139608 | 2.0254 | avg 22.54 dB, range 21.87-22.92 dB |
+
+### RaceHorses 4:2:0 Sweep
+
+| Vector | Status | SW bits | SW bpp | PSNR |
+|---|---|---:|---:|---:|
+| racehorses_crop_8x8_1f_yuv420p8.yuv | PASS | 304 | 4.7500 | 33.31 |
+| racehorses_crop_16x8_1f_yuv420p8.yuv | PASS | 456 | 3.5625 | 23.72 |
+| racehorses_crop_24x8_1f_yuv420p8.yuv | PASS | 640 | 3.3333 | 24.37 |
+| racehorses_crop_32x8_1f_yuv420p8.yuv | PASS | 824 | 3.2188 | 23.44 |
+| racehorses_crop_40x8_1f_yuv420p8.yuv | PASS | 976 | 3.0500 | 23.68 |
+| racehorses_crop_48x8_1f_yuv420p8.yuv | PASS | 1032 | 2.6875 | 23.69 |
+| racehorses_crop_56x8_1f_yuv420p8.yuv | PASS | 1240 | 2.7679 | 22.99 |
+| racehorses_crop_64x8_1f_yuv420p8.yuv | PASS | 1392 | 2.7188 | 22.72 |
+| racehorses_crop_8x16_1f_yuv420p8.yuv | PASS | 336 | 2.6250 | 32.71 |
+| racehorses_crop_16x16_1f_yuv420p8.yuv | PASS | 744 | 2.9062 | 23.50 |
+| racehorses_crop_24x16_1f_yuv420p8.yuv | PASS | 912 | 2.3750 | 24.91 |
+| racehorses_crop_32x16_1f_yuv420p8.yuv | PASS | 1216 | 2.3750 | 25.44 |
+| racehorses_crop_40x16_1f_yuv420p8.yuv | PASS | 1544 | 2.4125 | 25.97 |
+| racehorses_crop_48x16_1f_yuv420p8.yuv | PASS | 1776 | 2.3125 | 25.53 |
+| racehorses_crop_56x16_1f_yuv420p8.yuv | PASS | 2088 | 2.3304 | 24.58 |
+| racehorses_crop_64x16_1f_yuv420p8.yuv | PASS | 2336 | 2.2812 | 24.42 |
+| racehorses_crop_8x24_1f_yuv420p8.yuv | PASS | 528 | 2.7500 | 30.47 |
+| racehorses_crop_16x24_1f_yuv420p8.yuv | PASS | 976 | 2.5417 | 23.59 |
+| racehorses_crop_24x24_1f_yuv420p8.yuv | PASS | 1304 | 2.2639 | 23.95 |
+| racehorses_crop_32x24_1f_yuv420p8.yuv | PASS | 1632 | 2.1250 | 23.36 |
+| racehorses_crop_40x24_1f_yuv420p8.yuv | PASS | 2200 | 2.2917 | 22.93 |
+| racehorses_crop_48x24_1f_yuv420p8.yuv | PASS | 2600 | 2.2569 | 22.73 |
+| racehorses_crop_56x24_1f_yuv420p8.yuv | PASS | 3032 | 2.2560 | 22.47 |
+| racehorses_crop_64x24_1f_yuv420p8.yuv | PASS | 3584 | 2.3333 | 22.47 |
+| racehorses_crop_8x32_1f_yuv420p8.yuv | PASS | 600 | 2.3438 | 28.68 |
+| racehorses_crop_16x32_1f_yuv420p8.yuv | PASS | 1192 | 2.3281 | 23.57 |
+| racehorses_crop_24x32_1f_yuv420p8.yuv | PASS | 1600 | 2.0833 | 23.84 |
+| racehorses_crop_32x32_1f_yuv420p8.yuv | PASS | 2232 | 2.1797 | 23.72 |
+| racehorses_crop_40x32_1f_yuv420p8.yuv | PASS | 2952 | 2.3062 | 23.39 |
+| racehorses_crop_48x32_1f_yuv420p8.yuv | PASS | 3344 | 2.1771 | 22.93 |
+| racehorses_crop_56x32_1f_yuv420p8.yuv | PASS | 3912 | 2.1830 | 22.90 |
+| racehorses_crop_64x32_1f_yuv420p8.yuv | PASS | 4544 | 2.2188 | 22.75 |
+| racehorses_crop_8x40_1f_yuv420p8.yuv | PASS | 760 | 2.3750 | 28.02 |
+| racehorses_crop_16x40_1f_yuv420p8.yuv | PASS | 1528 | 2.3875 | 23.56 |
+| racehorses_crop_24x40_1f_yuv420p8.yuv | PASS | 1984 | 2.0667 | 23.33 |
+| racehorses_crop_32x40_1f_yuv420p8.yuv | PASS | 2752 | 2.1500 | 23.18 |
+| racehorses_crop_40x40_1f_yuv420p8.yuv | PASS | 3464 | 2.1650 | 23.17 |
+| racehorses_crop_48x40_1f_yuv420p8.yuv | PASS | 4416 | 2.3000 | 22.80 |
+| racehorses_crop_56x40_1f_yuv420p8.yuv | PASS | 4896 | 2.1857 | 22.86 |
+| racehorses_crop_64x40_1f_yuv420p8.yuv | PASS | 5560 | 2.1719 | 22.85 |
+| racehorses_crop_8x48_1f_yuv420p8.yuv | PASS | 968 | 2.5208 | 27.20 |
+| racehorses_crop_16x48_1f_yuv420p8.yuv | PASS | 1824 | 2.3750 | 23.94 |
+| racehorses_crop_24x48_1f_yuv420p8.yuv | PASS | 2280 | 1.9792 | 23.43 |
+| racehorses_crop_32x48_1f_yuv420p8.yuv | PASS | 3152 | 2.0521 | 23.12 |
+| racehorses_crop_40x48_1f_yuv420p8.yuv | PASS | 4104 | 2.1375 | 23.09 |
+| racehorses_crop_48x48_1f_yuv420p8.yuv | PASS | 5016 | 2.1771 | 22.77 |
+| racehorses_crop_56x48_1f_yuv420p8.yuv | PASS | 5776 | 2.1488 | 22.90 |
+| racehorses_crop_64x48_1f_yuv420p8.yuv | PASS | 6512 | 2.1198 | 22.93 |
+| racehorses_crop_8x56_1f_yuv420p8.yuv | PASS | 1072 | 2.3929 | 24.65 |
+| racehorses_crop_16x56_1f_yuv420p8.yuv | PASS | 2072 | 2.3125 | 22.94 |
+| racehorses_crop_24x56_1f_yuv420p8.yuv | PASS | 2680 | 1.9940 | 22.95 |
+| racehorses_crop_32x56_1f_yuv420p8.yuv | PASS | 3688 | 2.0580 | 23.17 |
+| racehorses_crop_40x56_1f_yuv420p8.yuv | PASS | 4696 | 2.0964 | 23.17 |
+| racehorses_crop_48x56_1f_yuv420p8.yuv | PASS | 5944 | 2.2113 | 22.92 |
+| racehorses_crop_56x56_1f_yuv420p8.yuv | PASS | 6704 | 2.1378 | 23.08 |
+| racehorses_crop_64x56_1f_yuv420p8.yuv | PASS | 7600 | 2.1205 | 22.94 |
+| racehorses_crop_8x64_1f_yuv420p8.yuv | PASS | 1184 | 2.3125 | 24.39 |
+| racehorses_crop_16x64_1f_yuv420p8.yuv | PASS | 2240 | 2.1875 | 23.53 |
+| racehorses_crop_24x64_1f_yuv420p8.yuv | PASS | 3152 | 2.0521 | 23.44 |
+| racehorses_crop_32x64_1f_yuv420p8.yuv | PASS | 4112 | 2.0078 | 23.45 |
+| racehorses_crop_40x64_1f_yuv420p8.yuv | PASS | 5320 | 2.0781 | 23.38 |
+| racehorses_crop_48x64_1f_yuv420p8.yuv | PASS | 6496 | 2.1146 | 23.06 |
+| racehorses_crop_56x64_1f_yuv420p8.yuv | PASS | 7744 | 2.1607 | 23.06 |
+| racehorses_crop_64x64_1f_yuv420p8.yuv | PASS | 8720 | 2.1289 | 22.93 |
+
+### Larger RaceHorses 4:2:0 Smoke
+
+| Vector | Status | SW bits | SW bpp | PSNR |
+|---|---|---:|---:|---:|
+| RaceHorses_136x80_1f_yuv420p8.yuv | PASS | 20608 | 1.8941 | 21.87 |
+| racehorses_multictu_h2_128x64_1f_yuv420p8.yuv | PASS | 16984 | 2.0732 | 22.76 |
+| racehorses_multictu_v2_64x128_1f_yuv420p8.yuv | PASS | 17160 | 2.0947 | 22.36 |
+| racehorses_multictu_grid2_128x128_1f_yuv420p8.yuv | PASS | 31816 | 1.9419 | 22.66 |
+| racehorses_partial_wide_136x80_1f_yuv420p8.yuv | PASS | 22552 | 2.0728 | 22.81 |
+| racehorses_partial_tall_72x128_1f_yuv420p8.yuv | PASS | 19104 | 2.0729 | 22.40 |
+| racehorses_partial_grid2_72x72_1f_yuv420p8.yuv | PASS | 11384 | 2.1960 | 22.92 |
+
 ## 2026-06-16 Luma Intra + IntraBC Syntax Fix Delta
 
 Baseline and current sources:

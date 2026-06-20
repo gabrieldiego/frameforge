@@ -23,6 +23,115 @@ Metric definitions:
   writer for these internal counters live in `tb/av2_metrics.py`; they are not
   part of the shared top-level pass/fail contract.
 
+## 2026-06-19 4:2:0 Lossy Residual Baseline
+
+Measured after extending the AV2 `yuv420p8` residual RTL to all RaceHorses
+single-superblock crop geometries and selected larger multi-superblock smoke
+vectors. This is the first output-utilization baseline for the AV2 4:2:0 path,
+so delta columns are intentionally omitted.
+
+Baseline and current sources:
+
+- Baseline Git SHA: none; this is the first AV2 `yuv420p8` utilization
+  baseline.
+- Current validated RTL Git SHA:
+  `3b644b32e731840bb1da774312c5a0c70298f040`
+
+Validation result:
+
+- `racehorses-sweep-420`: OK (64/64).
+- Larger 4:2:0 smoke vectors: OK (7/7).
+- All listed vectors matched SW/RTL bitstream checksums and
+  SW/RTL/reference-decoder reconstruction checksums.
+
+Aggregate top-level RTL utilization:
+
+| Set | Cases | RTL bits | Total cycles | Active cycles | Wait cycles | Output util | Bubble rate | Cycles/bit | Cycles/pixel |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| racehorses-sweep-420 | 64 | 182464 | 559546 | 22808 | 536738 | 0.041 | 0.959 | 3.067 | 6.746 |
+| larger RaceHorses 4:2:0 smoke | 7 | 139608 | 455922 | 17451 | 438471 | 0.038 | 0.962 | 3.266 | 6.615 |
+
+### RaceHorses 4:2:0 Sweep
+
+| Vector | Status | RTL bits | Total cycles | Active cycles | Wait cycles | Output util | Bubble rate | Cycles/bit | Cycles/pixel |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| racehorses_crop_8x8_1f_yuv420p8.yuv | PASS | 304 | 591 | 38 | 553 | 0.064 | 0.936 | 1.944 | 9.234 |
+| racehorses_crop_16x8_1f_yuv420p8.yuv | PASS | 456 | 1013 | 57 | 956 | 0.056 | 0.944 | 2.221 | 7.914 |
+| racehorses_crop_24x8_1f_yuv420p8.yuv | PASS | 640 | 1473 | 80 | 1393 | 0.054 | 0.946 | 2.302 | 7.672 |
+| racehorses_crop_32x8_1f_yuv420p8.yuv | PASS | 824 | 1903 | 103 | 1800 | 0.054 | 0.946 | 2.309 | 7.434 |
+| racehorses_crop_40x8_1f_yuv420p8.yuv | PASS | 976 | 2344 | 122 | 2222 | 0.052 | 0.948 | 2.402 | 7.325 |
+| racehorses_crop_48x8_1f_yuv420p8.yuv | PASS | 1032 | 2733 | 129 | 2604 | 0.047 | 0.953 | 2.648 | 7.117 |
+| racehorses_crop_56x8_1f_yuv420p8.yuv | PASS | 1240 | 3187 | 155 | 3032 | 0.049 | 0.951 | 2.570 | 7.114 |
+| racehorses_crop_64x8_1f_yuv420p8.yuv | PASS | 1392 | 3609 | 174 | 3435 | 0.048 | 0.952 | 2.593 | 7.049 |
+| racehorses_crop_8x16_1f_yuv420p8.yuv | PASS | 336 | 990 | 42 | 948 | 0.042 | 0.958 | 2.946 | 7.734 |
+| racehorses_crop_16x16_1f_yuv420p8.yuv | PASS | 744 | 1861 | 93 | 1768 | 0.050 | 0.950 | 2.501 | 7.270 |
+| racehorses_crop_24x16_1f_yuv420p8.yuv | PASS | 912 | 2691 | 114 | 2577 | 0.042 | 0.958 | 2.951 | 7.008 |
+| racehorses_crop_32x16_1f_yuv420p8.yuv | PASS | 1216 | 3527 | 152 | 3375 | 0.043 | 0.957 | 2.900 | 6.889 |
+| racehorses_crop_40x16_1f_yuv420p8.yuv | PASS | 1544 | 4403 | 193 | 4210 | 0.044 | 0.956 | 2.852 | 6.880 |
+| racehorses_crop_48x16_1f_yuv420p8.yuv | PASS | 1776 | 5214 | 222 | 4992 | 0.043 | 0.957 | 2.936 | 6.789 |
+| racehorses_crop_56x16_1f_yuv420p8.yuv | PASS | 2088 | 6098 | 261 | 5837 | 0.043 | 0.957 | 2.920 | 6.806 |
+| racehorses_crop_64x16_1f_yuv420p8.yuv | PASS | 2336 | 6929 | 292 | 6637 | 0.042 | 0.958 | 2.966 | 6.767 |
+| racehorses_crop_8x24_1f_yuv420p8.yuv | PASS | 528 | 1457 | 66 | 1391 | 0.045 | 0.955 | 2.759 | 7.589 |
+| racehorses_crop_16x24_1f_yuv420p8.yuv | PASS | 976 | 2708 | 122 | 2586 | 0.045 | 0.955 | 2.775 | 7.052 |
+| racehorses_crop_24x24_1f_yuv420p8.yuv | PASS | 1304 | 3973 | 163 | 3810 | 0.041 | 0.959 | 3.047 | 6.898 |
+| racehorses_crop_32x24_1f_yuv420p8.yuv | PASS | 1632 | 5168 | 204 | 4964 | 0.039 | 0.961 | 3.167 | 6.729 |
+| racehorses_crop_40x24_1f_yuv420p8.yuv | PASS | 2200 | 6534 | 275 | 6259 | 0.042 | 0.958 | 2.970 | 6.806 |
+| racehorses_crop_48x24_1f_yuv420p8.yuv | PASS | 2600 | 7758 | 325 | 7433 | 0.042 | 0.958 | 2.984 | 6.734 |
+| racehorses_crop_56x24_1f_yuv420p8.yuv | PASS | 3032 | 9083 | 379 | 8704 | 0.042 | 0.958 | 2.996 | 6.758 |
+| racehorses_crop_64x24_1f_yuv420p8.yuv | PASS | 3584 | 10417 | 448 | 9969 | 0.043 | 0.957 | 2.907 | 6.782 |
+| racehorses_crop_8x32_1f_yuv420p8.yuv | PASS | 600 | 1849 | 75 | 1774 | 0.041 | 0.959 | 3.082 | 7.223 |
+| racehorses_crop_16x32_1f_yuv420p8.yuv | PASS | 1192 | 3543 | 149 | 3394 | 0.042 | 0.958 | 2.972 | 6.920 |
+| racehorses_crop_24x32_1f_yuv420p8.yuv | PASS | 1600 | 5194 | 200 | 4994 | 0.039 | 0.961 | 3.246 | 6.763 |
+| racehorses_crop_32x32_1f_yuv420p8.yuv | PASS | 2232 | 6889 | 279 | 6610 | 0.040 | 0.960 | 3.086 | 6.728 |
+| racehorses_crop_40x32_1f_yuv420p8.yuv | PASS | 2952 | 8711 | 369 | 8342 | 0.042 | 0.958 | 2.951 | 6.805 |
+| racehorses_crop_48x32_1f_yuv420p8.yuv | PASS | 3344 | 10291 | 418 | 9873 | 0.041 | 0.959 | 3.077 | 6.700 |
+| racehorses_crop_56x32_1f_yuv420p8.yuv | PASS | 3912 | 12024 | 489 | 11535 | 0.041 | 0.959 | 3.074 | 6.710 |
+| racehorses_crop_64x32_1f_yuv420p8.yuv | PASS | 4544 | 13722 | 568 | 13154 | 0.041 | 0.959 | 3.020 | 6.700 |
+| racehorses_crop_8x40_1f_yuv420p8.yuv | PASS | 760 | 2320 | 95 | 2225 | 0.041 | 0.959 | 3.053 | 7.250 |
+| racehorses_crop_16x40_1f_yuv420p8.yuv | PASS | 1528 | 4420 | 191 | 4229 | 0.043 | 0.957 | 2.893 | 6.906 |
+| racehorses_crop_24x40_1f_yuv420p8.yuv | PASS | 1984 | 6488 | 248 | 6240 | 0.038 | 0.962 | 3.270 | 6.758 |
+| racehorses_crop_32x40_1f_yuv420p8.yuv | PASS | 2752 | 8607 | 344 | 8263 | 0.040 | 0.960 | 3.128 | 6.724 |
+| racehorses_crop_40x40_1f_yuv420p8.yuv | PASS | 3464 | 10756 | 433 | 10323 | 0.040 | 0.960 | 3.105 | 6.723 |
+| racehorses_crop_48x40_1f_yuv420p8.yuv | PASS | 4416 | 12963 | 552 | 12411 | 0.043 | 0.957 | 2.935 | 6.752 |
+| racehorses_crop_56x40_1f_yuv420p8.yuv | PASS | 4896 | 15039 | 612 | 14427 | 0.041 | 0.959 | 3.072 | 6.714 |
+| racehorses_crop_64x40_1f_yuv420p8.yuv | PASS | 5560 | 17133 | 695 | 16438 | 0.041 | 0.959 | 3.081 | 6.693 |
+| racehorses_crop_8x48_1f_yuv420p8.yuv | PASS | 968 | 2787 | 121 | 2666 | 0.043 | 0.957 | 2.879 | 7.258 |
+| racehorses_crop_16x48_1f_yuv420p8.yuv | PASS | 1824 | 5302 | 228 | 5074 | 0.043 | 0.957 | 2.907 | 6.904 |
+| racehorses_crop_24x48_1f_yuv420p8.yuv | PASS | 2280 | 7701 | 285 | 7416 | 0.037 | 0.963 | 3.378 | 6.685 |
+| racehorses_crop_32x48_1f_yuv420p8.yuv | PASS | 3152 | 10237 | 394 | 9843 | 0.038 | 0.962 | 3.248 | 6.665 |
+| racehorses_crop_40x48_1f_yuv420p8.yuv | PASS | 4104 | 12874 | 513 | 12361 | 0.040 | 0.960 | 3.137 | 6.705 |
+| racehorses_crop_48x48_1f_yuv420p8.yuv | PASS | 5016 | 15369 | 627 | 14742 | 0.041 | 0.959 | 3.064 | 6.671 |
+| racehorses_crop_56x48_1f_yuv420p8.yuv | PASS | 5776 | 17989 | 722 | 17267 | 0.040 | 0.960 | 3.114 | 6.692 |
+| racehorses_crop_64x48_1f_yuv420p8.yuv | PASS | 6512 | 20439 | 814 | 19625 | 0.040 | 0.960 | 3.139 | 6.653 |
+| racehorses_crop_8x56_1f_yuv420p8.yuv | PASS | 1072 | 3216 | 134 | 3082 | 0.042 | 0.958 | 3.000 | 7.179 |
+| racehorses_crop_16x56_1f_yuv420p8.yuv | PASS | 2072 | 6134 | 259 | 5875 | 0.042 | 0.958 | 2.960 | 6.846 |
+| racehorses_crop_24x56_1f_yuv420p8.yuv | PASS | 2680 | 9018 | 335 | 8683 | 0.037 | 0.963 | 3.365 | 6.710 |
+| racehorses_crop_32x56_1f_yuv420p8.yuv | PASS | 3688 | 11943 | 461 | 11482 | 0.039 | 0.961 | 3.238 | 6.665 |
+| racehorses_crop_40x56_1f_yuv420p8.yuv | PASS | 4696 | 14943 | 587 | 14356 | 0.039 | 0.961 | 3.182 | 6.671 |
+| racehorses_crop_48x56_1f_yuv420p8.yuv | PASS | 5944 | 17987 | 743 | 17244 | 0.041 | 0.959 | 3.026 | 6.692 |
+| racehorses_crop_56x56_1f_yuv420p8.yuv | PASS | 6704 | 20975 | 838 | 20137 | 0.040 | 0.960 | 3.129 | 6.688 |
+| racehorses_crop_64x56_1f_yuv420p8.yuv | PASS | 7600 | 23836 | 950 | 22886 | 0.040 | 0.960 | 3.136 | 6.651 |
+| racehorses_crop_8x64_1f_yuv420p8.yuv | PASS | 1184 | 3640 | 148 | 3492 | 0.041 | 0.959 | 3.074 | 7.109 |
+| racehorses_crop_16x64_1f_yuv420p8.yuv | PASS | 2240 | 6950 | 280 | 6670 | 0.040 | 0.960 | 3.103 | 6.787 |
+| racehorses_crop_24x64_1f_yuv420p8.yuv | PASS | 3152 | 10323 | 394 | 9929 | 0.038 | 0.962 | 3.275 | 6.721 |
+| racehorses_crop_32x64_1f_yuv420p8.yuv | PASS | 4112 | 13580 | 514 | 13066 | 0.038 | 0.962 | 3.303 | 6.631 |
+| racehorses_crop_40x64_1f_yuv420p8.yuv | PASS | 5320 | 17067 | 665 | 16402 | 0.039 | 0.961 | 3.208 | 6.667 |
+| racehorses_crop_48x64_1f_yuv420p8.yuv | PASS | 6496 | 20423 | 812 | 19611 | 0.040 | 0.960 | 3.144 | 6.648 |
+| racehorses_crop_56x64_1f_yuv420p8.yuv | PASS | 7744 | 23957 | 968 | 22989 | 0.040 | 0.960 | 3.094 | 6.684 |
+| racehorses_crop_64x64_1f_yuv420p8.yuv | PASS | 8720 | 27243 | 1090 | 26153 | 0.040 | 0.960 | 3.124 | 6.651 |
+
+### Larger RaceHorses 4:2:0 Smoke
+
+| Vector | Status | RTL bits | Total cycles | Active cycles | Wait cycles | Output util | Bubble rate | Cycles/bit | Cycles/pixel |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| RaceHorses_136x80_1f_yuv420p8.yuv | PASS | 20608 | 71494 | 2576 | 68918 | 0.036 | 0.964 | 3.469 | 6.571 |
+| racehorses_multictu_h2_128x64_1f_yuv420p8.yuv | PASS | 16984 | 54207 | 2123 | 52084 | 0.039 | 0.961 | 3.192 | 6.617 |
+| racehorses_multictu_v2_64x128_1f_yuv420p8.yuv | PASS | 17160 | 54258 | 2145 | 52113 | 0.040 | 0.960 | 3.162 | 6.623 |
+| racehorses_multictu_grid2_128x128_1f_yuv420p8.yuv | PASS | 31816 | 107342 | 3977 | 103365 | 0.037 | 0.963 | 3.374 | 6.552 |
+| racehorses_partial_wide_136x80_1f_yuv420p8.yuv | PASS | 22552 | 72402 | 2819 | 69583 | 0.039 | 0.961 | 3.210 | 6.655 |
+| racehorses_partial_tall_72x128_1f_yuv420p8.yuv | PASS | 19104 | 61379 | 2388 | 58991 | 0.039 | 0.961 | 3.213 | 6.660 |
+| racehorses_partial_grid2_72x72_1f_yuv420p8.yuv | PASS | 11384 | 34840 | 1423 | 33417 | 0.041 | 0.959 | 3.060 | 6.721 |
+
 ## 2026-06-19 Direct Plane-Row Source Cache Recheck
 
 Measured after the shared AXI frame reader was changed to keep a small direct

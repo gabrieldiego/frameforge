@@ -1,13 +1,16 @@
-# AV2 Roadmap (Lossless 4:4:4 Screen Content Focus)
+# AV2 Roadmap (Lossless 4:4:4 Screen Content And Lossy 4:2:0 Video)
 
-This roadmap is scoped to building a practical, spec-aligned **lossless 4:4:4 screen-content encoder** path for FrameForge AV2.
-It is organized for incremental validation, with each item tied to concrete
-validation and synthesis checkpoints.
+This roadmap is scoped to building a practical, spec-aligned **lossless 4:4:4
+screen-content encoder** path plus a maintained **lossy 4:2:0 video residual**
+path for FrameForge AV2. It is organized for incremental validation, with each
+item tied to concrete validation and synthesis checkpoints.
 
 ## North Star
 
 - Encode RGB-like screen content in 4:4:4 losslessly from `screenshot_*.png`-derived
   planar inputs.
+- Encode natural-video `yuv420p8` inputs with a simple VVC-style lossy residual
+  path so AV2 and VVC share a comparable 4:2:0 validation target.
 - Maintain SW/RTL bitstream and reconstruction parity with AVM reference.
 - Keep implementation synthesizable and regression-friendly.
 - Preserve the shared FrameForge test infra and avoid hard-coded bitstreams.
@@ -21,7 +24,9 @@ validation and synthesis checkpoints.
   decisions and mirrored in RTL (no opaque blobs).
 - A feature is considered complete only after at least:
   - one focused SW-only validation pass,
-  - one full AV2 sweep including `screenshot-sweep-444` and `screenshot-multictu-444`,
+  - one full AV2 sweep for the affected format, such as
+    `screenshot-sweep-444` + `screenshot-multictu-444` for 4:4:4 or
+    `racehorses-sweep-420` plus larger 4:2:0 guards for `yuv420p8`,
   - one Yosys synthesis baseline and documented delta.
 
 ## Feature Baseline Routine
@@ -64,6 +69,9 @@ reducing cost rather than proving the plumbing again:
   modes where the currently implemented context model is valid.
 - Strict SW/RTL/reference-decoder checksum validation and per-milestone
   bitrate/output-utilization/synthesis delta reporting.
+- Lossy 4:2:0 residual support for 8x8 luma leaves and colocated 4x4 chroma
+  transform blocks, validated on the RaceHorses crop sweep and larger
+  multi-superblock smoke vectors.
 
 ## Roadmap
 
@@ -142,6 +150,24 @@ reducing cost rather than proving the plumbing again:
    - Confirm all 8x8, 16x16, ..., 64x64 non-rectangular/screen-aligned tile shapes in
      screenshot manifests are supported without behavior changes.
 
+### Phase 1b — Maintained Lossy 4:2:0 Video Path
+
+1. Residual baseline
+   - Done: add AV2 `yuv420p8` software/RTL residual coding with strict
+     software/RTL bitstream parity and AVM-decoded reconstruction parity.
+   - Done: validate the RaceHorses 8x8-through-64x64 crop sweep and a short
+     set of larger/multi-superblock RaceHorses vectors.
+   - Keep this path simple and local while the lossless 4:4:4 path remains the
+     primary feature focus.
+
+2. Future residual improvements
+   - Reuse VVC residual lessons where possible: fewer bubbles, simpler
+     transform-block buffering, and bounded coefficient scans.
+   - Keep every quality-changing change documented in `quality-bitrate.md`
+     because 4:2:0 is lossy and PSNR deltas matter.
+   - Treat RaceHorses 4:2:0 sweeps as a guard for shared entropy, residual, and
+     AXI-interface changes even when the feature work targets 4:4:4.
+
 ### Phase 2 — Screen Throughput and Multi-CTU Robustness
 
 1. Multi-CTU ordering
@@ -216,8 +242,9 @@ Use this as the recurring feature checklist for each active development cycle:
   - Screen-aware coding-tool tuning hooks
 
 - **Format and input coverage**
-  - 4:4:4 arbitrary-color full-frame/screenshot cases
-  - Multi-CTU geometry support with deterministic ordering
+- 4:4:4 arbitrary-color full-frame/screenshot cases
+- 4:2:0 RaceHorses crop and multi-superblock cases
+- Multi-CTU geometry support with deterministic ordering
   - Partial-CTU edge cases and non-tile-aligned crops
   - Deterministic seed/replay support for pseudo-random screen crop generation
 

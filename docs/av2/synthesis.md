@@ -8,6 +8,97 @@ Older bring-up and intermediate optimization checkpoints are intentionally kept
 out of this report so the document remains focused on the current validated
 baseline and its immediate delta. Use git history for retired measurements.
 
+## 2026-06-19 4:2:0 Multi-Leaf Residual Path
+
+Measured after extending the AV2 `yuv420p8` residual RTL from the initial 8x8
+leaf smoke path to all RaceHorses crop geometries from 8x8 through 64x64 plus
+larger multi-superblock smoke vectors. This checkpoint keeps the existing 4:4:4
+screen-content blocks enabled and adds the maintained lossy 4:2:0 residual
+path.
+
+Baseline and current sources:
+
+- Baseline Git SHA: `75b15586bfbdeee877f1311ef82133a4990831f8`
+- Current validated RTL Git SHA: `3b644b32e731840bb1da774312c5a0c70298f040`
+- Baseline mode: AV2 RTL `yuv420p8` residual path validated for the first 8x8
+  leaf smoke case.
+- Current mode: AV2 RTL `yuv420p8` residual path validated across all
+  single-superblock RaceHorses crop geometries and selected larger
+  multi-superblock RaceHorses vectors.
+- Delta columns compare against the previous 8x8-only residual checkpoint.
+
+Validation result:
+
+- `racehorses-sweep-420`: OK (64/64), strict SW/RTL bitstream parity and
+  SW/RTL/reference-decoder reconstruction parity.
+- Larger 4:2:0 smoke vectors: OK (7/7), including the scaled 136x80
+  RaceHorses frame, horizontal/vertical/grid multi-superblock crops, and
+  partial-superblock crops.
+- Current 4:2:0 reconstruction is lossy by design; PSNR is tracked in
+  [quality-bitrate.md](quality-bitrate.md).
+
+Synthesis configuration:
+
+- command: `make synth CODEC=av2 SYNTH_DUT=av2-encoder`
+- DUT: `av2-encoder`
+- RTL top: `ff_av2_encoder`
+- board: `synth/boards/arty-z7-10.env`
+- clock metadata: `25 MHz`
+- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
+- memory limit: 3072 MiB
+- feature flags: palette 4:4:4 enabled, exact-hash IBC 4:4:4 enabled,
+  lossy 4:2:0 residual enabled
+- max visible size: 1024x1024
+
+Synthesis result:
+
+- Yosys synthesis passed in 369.1 seconds.
+- Peak child RSS observed by the synthesis runner was 1641.88 MiB.
+- Runtime exceeded the 300 second review threshold but completed inside the
+  600 second hard timeout and 3072 MiB memory limit.
+- The isolated `ff_av2_chroma_sample_store` path length remains 1.
+- The top `ff_av2_encoder` topological path length rose from 75 to 80.
+
+Flattened Xilinx-cell estimate from
+`synth/out/arty-z7-10/ff_av2_encoder/cell_report.log`:
+
+| Metric | Count |
+|---|---:|
+| Cells | 102429 |
+| Estimated LCs | 33984 |
+| CARRY4 | 2652 |
+| DSP48E1 | 13 |
+| FDCE | 6352 |
+| FDPE | 35 |
+| FDRE | 35695 |
+| FDSE | 129 |
+| LUT1 | 419 |
+| LUT2 | 7853 |
+| LUT3 | 6463 |
+| LUT4 | 3518 |
+| LUT5 | 4167 |
+| LUT6 | 19836 |
+| MUXF7 | 3681 |
+| MUXF8 | 616 |
+| RAMB36E1 | 19 |
+| RAM32M | 10 |
+| RAM64M | 1536 |
+
+Delta from the 8x8-only residual checkpoint:
+
+| Metric | Baseline | Current | Delta |
+|---|---:|---:|---:|
+| Synthesis time | 367.8 s | 369.1 s | +1.3 s |
+| Peak synthesis RSS | 1629.85 MiB | 1641.88 MiB | +12.03 MiB |
+| Topological path length | 75 | 80 | +5 |
+| Cells | 100405 | 102429 | +2024 |
+| Estimated LCs | 32558 | 33984 | +1426 |
+
+The multi-leaf 4:2:0 residual work adds modest area and a small topological-path
+increase. The next 4:2:0 optimization pass should target the new
+neighbor/predictor state and the chroma residual symbolizer fan-in if this path
+becomes timing-critical.
+
 ## 2026-06-18 AXI Writer FIFO
 
 Measured after optimizing the shared AXI bridge used by every codec target. The
