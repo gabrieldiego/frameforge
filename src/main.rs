@@ -21,6 +21,7 @@ struct Av2EncodeCli {
     output: PathBuf,
     recon: Option<PathBuf>,
     trace: Option<PathBuf>,
+    stats: Option<PathBuf>,
     frames: usize,
     width: usize,
     height: usize,
@@ -124,16 +125,23 @@ fn run_av2_encode(cli: Av2EncodeCli) -> Result<(), String> {
     };
     let recon_sink = recon_output.as_mut().map(|writer| writer as &mut dyn Write);
     frameforge::av2::av2_encode_fixed_black_444(&mut input, &mut output, recon_sink, request)?;
-    if let Some(trace) = cli.trace.as_ref() {
+    if cli.trace.is_some() || cli.stats.is_some() {
         let frame = fs::read(&cli.input).map_err(|err| {
             format!(
-                "failed to reread AV2 input '{}' for trace: {err}",
+                "failed to reread AV2 input '{}' for side outputs: {err}",
                 cli.input.display()
             )
         })?;
-        let jsonl = frameforge::av2::av2_mvp_444_trace_jsonl_for_frame(&frame, request)?;
-        fs::write(trace, jsonl)
-            .map_err(|err| format!("failed to write AV2 trace '{}': {err}", trace.display()))?;
+        if let Some(trace) = cli.trace.as_ref() {
+            let jsonl = frameforge::av2::av2_mvp_444_trace_jsonl_for_frame(&frame, request)?;
+            fs::write(trace, jsonl)
+                .map_err(|err| format!("failed to write AV2 trace '{}': {err}", trace.display()))?;
+        }
+        if let Some(stats) = cli.stats.as_ref() {
+            let json = frameforge::av2::av2_mvp_444_ibc_stats_json_for_frame(&frame, request)?;
+            fs::write(stats, json)
+                .map_err(|err| format!("failed to write AV2 stats '{}': {err}", stats.display()))?;
+        }
     }
     Ok(())
 }
@@ -296,6 +304,7 @@ fn parse_av2_encode_cli(args: Vec<String>) -> Result<Command, String> {
     let mut output = None;
     let mut recon = None;
     let mut trace = None;
+    let mut stats = None;
     let mut frames = 1;
     let mut width = 64;
     let mut height = 64;
@@ -308,6 +317,7 @@ fn parse_av2_encode_cli(args: Vec<String>) -> Result<Command, String> {
             "--output" => output = Some(next_value(&mut iter, "--output")?.into()),
             "--recon" => recon = Some(next_value(&mut iter, "--recon")?.into()),
             "--trace" => trace = Some(next_value(&mut iter, "--trace")?.into()),
+            "--stats" => stats = Some(next_value(&mut iter, "--stats")?.into()),
             "--frames" => frames = parse_usize(next_value(&mut iter, "--frames")?, "--frames")?,
             "--width" => width = parse_usize(next_value(&mut iter, "--width")?, "--width")?,
             "--height" => height = parse_usize(next_value(&mut iter, "--height")?, "--height")?,
@@ -325,6 +335,7 @@ fn parse_av2_encode_cli(args: Vec<String>) -> Result<Command, String> {
         output: output.ok_or_else(|| "missing --output <path>".to_string())?,
         recon,
         trace,
+        stats,
         frames,
         width,
         height,
@@ -497,7 +508,7 @@ fn parse_usize(value: String, flag: &str) -> Result<usize, String> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  frameforge av2-encode --input <yuv> --output <av2> [--recon <yuv>] [--frames <n>] [--width <w> --height <h>] [--format yuv420p8|yuv422p8|yuv444p8|i420|i422|i444|i010|i210|i410|...]\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-encode --input <yuv> --output <vvc> [--recon <yuv>] [--frames <n>] [--width <w> --height <h>] [--max-width <w> --max-height <h>] [--format yuv420p8|yuv422p8|yuv444p8|i420|i422|i444|i010|i210|i410|...]\n  frameforge vvc-cabac-vector-dump --input <yuv420> --output <json> [--frames 1 --width <w> --height <h> --format yuv420p8]\n  frameforge vvc-palette-cabac-dump --input <yuv444> --output <json> [--width <w> --height <h> --format yuv444p8]\n  frameforge vvc-list --input <vvc>"
+    "usage:\n  frameforge av2-encode --input <yuv> --output <av2> [--recon <yuv>] [--trace <jsonl>] [--stats <json>] [--frames <n>] [--width <w> --height <h>] [--format yuv420p8|yuv422p8|yuv444p8|i420|i422|i444|i010|i210|i410|...]\n  frameforge vvc-eos --output <vvc>\n  frameforge vvc-encode --input <yuv> --output <vvc> [--recon <yuv>] [--frames <n>] [--width <w> --height <h>] [--max-width <w> --max-height <h>] [--format yuv420p8|yuv422p8|yuv444p8|i420|i422|i444|i010|i210|i410|...]\n  frameforge vvc-cabac-vector-dump --input <yuv420> --output <json> [--frames 1 --width <w> --height <h> --format yuv420p8]\n  frameforge vvc-palette-cabac-dump --input <yuv444> --output <json> [--width <w> --height <h> --format yuv444p8]\n  frameforge vvc-list --input <vvc>"
 }
 
 #[cfg(test)]

@@ -434,6 +434,7 @@ def validate_av2_fixed_black_path(
     sw_bitstream = out_dir / f"{stem}_software.{codec.bitstream_extension}"
     sw_internal_recon = out_dir / f"{stem}_software_internal_rec.yuv"
     sw_trace = out_dir / f"{stem}_software_trace.jsonl"
+    sw_ibc_stats = out_dir / f"{stem}_software_ibc_stats.json"
     sw_ref_decoded_recon = out_dir / f"{stem}_software_ref_decoded.yuv"
     rtl_bitstream = out_dir / f"{stem}_rtl.{codec.bitstream_extension}"
     rtl_internal_recon = out_dir / f"{stem}_rtl_internal_rec.yuv"
@@ -452,30 +453,33 @@ def validate_av2_fixed_black_path(
         f"{info.width}x{info.height} {info.fmt}",
         flush=True,
     )
+    sw_cmd = [
+        "cargo",
+        "run",
+        "--quiet",
+        "--",
+        codec.rust_encode_command,
+        "--input",
+        str(validation_input_path),
+        "--frames",
+        str(info.frames),
+        "--width",
+        str(info.width),
+        "--height",
+        str(info.height),
+        "--format",
+        info.fmt,
+        "--output",
+        str(sw_bitstream),
+        "--recon",
+        str(sw_internal_recon),
+        "--trace",
+        str(sw_trace),
+    ]
+    if normalize_format(info.fmt) == "yuv444p8":
+        sw_cmd.extend(["--stats", str(sw_ibc_stats)])
     sw = subprocess.run(
-        [
-            "cargo",
-            "run",
-            "--quiet",
-            "--",
-            codec.rust_encode_command,
-            "--input",
-            str(validation_input_path),
-            "--frames",
-            str(info.frames),
-            "--width",
-            str(info.width),
-            "--height",
-            str(info.height),
-            "--format",
-            info.fmt,
-            "--output",
-            str(sw_bitstream),
-            "--recon",
-            str(sw_internal_recon),
-            "--trace",
-            str(sw_trace),
-        ],
+        sw_cmd,
         cwd=REPO_ROOT,
         check=False,
     )
@@ -564,6 +568,8 @@ def validate_av2_fixed_black_path(
         else:
             print(f"{digest}  {name}")
     print_bitrate_report("software_bitstream", sw_bitstream, info)
+    if sw_ibc_stats.exists():
+        print_av2_ibc_stats_report("software_ibc", sw_ibc_stats)
     if ran_rtl:
         print_bitrate_report("rtl_bitstream", rtl_bitstream, info)
         if not rtl_metrics.exists():
@@ -812,6 +818,29 @@ def print_bitrate_report(label: str, bitstream_path: Path, info: InputInfo) -> N
     print(f"{encoded_bits}  {label}_bits")
     print(f"{bpp:.4f}  {label}_bits_per_luma_pixel")
     print(f"{source_ratio:.4f}  {label}_encoded_to_source_bytes")
+
+
+def print_av2_ibc_stats_report(label: str, stats_path: Path) -> None:
+    metrics = json.loads(stats_path.read_text())
+    keys = [
+        "total_blocks",
+        "blocks_with_above_in_tile",
+        "blocks_with_left_in_tile",
+        "fixed_drl_supported_blocks",
+        "raw_above_hash_matches",
+        "raw_left_hash_matches",
+        "direct_above_hash_matches",
+        "direct_left_hash_matches",
+        "above_hash_matches_blocked_by_fixed_drl_guard",
+        "left_hash_matches_blocked_by_fixed_drl_guard",
+        "above_hash_matches_blocked_by_copied_candidate",
+        "left_hash_matches_blocked_by_copied_candidate",
+        "selected_above_copy_blocks",
+        "selected_left_copy_blocks",
+        "selected_copy_blocks",
+    ]
+    for key in keys:
+        print(f"{int(metrics[key])}  {label}_{key}")
 
 
 def print_rtl_cycle_report(label: str, metrics_path: Path, info: InputInfo) -> None:

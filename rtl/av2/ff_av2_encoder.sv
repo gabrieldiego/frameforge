@@ -919,7 +919,8 @@ module ff_av2_encoder #(
     .samples(luma_fetch_txb_samples_w),
     .predictor(lossy420_luma_predictor_w),
     .delta(lossy420_luma_delta_w),
-    .recon_sample(lossy420_luma_recon_sample_w)
+    .recon_sample(lossy420_luma_recon_sample_w),
+    .zero_delta(lossy420_luma_known_zero_w)
   );
 
   ff_av2_chroma_bdpcm_symbolizer #(
@@ -987,7 +988,8 @@ module ff_av2_encoder #(
     .samples(chroma_bdpcm_txb_samples_w),
     .predictor(lossy420_chroma_predictor_w),
     .delta(lossy420_chroma_delta_w),
-    .recon_sample(lossy420_chroma_recon_sample_w)
+    .recon_sample(lossy420_chroma_recon_sample_w),
+    .zero_delta(lossy420_chroma_known_zero_w)
   );
 
   ff_av2_chroma_bdpcm_symbolizer #(
@@ -1165,8 +1167,6 @@ module ff_av2_encoder #(
     lossy420_chroma_have_left_w ? lossy420_chroma_left_sample_w :
     lossy420_chroma_have_top_w ? lossy420_chroma_top_sample_w :
       8'd128;
-  assign lossy420_luma_known_zero_w = (lossy420_luma_delta_w == 10'sd0);
-  assign lossy420_chroma_known_zero_w = (lossy420_chroma_delta_w == 10'sd0);
   assign luma_residual_op_valid_w =
     lossy_420_mode_q ? lossy420_luma_residual_op_valid_w : palette_luma_residual_op_valid_w;
   assign luma_residual_op_literal_w =

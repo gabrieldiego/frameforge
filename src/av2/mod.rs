@@ -8,7 +8,7 @@ mod palette;
 mod syntax;
 mod tile;
 
-use ibc::Av2LocalIbc444;
+use ibc::{Av2LocalIbc444, Av2LocalIbcStats};
 use palette::Av2LumaPalette444;
 use syntax::{Av2SyntaxPayload, Av2SyntaxWriter};
 use tile::{
@@ -518,6 +518,77 @@ pub fn av2_mvp_444_trace_jsonl_for_frame(
     }
     let frame_mode = Av2Mvp444FrameMode::from_frame(frame, geometry)?;
     av2_mvp_444_trace_jsonl_for_mode(geometry, &frame_mode)
+}
+
+pub fn av2_mvp_444_ibc_stats_json_for_frame(
+    frame: &[u8],
+    request: Av2EncodeRequest,
+) -> Result<String, String> {
+    request.validate()?;
+    let geometry = validate_mvp_request(request)?;
+    let chroma_format = Av2ChromaFormat::from_pixel_format(request.format)
+        .expect("validate_mvp_request accepts only supported AV2 chroma formats");
+    if chroma_format != Av2ChromaFormat::Yuv444 {
+        return Err(format!(
+            "AV2 IBC stats expect yuv444p8 input; got {}",
+            request.format
+        ));
+    }
+
+    let frame_mode = Av2Mvp444FrameMode::from_frame(frame, geometry)?;
+    let (black_mode, allow_intrabc, stats) = match &frame_mode {
+        Av2Mvp444FrameMode::Black => (true, false, Av2LocalIbcStats::default()),
+        Av2Mvp444FrameMode::LumaPalette { ibc, .. } => (false, true, ibc.stats()),
+    };
+
+    Ok(format!(
+        concat!(
+            "{{\n",
+            "  \"codec\": \"av2\",\n",
+            "  \"tool\": \"local_hash_ibc\",\n",
+            "  \"width\": {},\n",
+            "  \"height\": {},\n",
+            "  \"format\": \"{}\",\n",
+            "  \"black_mode\": {},\n",
+            "  \"allow_intrabc\": {},\n",
+            "  \"total_blocks\": {},\n",
+            "  \"blocks_with_above_in_tile\": {},\n",
+            "  \"blocks_with_left_in_tile\": {},\n",
+            "  \"fixed_drl_supported_blocks\": {},\n",
+            "  \"raw_above_hash_matches\": {},\n",
+            "  \"raw_left_hash_matches\": {},\n",
+            "  \"direct_above_hash_matches\": {},\n",
+            "  \"direct_left_hash_matches\": {},\n",
+            "  \"above_hash_matches_blocked_by_fixed_drl_guard\": {},\n",
+            "  \"left_hash_matches_blocked_by_fixed_drl_guard\": {},\n",
+            "  \"above_hash_matches_blocked_by_copied_candidate\": {},\n",
+            "  \"left_hash_matches_blocked_by_copied_candidate\": {},\n",
+            "  \"selected_above_copy_blocks\": {},\n",
+            "  \"selected_left_copy_blocks\": {},\n",
+            "  \"selected_copy_blocks\": {}\n",
+            "}}\n"
+        ),
+        geometry.width,
+        geometry.height,
+        request.format,
+        black_mode,
+        allow_intrabc,
+        stats.total_blocks,
+        stats.blocks_with_above_in_tile,
+        stats.blocks_with_left_in_tile,
+        stats.fixed_drl_supported_blocks,
+        stats.raw_above_hash_matches,
+        stats.raw_left_hash_matches,
+        stats.direct_above_hash_matches,
+        stats.direct_left_hash_matches,
+        stats.above_hash_matches_blocked_by_fixed_drl_guard,
+        stats.left_hash_matches_blocked_by_fixed_drl_guard,
+        stats.above_hash_matches_blocked_by_copied_candidate,
+        stats.left_hash_matches_blocked_by_copied_candidate,
+        stats.selected_above_copy_blocks,
+        stats.selected_left_copy_blocks,
+        stats.selected_copy_blocks(),
+    ))
 }
 
 pub fn av2_black_444_trace_jsonl(request: Av2EncodeRequest) -> Result<String, String> {
