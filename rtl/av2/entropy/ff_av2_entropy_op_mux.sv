@@ -10,7 +10,8 @@ module ff_av2_entropy_op_mux (
   input  logic        partition_emit_rect,
   input  logic [31:0] partition_do_cdf0,
   input  logic [31:0] partition_rect_cdf0,
-  input  logic        ibc_use_left_copy,
+  input  logic        ibc_use_copy,
+  input  logic [1:0]  ibc_drl_idx,
   input  logic [1:0]  intrabc_ctx,
   input  logic [1:0]  intrabc_skip_ctx,
   input  logic [1:0]  leaf_luma_mode,
@@ -120,7 +121,7 @@ module ff_av2_entropy_op_mux (
           7'd0: begin
             // AV2 v1.0.0 read_intra_frame_mode_info(): use_intrabc is
             // signaled before normal intra mode syntax when allow_intrabc=1.
-            if (ibc_use_left_copy) begin
+            if (ibc_use_copy) begin
               case (intrabc_ctx)
                 2'd0: op_fl = 32'd683;
                 2'd1: op_fl = 32'd17596;
@@ -151,7 +152,8 @@ module ff_av2_entropy_op_mux (
           7'd2: begin
             // AV2 v1.0.0 write_intrabc_info(): intrabc_mode=1 selects a
             // default reference block vector. The widened sequence profile
-            // lets DRL index 3 address the immediate-left 8x8 block.
+            // lets DRL index 2 address the above 8x8 block and index 3
+            // address the immediate-left 8x8 block.
             op_fl = 32'd2775;
             op_fh = 32'd0;
             op_fl_inc = 8;
@@ -161,7 +163,8 @@ module ff_av2_entropy_op_mux (
           7'd4,
           7'd5: begin
             op_literal = 1'b1;
-            op_literal_value = 32'd1;
+            op_literal_value = (step == 7'd5) ?
+              {31'd0, (ibc_drl_idx == 2'd3)} : 32'd1;
             op_literal_bits = 5'd1;
           end
           default: op_valid = 1'b0;

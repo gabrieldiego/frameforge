@@ -8,7 +8,7 @@ mod palette;
 mod syntax;
 mod tile;
 
-use ibc::Av2LeftIbc444;
+use ibc::Av2LocalIbc444;
 use palette::Av2LumaPalette444;
 use syntax::{Av2SyntaxPayload, Av2SyntaxWriter};
 use tile::{
@@ -133,10 +133,10 @@ impl Av2Black444MvpProfile {
         }
     }
 
-    fn with_left_ibc_candidates(mut self) -> Self {
-        // AVM derives the immediate-left 8x8 block vector as the fourth
-        // default IntraBC BV candidate in mvref_common.c. AV2 sequence syntax
-        // stores max_bvp_drl_bits minus MIN_MAX_IBC_DRL_BITS; value 2 therefore
+    fn with_local_ibc_candidates(mut self) -> Self {
+        // AVM derives above/left 8x8 block vectors as default IntraBC BV
+        // candidates 2 and 3 in mvref_common.c. AV2 sequence syntax stores
+        // max_bvp_drl_bits minus MIN_MAX_IBC_DRL_BITS; value 2 therefore
         // permits DRL indices 0..3 without frame-level overrides.
         self.def_max_bvp_drl_bits_minus_min = 2;
         self
@@ -322,7 +322,7 @@ enum Av2Mvp444FrameMode {
     Black,
     LumaPalette {
         palette: Av2LumaPalette444,
-        ibc: Av2LeftIbc444,
+        ibc: Av2LocalIbc444,
     },
 }
 
@@ -334,7 +334,7 @@ impl Av2Mvp444FrameMode {
         }
         Ok(Self::LumaPalette {
             palette: palette::build_luma_palette_444(frame, geometry)?,
-            ibc: ibc::build_left_ibc_444(frame, geometry)?,
+            ibc: ibc::build_local_ibc_444(frame, geometry)?,
         })
     }
 
@@ -349,7 +349,7 @@ impl Av2Mvp444FrameMode {
     fn profile(&self) -> Av2Black444MvpProfile {
         let profile = Av2Black444MvpProfile::current();
         if self.allow_intrabc() {
-            profile.with_left_ibc_candidates()
+            profile.with_local_ibc_candidates()
         } else {
             profile
         }

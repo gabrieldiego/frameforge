@@ -1,6 +1,6 @@
 use super::{Av2Black444MvpProfile, Av2ChromaFormat, Av2VideoGeometry};
 use crate::av2::entropy::{Av2EntropyPayload, Av2EntropyWriter};
-use crate::av2::ibc::Av2LeftIbc444;
+use crate::av2::ibc::{Av2LocalIbc444, AV2_IBC_DRL_IDX_ABOVE_8X8, AV2_IBC_DRL_IDX_LEFT_8X8};
 use crate::av2::palette::{
     Av2LumaIntraMode, Av2LumaPalette444, AV2_LUMA_PALETTE_BLOCK_SIZE, AV2_LUMA_PALETTE_MAX_COLORS,
     AV2_LUMA_PALETTE_MIN_COLORS,
@@ -820,7 +820,7 @@ enum Av2MvpPartition {
 enum Av2TileDecisionKind {
     Partition(Av2MvpPartition),
     IntrabcFlag(bool),
-    LeftIntrabcCopy,
+    IntrabcCopy { drl_idx: u8 },
     IntraLumaMode(Av2LumaIntraMode),
     IntraChromaDc,
     LumaPaletteModeInfo,
@@ -1037,7 +1037,7 @@ pub(crate) fn av2_luma_palette_444_tile_entropy_payload_for_region(
     region: Av2TileRegion,
     profile: Av2Black444MvpProfile,
     palette: &Av2LumaPalette444,
-    ibc: &Av2LeftIbc444,
+    ibc: &Av2LocalIbc444,
 ) -> Av2EntropyPayload {
     let plan = Av2Black444TilePlan::for_region(
         region,
@@ -1087,7 +1087,7 @@ impl Av2Black444TilePlan {
         chroma_format: Av2ChromaFormat,
         luma_palette: bool,
         allow_intrabc: bool,
-        ibc: Option<&Av2LeftIbc444>,
+        ibc: Option<&Av2LocalIbc444>,
         palette: Option<&Av2LumaPalette444>,
     ) -> Self {
         assert!(
@@ -1148,7 +1148,7 @@ impl Av2Black444TilePlan {
         visible_rows_mi: usize,
         visible_cols_mi: usize,
         partition_context: &mut Av2PartitionContext,
-        ibc: Option<&Av2LeftIbc444>,
+        ibc: Option<&Av2LocalIbc444>,
         palette: Option<&Av2LumaPalette444>,
     ) {
         if row_mi >= visible_rows_mi || col_mi >= visible_cols_mi {
@@ -1236,7 +1236,7 @@ impl Av2Black444TilePlan {
         row_mi: usize,
         col_mi: usize,
         block_size: Av2MvpBlockSize,
-        ibc: Option<&Av2LeftIbc444>,
+        ibc: Option<&Av2LocalIbc444>,
         palette: Option<&Av2LumaPalette444>,
     ) {
         assert_eq!(
@@ -1249,22 +1249,22 @@ impl Av2Black444TilePlan {
         );
         let x0 = self.origin_x + col_mi * MI_SIZE;
         let y0 = self.origin_y + row_mi * MI_SIZE;
-        let use_left_ibc = ibc.is_some_and(|ibc| ibc.uses_left_copy(x0, y0));
+        let ibc_drl_idx = ibc.and_then(|ibc| ibc.candidate_drl_idx(x0, y0));
         let luma_mode = palette
             .map(|palette| palette.luma_mode_for_block(x0, y0))
             .unwrap_or(Av2LumaIntraMode::Dc);
         let use_luma_palette = self.luma_palette && luma_mode == Av2LumaIntraMode::Dc;
         if self.allow_intrabc {
             self.decisions.push(Av2TileDecision {
-                kind: Av2TileDecisionKind::IntrabcFlag(use_left_ibc),
+                kind: Av2TileDecisionKind::IntrabcFlag(ibc_drl_idx.is_some()),
                 row: row_mi,
                 col: col_mi,
                 block_size,
             });
         }
-        if use_left_ibc {
+        if let Some(drl_idx) = ibc_drl_idx {
             self.decisions.push(Av2TileDecision {
-                kind: Av2TileDecisionKind::LeftIntrabcCopy,
+                kind: Av2TileDecisionKind::IntrabcCopy { drl_idx },
                 row: row_mi,
                 col: col_mi,
                 block_size,
@@ -1314,7 +1314,7 @@ impl Av2Black444TilePlan {
         &self,
         writer: &mut Av2EntropyWriter,
         palette: Option<&Av2LumaPalette444>,
-        _ibc: Option<&Av2LeftIbc444>,
+        _ibc: Option<&Av2LocalIbc444>,
     ) {
         let mut partition_context = Av2PartitionContext::new();
         let mut txb_contexts = Av2TxbEntropyContexts::new();
@@ -1343,12 +1343,13 @@ impl Av2Black444TilePlan {
                 Av2TileDecisionKind::IntrabcFlag(use_intrabc) => {
                     write_intrabc_flag(writer, *decision, &intrabc_context, use_intrabc);
                 }
-                Av2TileDecisionKind::LeftIntrabcCopy => {
-                    write_left_intrabc_copy(
+                Av2TileDecisionKind::IntrabcCopy { drl_idx } => {
+                    write_intrabc_copy(
                         writer,
                         *decision,
                         &intrabc_context,
                         self.profile_max_ref_bv_count(),
+                        drl_idx,
                     );
                     intrabc_context.update_leaf(
                         decision.row,
@@ -1497,7 +1498,7 @@ impl Av2Black444TilePlan {
                     );
                 }
                 Av2TileDecisionKind::IntrabcFlag(_)
-                | Av2TileDecisionKind::LeftIntrabcCopy
+                | Av2TileDecisionKind::IntrabcCopy { .. }
                 | Av2TileDecisionKind::LumaPaletteModeInfo
                 | Av2TileDecisionKind::LumaPaletteColorMap
                 | Av2TileDecisionKind::LumaPaletteResidualCoefficients => {
@@ -1894,28 +1895,40 @@ fn write_intrabc_flag(
     );
 }
 
-fn write_left_intrabc_copy(
+fn write_intrabc_copy(
     writer: &mut Av2EntropyWriter,
     decision: Av2TileDecision,
     context: &Av2IntrabcContext,
     max_ref_bv_count: usize,
+    drl_idx: u8,
 ) {
     assert!(
         max_ref_bv_count >= 4,
-        "AV2 left-block IntraBC uses default BV candidate 3"
+        "AV2 local IntraBC uses default BV candidates 2 and 3"
+    );
+    assert!(
+        matches!(
+            drl_idx,
+            AV2_IBC_DRL_IDX_ABOVE_8X8 | AV2_IBC_DRL_IDX_LEFT_8X8
+        ),
+        "AV2 local IntraBC only supports above/left default BV candidates"
     );
     let skip_ctx = context.skip_txfm_ctx(decision.row, decision.col);
     let mut skip_cdf = DEFAULT_SKIP_TXFM_CDFS[skip_ctx];
     writer.write_symbol("tile.intrabc.skip_txfm", 1, &mut skip_cdf, 2, false);
 
     // AV2 v1.0.0 read_intrabc_info()/write_intrabc_info(): intrabc_mode=1
-    // copies the selected reference BV directly. With the sequence header's
-    // max_bvp_drl_bits widened to 3, AVM's default BV list entry 3 is the
-    // immediate left block vector {-block_width, 0}.
+    // copies the selected reference BV directly. With max_bvp_drl_bits widened
+    // to 3, AVM's default BV list entry 2 is the above 8x8 block vector and
+    // entry 3 is the immediate-left 8x8 block vector.
     let mut mode_cdf = DEFAULT_INTRABC_MODE_CDF;
     writer.write_symbol("tile.intrabc.mode", 1, &mut mode_cdf, 2, false);
-    for _idx in 0..3 {
-        writer.write_literal("tile.intrabc.drl_idx", 1, 1);
+    for idx in 0..(max_ref_bv_count - 1) {
+        let bit = usize::from(usize::from(drl_idx) != idx);
+        writer.write_literal("tile.intrabc.drl_idx", bit as u32, 1);
+        if usize::from(drl_idx) == idx {
+            break;
+        }
     }
 }
 

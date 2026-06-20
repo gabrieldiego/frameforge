@@ -271,10 +271,12 @@ module ff_av2_encoder #(
   logic multi_tile_w;
   logic frame_ibc_mode_q;
   logic ibc_done_w;
-  logic ibc_any_left_copy_w;
-  logic [63:0] ibc_left_copy_mask_w;
+  logic ibc_any_copy_w;
+  logic [63:0] ibc_copy_mask_w;
+  logic [63:0] ibc_above_copy_mask_w;
   logic [5:0] ibc_current_block_id_w;
-  logic ibc_use_left_copy_w;
+  logic ibc_use_copy_w;
+  logic [1:0] ibc_drl_idx_w;
   logic [1:0] intrabc_ctx_w;
   logic [1:0] intrabc_skip_ctx_w;
   logic [3:0] closed_header_len_w;
@@ -775,10 +777,10 @@ module ff_av2_encoder #(
     .output_byte(output_byte_w)
   );
 
-  ff_av2_left_hash_matcher_444 #(
+  ff_av2_local_hash_matcher_444 #(
     .SAMPLE_BITS(SAMPLE_BITS),
     .SUPPORT_EXACT_HASH_IBC_444(SUPPORT_EXACT_HASH_IBC_444)
-  ) left_hash_ibc (
+  ) local_hash_ibc (
     .clk(clk),
     .rst_n(rst_n),
     .start(palette_analyzer_start_w && (chroma_format_idc == 2'd3)),
@@ -788,8 +790,9 @@ module ff_av2_encoder #(
     .sample(s_axis_data),
     .sample_last(tile_input_last_w),
     .done(ibc_done_w),
-    .any_left_copy(ibc_any_left_copy_w),
-    .left_copy_mask(ibc_left_copy_mask_w)
+    .any_copy(ibc_any_copy_w),
+    .copy_mask(ibc_copy_mask_w),
+    .above_copy_mask(ibc_above_copy_mask_w)
   );
 
   ff_av2_palette_analyzer_444 #(
@@ -1031,7 +1034,8 @@ module ff_av2_encoder #(
     .partition_emit_rect(partition_emit_rect_w),
     .partition_do_cdf0(partition_do_cdf0_w),
     .partition_rect_cdf0(partition_rect_cdf0_w),
-    .ibc_use_left_copy(ibc_use_left_copy_w),
+    .ibc_use_copy(ibc_use_copy_w),
+    .ibc_drl_idx(ibc_drl_idx_w),
     .intrabc_ctx(intrabc_ctx_w),
     .intrabc_skip_ctx(intrabc_skip_ctx_w),
     .leaf_luma_mode(leaf_luma_mode_q),
@@ -1288,11 +1292,12 @@ module ff_av2_encoder #(
   assign visible_rows_mi_w = tile_height_q[6:2];
   assign visible_cols_mi_w = tile_width_q[6:2];
   assign ibc_current_block_id_w = {block_row_mi_q[3:1], block_col_mi_q[3:1]};
-  assign ibc_use_left_copy_w =
+  assign ibc_use_copy_w =
     frame_ibc_mode_q &&
     (block_w_mi_q == 5'd2) &&
     (block_h_mi_q == 5'd2) &&
-    ibc_left_copy_mask_w[ibc_current_block_id_w];
+    ibc_copy_mask_w[ibc_current_block_id_w];
+  assign ibc_drl_idx_w = ibc_above_copy_mask_w[ibc_current_block_id_w] ? 2'd2 : 2'd3;
   assign intrabc_ctx_w =
     {1'd0, ibc_above_q[block_col_mi_q]} + {1'd0, ibc_left_q[block_row_mi_q]};
   assign intrabc_skip_ctx_w =
@@ -2557,7 +2562,7 @@ module ff_av2_encoder #(
               cnt_q <= norm_cnt_w;
 
               if (phase_q == PHASE_INTRABC) begin
-                if (step_q == 5'd0 && !ibc_use_left_copy_w) begin
+                if (step_q == 5'd0 && !ibc_use_copy_w) begin
                   phase_q <= PHASE_INTRA;
                   step_q <= 5'd0;
                   leaf_luma_mode_q <= LUMA_MODE_DC;
@@ -3024,7 +3029,7 @@ module ff_av2_encoder #(
     1'b0,
     CTU_SIZE[0],
     SOURCE_SAMPLE_BITS[0],
-    ibc_any_left_copy_w,
+    ibc_any_copy_w,
     ibc_done_w
   };
 
