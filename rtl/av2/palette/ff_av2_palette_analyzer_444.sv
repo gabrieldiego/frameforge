@@ -11,6 +11,7 @@ module ff_av2_palette_analyzer_444 #(
   input  logic [15:0] visible_width,
   input  logic [15:0] visible_height,
   input  logic [1:0]  chroma_format_idc,
+  input  logic [63:0] ibc_copy_mask,
   input  logic [SAMPLE_BITS - 1:0] sample,
   input  logic       sample_last,
   output logic       sample_ready,
@@ -217,6 +218,7 @@ module ff_av2_palette_analyzer_444 #(
   logic [4:0] query_load_delta_bits_w [0:6];
   logic [8:0] query_load_delta_range_w;
   logic [4:0] block_palette_cache_size_w;
+  logic [4:0] query_palette_cache_size_w;
   logic fixed_mode_ctx0_w;
   logic above_mode_dc_or_unavailable_w;
   logic left_mode_dc_or_unavailable_w;
@@ -466,6 +468,26 @@ module ff_av2_palette_analyzer_444 #(
     if (block_id_q[2:0] != 3'd0 && block_luma_mode_q[block_id_q - 6'd1] == LUMA_MODE_DC) begin
       block_palette_cache_size_w =
         block_palette_cache_size_w + {1'd0, block_palette_size_q[block_id_q - 6'd1]};
+    end
+  end
+
+  always @* begin
+    query_palette_cache_size_w = 5'd0;
+    // AV2 v1.0.0 palette_mode_info() derives its color cache from neighboring
+    // MB_MODE_INFO palette sizes. IntraBC leaves return before palette syntax,
+    // so they contribute a zero palette size even when the block analyzer had
+    // found luma colors during the input prepass.
+    if (query_load_block_id_q[5:3] != 3'd0 &&
+        !ibc_copy_mask[query_load_block_id_q - 6'd8] &&
+        block_luma_mode_q[query_load_block_id_q - 6'd8] == LUMA_MODE_DC) begin
+      query_palette_cache_size_w =
+        query_palette_cache_size_w + {1'd0, block_palette_size_q[query_load_block_id_q - 6'd8]};
+    end
+    if (query_load_block_id_q[2:0] != 3'd0 &&
+        !ibc_copy_mask[query_load_block_id_q - 6'd1] &&
+        block_luma_mode_q[query_load_block_id_q - 6'd1] == LUMA_MODE_DC) begin
+      query_palette_cache_size_w =
+        query_palette_cache_size_w + {1'd0, block_palette_size_q[query_load_block_id_q - 6'd1]};
     end
   end
 
@@ -791,7 +813,7 @@ module ff_av2_palette_analyzer_444 #(
         end
         query_palette_colors_q <= block_palette_colors_q[query_load_block_id_q];
         query_palette_size_q <= block_palette_size_q[query_load_block_id_q];
-        query_palette_cache_size_q <= block_palette_cache_size_q[query_load_block_id_q];
+        query_palette_cache_size_q <= query_palette_cache_size_w;
         query_palette_first_color_q <= query_load_color_w[0];
         query_palette_delta_bits_minus5_q <= query_load_base_delta_bits_w - 5'd5;
         for (delta_index_q = 0; delta_index_q < 7; delta_index_q = delta_index_q + 1) begin

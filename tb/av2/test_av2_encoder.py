@@ -326,7 +326,7 @@ def av2_rtl_trace_name(
             "tile.intra.y_mode_idx_dc",
             "tile.intra.fsc_mode",
             "tile.intra.use_dpcm_uv",
-            "tile.intra.uv_mode_idx_dc",
+            "tile.intra.dpcm_uv_horz" if palette_mode else "tile.intra.uv_mode_idx_dc",
         ][step] if 0 <= step <= 5 else "tile.unknown"
     if phase == AV2_PHASE_PALETTE_HEADER:
         color_first_step = 2 + (palette_cache_size or 0)

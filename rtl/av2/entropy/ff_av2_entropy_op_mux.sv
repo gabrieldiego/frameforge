@@ -151,9 +151,9 @@ module ff_av2_entropy_op_mux (
           end
           7'd2: begin
             // AV2 v1.0.0 write_intrabc_info(): intrabc_mode=1 selects a
-            // default reference block vector. The widened sequence profile
-            // lets DRL index 2 address the above 8x8 block and index 3
-            // address the immediate-left 8x8 block.
+            // reference block vector from the BVP stack. The local matcher can
+            // select spatial BVPs at DRL 0/1 or default above/left entries at
+            // DRL 2/3.
             op_fl = 32'd2775;
             op_fh = 32'd0;
             op_fl_inc = 8;
@@ -163,8 +163,11 @@ module ff_av2_entropy_op_mux (
           7'd4,
           7'd5: begin
             op_literal = 1'b1;
-            op_literal_value = (step == 7'd5) ?
-              {31'd0, (ibc_drl_idx == 2'd3)} : 32'd1;
+            case (step)
+              7'd3: op_literal_value = {31'd0, (ibc_drl_idx != 2'd0)};
+              7'd4: op_literal_value = {31'd0, (ibc_drl_idx != 2'd1)};
+              default: op_literal_value = {31'd0, (ibc_drl_idx != 2'd2)};
+            endcase
             op_literal_bits = 5'd1;
           end
           default: op_valid = 1'b0;

@@ -1,6 +1,6 @@
 use super::{Av2Black444MvpProfile, Av2ChromaFormat, Av2VideoGeometry};
 use crate::av2::entropy::{Av2EntropyPayload, Av2EntropyWriter};
-use crate::av2::ibc::{Av2LocalIbc444, AV2_IBC_DRL_IDX_ABOVE_8X8, AV2_IBC_DRL_IDX_LEFT_8X8};
+use crate::av2::ibc::Av2LocalIbc444;
 use crate::av2::palette::{
     Av2LumaIntraMode, Av2LumaPalette444, AV2_LUMA_PALETTE_BLOCK_SIZE, AV2_LUMA_PALETTE_MAX_COLORS,
     AV2_LUMA_PALETTE_MIN_COLORS,
@@ -783,6 +783,100 @@ impl Av2MvpBlockSize {
             Av2MvpPartition::Horz if self.height >= 8 => Some((self.width, self.height / 2)),
             Av2MvpPartition::Vert if self.width >= 8 => Some((self.width / 2, self.height)),
             _ => None,
+        }
+    }
+}
+
+pub(crate) fn av2_mvp_8x8_leaf_order_for_region(
+    visible_width: usize,
+    visible_height: usize,
+) -> Vec<(usize, usize)> {
+    assert!(visible_width <= MVP_SUPERBLOCK_SIZE);
+    assert!(visible_height <= MVP_SUPERBLOCK_SIZE);
+    assert_eq!(visible_width % MVP_LEAF_BLOCK_SIZE, 0);
+    assert_eq!(visible_height % MVP_LEAF_BLOCK_SIZE, 0);
+
+    let mut order = Vec::with_capacity(
+        (visible_width / MVP_LEAF_BLOCK_SIZE) * (visible_height / MVP_LEAF_BLOCK_SIZE),
+    );
+    append_8x8_leaf_order(
+        0,
+        0,
+        Av2MvpBlockSize::BLOCK_64X64,
+        visible_height / MI_SIZE,
+        visible_width / MI_SIZE,
+        &mut order,
+    );
+    order
+}
+
+fn append_8x8_leaf_order(
+    row_mi: usize,
+    col_mi: usize,
+    block_size: Av2MvpBlockSize,
+    visible_rows_mi: usize,
+    visible_cols_mi: usize,
+    order: &mut Vec<(usize, usize)>,
+) {
+    if row_mi >= visible_rows_mi || col_mi >= visible_cols_mi {
+        return;
+    }
+
+    let partition =
+        choose_8x8_leaf_partition(row_mi, col_mi, block_size, visible_rows_mi, visible_cols_mi);
+    match partition {
+        Av2MvpPartition::None => {
+            assert_eq!(
+                block_size.width, MVP_LEAF_BLOCK_SIZE,
+                "AV2 MVP leaf order is only defined for fixed 8x8 leaves"
+            );
+            assert_eq!(
+                block_size.height, MVP_LEAF_BLOCK_SIZE,
+                "AV2 MVP leaf order is only defined for fixed 8x8 leaves"
+            );
+            order.push((col_mi * MI_SIZE, row_mi * MI_SIZE));
+        }
+        Av2MvpPartition::Horz => {
+            let subsize = block_size
+                .subsize(partition)
+                .expect("AV2 MVP horizontal partition must have a subsize");
+            append_8x8_leaf_order(
+                row_mi,
+                col_mi,
+                subsize,
+                visible_rows_mi,
+                visible_cols_mi,
+                order,
+            );
+            append_8x8_leaf_order(
+                row_mi + block_size.mi_height() / 2,
+                col_mi,
+                subsize,
+                visible_rows_mi,
+                visible_cols_mi,
+                order,
+            );
+        }
+        Av2MvpPartition::Vert => {
+            let subsize = block_size
+                .subsize(partition)
+                .expect("AV2 MVP vertical partition must have a subsize");
+            append_8x8_leaf_order(
+                row_mi,
+                col_mi,
+                subsize,
+                visible_rows_mi,
+                visible_cols_mi,
+                order,
+            );
+            append_8x8_leaf_order(
+                row_mi,
+                col_mi + block_size.mi_width() / 2,
+                subsize,
+                visible_rows_mi,
+                visible_cols_mi,
+                order,
+            );
         }
     }
 }
@@ -1907,20 +2001,17 @@ fn write_intrabc_copy(
         "AV2 local IntraBC uses default BV candidates 2 and 3"
     );
     assert!(
-        matches!(
-            drl_idx,
-            AV2_IBC_DRL_IDX_ABOVE_8X8 | AV2_IBC_DRL_IDX_LEFT_8X8
-        ),
-        "AV2 local IntraBC only supports above/left default BV candidates"
+        usize::from(drl_idx) < max_ref_bv_count,
+        "AV2 local IntraBC DRL index is outside the BVP stack"
     );
     let skip_ctx = context.skip_txfm_ctx(decision.row, decision.col);
     let mut skip_cdf = DEFAULT_SKIP_TXFM_CDFS[skip_ctx];
     writer.write_symbol("tile.intrabc.skip_txfm", 1, &mut skip_cdf, 2, false);
 
     // AV2 v1.0.0 read_intrabc_info()/write_intrabc_info(): intrabc_mode=1
-    // copies the selected reference BV directly. With max_bvp_drl_bits widened
-    // to 3, AVM's default BV list entry 2 is the above 8x8 block vector and
-    // entry 3 is the immediate-left 8x8 block vector.
+    // copies the selected reference BV directly. The local hash matcher
+    // mirrors AVM's BVP stack, so the selected above/left vector may be a
+    // spatial candidate at DRL 0/1 or the default above/left entry at DRL 2/3.
     let mut mode_cdf = DEFAULT_INTRABC_MODE_CDF;
     writer.write_symbol("tile.intrabc.mode", 1, &mut mode_cdf, 2, false);
     for idx in 0..(max_ref_bv_count - 1) {

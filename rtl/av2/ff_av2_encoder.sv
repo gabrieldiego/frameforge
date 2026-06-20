@@ -274,7 +274,9 @@ module ff_av2_encoder #(
   logic ibc_any_copy_w;
   logic [63:0] ibc_copy_mask_w;
   logic [63:0] ibc_above_copy_mask_w;
+  logic [127:0] ibc_drl_idx_table_w;
   logic [5:0] ibc_current_block_id_w;
+  logic [6:0] ibc_drl_idx_bit_index_w;
   logic ibc_use_copy_w;
   logic [1:0] ibc_drl_idx_w;
   logic [1:0] intrabc_ctx_w;
@@ -792,7 +794,8 @@ module ff_av2_encoder #(
     .done(ibc_done_w),
     .any_copy(ibc_any_copy_w),
     .copy_mask(ibc_copy_mask_w),
-    .above_copy_mask(ibc_above_copy_mask_w)
+    .above_copy_mask(ibc_above_copy_mask_w),
+    .drl_idx_table(ibc_drl_idx_table_w)
   );
 
   ff_av2_palette_analyzer_444 #(
@@ -806,6 +809,7 @@ module ff_av2_encoder #(
     .visible_width(tile_width_q),
     .visible_height(tile_height_q),
     .chroma_format_idc(chroma_format_idc),
+    .ibc_copy_mask(ibc_copy_mask_w),
     .sample(s_axis_data),
     .sample_last(tile_input_last_w),
     .sample_ready(palette_analyzer_sample_ready_w),
@@ -1292,12 +1296,13 @@ module ff_av2_encoder #(
   assign visible_rows_mi_w = tile_height_q[6:2];
   assign visible_cols_mi_w = tile_width_q[6:2];
   assign ibc_current_block_id_w = {block_row_mi_q[3:1], block_col_mi_q[3:1]};
+  assign ibc_drl_idx_bit_index_w = {ibc_current_block_id_w, 1'b0};
   assign ibc_use_copy_w =
     frame_ibc_mode_q &&
     (block_w_mi_q == 5'd2) &&
     (block_h_mi_q == 5'd2) &&
     ibc_copy_mask_w[ibc_current_block_id_w];
-  assign ibc_drl_idx_w = ibc_above_copy_mask_w[ibc_current_block_id_w] ? 2'd2 : 2'd3;
+  assign ibc_drl_idx_w = ibc_drl_idx_table_w[ibc_drl_idx_bit_index_w +: 2];
   assign intrabc_ctx_w =
     {1'd0, ibc_above_q[block_col_mi_q]} + {1'd0, ibc_left_q[block_row_mi_q]};
   assign intrabc_skip_ctx_w =
@@ -2567,7 +2572,9 @@ module ff_av2_encoder #(
                   step_q <= 5'd0;
                   leaf_luma_mode_q <= LUMA_MODE_DC;
                   state_q <= palette_mode_q ? ST_PALETTE_QUERY : ST_LEAF;
-                end else if (step_q == 5'd5) begin
+                end else if ((step_q == 5'd3 && ibc_drl_idx_w == 2'd0) ||
+                             (step_q == 5'd4 && ibc_drl_idx_w == 2'd1) ||
+                             (step_q == 5'd5)) begin
                   for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
                     if (context_index_q >= block_col_mi_q && context_index_q < (block_col_mi_q + block_w_mi_q)) begin
                       ibc_above_q[context_index_q] <= 1'b1;
