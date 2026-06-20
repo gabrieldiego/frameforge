@@ -243,15 +243,14 @@ fn visit_local_ibc_block(
         stats.left_hash_matches_blocked_by_fixed_drl_guard += 1;
     }
 
-    // Vertical local IntraBC copies need a fuller AVM is_mi_coded availability
-    // mirror than this MVP selector currently carries. Keep the implemented
-    // exact-match IBC path left-copy-only for now; the BVP stack above still
-    // accounts for copied above neighbors so left DRL positions remain aligned.
+    // Vertical local IntraBC copies need the full AVM is_mi_coded/pseudo-coded
+    // availability mirror before they are reference-decoder-safe. Keep actual
+    // selection left-copy-only; the above counters stay useful for deciding
+    // when to implement the full BVP/availability model.
     let above_match = false;
-    // AVM av2_is_dv_in_local_range() validates same-superblock IBC against an
-    // is_mi_coded map. Top-row same-row copies on partial SBs can be rejected
-    // even when the left 8x8 hash matches; keep the MVP selector conservative
-    // until the full coded-map availability model is mirrored.
+    // Top-row same-row copies can still be rejected by AVM for the current
+    // partial-superblock partition state. Keep left-copy selection below the
+    // first 8x8 row until the full is_mi_coded/pseudo-coded map is mirrored.
     let left_match = direct_left_match && above_in_same_tile;
     let candidate = match (above_match, left_match) {
         (true, true) => {
@@ -319,10 +318,23 @@ fn build_bvp_stack_8x8(
     block_y: usize,
 ) -> Vec<Av2LocalIbcVector> {
     let mut stack = Vec::with_capacity(AV2_IBC_MAX_BVP_SIZE);
-    // AVM setup_ref_mv_list() adjacent SMVP scan order starts with the direct
-    // left/above samples for an 8x8 local IntraBC leaf. Those entries are cheap
-    // to mirror in RTL and are stable for left/above copy chains.
-    for (row_mi_offset, col_mi_offset) in [(1, -1), (-1, 1), (0, -1), (-1, 0)] {
+    // AVM setup_ref_mv_list() scans adjacent SMVP candidates before appending
+    // default BVs: left-bottom, row_smvp[0], left-top, row_smvp[1],
+    // bottom-left, row_smvp[2], row_smvp[3], and the second-left column. For
+    // FrameForge's fixed 8x8 shared-tree leaves, these offsets collapse to the
+    // 8x8 hash cells below. Mirroring this order keeps intrabc_drl_idx aligned
+    // when nearby IBC blocks shift the default {0,-8}/{-8,0} entries.
+    for (row_mi_offset, col_mi_offset) in [
+        (1, -1),
+        (-1, 1),
+        (0, -1),
+        (-1, 0),
+        (2, -1),
+        (-1, 2),
+        (-1, -1),
+        (1, -3),
+        (0, -3),
+    ] {
         if let Some(index) = neighbor_index_for_mi_offset(
             blocks_wide,
             blocks_high,
@@ -335,29 +347,6 @@ fn build_bvp_stack_8x8(
                 push_unique_spatial_bv(&mut stack, blocks[index].copy_vector);
             }
         }
-    }
-
-    // AVM then scans bottom-left, top-right, top-left, and a second left
-    // column before default BVs are appended. Until those non-direct stack
-    // entries are fully mirrored in RTL, do not select default DRL positions
-    // when any of them is an IBC block that could shift the defaults.
-    let mut non_direct_spatial_copy = false;
-    for (row_mi_offset, col_mi_offset) in [(2, -1), (-1, 2), (-1, -1), (1, -3), (0, -3)] {
-        if let Some(index) = neighbor_index_for_mi_offset(
-            blocks_wide,
-            blocks_high,
-            block_x,
-            block_y,
-            row_mi_offset,
-            col_mi_offset,
-        ) {
-            if coded_blocks[index] {
-                non_direct_spatial_copy |= blocks[index].copy_vector.is_some();
-            }
-        }
-    }
-    if non_direct_spatial_copy {
-        return stack;
     }
     for vector in [
         Av2LocalIbcVector::SuperblockAbove,
@@ -495,6 +484,43 @@ mod tests {
         assert_eq!(ibc.candidate_drl_idx(8, 0), None);
         assert_eq!(ibc.candidate_drl_idx(8, 8), Some(AV2_IBC_DRL_IDX_LEFT_8X8));
         assert_eq!(ibc.candidate_drl_idx(16, 8), Some(0));
+    }
+
+    #[test]
+    fn av2_local_ibc_hash_keeps_defaults_after_non_direct_spatial_bvp() {
+        let geometry = Av2VideoGeometry {
+            width: 32,
+            height: 24,
+        };
+        let plane_len = geometry.width * geometry.height;
+        let mut frame = vec![0; plane_len * 3];
+        for plane in 0..3 {
+            for y in 0..geometry.height {
+                for x in 0..geometry.width {
+                    frame[plane * plane_len + y * geometry.width + x] =
+                        (plane * 41 + y * 17 + x * 9) as u8;
+                }
+            }
+            for y in 8..16 {
+                for x in 0..8 {
+                    let value = (plane * 23 + y * 5 + x * 3) as u8;
+                    frame[plane * plane_len + y * geometry.width + x] = value;
+                    frame[plane * plane_len + y * geometry.width + x + 8] = value;
+                }
+            }
+            for y in 16..24 {
+                for x in 0..8 {
+                    let value = (plane * 13 + y * 7 + x * 11) as u8;
+                    frame[plane * plane_len + y * geometry.width + x + 8] = value;
+                    frame[plane * plane_len + y * geometry.width + x + 16] = value;
+                }
+            }
+        }
+
+        let ibc = build_local_ibc_444(&frame, geometry).expect("IBC hash map should build");
+        assert_eq!(ibc.candidate_drl_idx(8, 8), Some(AV2_IBC_DRL_IDX_LEFT_8X8));
+        assert_eq!(ibc.candidate_drl_idx(16, 16), Some(0));
+        assert_eq!(ibc.stats.left_hash_matches_blocked_by_copied_candidate, 0);
     }
 
     #[test]

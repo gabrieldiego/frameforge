@@ -50,6 +50,10 @@ module ff_av2_local_hash_matcher_444 #(
   logic [1:0] direct0_vec_w;
   logic [1:0] direct1_vec_w;
   logic [1:0] direct_count_w;
+  logic [1:0] spatial0_vec_w;
+  logic [1:0] spatial1_vec_w;
+  logic spatial0_valid_w;
+  logic spatial1_valid_w;
   logic [1:0] above_drl_idx_w;
   logic [1:0] left_drl_idx_w;
   logic [1:0] candidate_drl_idx_w;
@@ -62,9 +66,16 @@ module ff_av2_local_hash_matcher_444 #(
   logic decide_block_visible_w;
   logic direct_left_valid_w;
   logic direct_above_valid_w;
+  logic bottom_left_valid_w;
+  logic top_right_valid_w;
+  logic top_left_valid_w;
+  logic second_left_valid_w;
   logic direct_left_vec_above_w;
   logic direct_above_vec_above_w;
-  logic non_direct_spatial_copy_w;
+  logic bottom_left_vec_above_w;
+  logic top_right_vec_above_w;
+  logic top_left_vec_above_w;
+  logic second_left_vec_above_w;
   logic above_drl_valid_w;
   logic left_drl_valid_w;
   logic block_complete_w;
@@ -105,32 +116,32 @@ module ff_av2_local_hash_matcher_444 #(
     left_in_tile_w && coded_mask_q[left_block_id_w] && copy_mask[left_block_id_w];
   assign direct_above_valid_w =
     above_in_tile_w && coded_mask_q[above_block_id_w] && copy_mask[above_block_id_w];
+  assign bottom_left_valid_w =
+    bottom_left_in_tile_w && coded_mask_q[bottom_left_block_id_w] &&
+    copy_mask[bottom_left_block_id_w];
+  assign top_right_valid_w =
+    top_right_in_tile_w && coded_mask_q[top_right_block_id_w] &&
+    copy_mask[top_right_block_id_w];
+  assign top_left_valid_w =
+    top_left_in_tile_w && coded_mask_q[top_left_block_id_w] &&
+    copy_mask[top_left_block_id_w];
+  assign second_left_valid_w =
+    second_left_in_tile_w && coded_mask_q[second_left_block_id_w] &&
+    copy_mask[second_left_block_id_w];
   assign direct_left_vec_above_w = above_copy_mask[left_block_id_w];
   assign direct_above_vec_above_w = above_copy_mask[above_block_id_w];
-  assign non_direct_spatial_copy_w =
-    (bottom_left_in_tile_w && coded_mask_q[bottom_left_block_id_w] &&
-     copy_mask[bottom_left_block_id_w]) ||
-    (top_right_in_tile_w && coded_mask_q[top_right_block_id_w] &&
-     copy_mask[top_right_block_id_w]) ||
-    (top_left_in_tile_w && coded_mask_q[top_left_block_id_w] &&
-     copy_mask[top_left_block_id_w]) ||
-    (second_left_in_tile_w && coded_mask_q[second_left_block_id_w] &&
-     copy_mask[second_left_block_id_w]);
-  assign direct0_vec_w =
-    direct_left_valid_w ? {1'b0, direct_left_vec_above_w} :
-    (direct_above_valid_w ? {1'b0, direct_above_vec_above_w} : 2'd0);
-  assign direct1_vec_w =
-    (direct_left_valid_w && direct_above_valid_w &&
-     (direct_left_vec_above_w != direct_above_vec_above_w)) ?
-      {1'b0, direct_above_vec_above_w} : 2'd0;
+  assign bottom_left_vec_above_w = above_copy_mask[bottom_left_block_id_w];
+  assign top_right_vec_above_w = above_copy_mask[top_right_block_id_w];
+  assign top_left_vec_above_w = above_copy_mask[top_left_block_id_w];
+  assign second_left_vec_above_w = above_copy_mask[second_left_block_id_w];
+  assign direct0_vec_w = spatial0_vec_w;
+  assign direct1_vec_w = spatial1_vec_w;
   assign direct_count_w =
-    direct_left_valid_w ?
-      ((direct_above_valid_w && (direct_left_vec_above_w != direct_above_vec_above_w)) ? 2'd2 : 2'd1) :
-      (direct_above_valid_w ? 2'd1 : 2'd0);
+    spatial1_valid_w ? 2'd2 : (spatial0_valid_w ? 2'd1 : 2'd0);
   assign above_drl_valid_w =
     (direct_count_w != 2'd0 && direct0_vec_w == 2'd1) ||
     (direct_count_w == 2'd2 && direct1_vec_w == 2'd1) ||
-    (!non_direct_spatial_copy_w && (direct_count_w <= 2'd1));
+    (direct_count_w <= 2'd1);
   assign above_drl_idx_w =
     (direct_count_w != 2'd0 && direct0_vec_w == 2'd1) ? 2'd0 :
     ((direct_count_w == 2'd2 && direct1_vec_w == 2'd1) ? 2'd1 :
@@ -138,7 +149,7 @@ module ff_av2_local_hash_matcher_444 #(
   assign left_drl_valid_w =
     (direct_count_w != 2'd0 && direct0_vec_w == 2'd0) ||
     (direct_count_w == 2'd2 && direct1_vec_w == 2'd0) ||
-    (!non_direct_spatial_copy_w && (direct_count_w == 2'd0));
+    (direct_count_w == 2'd0);
   assign left_drl_idx_w =
     (direct_count_w != 2'd0 && direct0_vec_w == 2'd0) ? 2'd0 :
     ((direct_count_w == 2'd2 && direct1_vec_w == 2'd0) ? 2'd1 : 2'd3);
@@ -158,6 +169,72 @@ module ff_av2_local_hash_matcher_444 #(
   assign candidate_above_w =
     above_match_w && (!left_match_w || (above_drl_idx_w <= left_drl_idx_w));
   assign candidate_drl_idx_w = candidate_above_w ? above_drl_idx_w : left_drl_idx_w;
+
+  always @* begin
+    // AV2 v1.0.0 setup_ref_mv_list() scans spatial IntraBC candidates before
+    // appending default BVs. FrameForge's fixed 8x8 leaves can carry only the
+    // local above/left vectors today, so the unique spatial stack needs at most
+    // two entries while preserving AVM scan order for intrabc_drl_idx.
+    spatial0_valid_w = 1'b0;
+    spatial0_vec_w = 2'd0;
+    spatial1_valid_w = 1'b0;
+    spatial1_vec_w = 2'd0;
+
+    if (direct_left_valid_w) begin
+      spatial0_valid_w = 1'b1;
+      spatial0_vec_w = {1'b0, direct_left_vec_above_w};
+    end
+    if (direct_above_valid_w) begin
+      if (!spatial0_valid_w) begin
+        spatial0_valid_w = 1'b1;
+        spatial0_vec_w = {1'b0, direct_above_vec_above_w};
+      end else if (!spatial1_valid_w &&
+                   spatial0_vec_w != {1'b0, direct_above_vec_above_w}) begin
+        spatial1_valid_w = 1'b1;
+        spatial1_vec_w = {1'b0, direct_above_vec_above_w};
+      end
+    end
+    if (bottom_left_valid_w) begin
+      if (!spatial0_valid_w) begin
+        spatial0_valid_w = 1'b1;
+        spatial0_vec_w = {1'b0, bottom_left_vec_above_w};
+      end else if (!spatial1_valid_w &&
+                   spatial0_vec_w != {1'b0, bottom_left_vec_above_w}) begin
+        spatial1_valid_w = 1'b1;
+        spatial1_vec_w = {1'b0, bottom_left_vec_above_w};
+      end
+    end
+    if (top_right_valid_w) begin
+      if (!spatial0_valid_w) begin
+        spatial0_valid_w = 1'b1;
+        spatial0_vec_w = {1'b0, top_right_vec_above_w};
+      end else if (!spatial1_valid_w &&
+                   spatial0_vec_w != {1'b0, top_right_vec_above_w}) begin
+        spatial1_valid_w = 1'b1;
+        spatial1_vec_w = {1'b0, top_right_vec_above_w};
+      end
+    end
+    if (top_left_valid_w) begin
+      if (!spatial0_valid_w) begin
+        spatial0_valid_w = 1'b1;
+        spatial0_vec_w = {1'b0, top_left_vec_above_w};
+      end else if (!spatial1_valid_w &&
+                   spatial0_vec_w != {1'b0, top_left_vec_above_w}) begin
+        spatial1_valid_w = 1'b1;
+        spatial1_vec_w = {1'b0, top_left_vec_above_w};
+      end
+    end
+    if (second_left_valid_w) begin
+      if (!spatial0_valid_w) begin
+        spatial0_valid_w = 1'b1;
+        spatial0_vec_w = {1'b0, second_left_vec_above_w};
+      end else if (!spatial1_valid_w &&
+                   spatial0_vec_w != {1'b0, second_left_vec_above_w}) begin
+        spatial1_valid_w = 1'b1;
+        spatial1_vec_w = {1'b0, second_left_vec_above_w};
+      end
+    end
+  end
 
   always @* begin
     case (decide_index_q)
