@@ -77,9 +77,6 @@ module ff_av2_palette_analyzer_444 #(
   localparam logic [15:0] LUMA_MODE_SWITCH_SAD_MARGIN = 16'd64;
 
   logic [3:0] state_q;
-  logic [31:0] area_q;
-  logic [31:0] frame_samples_q;
-  logic [31:0] sample_index_q;
   logic [2:0] last_block_col_q;
   logic [2:0] last_block_row_q;
   logic [5:0] block_id_q;
@@ -99,13 +96,12 @@ module ff_av2_palette_analyzer_444 #(
   logic [191:0] current_palette_index_q;
   logic [191:0] block_palette_index_q [0:63];
   logic [1:0] block_luma_mode_q [0:63];
-  logic [63:0] block_luma_predictor_edge_q [0:63];
-  logic [63:0] block_luma_predictor_inner_edge_q [0:63];
+  logic [63:0] terminal_luma_predictor_edge_q;
+  logic [63:0] terminal_luma_predictor_inner_edge_q;
   logic block_luma_residual_zero_q [0:63];
   logic [7:0] palette_color_q [0:7];
   logic [63:0] block_palette_colors_q [0:63];
   logic [3:0] block_palette_size_q [0:63];
-  logic [4:0] block_palette_cache_size_q [0:63];
   logic [63:0] left_predictor_edge_q;
   logic [63:0] above_predictor_edge_q [0:7];
   logic [15:0] palette_sad_q;
@@ -217,7 +213,6 @@ module ff_av2_palette_analyzer_444 #(
   logic [4:0] query_load_delta_limit_w;
   logic [4:0] query_load_delta_bits_w [0:6];
   logic [8:0] query_load_delta_range_w;
-  logic [4:0] block_palette_cache_size_w;
   logic [4:0] query_palette_cache_size_w;
   logic fixed_mode_ctx0_w;
   logic above_mode_dc_or_unavailable_w;
@@ -239,7 +234,6 @@ module ff_av2_palette_analyzer_444 #(
   logic [5:0] fetch_above_pred_y_w;
   integer color_index_q;
   integer pack_index_q;
-  integer block_index_q;
   integer edge_index_q;
   integer inner_index_q;
   integer delta_index_q;
@@ -460,18 +454,6 @@ module ff_av2_palette_analyzer_444 #(
   end
 
   always @* begin
-    block_palette_cache_size_w = 5'd0;
-    if (block_id_q[5:3] != 3'd0 && block_luma_mode_q[block_id_q - 6'd8] == LUMA_MODE_DC) begin
-      block_palette_cache_size_w =
-        block_palette_cache_size_w + {1'd0, block_palette_size_q[block_id_q - 6'd8]};
-    end
-    if (block_id_q[2:0] != 3'd0 && block_luma_mode_q[block_id_q - 6'd1] == LUMA_MODE_DC) begin
-      block_palette_cache_size_w =
-        block_palette_cache_size_w + {1'd0, block_palette_size_q[block_id_q - 6'd1]};
-    end
-  end
-
-  always @* begin
     query_palette_cache_size_w = 5'd0;
     // AV2 v1.0.0 palette_mode_info() derives its color cache from neighboring
     // MB_MODE_INFO palette sizes. IntraBC leaves return before palette syntax,
@@ -645,9 +627,6 @@ module ff_av2_palette_analyzer_444 #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       state_q <= ST_IDLE;
-      area_q <= 32'd0;
-      frame_samples_q <= 32'd0;
-      sample_index_q <= 32'd0;
       last_block_col_q <= 3'd0;
       last_block_row_q <= 3'd0;
       block_id_q <= 6'd0;
@@ -717,6 +696,8 @@ module ff_av2_palette_analyzer_444 #(
       query_luma_residual_zero_q <= 1'b0;
       query_row_same_left_q <= 8'd0;
       query_row_same_above_q <= 8'd0;
+      terminal_luma_predictor_edge_q <= 64'd0;
+      terminal_luma_predictor_inner_edge_q <= 64'd0;
       for (edge_index_q = 0; edge_index_q < 8; edge_index_q = edge_index_q + 1) begin
         above_predictor_edge_q[edge_index_q] <= 64'd0;
       end
@@ -726,13 +707,6 @@ module ff_av2_palette_analyzer_444 #(
       luma_palette_mode <= 1'b0;
     end else if (start) begin
       state_q <= ST_BLOCK_INIT;
-      area_q <= {16'd0, visible_width} * {16'd0, visible_height};
-      frame_samples_q <=
-        (chroma_format_idc == 2'd1) ?
-          (({16'd0, visible_width} * {16'd0, visible_height}) +
-           (({16'd0, visible_width} * {16'd0, visible_height}) >> 1)) :
-          (({16'd0, visible_width} * {16'd0, visible_height}) * 32'd3);
-      sample_index_q <= 32'd0;
       last_block_col_q <= (visible_width == 16'd64) ? 3'd7 : (visible_width[5:3] - 3'd1);
       last_block_row_q <= (visible_height == 16'd64) ? 3'd7 : (visible_height[5:3] - 3'd1);
       block_id_q <= 6'd0;
@@ -773,6 +747,8 @@ module ff_av2_palette_analyzer_444 #(
       query_palette_delta_minus1_q <= 56'd0;
       query_palette_delta_literal_bits_q <= 35'd0;
       query_luma_residual_zero_q <= 1'b0;
+      terminal_luma_predictor_edge_q <= 64'd0;
+      terminal_luma_predictor_inner_edge_q <= 64'd0;
       for (edge_index_q = 0; edge_index_q < 8; edge_index_q = edge_index_q + 1) begin
         above_predictor_edge_q[edge_index_q] <= 64'd0;
       end
@@ -793,7 +769,6 @@ module ff_av2_palette_analyzer_444 #(
     end else begin
       if (chroma_sample_fire_w) begin
         black_ok_q <= black_next_w;
-        sample_index_q <= sample_index_q + 32'd1;
         if (block_chroma_sample_q == block_chroma_sample_last_w) begin
           chroma_complete_q <= 1'b1;
         end else begin
@@ -823,9 +798,12 @@ module ff_av2_palette_analyzer_444 #(
             query_load_delta_bits_w[delta_index_q];
         end
         query_luma_mode_q <= block_luma_mode_q[query_load_block_id_q];
-        query_luma_predictor_edge_q <= block_luma_predictor_edge_q[query_load_block_id_q];
-        query_luma_predictor_inner_edge_q <=
-          block_luma_predictor_inner_edge_q[query_load_block_id_q];
+        // The current H/V intra mode selector is intentionally limited to the
+        // terminal 8x8 leaf so directional context cannot leak into later
+        // blocks. Store only that terminal predictor pair instead of a
+        // 64-entry predictor-edge register bank.
+        query_luma_predictor_edge_q <= terminal_luma_predictor_edge_q;
+        query_luma_predictor_inner_edge_q <= terminal_luma_predictor_inner_edge_q;
         query_luma_residual_zero_q <= block_luma_residual_zero_q[query_load_block_id_q];
         query_row_same_left_q <= row_same_left_q[query_load_block_id_q];
         query_row_same_above_q <= row_same_above_q[query_load_block_id_q];
@@ -954,7 +932,6 @@ module ff_av2_palette_analyzer_444 #(
           ST_READ: begin
             if (sample_fire) begin
               black_ok_q <= black_next_w;
-              sample_index_q <= sample_index_q + 32'd1;
               block_luma_sample_q[block_sample_q] <= sample_u8_w;
               if (collect_add_w) begin
                 palette_color_q[collected_count_q] <= collect_sample_w;
@@ -1030,7 +1007,6 @@ module ff_av2_palette_analyzer_444 #(
           end
           ST_STORE_COLORS: begin
             block_palette_size_q[block_id_q] <= target_palette_size_q;
-            block_palette_cache_size_q[block_id_q] <= block_palette_cache_size_w;
             block_palette_colors_q[block_id_q] <= palette_colors_pack_w;
             block_sample_q <= 6'd0;
             state_q <= ST_MAP;
@@ -1058,8 +1034,10 @@ module ff_av2_palette_analyzer_444 #(
           ST_NEXT_BLOCK: begin
             block_palette_index_q[block_id_q] <= current_palette_index_q;
             block_luma_mode_q[block_id_q] <= selected_luma_mode_w;
-            block_luma_predictor_edge_q[block_id_q] <= selected_luma_predictor_edge_w;
-            block_luma_predictor_inner_edge_q[block_id_q] <= selected_luma_predictor_inner_edge_w;
+            if (selected_luma_mode_w != LUMA_MODE_DC) begin
+              terminal_luma_predictor_edge_q <= selected_luma_predictor_edge_w;
+              terminal_luma_predictor_inner_edge_q <= selected_luma_predictor_inner_edge_w;
+            end
             block_luma_residual_zero_q[block_id_q] <= (selected_luma_sad_w == 16'd0);
             row_same_left_q[block_id_q] <= current_row_same_left_q;
             row_same_above_q[block_id_q] <= current_row_same_above_q;
