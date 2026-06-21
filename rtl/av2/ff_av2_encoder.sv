@@ -602,9 +602,11 @@ module ff_av2_encoder #(
   logic luma_residual_enable_w;
   logic palette_luma_residual_enable_w;
   logic lossy420_luma_residual_enable_w;
-  logic chroma_bdpcm_enable_w;
   logic palette_chroma_bdpcm_enable_w;
   logic lossy420_chroma_bdpcm_enable_w;
+  logic chroma_residual_phase_w;
+  logic chroma_bdpcm_fetch_ready_w;
+  logic palette_chroma_bdpcm_cache_ready_w;
   logic chroma_subsampled_phase_w;
 
   ff_av2_partition_cdf_lut partition_cdf_lut (
@@ -1241,14 +1243,22 @@ module ff_av2_encoder #(
     chroma_bdpcm_op_valid_w;
   assign palette_chroma_bdpcm_advance_w = chroma_bdpcm_advance_w && palette_mode_q;
   assign lossy420_chroma_bdpcm_advance_w = chroma_bdpcm_advance_w && lossy_420_mode_q;
-  assign chroma_bdpcm_enable_w =
+  assign chroma_residual_phase_w =
     residual_mode_w &&
-    (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF) &&
+    (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF);
+  assign chroma_bdpcm_fetch_ready_w =
     ((state_q == ST_LEAF) ||
-     ((state_q == ST_CHROMA_FETCH) &&
-      (chroma_fetch_done_w || (palette_mode_q && chroma_fetch_current_cache_hit_w))));
-  assign palette_chroma_bdpcm_enable_w = chroma_bdpcm_enable_w && palette_mode_q;
-  assign lossy420_chroma_bdpcm_enable_w = chroma_bdpcm_enable_w && lossy_420_mode_q;
+     ((state_q == ST_CHROMA_FETCH) && chroma_fetch_done_w));
+  assign palette_chroma_bdpcm_cache_ready_w =
+    (state_q == ST_CHROMA_FETCH) && chroma_fetch_current_cache_hit_w;
+  assign palette_chroma_bdpcm_enable_w =
+    palette_mode_q &&
+    chroma_residual_phase_w &&
+    (chroma_bdpcm_fetch_ready_w || palette_chroma_bdpcm_cache_ready_w);
+  assign lossy420_chroma_bdpcm_enable_w =
+    lossy_420_mode_q &&
+    chroma_residual_phase_w &&
+    chroma_bdpcm_fetch_ready_w;
 
   // AV2 4:4:4 bring-up path: traverse one 64x64 superblock, split visible
   // coding leaves down to 8x8, and generate syntax through the range coder.

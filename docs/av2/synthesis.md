@@ -8,36 +8,35 @@ Older bring-up and intermediate optimization checkpoints are intentionally kept
 out of this report so the document remains focused on the current validated
 baseline and its immediate delta. Use git history for retired measurements.
 
-## 2026-06-20 DC-Delta TXB Timing Split
+## 2026-06-20 Chroma Residual Enable Split
 
-Measured after using the previous Vivado timing report to split the lossy
-4:2:0 DC-only residual path out of the general chroma BDPCM symbolizer. The
-new `ff_av2_dc_delta_txb_symbolizer` emits the same single-coefficient TXB
-symbol stream for lossy 4:2:0 luma/chroma residuals without carrying the full
-16-coefficient BDPCM scan, context, and residual arrays through the
-residual-to-range-coder timing path.
+Measured after splitting the AV2 chroma residual enables so the lossy 4:2:0
+DC-only path no longer carries the 4:4:4 palette cache-hit shortcut. The
+previous Vivado timing input showed pressure through the lossy 4:2:0 residual
+path into the range coder; this change keeps the palette predictor/cache
+shortcut isolated to the palette path while sharing the common chroma residual
+phase and fetch-ready terms.
 
 Baseline and current sources:
 
-- Baseline RTL Git SHA: `307363b80a71d77e19178e972a522c42bf8bfe1c`
-- Current RTL source: working tree after `fc3c15b9f1801a0ba40f2dde99c47bb54c475c90`
-- Baseline mode: AVM-order local IBC BVP stack with lossy 4:2:0 DC residuals
-  emitted through the parameterized `ff_av2_chroma_bdpcm_symbolizer`.
-- Current mode: same encoder behavior, with lossy 4:2:0 DC residuals emitted
-  through a dedicated DC-delta TXB symbolizer.
+- Baseline RTL Git SHA: `64961ede3115ee0941c2da7a519999f0285be8d2`
+- Current validated RTL source: this commit.
+- Baseline mode: dedicated lossy 4:2:0 DC-delta TXB symbolizer with shared
+  chroma residual enable logic.
+- Current mode: same encoder behavior, with palette and lossy 4:2:0 chroma
+  residual enables split so only the palette side sees the cache-hit shortcut.
 - Delta columns compare against the previous documented AV2 synthesis
   checkpoint.
 
 Validation result:
 
 - `cargo test av2 --lib`: OK (25/25).
-- `racehorses-sweep-420`: OK (64/64), strict SW/RTL bitstream parity and
+- `racehorses_crop_48x24_1f_yuv420p8`: OK, strict SW/RTL bitstream parity and
   SW/RTL/reference-decoder reconstruction parity.
-- `screenshot-sweep-444`: OK (64/64), strict SW/RTL bitstream parity and
-  SW/RTL/reference-decoder lossless reconstruction parity.
-- `screenshot-multictu-444`: OK (10/10), same parity checks.
+- `screenshot_640_sweep_48x24_1f_yuv444p8`: OK, strict SW/RTL bitstream parity
+  and SW/RTL/reference-decoder lossless reconstruction parity.
 - Yosys synthesis: PASS.
-- Vivado was not rerun after this patch. The optimization target was the
+- Vivado was not rerun after this patch. The optimization target remains the
   previous Vivado worst path documented below.
 
 Yosys synthesis configuration:
@@ -55,36 +54,36 @@ Yosys synthesis configuration:
 
 Yosys synthesis result:
 
-- Yosys synthesis passed in 349.0 seconds.
-- Peak child RSS observed by the synthesis runner was 1666.98 MiB.
+- Yosys synthesis passed in 344.8 seconds.
+- Peak child RSS observed by the synthesis runner was 1677.21 MiB.
 - Runtime exceeded the 300 second review threshold but completed inside the
   600 second hard timeout and 3072 MiB memory limit.
-- Post-synthesis flattened-cell reporting completed in 7.1 seconds.
-- Post-synthesis critical-path reporting completed in 91.5 seconds.
+- Post-synthesis flattened-cell reporting completed in 6.9 seconds.
+- Post-synthesis critical-path reporting completed in 89.8 seconds.
 - The isolated `ff_av2_chroma_sample_store` path length remains 1.
-- The top `ff_av2_encoder` topological path length improved from 63 to 60.
+- The top `ff_av2_encoder` topological path length improved from 60 to 55.
 
 Flattened Xilinx-cell estimate from
 `synth/out/arty-z7-10/ff_av2_encoder/cell_report.log`:
 
 | Metric | Count | Delta |
 |---|---:|---:|
-| Cells | 102391 | -478 |
-| Estimated LCs | 35043 | -765 |
-| CARRY4 | 2540 | -41 |
+| Cells | 102260 | -131 |
+| Estimated LCs | 35289 | +246 |
+| CARRY4 | 2540 | +0 |
 | DSP48E1 | 13 | +0 |
-| FDCE | 4462 | -40 |
-| FDPE | 27 | -8 |
+| FDCE | 4462 | +0 |
+| FDPE | 27 | +0 |
 | FDRE | 37423 | +0 |
 | FDSE | 129 | +0 |
-| LUT1 | 581 | +172 |
-| LUT2 | 7675 | -589 |
-| LUT3 | 6492 | -550 |
-| LUT4 | 4357 | -212 |
-| LUT5 | 3961 | -78 |
-| LUT6 | 20233 | +75 |
-| MUXF7 | 4574 | +793 |
-| MUXF8 | 704 | +26 |
+| LUT1 | 661 | +80 |
+| LUT2 | 7872 | +197 |
+| LUT3 | 6894 | +402 |
+| LUT4 | 4123 | -234 |
+| LUT5 | 3998 | +37 |
+| LUT6 | 20274 | +41 |
+| MUXF7 | 4084 | -490 |
+| MUXF8 | 696 | -8 |
 | RAMB36E1 | 19 | +0 |
 | RAM32M | 10 | +0 |
 | RAM64M | 1536 | +0 |
@@ -93,19 +92,20 @@ Delta from the previous documented AV2 synthesis checkpoint:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| Synthesis time | 415.8 s | 349.0 s | -66.8 s |
-| Peak synthesis RSS | 1695.05 MiB | 1666.98 MiB | -28.07 MiB |
-| Cell-report time | 7.1 s | 7.1 s | +0.0 s |
-| Critical-path report time | 100.6 s | 91.5 s | -9.1 s |
-| Topological path length | 63 | 60 | -3 |
-| Cells | 102869 | 102391 | -478 |
-| Estimated LCs | 35808 | 35043 | -765 |
+| Synthesis time | 349.0 s | 344.8 s | -4.2 s |
+| Peak synthesis RSS | 1666.98 MiB | 1677.21 MiB | +10.23 MiB |
+| Cell-report time | 7.1 s | 6.9 s | -0.2 s |
+| Critical-path report time | 91.5 s | 89.8 s | -1.7 s |
+| Topological path length | 60 | 55 | -5 |
+| Cells | 102391 | 102260 | -131 |
+| Estimated LCs | 35043 | 35289 | +246 |
 
-The timing-guided split reduced the reported topological path, total cells,
-estimated LCs, synthesis runtime, and peak RSS without changing the encoded
-bitstreams. The new Yosys top path still ends in the entropy range coder, but
-it now starts from phase/control logic through the lossy 4:2:0 chroma DC
-skip-CDF path rather than carrying the full BDPCM scan machinery.
+The chroma enable split removes the palette predictor/cache fan-in from the
+lossy 4:2:0 residual path. The top Yosys path now moves to the 4:4:4 palette
+analyzer/luma-palette-symbolizer path before the range coder. This is a useful
+timing tradeoff: it reduces the topological path length and total cell count,
+with a small estimated-LC increase and no observed change in smoke-test cycle
+counts or encoded bitstreams.
 
 Previous Vivado timing input:
 
