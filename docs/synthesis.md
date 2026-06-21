@@ -110,6 +110,28 @@ FrameForge keeps a tracked Vivado install template at
 written under `.tools/` and remains untracked because it contains absolute local
 paths.
 
+The preferred local install helper keeps the Vivado payload, extracted installer,
+temporary files, installer home, XDG cache/config state, and license copy under
+this checkout's `.tools/` directory. When `bubblewrap` is available, AMD `xsetup`
+runs with `/` mounted read-only and `.tools/` as the writable install/cache area:
+
+```sh
+./install-vivado-local.sh \
+  --installer "/path/to/FPGAs_AdaptiveSoCs_Unified_SDI_2025.2_1114_2157_Lin64.bin" \
+  --license "/path/to/Xilinx.lic"
+```
+
+If the AMD authentication token has expired, regenerate it inside the same
+project-local home first:
+
+```sh
+./install-vivado-local.sh \
+  --installer "/path/to/FPGAs_AdaptiveSoCs_Unified_SDI_2025.2_1114_2157_Lin64.bin" \
+  --license "/path/to/Xilinx.lic" \
+  --force-auth \
+  --skip-install
+```
+
 Prepare a local install area:
 
 ```sh

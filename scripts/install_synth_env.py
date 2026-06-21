@@ -96,7 +96,7 @@ def print_detected_tools(repo: Path, install_dir: Path) -> None:
     if settings:
         print(f"[ok] Vivado settings: {settings}")
     else:
-        print("[missing] Vivado settings: not found under .tools/Xilinx/Vivado/*/settings64.sh")
+        print("[missing] Vivado settings: not found under .tools/Xilinx/Vivado/*/settings64.sh or .tools/Xilinx/*/Vivado/settings64.sh")
     if license_file.exists():
         print(f"[ok] Vivado license: {license_file}")
     else:
@@ -108,13 +108,18 @@ def print_detected_tools(repo: Path, install_dir: Path) -> None:
 def find_project_vivado(repo: Path, tool: str) -> str | None:
     if tool != "vivado":
         return None
-    pattern = repo / ".tools" / "Xilinx" / "Vivado" / "*" / "bin" / "vivado"
-    candidates = sorted(glob.glob(str(pattern)), reverse=True)
+    candidates = [
+        *sorted(glob.glob(str(repo / ".tools" / "Xilinx" / "Vivado" / "*" / "bin" / "vivado")), reverse=True),
+        *sorted(glob.glob(str(repo / ".tools" / "Xilinx" / "*" / "Vivado" / "bin" / "vivado")), reverse=True),
+    ]
     return candidates[0] if candidates else None
 
 
 def find_project_vivado_settings(repo: Path) -> Path | None:
-    candidates = sorted((repo / ".tools" / "Xilinx" / "Vivado").glob("*/settings64.sh"), reverse=True)
+    candidates = [
+        *sorted((repo / ".tools" / "Xilinx" / "Vivado").glob("*/settings64.sh"), reverse=True),
+        *sorted((repo / ".tools" / "Xilinx").glob("*/Vivado/settings64.sh"), reverse=True),
+    ]
     return candidates[0] if candidates else None
 
 

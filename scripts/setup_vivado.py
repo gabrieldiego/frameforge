@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import pwd
 import shutil
 import subprocess
 from pathlib import Path
@@ -18,6 +19,7 @@ from pathlib import Path
 DEFAULT_TEMPLATE = Path("synth/vivado/install_config.template")
 DEFAULT_CONFIG = Path(".tools/vivado-install_config.txt")
 DEFAULT_INSTALLER_DIR = Path(".tools/vivado-installer")
+DEFAULT_TOOLS_DIR = Path(".tools")
 
 
 def main() -> int:
@@ -76,12 +78,18 @@ def main() -> int:
 
 
 def prepare_tree(root: Path, license_file: Path | None, link_home_cache: bool) -> None:
-    tools = root / ".tools"
+    tools = root / DEFAULT_TOOLS_DIR
     for path in (
         tools,
         tools / "Xilinx",
         tools / "tmp",
+        tools / "home",
+        tools / "home" / ".Xilinx",
         tools / "home-Xilinx",
+        tools / "xdg-cache",
+        tools / "xdg-config",
+        tools / "xdg-data",
+        tools / "xdg-state",
         tools / "vivado-install-logs",
     ):
         path.mkdir(parents=True, exist_ok=True)
@@ -104,6 +112,13 @@ def prepare_tree(root: Path, license_file: Path | None, link_home_cache: bool) -
         link.symlink_to(target)
         print(f"Linked {link} -> {target}")
 
+    print("Vivado local state:")
+    print(f"  install destination: {tools / 'Xilinx'}")
+    print(f"  installer extraction: {root / DEFAULT_INSTALLER_DIR}")
+    print(f"  temporary files:      {tools / 'tmp'}")
+    print(f"  project HOME:         {tools / 'home'}")
+    print(f"  XDG cache/config:     {tools / 'xdg-cache'} / {tools / 'xdg-config'}")
+
 
 def write_config(root: Path, template: Path, output: Path) -> None:
     template_path = template if template.is_absolute() else root / template
@@ -124,12 +139,107 @@ def extract_installer(root: Path, installer: Path, force: bool) -> None:
             return
         shutil.rmtree(installer_dir)
     installer_dir.parent.mkdir(parents=True, exist_ok=True)
+    command = ["sh", str(installer), "--noexec", "--target", str(installer_dir)]
     subprocess.run(
-        ["sh", str(installer), "--noexec", "--target", str(installer_dir)],
+        bubblewrap_command(root, command),
         check=True,
         cwd=root,
+        env=project_local_env(root),
     )
     print(f"Extracted installer to {installer_dir}")
+
+
+def project_local_env(root: Path) -> dict[str, str]:
+    tools = root / DEFAULT_TOOLS_DIR
+    home = tools / "home"
+    tmp = tools / "tmp"
+    xdg_cache = tools / "xdg-cache"
+    xdg_config = tools / "xdg-config"
+    xdg_data = tools / "xdg-data"
+    xdg_state = tools / "xdg-state"
+    xdg_runtime = tools / "xdg-runtime"
+
+    for path in (
+        tools,
+        home,
+        home / ".Xilinx",
+        tmp,
+        xdg_cache,
+        xdg_config,
+        xdg_data,
+        xdg_state,
+        xdg_runtime,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+
+    xdg_runtime.chmod(0o700)
+
+    env = os.environ.copy()
+    env["HOME"] = str(home)
+    env["TMPDIR"] = str(tmp)
+    env["TMP"] = str(tmp)
+    env["TEMP"] = str(tmp)
+    env["XDG_CACHE_HOME"] = str(xdg_cache)
+    env["XDG_CONFIG_HOME"] = str(xdg_config)
+    env["XDG_DATA_HOME"] = str(xdg_data)
+    env["XDG_STATE_HOME"] = str(xdg_state)
+    env["XDG_RUNTIME_DIR"] = str(xdg_runtime)
+    env["XILINXD_LICENSE_FILE"] = str(tools / "Xilinx.lic")
+    java_home_arg = f"-Duser.home={home}"
+    existing_java_options = env.get("_JAVA_OPTIONS", "")
+    if java_home_arg not in existing_java_options:
+        env["_JAVA_OPTIONS"] = f"{existing_java_options} {java_home_arg}".strip()
+    return env
+
+
+def bubblewrap_command(root: Path, command: list[str], isolate_passwd_home: bool = False) -> list[str]:
+    """Run vendor installer commands with only .tools writable when possible."""
+    if os.environ.get("FRAMEFORGE_VIVADO_NO_BWRAP") == "1":
+        print("Vivado installer isolation: disabled by FRAMEFORGE_VIVADO_NO_BWRAP=1")
+        return command
+
+    bwrap = shutil.which("bwrap") or shutil.which("bubblewrap")
+    if not bwrap:
+        print("Vivado installer isolation: bubblewrap not found; using environment-only isolation")
+        return command
+
+    tools = root / DEFAULT_TOOLS_DIR
+    home = tools / "home"
+    tmp = tools / "tmp"
+    xdg_runtime = tools / "xdg-runtime"
+    for path in (tools, home, home / ".Xilinx", tmp, xdg_runtime):
+        path.mkdir(parents=True, exist_ok=True)
+    xdg_runtime.chmod(0o700)
+
+    print("Vivado installer isolation: bubblewrap read-only / with writable .tools")
+    wrapped = [
+        bwrap,
+        "--die-with-parent",
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev-bind",
+        "/dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--bind",
+        str(tools),
+        str(tools),
+        "--bind",
+        str(tmp),
+        "/tmp",
+        "--bind",
+        str(tmp),
+        "/var/tmp",
+    ]
+    if isolate_passwd_home:
+        real_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        if real_home != home and real_home.exists():
+            print(f"Vivado installer isolation: overlaying passwd home {real_home} with {home}")
+            wrapped.extend(["--bind", str(home), str(real_home)])
+    wrapped.extend(["--chdir", str(root), *command])
+    return wrapped
 
 
 def run_xsetup(root: Path, args: list[str], log: Path | None = None) -> int:
@@ -137,12 +247,9 @@ def run_xsetup(root: Path, args: list[str], log: Path | None = None) -> int:
     if not xsetup.exists():
         raise SystemExit(f"xsetup not found: {xsetup}. Run `scripts/setup_vivado.py extract` first.")
 
-    env = os.environ.copy()
-    env.setdefault("TMPDIR", str(root / ".tools" / "tmp"))
-    env.setdefault("XILINXD_LICENSE_FILE", str(root / ".tools" / "Xilinx.lic"))
-    (root / ".tools" / "tmp").mkdir(parents=True, exist_ok=True)
+    env = project_local_env(root)
 
-    command = [str(xsetup), *args]
+    command = bubblewrap_command(root, [str(xsetup), *args], isolate_passwd_home=True)
     if log:
         log_path = log if log.is_absolute() else root / log
         log_path.parent.mkdir(parents=True, exist_ok=True)

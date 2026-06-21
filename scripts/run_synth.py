@@ -30,6 +30,8 @@ DEFAULT_YOSYS_QUIET = True
 DEFAULT_SYNTH_MAX_VISIBLE_WIDTH = 1024
 DEFAULT_SYNTH_MAX_VISIBLE_HEIGHT = 1024
 DEFAULT_SYNTH_SUPPORT_PALETTE_444 = True
+DEFAULT_VIVADO_SYNTH_DIRECTIVE = "Default"
+DEFAULT_VIVADO_RETIMING = False
 XILINX_CELL_REPORT_METRICS = (
     "Cells",
     "Estimated LCs",
@@ -105,6 +107,17 @@ def main() -> int:
         default=default_yosys_quiet(),
         help="run the main Yosys synthesis command with -q to suppress verbose mapper logs",
     )
+    parser.add_argument(
+        "--vivado-directive",
+        default=default_vivado_synth_directive(),
+        help="Vivado synth_design -directive value; use Default for Vivado's default strategy",
+    )
+    parser.add_argument(
+        "--vivado-retiming",
+        type=parse_bool_int,
+        default=default_vivado_retiming(),
+        help="enable Vivado synth_design -retiming (0 or 1)",
+    )
     parser.add_argument("--post-synth-smoke", action="store_true")
     args = parser.parse_args()
     codec = codec_config_from_args(args)
@@ -134,6 +147,8 @@ def main() -> int:
             args.max_visible_height,
             args.support_palette_444,
             codec.rtl_include_dirs,
+            args.vivado_directive,
+            args.vivado_retiming,
         )
 
     rc = run_yosys(
@@ -217,6 +232,23 @@ def default_yosys_quiet() -> bool:
         return parse_bool_int(value)
     except argparse.ArgumentTypeError as err:
         raise SystemExit(f"SYNTH_YOSYS_QUIET must be 0 or 1, got {value!r}") from err
+
+
+def default_vivado_synth_directive() -> str:
+    value = os.environ.get("SYNTH_VIVADO_DIRECTIVE")
+    if value is None or value == "":
+        return DEFAULT_VIVADO_SYNTH_DIRECTIVE
+    return value
+
+
+def default_vivado_retiming() -> bool:
+    value = os.environ.get("SYNTH_VIVADO_RETIMING")
+    if value is None or value == "":
+        return DEFAULT_VIVADO_RETIMING
+    try:
+        return parse_bool_int(value)
+    except argparse.ArgumentTypeError as err:
+        raise SystemExit(f"SYNTH_VIVADO_RETIMING must be 0 or 1, got {value!r}") from err
 
 
 def resolve_memory_limit_mb(tool: str, explicit_limit: float | None) -> float | None:
@@ -766,10 +798,13 @@ def run_vivado(
     max_visible_height: int,
     support_palette_444: bool,
     include_dirs: tuple[Path, ...],
+    vivado_directive: str,
+    vivado_retiming: bool,
 ) -> int:
     vivado_cmd = find_vivado_command()
 
     tcl = out_dir / "vivado_synth.tcl"
+    xdc = out_dir / "vivado_synth.xdc"
     period_ns = 1000.0 / clock_mhz
     part = board.get("FPGA_PART", "xc7z010clg400-1")
     generic_args = encoder_vivado_generic_args(
@@ -778,7 +813,20 @@ def run_vivado(
         max_visible_height,
         support_palette_444,
     )
+    synth_options = generic_args
+    if vivado_directive and vivado_directive != "Default":
+        synth_options += f" -directive {vivado_directive}"
+    if vivado_retiming:
+        synth_options += " -retiming"
     include_dirs_tcl = " ".join(quote_tcl_path(path) for path in include_dirs)
+    xdc.write_text(
+        "\n".join(
+            [
+                f"create_clock -name ff_synth_clk -period {period_ns:.3f} [get_ports clk]",
+                "",
+            ]
+        )
+    )
     tcl.write_text(
         "\n".join(
             [
@@ -788,9 +836,9 @@ def run_vivado(
                 "create_project -in_memory -part $part",
                 f"set_property include_dirs [list {include_dirs_tcl}] [current_fileset]",
                 *[f"read_verilog -sv {quote_tcl_path(source)}" for source in sources],
+                f"read_xdc {quote_tcl_path(xdc)}",
                 "set_property top $top [current_fileset]",
-                f"synth_design -top $top -part $part{generic_args}",
-                f"create_clock -name ff_synth_clk -period {period_ns:.3f} [get_ports clk]",
+                f"synth_design -top $top -part $part{synth_options}",
                 "report_utilization -file $out_dir/vivado_utilization.rpt",
                 "report_timing_summary -file $out_dir/vivado_timing_summary.rpt",
                 "report_timing -max_paths 20 -sort_by group -file $out_dir/vivado_critical_paths.rpt",
@@ -806,6 +854,8 @@ def run_vivado(
     if top in ("ff_vvc_encoder", "ff_av2_encoder"):
         print(f"Encoder synthesis max visible size: {max_visible_width}x{max_visible_height}")
         print(f"Encoder synthesis 4:4:4 palette support: {int(support_palette_444)}")
+    print(f"Vivado synth directive: {vivado_directive}")
+    print(f"Vivado retiming: {int(vivado_retiming)}")
     if "XILINXD_LICENSE_FILE" not in os.environ and LOCAL_LICENSE.exists():
         print(f"Using project-local Vivado license: {LOCAL_LICENSE}")
     settings = find_project_vivado_settings()
