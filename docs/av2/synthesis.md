@@ -8,36 +8,36 @@ Older bring-up and intermediate optimization checkpoints are intentionally kept
 out of this report so the document remains focused on the current validated
 baseline and its immediate delta. Use git history for retired measurements.
 
-## 2026-06-21 Vivado Timing Closure
+## 2026-06-21 Payload BRAM Area Optimization
 
-Measured after registering the AV2 DC-delta zero-TXB decision before emitting
-the skip symbol. The previous Vivado report showed a failing path from the
-lossy 4:2:0 residual estimator into the range coder. This change removes that
-same-cycle estimator-to-range-coder path while preserving the emitted
-`coeffs()` syntax.
+Measured after moving the AV2 payload byte buffer out of the main encoder FSM
+array and into an explicit synchronous 1-write/1-read block-RAM wrapper. The
+bitstream is unchanged, but Vivado now maps the 32 KiB payload store to BRAM
+instead of distributed RAM.
 
 Baseline and current sources:
 
-- Baseline Vivado report Git SHA: `93ad7fad972aab259830c0daffe5dac62701c4c7`
-  (`Document AV2 local IBC checkpoint`), a docs-only child of RTL SHA
-  `64961ede3115ee0941c2da7a519999f0285be8d2`.
-- Current validated RTL/source Git SHA:
+- Baseline Vivado report Git SHA:
   `3d2b2303cd67599afa6df6de64e86f6dc2f28efd`.
-- Baseline mode: AV2 local IBC, palette 4:4:4, and lossy 4:2:0 residual with
-  the DC zero-TXB skip emitted directly from the estimator path.
-- Current mode: same codec behavior, with the DC zero-TXB decision registered
-  before entropy emission and the Vivado clock constraint read before
-  `synth_design`.
+- Current validated RTL/source Git SHA:
+  `ed53f2e953f2aa5a84b977e5e7ed4ee47f6fd765`.
+- Baseline mode: AV2 local IBC, palette 4:4:4, lossy 4:2:0 residual, and the
+  previous payload byte buffer inferred by Vivado as distributed RAM.
+- Current mode: same codec behavior, with the payload byte buffer inferred as
+  block RAM through `ff_sync_block_ram_1r1w`.
 - Delta columns compare against the previous documented AV2 Vivado checkpoint.
 
 Validation result:
 
-- `python3 -m py_compile scripts/run_synth.py scripts/setup_vivado.py
-  scripts/install_synth_env.py`: PASS.
 - `racehorses-sweep-420` limited 8x8 smoke: PASS, strict SW/RTL bitstream
   parity and SW/RTL/reference-decoder reconstruction parity.
 - `screenshot-sweep-444` limited 8x8 smoke: PASS, strict SW/RTL bitstream
   parity and SW/RTL/reference-decoder lossless reconstruction parity.
+- Direct `screenshot_640_sweep_16x16_1f_yuv444p8.yuv` validation: PASS,
+  strict SW/RTL bitstream parity and lossless reconstruction parity. Output
+  utilization stayed at `0.108`, matching the previous detailed utilization
+  table for this vector.
+- Yosys synthesis: PASS at 25 MHz metadata target.
 - Vivado synthesis: PASS at 25 MHz with zero setup, hold, or pulse-width
   failing endpoints.
 
@@ -60,43 +60,55 @@ Current Vivado synthesis result:
 
 | Metric | Result |
 |---|---:|
-| Wrapper elapsed time | 682.7 s |
-| `synth_design` elapsed time | 09:48 |
-| Runner-observed peak child RSS | 2674.39 MiB |
-| Vivado log peak memory | 3302.32 MB |
-| Vivado PSS peak, overall | 9348.03 MB |
-| Vivado PSS peak, main process | 2658.39 MB |
-| Vivado PSS peak, forked workers | 7594.19 MB |
-| WNS at 25 MHz | +3.942 ns |
+| Wrapper elapsed time | 487.0 s |
+| `synth_design` elapsed time | 07:01 |
+| Runner-observed peak child RSS | 2613.69 MiB |
+| Vivado log peak memory | 3244.88 MB |
+| Vivado PSS peak, overall | 9352.54 MB |
+| Vivado PSS peak, main process | 2596.28 MB |
+| Vivado PSS peak, forked workers | 7596.98 MB |
+| WNS at 25 MHz | +3.372 ns |
 | TNS at 25 MHz | 0.000 ns |
 | Setup failing endpoints | 0 |
 | Worst hold slack | +0.043 ns |
-| Slice LUTs | 43126 / 17600 (245.03%) |
-| LUT as logic | 30798 / 17600 (174.99%) |
-| LUT as distributed RAM | 12328 / 6000 (205.47%) |
-| Slice registers | 41503 / 35200 (117.91%) |
-| Block RAM tiles | 19 / 60 (31.67%) |
+| Slice LUTs | 27675 / 17600 (157.24%) |
+| LUT as logic | 27635 / 17600 (157.02%) |
+| LUT as distributed RAM | 40 / 6000 (0.67%) |
+| Slice registers | 41519 / 35200 (117.95%) |
+| Block RAM tiles | 27 / 60 (45.00%) |
 | DSPs | 10 / 80 (12.50%) |
 | Bonded IOBs | 482 / 100 (482.00%) |
+
+Yosys synthesis check:
+
+| Metric | Result |
+|---|---:|
+| Main Yosys elapsed time | 315.8 s |
+| Runner-observed peak child RSS | 1632.57 MiB |
+| Flattened cells | 98386 |
+| Estimated LCs | 33157 |
+| RAMB36E1 | 27 |
+| RAM32M | 10 |
+| DSP48E1 | 13 |
 
 Delta from the previous documented AV2 Vivado checkpoint:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| `synth_design` elapsed time | 15:47 | 09:48 | -5:59 |
-| Full wrapper elapsed time | about 21:06 | 11:22.7 | about -9:43 |
-| Vivado log peak memory | 3065.31 MB | 3302.32 MB | +237.01 MB |
-| Vivado PSS peak, overall | 6454.57 MB | 9348.03 MB | +2893.46 MB |
-| Vivado PSS peak, forked workers | 6078.84 MB | 7594.19 MB | +1515.35 MB |
-| WNS at 25 MHz | -1.944 ns | +3.942 ns | +5.886 ns |
-| TNS at 25 MHz | -102.321 ns | 0.000 ns | +102.321 ns |
-| Setup failing endpoints | 100 | 0 | -100 |
+| `synth_design` elapsed time | 09:48 | 07:01 | -2:47 |
+| Full wrapper elapsed time | 682.7 s | 487.0 s | -195.7 s |
+| Vivado log peak memory | 3302.32 MB | 3244.88 MB | -57.44 MB |
+| Vivado PSS peak, overall | 9348.03 MB | 9352.54 MB | +4.51 MB |
+| Vivado PSS peak, forked workers | 7594.19 MB | 7596.98 MB | +2.79 MB |
+| WNS at 25 MHz | +3.942 ns | +3.372 ns | -0.570 ns |
+| TNS at 25 MHz | 0.000 ns | 0.000 ns | +0.000 ns |
+| Setup failing endpoints | 0 | 0 | +0 |
 | Worst hold slack | +0.043 ns | +0.043 ns | +0.000 ns |
-| Slice LUTs | 44143 | 43126 | -1017 |
-| LUT as logic | 31815 | 30798 | -1017 |
-| LUT as distributed RAM | 12328 | 12328 | +0 |
-| Slice registers | 41562 | 41503 | -59 |
-| Block RAM tiles | 19 | 19 | +0 |
+| Slice LUTs | 43126 | 27675 | -15451 |
+| LUT as logic | 30798 | 27635 | -3163 |
+| LUT as distributed RAM | 12328 | 40 | -12288 |
+| Slice registers | 41503 | 41519 | +16 |
+| Block RAM tiles | 19 | 27 | +8 |
 | DSPs | 10 | 10 | +0 |
 | Bonded IOBs | 482 | 482 | +0 |
 
@@ -104,18 +116,17 @@ Current worst path:
 
 - Source: `cached_chroma_samples_valid_q_reg[3]/C`.
 - Destination: `chroma_bdpcm_symbolizer/entropy_context_q_reg[0]/D`.
-- Data path delay: 35.907 ns, with 12.565 ns logic and 23.342 ns route.
-- The previous `low_q_reg` range-coder path now has positive slack; the new
-  timing target is the chroma BDPCM symbolizer context path.
+- Data path delay: 36.477 ns, with 12.689 ns logic and 23.788 ns route.
+- Logic levels: 52.
+- The current timing target remains the chroma BDPCM symbolizer context path.
 
 Notes:
 
-- The design now meets the 25 MHz Z7-10 Vivado synthesis timing target.
-- Area also improved slightly versus the previous documented Vivado checkpoint,
-  but the design still exceeds the small Z7-10 fabric capacity in LUTs,
-  registers, distributed RAM, and I/O count. Treat this board as a consistent
-  timing/area pressure target rather than a fit target for the full encoder.
-- A `PerformanceOptimized` plus retiming run was tested but abandoned before
-  completion because Vivado moved into a high-memory timing-aware mapping phase
-  and reported zero retiming moves. The adopted baseline remains the default
-  directive with retiming disabled.
+- The design still meets the 25 MHz Z7-10 Vivado synthesis timing target.
+- This is primarily an area and synthesis-time improvement. Output-utilization
+  smoke metrics stayed unchanged because the byte stream and output handshake
+  schedule are unchanged.
+- The payload byte buffer now accounts for 8 additional BRAM tiles instead of
+  12,288 distributed-RAM LUTs. The design still exceeds the small Z7-10 fabric
+  capacity in LUTs, registers, and I/O count, so this board remains a pressure
+  target rather than a fit target for the full encoder.
