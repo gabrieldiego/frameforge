@@ -1,8 +1,8 @@
 # AV2 RTL Output Utilization Baselines
 
-This file records AV2 RTL simulation throughput counters per validation vector.
-It is separate from quality/bitrate reporting because these numbers describe
-testbench-observed output timing, not compression efficiency.
+This file records AV2 RTL simulation throughput counters per validation
+vector. It is separate from quality/bitrate reporting because these numbers
+describe testbench-observed output timing, not compression efficiency.
 
 Metric definitions:
 
@@ -12,7 +12,7 @@ Metric definitions:
   one output byte. The AV2 encoder testbench holds `m_axis_ready` high.
 - `output_wait_cycles`: `total_cycles - output_active_cycles`.
 - `output_utilization`: `output_active_cycles / total_cycles`; this is the
-  requested ratio of cycles outputting data to total cycles.
+  ratio of cycles outputting data to total cycles.
 - `bubble_rate`: `1 - output_utilization`, the fraction of measured cycles
   spent not accepting output bytes.
 - `cycles/bit`: `total_cycles / rtl_bitstream_bits`.
@@ -20,25 +20,26 @@ Metric definitions:
 - The metrics JSON also records `state_cycles`, `leaf_phase_cycles`,
   `pipeline_cycles`, `entropy_op_cycles`, `pending_push_cycles`, and
   `input_sample_cycles` for AV2-specific profiling. The constants and JSON
-  writer for these internal counters live in `tb/av2_metrics.py`; they are not
-  part of the shared top-level pass/fail contract.
+  writer for these internal counters live in `tb/av2_metrics.py`; they are
+  not part of the shared top-level pass/fail contract.
 
-## 2026-06-20 AVM-Valid Local Hash IntraBC
+## 2026-06-21 Palette Index RAM Storage
 
-Measured after correcting the AV2 exact-hash IntraBC path to select only
-AVM-valid local left-copy blocks while still tracking above hash candidates for
-future work. Fewer emitted bytes improved aggregate utilization slightly, but
-large low-bitrate blocks still spend most cycles waiting for entropy output.
+Measured after moving the AV2 4:4:4 palette index table from a 64-entry
+flip-flop bank into `ff_sync_block_ram_1r1w`. This reduces area while keeping
+the external palette query handshake and output schedule unchanged.
 
 Baseline and current sources:
 
-- Baseline Git SHA: `576fe0a4e863c95d80f4823b104cad5cb31d9d63`
-- Current validated RTL Git SHA: `fecba0947c6b46f801f0394a8e0699f68c1c542f`
-- Baseline mode: previous documented AV2 4:4:4 local-hash IntraBC checkpoint.
-- Current mode: AVM-valid left-copy exact-hash IBC with DRL-aware syntax and
-  IBC-aware palette cache context.
-- Delta columns compare against the previous documented AV2 4:4:4
-  output-utilization checkpoint.
+- Baseline report Git SHA: `1d39efb13aca62789800ab3f21cb4f1ba9471d19`
+- Baseline validated RTL Git SHA: `28df2e21c2a44d6ba00e819616a10fb1b9686bf1`
+- Current validated RTL Git SHA: `113d850538d22e12dd5e9a29ed54ab0f25e6aa67`
+- Baseline mode: AV2 palette analyzer with terminal predictor-edge state
+  collapsed and the palette-index table still stored in flip-flops.
+- Current mode: same codec behavior, with one 192-bit palette-index RAM word
+  per 8x8 leaf.
+- Delta columns compare against the immediate previous validated 4:4:4
+  checkpoint. Output scheduling is unchanged, so all cycle deltas are zero.
 
 Validation result:
 
@@ -49,94 +50,94 @@ Validation result:
 
 Aggregate top-level RTL utilization:
 
-| Set | Cases | RTL bits (delta) | Total cycles (delta) | Active cycles (delta) | Wait cycles (delta) | Output util (delta) | Bubble rate (delta) | Cycles/bit (delta) | Cycles/pixel (delta) | Cycles/pixel range |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| screenshot-sweep-444 | 64 | 755352 (-15072) | 1186030 (-41531) | 94419 (-1884) | 1091611 (-39647) | 0.080 (+0.001) | 0.920 (-0.002) | 1.570 (-0.020) | 14.299 (-0.501) | 7.318-23.122 |
-| screenshot-multictu-444 | 10 | 570512 (-21496) | 1091392 (-76887) | 71314 (-2687) | 1020078 (-74200) | 0.065 (+0.002) | 0.935 (-0.002) | 1.913 (-0.057) | 11.884 (-0.816) | 7.345-17.308 |
+| Set | Cases | RTL bits (delta) | Total cycles (delta) | Active cycles (delta) | Wait cycles (delta) | Output util (delta) | Bubble rate (delta) | Cycles/bit (delta) | Cycles/pixel (delta) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| screenshot-sweep-444 | 64 | 755272 (+0) | 1194284 (+0) | 94409 (+0) | 1099875 (+0) | 0.079 (+0.000) | 0.921 (+0.000) | 1.581 (+0.000) | 14.795 (+0.000) |
+| screenshot-multictu-444 | 10 | 570480 (+0) | 1098202 (+0) | 71310 (+0) | 1026892 (+0) | 0.065 (+0.000) | 0.935 (+0.000) | 1.925 (+0.000) | 12.118 (+0.000) |
 
 ### Full Screenshot Sweep
 
-| Vector | Status | RTL bits | Total cycles | Active cycles | Wait cycles | Output util | Bubble rate | Cycles/bit | Cycles/pixel |
+| Vector | Status | RTL bits (delta) | Total cycles (delta) | Active cycles (delta) | Wait cycles (delta) | Output util (delta) | Bubble rate (delta) | Cycles/bit (delta) | Cycles/pixel (delta) |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| screenshot_640_sweep_8x8_1f_yuv444p8.yuv | PASS | 344 | 826 | 43 | 783 | 0.052 | 0.948 | 2.401 | 12.906 |
-| screenshot_640_sweep_16x8_1f_yuv444p8.yuv | PASS | 1984 | 2474 | 248 | 2226 | 0.100 | 0.900 | 1.247 | 19.328 |
-| screenshot_640_sweep_24x8_1f_yuv444p8.yuv | PASS | 416 | 1900 | 52 | 1848 | 0.027 | 0.973 | 4.567 | 9.896 |
-| screenshot_640_sweep_32x8_1f_yuv444p8.yuv | PASS | 736 | 2652 | 92 | 2560 | 0.035 | 0.965 | 3.603 | 10.359 |
-| screenshot_640_sweep_40x8_1f_yuv444p8.yuv | PASS | 480 | 2977 | 60 | 2917 | 0.020 | 0.980 | 6.202 | 9.303 |
-| screenshot_640_sweep_48x8_1f_yuv444p8.yuv | PASS | 520 | 3479 | 65 | 3414 | 0.019 | 0.981 | 6.690 | 9.060 |
-| screenshot_640_sweep_56x8_1f_yuv444p8.yuv | PASS | 6864 | 8473 | 858 | 7615 | 0.101 | 0.899 | 1.234 | 18.913 |
-| screenshot_640_sweep_64x8_1f_yuv444p8.yuv | PASS | 6816 | 9366 | 852 | 8514 | 0.091 | 0.909 | 1.374 | 18.293 |
-| screenshot_640_sweep_8x16_1f_yuv444p8.yuv | PASS | 1824 | 2404 | 228 | 2176 | 0.095 | 0.905 | 1.318 | 18.781 |
-| screenshot_640_sweep_16x16_1f_yuv444p8.yuv | PASS | 4616 | 5340 | 577 | 4763 | 0.108 | 0.892 | 1.157 | 20.859 |
-| screenshot_640_sweep_24x16_1f_yuv444p8.yuv | PASS | 472 | 3342 | 59 | 3283 | 0.018 | 0.982 | 7.081 | 8.703 |
-| screenshot_640_sweep_32x16_1f_yuv444p8.yuv | PASS | 512 | 4234 | 64 | 4170 | 0.015 | 0.985 | 8.270 | 8.270 |
-| screenshot_640_sweep_40x16_1f_yuv444p8.yuv | PASS | 9744 | 12519 | 1218 | 11301 | 0.097 | 0.903 | 1.285 | 19.561 |
-| screenshot_640_sweep_48x16_1f_yuv444p8.yuv | PASS | 608 | 6171 | 76 | 6095 | 0.012 | 0.988 | 10.150 | 8.035 |
-| screenshot_640_sweep_56x16_1f_yuv444p8.yuv | PASS | 10648 | 15201 | 1331 | 13870 | 0.088 | 0.912 | 1.428 | 16.965 |
-| screenshot_640_sweep_64x16_1f_yuv444p8.yuv | PASS | 696 | 8105 | 87 | 8018 | 0.011 | 0.989 | 11.645 | 7.915 |
-| screenshot_640_sweep_8x24_1f_yuv444p8.yuv | PASS | 3536 | 4197 | 442 | 3755 | 0.105 | 0.895 | 1.187 | 21.859 |
-| screenshot_640_sweep_16x24_1f_yuv444p8.yuv | PASS | 2728 | 5012 | 341 | 4671 | 0.068 | 0.932 | 1.837 | 13.052 |
-| screenshot_640_sweep_24x24_1f_yuv444p8.yuv | PASS | 7000 | 9838 | 875 | 8963 | 0.089 | 0.911 | 1.405 | 17.080 |
-| screenshot_640_sweep_32x24_1f_yuv444p8.yuv | PASS | 14664 | 16488 | 1833 | 14655 | 0.111 | 0.889 | 1.124 | 21.469 |
-| screenshot_640_sweep_40x24_1f_yuv444p8.yuv | PASS | 15360 | 18791 | 1920 | 16871 | 0.102 | 0.898 | 1.223 | 19.574 |
-| screenshot_640_sweep_48x24_1f_yuv444p8.yuv | PASS | 680 | 8875 | 85 | 8790 | 0.010 | 0.990 | 13.051 | 7.704 |
-| screenshot_640_sweep_56x24_1f_yuv444p8.yuv | PASS | 720 | 10384 | 90 | 10294 | 0.009 | 0.991 | 14.422 | 7.726 |
-| screenshot_640_sweep_64x24_1f_yuv444p8.yuv | PASS | 23320 | 29253 | 2915 | 26338 | 0.100 | 0.900 | 1.254 | 19.045 |
-| screenshot_640_sweep_8x32_1f_yuv444p8.yuv | PASS | 3016 | 4327 | 377 | 3950 | 0.087 | 0.913 | 1.435 | 16.902 |
-| screenshot_640_sweep_16x32_1f_yuv444p8.yuv | PASS | 1328 | 4891 | 166 | 4725 | 0.034 | 0.966 | 3.683 | 9.553 |
-| screenshot_640_sweep_24x32_1f_yuv444p8.yuv | PASS | 1728 | 7254 | 216 | 7038 | 0.030 | 0.970 | 4.198 | 9.445 |
-| screenshot_640_sweep_32x32_1f_yuv444p8.yuv | PASS | 11112 | 16052 | 1389 | 14663 | 0.087 | 0.913 | 1.445 | 15.676 |
-| screenshot_640_sweep_40x32_1f_yuv444p8.yuv | PASS | 688 | 9877 | 86 | 9791 | 0.009 | 0.991 | 14.356 | 7.716 |
-| screenshot_640_sweep_48x32_1f_yuv444p8.yuv | PASS | 22176 | 29239 | 2772 | 26467 | 0.095 | 0.905 | 1.318 | 19.036 |
-| screenshot_640_sweep_56x32_1f_yuv444p8.yuv | PASS | 27264 | 34368 | 3408 | 30960 | 0.099 | 0.901 | 1.261 | 19.179 |
-| screenshot_640_sweep_64x32_1f_yuv444p8.yuv | PASS | 856 | 15212 | 107 | 15105 | 0.007 | 0.993 | 17.771 | 7.428 |
-| screenshot_640_sweep_8x40_1f_yuv444p8.yuv | PASS | 5952 | 6996 | 744 | 6252 | 0.106 | 0.894 | 1.175 | 21.863 |
-| screenshot_640_sweep_16x40_1f_yuv444p8.yuv | PASS | 13240 | 14566 | 1655 | 12911 | 0.114 | 0.886 | 1.100 | 22.759 |
-| screenshot_640_sweep_24x40_1f_yuv444p8.yuv | PASS | 1640 | 8658 | 205 | 8453 | 0.024 | 0.976 | 5.279 | 9.019 |
-| screenshot_640_sweep_32x40_1f_yuv444p8.yuv | PASS | 21832 | 25945 | 2729 | 23216 | 0.105 | 0.895 | 1.188 | 20.270 |
-| screenshot_640_sweep_40x40_1f_yuv444p8.yuv | PASS | 21976 | 28593 | 2747 | 25846 | 0.096 | 0.904 | 1.301 | 17.871 |
-| screenshot_640_sweep_48x40_1f_yuv444p8.yuv | PASS | 1552 | 14929 | 194 | 14735 | 0.013 | 0.987 | 9.619 | 7.776 |
-| screenshot_640_sweep_56x40_1f_yuv444p8.yuv | PASS | 20568 | 31850 | 2571 | 29279 | 0.081 | 0.919 | 1.549 | 14.219 |
-| screenshot_640_sweep_64x40_1f_yuv444p8.yuv | PASS | 1144 | 18936 | 143 | 18793 | 0.008 | 0.992 | 16.552 | 7.397 |
-| screenshot_640_sweep_8x48_1f_yuv444p8.yuv | PASS | 664 | 3791 | 83 | 3708 | 0.022 | 0.978 | 5.709 | 9.872 |
-| screenshot_640_sweep_16x48_1f_yuv444p8.yuv | PASS | 15856 | 17758 | 1982 | 15776 | 0.112 | 0.888 | 1.120 | 23.122 |
-| screenshot_640_sweep_24x48_1f_yuv444p8.yuv | PASS | 15112 | 20220 | 1889 | 18331 | 0.093 | 0.907 | 1.338 | 17.552 |
-| screenshot_640_sweep_32x48_1f_yuv444p8.yuv | PASS | 15728 | 23284 | 1966 | 21318 | 0.084 | 0.916 | 1.480 | 15.159 |
-| screenshot_640_sweep_40x48_1f_yuv444p8.yuv | PASS | 30328 | 36769 | 3791 | 32978 | 0.103 | 0.897 | 1.212 | 19.151 |
-| screenshot_640_sweep_48x48_1f_yuv444p8.yuv | PASS | 880 | 16942 | 110 | 16832 | 0.006 | 0.994 | 19.252 | 7.353 |
-| screenshot_640_sweep_56x48_1f_yuv444p8.yuv | PASS | 13248 | 31257 | 1656 | 29601 | 0.053 | 0.947 | 2.359 | 11.628 |
-| screenshot_640_sweep_64x48_1f_yuv444p8.yuv | PASS | 1240 | 22482 | 155 | 22327 | 0.007 | 0.993 | 18.131 | 7.318 |
-| screenshot_640_sweep_8x56_1f_yuv444p8.yuv | PASS | 6952 | 8649 | 869 | 7780 | 0.100 | 0.900 | 1.244 | 19.306 |
-| screenshot_640_sweep_16x56_1f_yuv444p8.yuv | PASS | 9808 | 14279 | 1226 | 13053 | 0.086 | 0.914 | 1.456 | 15.936 |
-| screenshot_640_sweep_24x56_1f_yuv444p8.yuv | PASS | 11976 | 19407 | 1497 | 17910 | 0.077 | 0.923 | 1.620 | 14.440 |
-| screenshot_640_sweep_32x56_1f_yuv444p8.yuv | PASS | 18864 | 27304 | 2358 | 24946 | 0.086 | 0.914 | 1.447 | 15.237 |
-| screenshot_640_sweep_40x56_1f_yuv444p8.yuv | PASS | 37184 | 44591 | 4648 | 39943 | 0.104 | 0.896 | 1.199 | 19.907 |
-| screenshot_640_sweep_48x56_1f_yuv444p8.yuv | PASS | 22544 | 36383 | 2818 | 33565 | 0.077 | 0.923 | 1.614 | 13.535 |
-| screenshot_640_sweep_56x56_1f_yuv444p8.yuv | PASS | 57760 | 67227 | 7220 | 60007 | 0.107 | 0.893 | 1.164 | 21.437 |
-| screenshot_640_sweep_64x56_1f_yuv444p8.yuv | PASS | 28200 | 46810 | 3525 | 43285 | 0.075 | 0.925 | 1.660 | 13.061 |
-| screenshot_640_sweep_8x64_1f_yuv444p8.yuv | PASS | 5344 | 8389 | 668 | 7721 | 0.080 | 0.920 | 1.570 | 16.385 |
-| screenshot_640_sweep_16x64_1f_yuv444p8.yuv | PASS | 15448 | 19199 | 1931 | 17268 | 0.101 | 0.899 | 1.243 | 18.749 |
-| screenshot_640_sweep_24x64_1f_yuv444p8.yuv | PASS | 13496 | 21607 | 1687 | 19920 | 0.078 | 0.922 | 1.601 | 14.067 |
-| screenshot_640_sweep_32x64_1f_yuv444p8.yuv | PASS | 32040 | 39351 | 4005 | 35346 | 0.102 | 0.898 | 1.228 | 19.214 |
-| screenshot_640_sweep_40x64_1f_yuv444p8.yuv | PASS | 2096 | 20011 | 262 | 19749 | 0.013 | 0.987 | 9.547 | 7.817 |
-| screenshot_640_sweep_48x64_1f_yuv444p8.yuv | PASS | 50160 | 60115 | 6270 | 53845 | 0.104 | 0.896 | 1.198 | 19.569 |
-| screenshot_640_sweep_56x64_1f_yuv444p8.yuv | PASS | 2512 | 27544 | 314 | 27230 | 0.011 | 0.989 | 10.965 | 7.685 |
-| screenshot_640_sweep_64x64_1f_yuv444p8.yuv | PASS | 76552 | 88667 | 9569 | 79098 | 0.108 | 0.892 | 1.158 | 21.647 |
+| screenshot_640_sweep_8x8_1f_yuv444p8.yuv | PASS | 344 (+0) | 834 (+0) | 43 (+0) | 791 (+0) | 0.052 (+0.000) | 0.948 (+0.000) | 2.424 (+0.000) | 13.031 (+0.000) |
+| screenshot_640_sweep_16x8_1f_yuv444p8.yuv | PASS | 1984 (+0) | 2490 (+0) | 248 (+0) | 2242 (+0) | 0.100 (+0.000) | 0.900 (+0.000) | 1.255 (+0.000) | 19.453 (+0.000) |
+| screenshot_640_sweep_24x8_1f_yuv444p8.yuv | PASS | 416 (+0) | 1924 (+0) | 52 (+0) | 1872 (+0) | 0.027 (+0.000) | 0.973 (+0.000) | 4.625 (+0.000) | 10.021 (+0.000) |
+| screenshot_640_sweep_32x8_1f_yuv444p8.yuv | PASS | 736 (+0) | 2684 (+0) | 92 (+0) | 2592 (+0) | 0.034 (+0.000) | 0.966 (+0.000) | 3.647 (+0.000) | 10.484 (+0.000) |
+| screenshot_640_sweep_40x8_1f_yuv444p8.yuv | PASS | 480 (+0) | 3017 (+0) | 60 (+0) | 2957 (+0) | 0.020 (+0.000) | 0.980 (+0.000) | 6.285 (+0.000) | 9.428 (+0.000) |
+| screenshot_640_sweep_48x8_1f_yuv444p8.yuv | PASS | 520 (+0) | 3527 (+0) | 65 (+0) | 3462 (+0) | 0.018 (+0.000) | 0.982 (+0.000) | 6.783 (+0.000) | 9.185 (+0.000) |
+| screenshot_640_sweep_56x8_1f_yuv444p8.yuv | PASS | 6864 (+0) | 8551 (+0) | 858 (+0) | 7693 (+0) | 0.100 (+0.000) | 0.900 (+0.000) | 1.246 (+0.000) | 19.087 (+0.000) |
+| screenshot_640_sweep_64x8_1f_yuv444p8.yuv | PASS | 6816 (+0) | 9450 (+0) | 852 (+0) | 8598 (+0) | 0.090 (+0.000) | 0.910 (+0.000) | 1.386 (+0.000) | 18.457 (+0.000) |
+| screenshot_640_sweep_8x16_1f_yuv444p8.yuv | PASS | 1824 (+0) | 2421 (+0) | 228 (+0) | 2193 (+0) | 0.094 (+0.000) | 0.906 (+0.000) | 1.327 (+0.000) | 18.914 (+0.000) |
+| screenshot_640_sweep_16x16_1f_yuv444p8.yuv | PASS | 4616 (+0) | 5380 (+0) | 577 (+0) | 4803 (+0) | 0.107 (+0.000) | 0.893 (+0.000) | 1.166 (+0.000) | 21.016 (+0.000) |
+| screenshot_640_sweep_24x16_1f_yuv444p8.yuv | PASS | 472 (+0) | 3373 (+0) | 59 (+0) | 3314 (+0) | 0.017 (+0.000) | 0.983 (+0.000) | 7.146 (+0.000) | 8.784 (+0.000) |
+| screenshot_640_sweep_32x16_1f_yuv444p8.yuv | PASS | 512 (+0) | 4273 (+0) | 64 (+0) | 4209 (+0) | 0.015 (+0.000) | 0.985 (+0.000) | 8.346 (+0.000) | 8.346 (+0.000) |
+| screenshot_640_sweep_40x16_1f_yuv444p8.yuv | PASS | 9744 (+0) | 12617 (+0) | 1218 (+0) | 11399 (+0) | 0.097 (+0.000) | 0.903 (+0.000) | 1.295 (+0.000) | 19.714 (+0.000) |
+| screenshot_640_sweep_48x16_1f_yuv444p8.yuv | PASS | 608 (+0) | 6226 (+0) | 76 (+0) | 6150 (+0) | 0.012 (+0.000) | 0.988 (+0.000) | 10.240 (+0.000) | 8.107 (+0.000) |
+| screenshot_640_sweep_56x16_1f_yuv444p8.yuv | PASS | 10648 (+0) | 15333 (+0) | 1331 (+0) | 14002 (+0) | 0.087 (+0.000) | 0.913 (+0.000) | 1.440 (+0.000) | 17.113 (+0.000) |
+| screenshot_640_sweep_64x16_1f_yuv444p8.yuv | PASS | 696 (+0) | 8176 (+0) | 87 (+0) | 8089 (+0) | 0.011 (+0.000) | 0.989 (+0.000) | 11.747 (+0.000) | 7.984 (+0.000) |
+| screenshot_640_sweep_8x24_1f_yuv444p8.yuv | PASS | 3536 (+0) | 4229 (+0) | 442 (+0) | 3787 (+0) | 0.105 (+0.000) | 0.895 (+0.000) | 1.196 (+0.000) | 22.026 (+0.000) |
+| screenshot_640_sweep_16x24_1f_yuv444p8.yuv | PASS | 2728 (+0) | 5062 (+0) | 341 (+0) | 4721 (+0) | 0.067 (+0.000) | 0.933 (+0.000) | 1.856 (+0.000) | 13.182 (+0.000) |
+| screenshot_640_sweep_24x24_1f_yuv444p8.yuv | PASS | 7000 (+0) | 9914 (+0) | 875 (+0) | 9039 (+0) | 0.088 (+0.000) | 0.912 (+0.000) | 1.416 (+0.000) | 17.212 (+0.000) |
+| screenshot_640_sweep_32x24_1f_yuv444p8.yuv | PASS | 14664 (+0) | 16609 (+0) | 1833 (+0) | 14776 (+0) | 0.110 (+0.000) | 0.890 (+0.000) | 1.133 (+0.000) | 21.626 (+0.000) |
+| screenshot_640_sweep_40x24_1f_yuv444p8.yuv | PASS | 15360 (+0) | 18924 (+0) | 1920 (+0) | 17004 (+0) | 0.101 (+0.000) | 0.899 (+0.000) | 1.232 (+0.000) | 19.712 (+0.000) |
+| screenshot_640_sweep_48x24_1f_yuv444p8.yuv | PASS | 680 (+0) | 8937 (+0) | 85 (+0) | 8852 (+0) | 0.010 (+0.000) | 0.990 (+0.000) | 13.143 (+0.000) | 7.758 (+0.000) |
+| screenshot_640_sweep_56x24_1f_yuv444p8.yuv | PASS | 720 (+0) | 10454 (+0) | 90 (+0) | 10364 (+0) | 0.009 (+0.000) | 0.991 (+0.000) | 14.519 (+0.000) | 7.778 (+0.000) |
+| screenshot_640_sweep_64x24_1f_yuv444p8.yuv | PASS | 23320 (+0) | 29485 (+0) | 2915 (+0) | 26570 (+0) | 0.099 (+0.000) | 0.901 (+0.000) | 1.264 (+0.000) | 19.196 (+0.000) |
+| screenshot_640_sweep_8x32_1f_yuv444p8.yuv | PASS | 3016 (+0) | 4363 (+0) | 377 (+0) | 3986 (+0) | 0.086 (+0.000) | 0.914 (+0.000) | 1.447 (+0.000) | 17.043 (+0.000) |
+| screenshot_640_sweep_16x32_1f_yuv444p8.yuv | PASS | 1328 (+0) | 4939 (+0) | 166 (+0) | 4773 (+0) | 0.034 (+0.000) | 0.966 (+0.000) | 3.719 (+0.000) | 9.646 (+0.000) |
+| screenshot_640_sweep_24x32_1f_yuv444p8.yuv | PASS | 1696 (+0) | 7198 (+0) | 212 (+0) | 6986 (+0) | 0.029 (+0.000) | 0.971 (+0.000) | 4.244 (+0.000) | 9.372 (+0.000) |
+| screenshot_640_sweep_32x32_1f_yuv444p8.yuv | PASS | 11088 (+0) | 16047 (+0) | 1386 (+0) | 14661 (+0) | 0.086 (+0.000) | 0.914 (+0.000) | 1.447 (+0.000) | 15.671 (+0.000) |
+| screenshot_640_sweep_40x32_1f_yuv444p8.yuv | PASS | 688 (+0) | 9939 (+0) | 86 (+0) | 9853 (+0) | 0.009 (+0.000) | 0.991 (+0.000) | 14.446 (+0.000) | 7.765 (+0.000) |
+| screenshot_640_sweep_48x32_1f_yuv444p8.yuv | PASS | 22176 (+0) | 29466 (+0) | 2772 (+0) | 26694 (+0) | 0.094 (+0.000) | 0.906 (+0.000) | 1.329 (+0.000) | 19.184 (+0.000) |
+| screenshot_640_sweep_56x32_1f_yuv444p8.yuv | PASS | 27264 (+0) | 34630 (+0) | 3408 (+0) | 31222 (+0) | 0.098 (+0.000) | 0.902 (+0.000) | 1.270 (+0.000) | 19.325 (+0.000) |
+| screenshot_640_sweep_64x32_1f_yuv444p8.yuv | PASS | 856 (+0) | 15298 (+0) | 107 (+0) | 15191 (+0) | 0.007 (+0.000) | 0.993 (+0.000) | 17.871 (+0.000) | 7.470 (+0.000) |
+| screenshot_640_sweep_8x40_1f_yuv444p8.yuv | PASS | 5952 (+0) | 7045 (+0) | 744 (+0) | 6301 (+0) | 0.106 (+0.000) | 0.894 (+0.000) | 1.184 (+0.000) | 22.016 (+0.000) |
+| screenshot_640_sweep_16x40_1f_yuv444p8.yuv | PASS | 13240 (+0) | 14670 (+0) | 1655 (+0) | 13015 (+0) | 0.113 (+0.000) | 0.887 (+0.000) | 1.108 (+0.000) | 22.922 (+0.000) |
+| screenshot_640_sweep_24x40_1f_yuv444p8.yuv | PASS | 1616 (+0) | 8628 (+0) | 202 (+0) | 8426 (+0) | 0.023 (+0.000) | 0.977 (+0.000) | 5.339 (+0.000) | 8.988 (+0.000) |
+| screenshot_640_sweep_32x40_1f_yuv444p8.yuv | PASS | 21832 (+0) | 26144 (+0) | 2729 (+0) | 23415 (+0) | 0.104 (+0.000) | 0.896 (+0.000) | 1.198 (+0.000) | 20.425 (+0.000) |
+| screenshot_640_sweep_40x40_1f_yuv444p8.yuv | PASS | 21976 (+0) | 28818 (+0) | 2747 (+0) | 26071 (+0) | 0.095 (+0.000) | 0.905 (+0.000) | 1.311 (+0.000) | 18.011 (+0.000) |
+| screenshot_640_sweep_48x40_1f_yuv444p8.yuv | PASS | 1552 (+0) | 15014 (+0) | 194 (+0) | 14820 (+0) | 0.013 (+0.000) | 0.987 (+0.000) | 9.674 (+0.000) | 7.820 (+0.000) |
+| screenshot_640_sweep_56x40_1f_yuv444p8.yuv | PASS | 20568 (+0) | 32064 (+0) | 2571 (+0) | 29493 (+0) | 0.080 (+0.000) | 0.920 (+0.000) | 1.559 (+0.000) | 14.314 (+0.000) |
+| screenshot_640_sweep_64x40_1f_yuv444p8.yuv | PASS | 1144 (+0) | 19030 (+0) | 143 (+0) | 18887 (+0) | 0.008 (+0.000) | 0.992 (+0.000) | 16.635 (+0.000) | 7.434 (+0.000) |
+| screenshot_640_sweep_8x48_1f_yuv444p8.yuv | PASS | 664 (+0) | 3839 (+0) | 83 (+0) | 3756 (+0) | 0.022 (+0.000) | 0.978 (+0.000) | 5.782 (+0.000) | 9.997 (+0.000) |
+| screenshot_640_sweep_16x48_1f_yuv444p8.yuv | PASS | 15856 (+0) | 17892 (+0) | 1982 (+0) | 15910 (+0) | 0.111 (+0.000) | 0.889 (+0.000) | 1.128 (+0.000) | 23.297 (+0.000) |
+| screenshot_640_sweep_24x48_1f_yuv444p8.yuv | PASS | 15112 (+0) | 20369 (+0) | 1889 (+0) | 18480 (+0) | 0.093 (+0.000) | 0.907 (+0.000) | 1.348 (+0.000) | 17.681 (+0.000) |
+| screenshot_640_sweep_32x48_1f_yuv444p8.yuv | PASS | 15728 (+0) | 23472 (+0) | 1966 (+0) | 21506 (+0) | 0.084 (+0.000) | 0.916 (+0.000) | 1.492 (+0.000) | 15.281 (+0.000) |
+| screenshot_640_sweep_40x48_1f_yuv444p8.yuv | PASS | 30328 (+0) | 37043 (+0) | 3791 (+0) | 33252 (+0) | 0.102 (+0.000) | 0.898 (+0.000) | 1.221 (+0.000) | 19.293 (+0.000) |
+| screenshot_640_sweep_48x48_1f_yuv444p8.yuv | PASS | 880 (+0) | 17028 (+0) | 110 (+0) | 16918 (+0) | 0.006 (+0.000) | 0.994 (+0.000) | 19.350 (+0.000) | 7.391 (+0.000) |
+| screenshot_640_sweep_56x48_1f_yuv444p8.yuv | PASS | 13248 (+0) | 31535 (+0) | 1656 (+0) | 29879 (+0) | 0.053 (+0.000) | 0.947 (+0.000) | 2.380 (+0.000) | 11.732 (+0.000) |
+| screenshot_640_sweep_64x48_1f_yuv444p8.yuv | PASS | 1240 (+0) | 22584 (+0) | 155 (+0) | 22429 (+0) | 0.007 (+0.000) | 0.993 (+0.000) | 18.213 (+0.000) | 7.352 (+0.000) |
+| screenshot_640_sweep_8x56_1f_yuv444p8.yuv | PASS | 6952 (+0) | 8718 (+0) | 869 (+0) | 7849 (+0) | 0.100 (+0.000) | 0.900 (+0.000) | 1.254 (+0.000) | 19.460 (+0.000) |
+| screenshot_640_sweep_16x56_1f_yuv444p8.yuv | PASS | 9808 (+0) | 14397 (+0) | 1226 (+0) | 13171 (+0) | 0.085 (+0.000) | 0.915 (+0.000) | 1.468 (+0.000) | 16.068 (+0.000) |
+| screenshot_640_sweep_24x56_1f_yuv444p8.yuv | PASS | 11976 (+0) | 19557 (+0) | 1497 (+0) | 18060 (+0) | 0.077 (+0.000) | 0.923 (+0.000) | 1.633 (+0.000) | 14.551 (+0.000) |
+| screenshot_640_sweep_32x56_1f_yuv444p8.yuv | PASS | 18864 (+0) | 27503 (+0) | 2358 (+0) | 25145 (+0) | 0.086 (+0.000) | 0.914 (+0.000) | 1.458 (+0.000) | 15.348 (+0.000) |
+| screenshot_640_sweep_40x56_1f_yuv444p8.yuv | PASS | 37184 (+0) | 44927 (+0) | 4648 (+0) | 40279 (+0) | 0.103 (+0.000) | 0.897 (+0.000) | 1.208 (+0.000) | 20.057 (+0.000) |
+| screenshot_640_sweep_48x56_1f_yuv444p8.yuv | PASS | 22544 (+0) | 36627 (+0) | 2818 (+0) | 33809 (+0) | 0.077 (+0.000) | 0.923 (+0.000) | 1.625 (+0.000) | 13.626 (+0.000) |
+| screenshot_640_sweep_56x56_1f_yuv444p8.yuv | PASS | 57760 (+0) | 67707 (+0) | 7220 (+0) | 60487 (+0) | 0.107 (+0.000) | 0.893 (+0.000) | 1.172 (+0.000) | 21.590 (+0.000) |
+| screenshot_640_sweep_64x56_1f_yuv444p8.yuv | PASS | 28200 (+0) | 47083 (+0) | 3525 (+0) | 43558 (+0) | 0.075 (+0.000) | 0.925 (+0.000) | 1.670 (+0.000) | 13.137 (+0.000) |
+| screenshot_640_sweep_8x64_1f_yuv444p8.yuv | PASS | 5344 (+0) | 8455 (+0) | 668 (+0) | 7787 (+0) | 0.079 (+0.000) | 0.921 (+0.000) | 1.582 (+0.000) | 16.514 (+0.000) |
+| screenshot_640_sweep_16x64_1f_yuv444p8.yuv | PASS | 15448 (+0) | 19356 (+0) | 1931 (+0) | 17425 (+0) | 0.100 (+0.000) | 0.900 (+0.000) | 1.253 (+0.000) | 18.902 (+0.000) |
+| screenshot_640_sweep_24x64_1f_yuv444p8.yuv | PASS | 13496 (+0) | 21755 (+0) | 1687 (+0) | 20068 (+0) | 0.078 (+0.000) | 0.922 (+0.000) | 1.612 (+0.000) | 14.163 (+0.000) |
+| screenshot_640_sweep_32x64_1f_yuv444p8.yuv | PASS | 32040 (+0) | 39624 (+0) | 4005 (+0) | 35619 (+0) | 0.101 (+0.000) | 0.899 (+0.000) | 1.237 (+0.000) | 19.348 (+0.000) |
+| screenshot_640_sweep_40x64_1f_yuv444p8.yuv | PASS | 2096 (+0) | 20121 (+0) | 262 (+0) | 19859 (+0) | 0.013 (+0.000) | 0.987 (+0.000) | 9.600 (+0.000) | 7.860 (+0.000) |
+| screenshot_640_sweep_48x64_1f_yuv444p8.yuv | PASS | 50160 (+0) | 60550 (+0) | 6270 (+0) | 54280 (+0) | 0.104 (+0.000) | 0.896 (+0.000) | 1.207 (+0.000) | 19.710 (+0.000) |
+| screenshot_640_sweep_56x64_1f_yuv444p8.yuv | PASS | 2512 (+0) | 27685 (+0) | 314 (+0) | 27371 (+0) | 0.011 (+0.000) | 0.989 (+0.000) | 11.021 (+0.000) | 7.725 (+0.000) |
+| screenshot_640_sweep_64x64_1f_yuv444p8.yuv | PASS | 76552 (+0) | 89274 (+0) | 9569 (+0) | 79705 (+0) | 0.107 (+0.000) | 0.893 (+0.000) | 1.166 (+0.000) | 21.795 (+0.000) |
 
 ### Screenshot Multi-CTU And Partial Crops
 
-| Vector | Status | RTL bits | Total cycles | Active cycles | Wait cycles | Output util | Bubble rate | Cycles/bit | Cycles/pixel |
+| Vector | Status | RTL bits (delta) | Total cycles (delta) | Active cycles (delta) | Wait cycles (delta) | Output util (delta) | Bubble rate (delta) | Cycles/bit (delta) | Cycles/pixel (delta) |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| screenshot_640_multictu_h2_128x64_1f_yuv444p8.yuv | PASS | 88520 | 124759 | 11065 | 113694 | 0.089 | 0.911 | 1.409 | 15.229 |
-| screenshot_640_multictu_v2_64x128_1f_yuv444p8.yuv | PASS | 43960 | 91780 | 5495 | 86285 | 0.060 | 0.940 | 2.088 | 11.204 |
-| screenshot_640_multictu_grid2_128x128_1f_yuv444p8.yuv | PASS | 10168 | 122411 | 1271 | 121140 | 0.010 | 0.990 | 12.039 | 7.471 |
-| screenshot_640_multictu_h3_192x64_1f_yuv444p8.yuv | PASS | 45768 | 123966 | 5721 | 118245 | 0.046 | 0.954 | 2.709 | 10.088 |
-| screenshot_640_multictu_v3_64x192_1f_yuv444p8.yuv | PASS | 101472 | 164358 | 12684 | 151674 | 0.077 | 0.923 | 1.620 | 13.375 |
-| screenshot_640_partial_h2_72x64_1f_yuv444p8.yuv | PASS | 60568 | 79753 | 7571 | 72182 | 0.095 | 0.905 | 1.317 | 17.308 |
-| screenshot_640_partial_v2_64x72_1f_yuv444p8.yuv | PASS | 1664 | 33845 | 208 | 33637 | 0.006 | 0.994 | 20.340 | 7.345 |
-| screenshot_640_partial_grid2_72x72_1f_yuv444p8.yuv | PASS | 3000 | 40102 | 375 | 39727 | 0.009 | 0.991 | 13.367 | 7.736 |
-| screenshot_640_partial_wide_136x80_1f_yuv444p8.yuv | PASS | 135600 | 181657 | 16950 | 164707 | 0.093 | 0.907 | 1.340 | 16.696 |
-| screenshot_640_partial_tall_72x128_1f_yuv444p8.yuv | PASS | 79792 | 128761 | 9974 | 118787 | 0.077 | 0.923 | 1.614 | 13.971 |
+| screenshot_640_multictu_h2_128x64_1f_yuv444p8.yuv | PASS | 88520 (+0) | 125600 (+0) | 11065 (+0) | 114535 (+0) | 0.088 (+0.000) | 0.912 (+0.000) | 1.419 (+0.000) | 15.332 (+0.000) |
+| screenshot_640_multictu_v2_64x128_1f_yuv444p8.yuv | PASS | 43928 (+0) | 92198 (+0) | 5491 (+0) | 86707 (+0) | 0.060 (+0.000) | 0.940 (+0.000) | 2.099 (+0.000) | 11.255 (+0.000) |
+| screenshot_640_multictu_grid2_128x128_1f_yuv444p8.yuv | PASS | 10168 (+0) | 122930 (+0) | 1271 (+0) | 121659 (+0) | 0.010 (+0.000) | 0.990 (+0.000) | 12.090 (+0.000) | 7.503 (+0.000) |
+| screenshot_640_multictu_h3_192x64_1f_yuv444p8.yuv | PASS | 45768 (+0) | 124755 (+0) | 5721 (+0) | 119034 (+0) | 0.046 (+0.000) | 0.954 (+0.000) | 2.726 (+0.000) | 10.153 (+0.000) |
+| screenshot_640_multictu_v3_64x192_1f_yuv444p8.yuv | PASS | 101472 (+0) | 165455 (+0) | 12684 (+0) | 152771 (+0) | 0.077 (+0.000) | 0.923 (+0.000) | 1.631 (+0.000) | 13.465 (+0.000) |
+| screenshot_640_partial_h2_72x64_1f_yuv444p8.yuv | PASS | 60568 (+0) | 80308 (+0) | 7571 (+0) | 72737 (+0) | 0.094 (+0.000) | 0.906 (+0.000) | 1.326 (+0.000) | 17.428 (+0.000) |
+| screenshot_640_partial_v2_64x72_1f_yuv444p8.yuv | PASS | 1664 (+0) | 34027 (+0) | 208 (+0) | 33819 (+0) | 0.006 (+0.000) | 0.994 (+0.000) | 20.449 (+0.000) | 7.384 (+0.000) |
+| screenshot_640_partial_grid2_72x72_1f_yuv444p8.yuv | PASS | 3000 (+0) | 40356 (+0) | 375 (+0) | 39981 (+0) | 0.009 (+0.000) | 0.991 (+0.000) | 13.452 (+0.000) | 7.785 (+0.000) |
+| screenshot_640_partial_wide_136x80_1f_yuv444p8.yuv | PASS | 135600 (+0) | 182921 (+0) | 16950 (+0) | 165971 (+0) | 0.093 (+0.000) | 0.907 (+0.000) | 1.349 (+0.000) | 16.813 (+0.000) |
+| screenshot_640_partial_tall_72x128_1f_yuv444p8.yuv | PASS | 79792 (+0) | 129652 (+0) | 9974 (+0) | 119678 (+0) | 0.077 (+0.000) | 0.923 (+0.000) | 1.625 (+0.000) | 14.068 (+0.000) |
 
 ## 2026-06-19 4:2:0 Lossy Residual Baseline
 
@@ -246,138 +247,3 @@ Aggregate top-level RTL utilization:
 | racehorses_partial_wide_136x80_1f_yuv420p8.yuv | PASS | 22552 | 72402 | 2819 | 69583 | 0.039 | 0.961 | 3.210 | 6.655 |
 | racehorses_partial_tall_72x128_1f_yuv420p8.yuv | PASS | 19104 | 61379 | 2388 | 58991 | 0.039 | 0.961 | 3.213 | 6.660 |
 | racehorses_partial_grid2_72x72_1f_yuv420p8.yuv | PASS | 11384 | 34840 | 1423 | 33417 | 0.041 | 0.959 | 3.060 | 6.721 |
-
-## 2026-06-19 Direct Plane-Row Source Cache Recheck
-
-Measured after the shared AXI frame reader was changed to keep a small direct
-plane-row cache indexed by component and local block row. The AV2 codec
-algorithm, bitstreams, and reconstructions are unchanged from the last detailed
-AV2 utilization report; this section restores per-vector rows so future
-throughput work has a concrete delta baseline again.
-
-Baseline and current sources:
-
-- Baseline Git SHA: `33be2008240bf3acecef4a9344ca9e9b01313dc5`
-- Current validated RTL Git SHA: `ffb4179caa0de4a4a4e52f4a21eaf9ddb39efc64`
-- Baseline mode: residual sign scan skip, known-zero luma residual fast path,
-  pipeline profiler counters, and direct testbench stream wiring.
-- Current mode: shared AXI4-Lite control registers, AXI4 memory-mapped source
-  reads with a direct plane-row cache, and packed AXI bitstream writes.
-- Delta columns compare against the last detailed per-vector AV2 output
-  utilization report. The current values in this section should become the
-  baseline for the next AV2 throughput delta.
-
-Validation commands:
-
-```sh
-make validate-set CODEC=av2 \
-  VALIDATION_SET=screenshot-sweep-444 \
-  VALIDATION_SET_DIR=verification/test_vector_sets/local \
-  VALIDATION_STOP_ON_FAIL=1 \
-  VALIDATION_WITH_SYNTH=0
-
-make validate-set CODEC=av2 \
-  VALIDATION_SET=screenshot-multictu-444 \
-  VALIDATION_SET_DIR=verification/test_vector_sets/local \
-  VALIDATION_STOP_ON_FAIL=1 \
-  VALIDATION_WITH_SYNTH=0
-```
-
-Validation result:
-
-- `screenshot-sweep-444`: OK (64/64)
-- `screenshot-multictu-444`: OK (10/10)
-- All listed vectors matched SW/RTL bitstream checksums and
-  SW/RTL/reference-decoder reconstruction checksums.
-- Bitstream lengths were unchanged, so bitrate deltas remain `+0.0000`.
-
-Aggregate top-level RTL utilization:
-
-| Set | Cases | RTL bits (delta) | Total cycles (delta) | Active cycles (delta) | Wait cycles (delta) | Output util (delta) | Bubble rate (delta) | Cycles/bit (delta) | Cycles/pixel (delta) | Cycles/pixel range |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| screenshot-sweep-444 | 64 (+0) | 770848 (+0) | 1228109 (+299699) | 96356 (+0) | 1131753 (+299699) | 0.078459 (-0.025327) | 0.921541 (+0.025327) | 1.593192 (+0.388791) | 14.806484 (+3.613269) | 8.521267-23.122396 (+3.548177/+3.554688) |
-| screenshot-multictu-444 | 10 (+0) | 592008 (+0) | 1168279 (+329247) | 74001 (+0) | 1094278 (+329247) | 0.063342 (-0.024856) | 0.936658 (+0.024856) | 1.973418 (+0.556153) | 12.720808 (+3.585007) | 8.518880-17.659722 (+3.548394/+3.672526) |
-
-### Full Screenshot Sweep
-
-| Vector | Status | RTL bits (delta) | Total cycles (delta) | Active cycles (delta) | Wait cycles (delta) | Output util (delta) | Bubble rate (delta) | Cycles/bit (delta) | Cycles/pixel (delta) |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| screenshot_640_sweep_8x8_1f_yuv444p8.yuv | PASS | 344 (+0) | 826 (+268) | 43 (+0) | 783 (+268) | 0.052058 (-0.025003) | 0.947942 (+0.025003) | 2.401163 (+0.779070) | 12.906250 (+4.187500) |
-| screenshot_640_sweep_16x8_1f_yuv444p8.yuv | PASS | 1984 (+0) | 2474 (+460) | 248 (+0) | 2226 (+460) | 0.100243 (-0.022895) | 0.899757 (+0.022895) | 1.246976 (+0.231855) | 19.328125 (+3.593750) |
-| screenshot_640_sweep_24x8_1f_yuv444p8.yuv | PASS | 392 (+0) | 1797 (+723) | 49 (+0) | 1748 (+723) | 0.027268 (-0.018356) | 0.972732 (+0.018356) | 4.584184 (+1.844388) | 9.359375 (+3.765625) |
-| screenshot_640_sweep_32x8_1f_yuv444p8.yuv | PASS | 712 (+0) | 2548 (+912) | 89 (+0) | 2459 (+912) | 0.034929 (-0.019472) | 0.965071 (+0.019472) | 3.578652 (+1.280899) | 9.953125 (+3.562500) |
-| screenshot_640_sweep_40x8_1f_yuv444p8.yuv | PASS | 456 (+0) | 2874 (+1177) | 57 (+0) | 2817 (+1177) | 0.019833 (-0.013756) | 0.980167 (+0.013756) | 6.302632 (+2.581141) | 8.981250 (+3.678125) |
-| screenshot_640_sweep_48x8_1f_yuv444p8.yuv | PASS | 496 (+0) | 3373 (+1368) | 62 (+0) | 3311 (+1368) | 0.018381 (-0.012542) | 0.981619 (+0.012542) | 6.800403 (+2.758064) | 8.783854 (+3.562500) |
-| screenshot_640_sweep_56x8_1f_yuv444p8.yuv | PASS | 6864 (+0) | 8473 (+1629) | 858 (+0) | 7615 (+1629) | 0.101263 (-0.024102) | 0.898737 (+0.024102) | 1.234411 (+0.237325) | 18.912946 (+3.636160) |
-| screenshot_640_sweep_64x8_1f_yuv444p8.yuv | PASS | 6816 (+0) | 9366 (+1820) | 852 (+0) | 8514 (+1820) | 0.090967 (-0.021941) | 0.909033 (+0.021941) | 1.374120 (+0.267019) | 18.292969 (+3.554688) |
-| screenshot_640_sweep_8x16_1f_yuv444p8.yuv | PASS | 1824 (+0) | 2404 (+531) | 228 (+0) | 2176 (+531) | 0.094842 (-0.026888) | 0.905158 (+0.026888) | 1.317982 (+0.291118) | 18.781250 (+4.148438) |
-| screenshot_640_sweep_16x16_1f_yuv444p8.yuv | PASS | 4616 (+0) | 5340 (+917) | 577 (+0) | 4763 (+917) | 0.108052 (-0.022402) | 0.891948 (+0.022402) | 1.156846 (+0.198657) | 20.859375 (+3.582031) |
-| screenshot_640_sweep_24x16_1f_yuv444p8.yuv | PASS | 504 (+0) | 3451 (+1440) | 63 (+0) | 3388 (+1440) | 0.018256 (-0.013072) | 0.981744 (+0.013072) | 6.847222 (+2.857143) | 8.986979 (+3.750000) |
-| screenshot_640_sweep_32x16_1f_yuv444p8.yuv | PASS | 576 (+0) | 4458 (+1819) | 72 (+0) | 4386 (+1819) | 0.016151 (-0.011132) | 0.983849 (+0.011132) | 7.739583 (+3.157986) | 8.707031 (+3.552734) |
-| screenshot_640_sweep_40x16_1f_yuv444p8.yuv | PASS | 9744 (+0) | 12519 (+2350) | 1218 (+0) | 11301 (+2350) | 0.097292 (-0.022484) | 0.902708 (+0.022484) | 1.284791 (+0.241174) | 19.560938 (+3.671876) |
-| screenshot_640_sweep_48x16_1f_yuv444p8.yuv | PASS | 720 (+0) | 6631 (+2728) | 90 (+0) | 6541 (+2728) | 0.013573 (-0.009486) | 0.986427 (+0.009486) | 9.209722 (+3.788889) | 8.634115 (+3.552084) |
-| screenshot_640_sweep_56x16_1f_yuv444p8.yuv | PASS | 10648 (+0) | 15201 (+3256) | 1331 (+0) | 13870 (+3256) | 0.087560 (-0.023867) | 0.912440 (+0.023867) | 1.427592 (+0.305785) | 16.965402 (+3.633929) |
-| screenshot_640_sweep_64x16_1f_yuv444p8.yuv | PASS | 872 (+0) | 8802 (+3637) | 109 (+0) | 8693 (+3637) | 0.012384 (-0.008720) | 0.987616 (+0.008720) | 10.094037 (+4.170872) | 8.595703 (+3.551758) |
-| screenshot_640_sweep_8x24_1f_yuv444p8.yuv | PASS | 3536 (+0) | 4197 (+795) | 442 (+0) | 3755 (+795) | 0.105313 (-0.024611) | 0.894687 (+0.024611) | 1.186934 (+0.224830) | 21.859375 (+4.140625) |
-| screenshot_640_sweep_16x24_1f_yuv444p8.yuv | PASS | 2728 (+0) | 5012 (+1366) | 341 (+0) | 4671 (+1366) | 0.068037 (-0.025490) | 0.931963 (+0.025490) | 1.837243 (+0.500733) | 13.052083 (+3.557291) |
-| screenshot_640_sweep_24x24_1f_yuv444p8.yuv | PASS | 7000 (+0) | 9838 (+2156) | 875 (+0) | 8963 (+2156) | 0.088941 (-0.024962) | 0.911059 (+0.024962) | 1.405429 (+0.308000) | 17.079861 (+3.743055) |
-| screenshot_640_sweep_32x24_1f_yuv444p8.yuv | PASS | 14664 (+0) | 16488 (+2729) | 1833 (+0) | 14655 (+2729) | 0.111172 (-0.022050) | 0.888828 (+0.022050) | 1.124386 (+0.186102) | 21.468750 (+3.553385) |
-| screenshot_640_sweep_40x24_1f_yuv444p8.yuv | PASS | 15360 (+0) | 18791 (+3519) | 1920 (+0) | 16871 (+3519) | 0.102177 (-0.023543) | 0.897823 (+0.023543) | 1.223372 (+0.229101) | 19.573958 (+3.665625) |
-| screenshot_640_sweep_48x24_1f_yuv444p8.yuv | PASS | 944 (+0) | 9879 (+4092) | 118 (+0) | 9761 (+4092) | 0.011945 (-0.008446) | 0.988055 (+0.008446) | 10.465042 (+4.334745) | 8.575521 (+3.552083) |
-| screenshot_640_sweep_56x24_1f_yuv444p8.yuv | PASS | 1048 (+0) | 11625 (+4882) | 131 (+0) | 11494 (+4882) | 0.011269 (-0.008159) | 0.988731 (+0.008159) | 11.092557 (+4.658397) | 8.649554 (+3.632441) |
-| screenshot_640_sweep_64x24_1f_yuv444p8.yuv | PASS | 23320 (+0) | 29253 (+5453) | 2915 (+0) | 26338 (+5453) | 0.099648 (-0.022831) | 0.900352 (+0.022831) | 1.254417 (+0.233834) | 19.044922 (+3.550130) |
-| screenshot_640_sweep_8x32_1f_yuv444p8.yuv | PASS | 3016 (+0) | 4327 (+1058) | 377 (+0) | 3950 (+1058) | 0.087127 (-0.028199) | 0.912873 (+0.028199) | 1.434682 (+0.350796) | 16.902344 (+4.132813) |
-| screenshot_640_sweep_16x32_1f_yuv444p8.yuv | PASS | 1408 (+0) | 5121 (+1821) | 176 (+0) | 4945 (+1821) | 0.034368 (-0.018965) | 0.965632 (+0.018965) | 3.637074 (+1.293324) | 10.001953 (+3.556641) |
-| screenshot_640_sweep_24x32_1f_yuv444p8.yuv | PASS | 1808 (+0) | 7594 (+2873) | 226 (+0) | 7368 (+2873) | 0.029760 (-0.018111) | 0.970240 (+0.018111) | 4.200221 (+1.589048) | 9.888021 (+3.740886) |
-| screenshot_640_sweep_32x32_1f_yuv444p8.yuv | PASS | 11152 (+0) | 16170 (+3638) | 1394 (+0) | 14776 (+3638) | 0.086209 (-0.025026) | 0.913791 (+0.025026) | 1.449964 (+0.326219) | 15.791016 (+3.552735) |
-| screenshot_640_sweep_40x32_1f_yuv444p8.yuv | PASS | 1008 (+0) | 11114 (+4690) | 126 (+0) | 10988 (+4690) | 0.011337 (-0.008277) | 0.988663 (+0.008277) | 11.025794 (+4.652778) | 8.682813 (+3.664063) |
-| screenshot_640_sweep_48x32_1f_yuv444p8.yuv | PASS | 22176 (+0) | 29239 (+5452) | 2772 (+0) | 26467 (+5452) | 0.094805 (-0.021729) | 0.905195 (+0.021729) | 1.318497 (+0.245851) | 19.035807 (+3.549479) |
-| screenshot_640_sweep_56x32_1f_yuv444p8.yuv | PASS | 27264 (+0) | 34368 (+6503) | 3408 (+0) | 30960 (+6503) | 0.099162 (-0.023142) | 0.900838 (+0.023142) | 1.260563 (+0.238519) | 19.178571 (+3.628906) |
-| screenshot_640_sweep_64x32_1f_yuv444p8.yuv | PASS | 1456 (+0) | 17472 (+7270) | 182 (+0) | 17290 (+7270) | 0.010417 (-0.007423) | 0.989583 (+0.007423) | 12.000000 (+4.993132) | 8.531250 (+3.549805) |
-| screenshot_640_sweep_8x40_1f_yuv444p8.yuv | PASS | 5952 (+0) | 6996 (+1320) | 744 (+0) | 6252 (+1320) | 0.106346 (-0.024732) | 0.893654 (+0.024732) | 1.175403 (+0.221774) | 21.862500 (+4.125000) |
-| screenshot_640_sweep_16x40_1f_yuv444p8.yuv | PASS | 13240 (+0) | 14566 (+2276) | 1655 (+0) | 12911 (+2276) | 0.113621 (-0.021041) | 0.886379 (+0.021041) | 1.100151 (+0.171903) | 22.759375 (+3.556250) |
-| screenshot_640_sweep_24x40_1f_yuv444p8.yuv | PASS | 1792 (+0) | 9232 (+3589) | 224 (+0) | 9008 (+3589) | 0.024263 (-0.015432) | 0.975737 (+0.015432) | 5.151786 (+2.002790) | 9.616667 (+3.738542) |
-| screenshot_640_sweep_32x40_1f_yuv444p8.yuv | PASS | 21832 (+0) | 25945 (+4545) | 2729 (+0) | 23216 (+4545) | 0.105184 (-0.022339) | 0.894816 (+0.022339) | 1.188393 (+0.208180) | 20.269531 (+3.550781) |
-| screenshot_640_sweep_40x40_1f_yuv444p8.yuv | PASS | 22480 (+0) | 29086 (+5861) | 2810 (+0) | 26276 (+5861) | 0.096610 (-0.024380) | 0.903390 (+0.024380) | 1.293861 (+0.260720) | 18.178750 (+3.663125) |
-| screenshot_640_sweep_48x40_1f_yuv444p8.yuv | PASS | 2152 (+0) | 17045 (+6813) | 269 (+0) | 16776 (+6813) | 0.015782 (-0.010508) | 0.984218 (+0.010508) | 7.920539 (+3.165892) | 8.877604 (+3.548437) |
-| screenshot_640_sweep_56x40_1f_yuv444p8.yuv | PASS | 20944 (+0) | 33273 (+8131) | 2618 (+0) | 30655 (+8131) | 0.078682 (-0.025447) | 0.921318 (+0.025447) | 1.588665 (+0.388226) | 14.854018 (+3.629911) |
-| screenshot_640_sweep_64x40_1f_yuv444p8.yuv | PASS | 2016 (+0) | 21981 (+9086) | 252 (+0) | 21729 (+9086) | 0.011464 (-0.008078) | 0.988536 (+0.008078) | 10.903274 (+4.506945) | 8.586328 (+3.549219) |
-| screenshot_640_sweep_8x48_1f_yuv444p8.yuv | PASS | 664 (+0) | 3791 (+1582) | 83 (+0) | 3708 (+1582) | 0.021894 (-0.015680) | 0.978106 (+0.015680) | 5.709337 (+2.382530) | 9.872396 (+4.119792) |
-| screenshot_640_sweep_16x48_1f_yuv444p8.yuv | PASS | 15856 (+0) | 17758 (+2730) | 1982 (+0) | 15776 (+2730) | 0.111612 (-0.020275) | 0.888388 (+0.020275) | 1.119955 (+0.172175) | 23.122396 (+3.554688) |
-| screenshot_640_sweep_24x48_1f_yuv444p8.yuv | PASS | 15152 (+0) | 20339 (+4307) | 1894 (+0) | 18445 (+4307) | 0.093122 (-0.025017) | 0.906878 (+0.025017) | 1.342331 (+0.284253) | 17.655382 (+3.738715) |
-| screenshot_640_sweep_32x48_1f_yuv444p8.yuv | PASS | 15832 (+0) | 23629 (+5454) | 1979 (+0) | 21650 (+5454) | 0.083753 (-0.025133) | 0.916247 (+0.025133) | 1.492484 (+0.344493) | 15.383464 (+3.550782) |
-| screenshot_640_sweep_40x48_1f_yuv444p8.yuv | PASS | 30400 (+0) | 37011 (+7030) | 3800 (+0) | 33211 (+7030) | 0.102672 (-0.024075) | 0.897328 (+0.024075) | 1.217467 (+0.231250) | 19.276563 (+3.661459) |
-| screenshot_640_sweep_48x48_1f_yuv444p8.yuv | PASS | 1600 (+0) | 19633 (+8175) | 200 (+0) | 19433 (+8175) | 0.010187 (-0.007268) | 0.989813 (+0.007268) | 12.270625 (+5.109375) | 8.521267 (+3.548177) |
-| screenshot_640_sweep_56x48_1f_yuv444p8.yuv | PASS | 13560 (+0) | 32313 (+9754) | 1695 (+0) | 30618 (+9754) | 0.052456 (-0.022680) | 0.947544 (+0.022680) | 2.382965 (+0.719322) | 12.021205 (+3.628720) |
-| screenshot_640_sweep_64x48_1f_yuv444p8.yuv | PASS | 2304 (+0) | 26332 (+10900) | 288 (+0) | 26044 (+10900) | 0.010937 (-0.007726) | 0.989063 (+0.007726) | 11.428819 (+4.730902) | 8.571615 (+3.548177) |
-| screenshot_640_sweep_8x56_1f_yuv444p8.yuv | PASS | 6952 (+0) | 8649 (+1846) | 869 (+0) | 7780 (+1846) | 0.100474 (-0.027264) | 0.899526 (+0.027264) | 1.244102 (+0.265535) | 19.305804 (+4.120536) |
-| screenshot_640_sweep_16x56_1f_yuv444p8.yuv | PASS | 9864 (+0) | 14497 (+3182) | 1233 (+0) | 13264 (+3182) | 0.085052 (-0.023918) | 0.914948 (+0.023918) | 1.469688 (+0.322587) | 16.179688 (+3.551340) |
-| screenshot_640_sweep_24x56_1f_yuv444p8.yuv | PASS | 12088 (+0) | 19864 (+5024) | 1511 (+0) | 18353 (+5024) | 0.076067 (-0.025752) | 0.923933 (+0.025752) | 1.643283 (+0.415619) | 14.779762 (+3.738095) |
-| screenshot_640_sweep_32x56_1f_yuv444p8.yuv | PASS | 19168 (+0) | 28137 (+6360) | 2396 (+0) | 25741 (+6360) | 0.085155 (-0.024869) | 0.914845 (+0.024869) | 1.467915 (+0.331803) | 15.701451 (+3.549107) |
-| screenshot_640_sweep_40x56_1f_yuv444p8.yuv | PASS | 37216 (+0) | 44710 (+8202) | 4652 (+0) | 40058 (+8202) | 0.104048 (-0.023376) | 0.895952 (+0.023376) | 1.201365 (+0.220389) | 19.959821 (+3.661607) |
-| screenshot_640_sweep_48x56_1f_yuv444p8.yuv | PASS | 27016 (+0) | 40947 (+9540) | 3377 (+0) | 37570 (+9540) | 0.082472 (-0.025052) | 0.917528 (+0.025052) | 1.515657 (+0.353124) | 15.233259 (+3.549107) |
-| screenshot_640_sweep_56x56_1f_yuv444p8.yuv | PASS | 57760 (+0) | 67227 (+11381) | 7220 (+0) | 60007 (+11381) | 0.107397 (-0.021887) | 0.892603 (+0.021887) | 1.163902 (+0.197039) | 21.437181 (+3.629145) |
-| screenshot_640_sweep_64x56_1f_yuv444p8.yuv | PASS | 29264 (+0) | 49906 (+12715) | 3658 (+0) | 46248 (+12715) | 0.073298 (-0.025059) | 0.926702 (+0.025059) | 1.705372 (+0.434493) | 13.924665 (+3.547712) |
-| screenshot_640_sweep_8x64_1f_yuv444p8.yuv | PASS | 5344 (+0) | 8389 (+2108) | 668 (+0) | 7721 (+2108) | 0.079628 (-0.026724) | 0.920372 (+0.026724) | 1.569798 (+0.394461) | 16.384766 (+4.117188) |
-| screenshot_640_sweep_16x64_1f_yuv444p8.yuv | PASS | 15448 (+0) | 19199 (+3635) | 1931 (+0) | 17268 (+3635) | 0.100578 (-0.023490) | 0.899422 (+0.023490) | 1.242815 (+0.235306) | 18.749023 (+3.549804) |
-| screenshot_640_sweep_24x64_1f_yuv444p8.yuv | PASS | 13744 (+0) | 22525 (+5742) | 1718 (+0) | 20807 (+5742) | 0.076271 (-0.026094) | 0.923729 (+0.026094) | 1.638897 (+0.417782) | 14.664714 (+3.738282) |
-| screenshot_640_sweep_32x64_1f_yuv444p8.yuv | PASS | 32136 (+0) | 39700 (+7270) | 4017 (+0) | 35683 (+7270) | 0.101184 (-0.022683) | 0.898816 (+0.022683) | 1.235375 (+0.226226) | 19.384766 (+3.549805) |
-| screenshot_640_sweep_40x64_1f_yuv444p8.yuv | PASS | 2856 (+0) | 22956 (+9373) | 357 (+0) | 22599 (+9373) | 0.015551 (-0.010732) | 0.984449 (+0.010732) | 8.037815 (+3.281863) | 8.967187 (+3.661328) |
-| screenshot_640_sweep_48x64_1f_yuv444p8.yuv | PASS | 50264 (+0) | 60471 (+10899) | 6283 (+0) | 54188 (+10899) | 0.103901 (-0.022844) | 0.896099 (+0.022844) | 1.203068 (+0.216835) | 19.684570 (+3.547851) |
-| screenshot_640_sweep_56x64_1f_yuv444p8.yuv | PASS | 3840 (+0) | 31957 (+13004) | 480 (+0) | 31477 (+13004) | 0.015020 (-0.010306) | 0.984980 (+0.010306) | 8.322135 (+3.386458) | 8.916574 (+3.628349) |
-| screenshot_640_sweep_64x64_1f_yuv444p8.yuv | PASS | 76656 (+0) | 89020 (+14533) | 9582 (+0) | 79438 (+14533) | 0.107639 (-0.021001) | 0.892361 (+0.021001) | 1.161292 (+0.189587) | 21.733398 (+3.548095) |
-
-### Screenshot Multi-CTU And Partial Crops
-
-| Vector | Status | RTL bits (delta) | Total cycles (delta) | Active cycles (delta) | Wait cycles (delta) | Output util (delta) | Bubble rate (delta) | Cycles/bit (delta) | Cycles/pixel (delta) |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| screenshot_640_multictu_h2_128x64_1f_yuv444p8.yuv | PASS | 89904 (+0) | 129718 (+29061) | 11238 (+0) | 118480 (+29061) | 0.086634 (-0.025012) | 0.913366 (+0.025012) | 1.442850 (+0.323245) | 15.834717 (+3.547486) |
-| screenshot_640_multictu_v2_64x128_1f_yuv444p8.yuv | PASS | 46184 (+0) | 99550 (+29059) | 5773 (+0) | 93777 (+29059) | 0.057991 (-0.023906) | 0.942009 (+0.023906) | 2.155508 (+0.629200) | 12.152100 (+3.547242) |
-| screenshot_640_multictu_grid2_128x128_1f_yuv444p8.yuv | PASS | 16384 (+0) | 144051 (+58118) | 2048 (+0) | 142003 (+58118) | 0.014217 (-0.009616) | 0.985783 (+0.009616) | 8.792175 (+3.547241) | 8.792175 (+3.547241) |
-| screenshot_640_multictu_h3_192x64_1f_yuv444p8.yuv | PASS | 48696 (+0) | 135186 (+43587) | 6087 (+0) | 129099 (+43587) | 0.045027 (-0.021426) | 0.954973 (+0.021426) | 2.776121 (+0.895084) | 11.001465 (+3.547119) |
-| screenshot_640_multictu_v3_64x192_1f_yuv444p8.yuv | PASS | 104056 (+0) | 173190 (+43587) | 13007 (+0) | 160183 (+43587) | 0.075102 (-0.025258) | 0.924898 (+0.025258) | 1.664392 (+0.418880) | 14.094238 (+3.547119) |
-| screenshot_640_partial_h2_72x64_1f_yuv444p8.yuv | PASS | 61016 (+0) | 81376 (+16923) | 7627 (+0) | 73749 (+16923) | 0.093725 (-0.024609) | 0.906275 (+0.024609) | 1.333683 (+0.277354) | 17.659722 (+3.672526) |
-| screenshot_640_partial_v2_64x72_1f_yuv444p8.yuv | PASS | 3096 (+0) | 39255 (+16351) | 387 (+0) | 38868 (+16351) | 0.009859 (-0.007038) | 0.990141 (+0.007038) | 12.679264 (+5.281331) | 8.518880 (+3.548394) |
-| screenshot_640_partial_grid2_72x72_1f_yuv444p8.yuv | PASS | 4488 (+0) | 45529 (+19041) | 561 (+0) | 44968 (+19041) | 0.012322 (-0.008857) | 0.987678 (+0.008857) | 10.144608 (+4.242647) | 8.782600 (+3.673032) |
-| screenshot_640_partial_wide_136x80_1f_yuv444p8.yuv | PASS | 136880 (+0) | 186132 (+39674) | 17110 (+0) | 169022 (+39674) | 0.091924 (-0.024901) | 0.908076 (+0.024901) | 1.359819 (+0.289845) | 17.107721 (+3.646508) |
-| screenshot_640_partial_tall_72x128_1f_yuv444p8.yuv | PASS | 81304 (+0) | 134292 (+33846) | 10163 (+0) | 124129 (+33846) | 0.075678 (-0.025501) | 0.924322 (+0.025501) | 1.651727 (+0.416290) | 14.571615 (+3.672526) |
