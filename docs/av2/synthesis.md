@@ -8,33 +8,37 @@ Older bring-up and intermediate optimization checkpoints are intentionally kept
 out of this report so the document remains focused on the current validated
 baseline and its immediate delta. Use git history for retired measurements.
 
-## 2026-06-20 AVM-Order Local IBC BVP Stack
+## 2026-06-20 DC-Delta TXB Timing Split
 
-Measured after changing the AV2 4:4:4 exact-hash IntraBC BVP stack to follow
-the AVM spatial-candidate order before default BVs. The implementation still
-stores only one 32-bit hash per 8x8 block inside the current 64x64 tile and
-does not fetch any IBC context from external memory.
+Measured after using the previous Vivado timing report to split the lossy
+4:2:0 DC-only residual path out of the general chroma BDPCM symbolizer. The
+new `ff_av2_dc_delta_txb_symbolizer` emits the same single-coefficient TXB
+symbol stream for lossy 4:2:0 luma/chroma residuals without carrying the full
+16-coefficient BDPCM scan, context, and residual arrays through the
+residual-to-range-coder timing path.
 
 Baseline and current sources:
 
-- Baseline Git SHA: `fecba0947c6b46f801f0394a8e0699f68c1c542f`
-- Current validated RTL Git SHA: `307363b80a71d77e19178e972a522c42bf8bfe1c`
-- Baseline mode: previous documented AV2 AVM-valid local hash IBC checkpoint.
-- Current mode: AVM-order spatial BVP stack with conservative left-copy-only
-  IBC selection.
+- Baseline RTL Git SHA: `307363b80a71d77e19178e972a522c42bf8bfe1c`
+- Current RTL source: working tree after `fc3c15b9f1801a0ba40f2dde99c47bb54c475c90`
+- Baseline mode: AVM-order local IBC BVP stack with lossy 4:2:0 DC residuals
+  emitted through the parameterized `ff_av2_chroma_bdpcm_symbolizer`.
+- Current mode: same encoder behavior, with lossy 4:2:0 DC residuals emitted
+  through a dedicated DC-delta TXB symbolizer.
 - Delta columns compare against the previous documented AV2 synthesis
   checkpoint.
 
 Validation result:
 
 - `cargo test av2 --lib`: OK (25/25).
+- `racehorses-sweep-420`: OK (64/64), strict SW/RTL bitstream parity and
+  SW/RTL/reference-decoder reconstruction parity.
 - `screenshot-sweep-444`: OK (64/64), strict SW/RTL bitstream parity and
   SW/RTL/reference-decoder lossless reconstruction parity.
 - `screenshot-multictu-444`: OK (10/10), same parity checks.
 - Yosys synthesis: PASS.
-- Vivado `synth_design`: PASS on the remote Vivado checkout.
-- Vivado post-synthesis Z7-10 fit/timing: FAIL at 25 MHz. The netlist exceeds
-  the xc7z010 LUT/register capacity and has negative setup slack.
+- Vivado was not rerun after this patch. The optimization target was the
+  previous Vivado worst path documented below.
 
 Yosys synthesis configuration:
 
@@ -51,36 +55,36 @@ Yosys synthesis configuration:
 
 Yosys synthesis result:
 
-- Yosys synthesis passed in 415.8 seconds.
-- Peak child RSS observed by the synthesis runner was 1695.05 MiB.
+- Yosys synthesis passed in 349.0 seconds.
+- Peak child RSS observed by the synthesis runner was 1666.98 MiB.
 - Runtime exceeded the 300 second review threshold but completed inside the
   600 second hard timeout and 3072 MiB memory limit.
 - Post-synthesis flattened-cell reporting completed in 7.1 seconds.
-- Post-synthesis critical-path reporting completed in 100.6 seconds.
+- Post-synthesis critical-path reporting completed in 91.5 seconds.
 - The isolated `ff_av2_chroma_sample_store` path length remains 1.
-- The top `ff_av2_encoder` topological path length remains 63.
+- The top `ff_av2_encoder` topological path length improved from 63 to 60.
 
 Flattened Xilinx-cell estimate from
 `synth/out/arty-z7-10/ff_av2_encoder/cell_report.log`:
 
 | Metric | Count | Delta |
 |---|---:|---:|
-| Cells | 102869 | +161 |
-| Estimated LCs | 35808 | -93 |
-| CARRY4 | 2581 | -1 |
+| Cells | 102391 | -478 |
+| Estimated LCs | 35043 | -765 |
+| CARRY4 | 2540 | -41 |
 | DSP48E1 | 13 | +0 |
-| FDCE | 4502 | +0 |
-| FDPE | 35 | +0 |
+| FDCE | 4462 | -40 |
+| FDPE | 27 | -8 |
 | FDRE | 37423 | +0 |
 | FDSE | 129 | +0 |
-| LUT1 | 409 | +77 |
-| LUT2 | 8264 | +589 |
-| LUT3 | 7042 | +264 |
-| LUT4 | 4569 | +34 |
-| LUT5 | 4039 | +103 |
-| LUT6 | 20158 | -494 |
-| MUXF7 | 3781 | -523 |
-| MUXF8 | 678 | +7 |
+| LUT1 | 581 | +172 |
+| LUT2 | 7675 | -589 |
+| LUT3 | 6492 | -550 |
+| LUT4 | 4357 | -212 |
+| LUT5 | 3961 | -78 |
+| LUT6 | 20233 | +75 |
+| MUXF7 | 4574 | +793 |
+| MUXF8 | 704 | +26 |
 | RAMB36E1 | 19 | +0 |
 | RAM32M | 10 | +0 |
 | RAM64M | 1536 | +0 |
@@ -89,26 +93,25 @@ Delta from the previous documented AV2 synthesis checkpoint:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| Synthesis time | 357.0 s | 415.8 s | +58.8 s |
-| Peak synthesis RSS | 1660.32 MiB | 1695.05 MiB | +34.73 MiB |
-| Cell-report time | 7.2 s | 7.1 s | -0.1 s |
-| Critical-path report time | 93.5 s | 100.6 s | +7.1 s |
-| Topological path length | 63 | 63 | +0 |
-| Cells | 102708 | 102869 | +161 |
-| Estimated LCs | 35901 | 35808 | -93 |
+| Synthesis time | 415.8 s | 349.0 s | -66.8 s |
+| Peak synthesis RSS | 1695.05 MiB | 1666.98 MiB | -28.07 MiB |
+| Cell-report time | 7.1 s | 7.1 s | +0.0 s |
+| Critical-path report time | 100.6 s | 91.5 s | -9.1 s |
+| Topological path length | 63 | 60 | -3 |
+| Cells | 102869 | 102391 | -478 |
+| Estimated LCs | 35808 | 35043 | -765 |
 
-The BVP-stack change slightly reduces the estimated LC count while preserving
-the topological path length. Runtime and peak RSS rose modestly; because the
-design still completes under the hard synthesis limits, this remains an
-acceptable functional checkpoint. Future IBC work should continue watching
-the entropy-op and range-coder path because it remains the top path in the
-Yosys report.
+The timing-guided split reduced the reported topological path, total cells,
+estimated LCs, synthesis runtime, and peak RSS without changing the encoded
+bitstreams. The new Yosys top path still ends in the entropy range coder, but
+it now starts from phase/control logic through the lossy 4:2:0 chroma DC
+skip-CDF path rather than carrying the full BDPCM scan machinery.
 
-Vivado synthesis configuration:
+Previous Vivado timing input:
 
 - remote checkout Git SHA: `93ad7fad972aab259830c0daffe5dac62701c4c7`
-  (`Document AV2 local IBC checkpoint`); this is a docs-only child of the
-  current validated RTL SHA above.
+  (`Document AV2 local IBC checkpoint`), a docs-only child of the baseline
+  RTL SHA above.
 - command context: `make synth-vivado CODEC=av2 SYNTH_DUT=av2-encoder`
   with a longer wrapper timeout and no wrapper memory cap.
 - Vivado version: 2025.2.
@@ -119,7 +122,7 @@ Vivado synthesis configuration:
 - feature flags: palette 4:4:4 enabled, exact-hash IBC 4:4:4 enabled,
   lossy 4:2:0 residual enabled.
 
-Vivado synthesis result:
+Previous Vivado synthesis result:
 
 | Metric | Result |
 |---|---:|
@@ -140,22 +143,11 @@ Vivado synthesis result:
 | DSPs | 10 / 80 (12.50%) |
 | Bonded IOBs | 482 / 100 (482.00%) |
 
-Largest Vivado-reported local instances:
-
-| Instance | Cells |
-|---|---:|
-| `palette_analyzer` | 52631 |
-| `control_regs` | 6633 |
-| `frame_reader` | 6018 |
-| `local_hash_ibc` | 5154 |
-| `bitstream_writer` | 2276 |
-| `chroma_bdpcm_symbolizer` | 1972 |
-
-The worst Vivado timing path starts at
-`control_regs/chroma_format_idc_reg[0]` and ends at `low_q_reg[63]`. It crosses
-the lossy 4:2:0 luma estimator/residual-symbolizer path and the range-coder
-step, with a 41.792 ns data path delay, 53 logic levels, and route delay
-accounting for about 60% of the path. This confirms the next AV2 optimization
-cycle should focus on registering the 4:2:0 residual/entropy handoff and
-reducing the palette/analyzer distributed-RAM footprint before treating Z7-10
-as a realistic fit target.
+The previous Vivado worst path started at
+`control_regs/chroma_format_idc_reg[0]` and ended at `low_q_reg[63]`. It
+crossed the lossy 4:2:0 luma estimator/residual-symbolizer path and the
+range-coder step, with a 41.792 ns data path delay, 53 logic levels, and route
+delay accounting for about 60% of the path. The DC-delta split removes the
+full BDPCM symbolizer from that lossy 4:2:0 path; the next Vivado run should
+verify whether the WNS moves to the shorter skip-CDF/range-coder path now
+reported by Yosys.

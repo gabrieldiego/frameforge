@@ -632,23 +632,49 @@ async def av2_encoder_emits_obu_stream(dut):
             lossy_420_mode = signal_int(dut, "lossy_420_mode_q") == 1
             if phase == AV2_PHASE_Y_COEFF and lossy_420_mode:
                 luma_symbolizer = dut.lossy420_luma_residual_symbolizer
-                coeff_pos = handle_int(luma_symbolizer.coeff_pos_w)
+                coeff_pos = nested_signal_int(
+                    dut, "lossy420_luma_residual_symbolizer.coeff_pos_w"
+                )
+                if coeff_pos is not None:
+                    record.update(
+                        {
+                            "luma_residual_emit_state": handle_int(
+                                luma_symbolizer.emit_state_q
+                            ),
+                            "luma_residual_scan": handle_int(luma_symbolizer.scan_q),
+                            "luma_residual_coeff_pos": coeff_pos,
+                            "luma_residual_level": handle_int(
+                                luma_symbolizer.level_q[coeff_pos]
+                            ),
+                            "luma_residual_hr_avg": handle_int(
+                                luma_symbolizer.hr_avg_q
+                            ),
+                            "luma_residual_hr_m": handle_int(luma_symbolizer.hr_m_w),
+                            "luma_residual_high_value": handle_int(
+                                luma_symbolizer.current_high_value_w
+                            ),
+                            "luma_residual_hr_q": handle_int(luma_symbolizer.hr_q_w),
+                        }
+                    )
+                else:
+                    record.update(
+                        {
+                            "luma_residual_emit_state": nested_signal_int(
+                                dut, "lossy420_luma_residual_symbolizer.emit_state_q"
+                            ),
+                            "luma_residual_level": nested_signal_int(
+                                dut, "lossy420_luma_residual_symbolizer.level_q"
+                            ),
+                            "luma_residual_high_value": nested_signal_int(
+                                dut, "lossy420_luma_residual_symbolizer.high_value_w"
+                            ),
+                            "luma_residual_hr_q": nested_signal_int(
+                                dut, "lossy420_luma_residual_symbolizer.hr_q_w"
+                            ),
+                        }
+                    )
                 record.update(
                     {
-                        "luma_residual_emit_state": handle_int(
-                            luma_symbolizer.emit_state_q
-                        ),
-                        "luma_residual_scan": handle_int(luma_symbolizer.scan_q),
-                        "luma_residual_coeff_pos": coeff_pos,
-                        "luma_residual_level": handle_int(
-                            luma_symbolizer.level_q[coeff_pos]
-                        ),
-                        "luma_residual_hr_avg": handle_int(luma_symbolizer.hr_avg_q),
-                        "luma_residual_hr_m": handle_int(luma_symbolizer.hr_m_w),
-                        "luma_residual_high_value": handle_int(
-                            luma_symbolizer.current_high_value_w
-                        ),
-                        "luma_residual_hr_q": handle_int(luma_symbolizer.hr_q_w),
                         "luma_fetch_txb_samples": signal_int(
                             dut, "luma_fetch_txb_samples_w"
                         ),
@@ -669,33 +695,56 @@ async def av2_encoder_emits_obu_stream(dut):
                     if lossy_420_mode
                     else dut.chroma_bdpcm_symbolizer
                 )
-                coeff_pos = handle_int(chroma_symbolizer.coeff_pos_w)
-                record.update(
-                    {
-                        "chroma_residual_emit_state": handle_int(
-                            chroma_symbolizer.emit_state_q
-                        ),
-                        "chroma_residual_scan": handle_int(
-                            chroma_symbolizer.scan_q
-                        ),
-                        "chroma_residual_coeff_pos": coeff_pos,
-                        "chroma_residual_level": handle_int(
-                            chroma_symbolizer.level_q[coeff_pos]
-                        ),
-                        "chroma_residual_hr_avg": handle_int(
-                            chroma_symbolizer.hr_avg_q
-                        ),
-                        "chroma_residual_hr_m": handle_int(
-                            chroma_symbolizer.hr_m_w
-                        ),
-                        "chroma_residual_high_value": handle_int(
-                            chroma_symbolizer.current_high_value_w
-                        ),
-                        "chroma_residual_hr_q": handle_int(
-                            chroma_symbolizer.hr_q_w
-                        ),
-                    }
+                chroma_path = (
+                    "lossy420_chroma_bdpcm_symbolizer"
+                    if lossy_420_mode
+                    else "chroma_bdpcm_symbolizer"
                 )
+                coeff_pos = nested_signal_int(dut, f"{chroma_path}.coeff_pos_w")
+                if coeff_pos is not None:
+                    record.update(
+                        {
+                            "chroma_residual_emit_state": handle_int(
+                                chroma_symbolizer.emit_state_q
+                            ),
+                            "chroma_residual_scan": handle_int(
+                                chroma_symbolizer.scan_q
+                            ),
+                            "chroma_residual_coeff_pos": coeff_pos,
+                            "chroma_residual_level": handle_int(
+                                chroma_symbolizer.level_q[coeff_pos]
+                            ),
+                            "chroma_residual_hr_avg": handle_int(
+                                chroma_symbolizer.hr_avg_q
+                            ),
+                            "chroma_residual_hr_m": handle_int(
+                                chroma_symbolizer.hr_m_w
+                            ),
+                            "chroma_residual_high_value": handle_int(
+                                chroma_symbolizer.current_high_value_w
+                            ),
+                            "chroma_residual_hr_q": handle_int(
+                                chroma_symbolizer.hr_q_w
+                            ),
+                        }
+                    )
+                else:
+                    record.update(
+                        {
+                            "chroma_residual_emit_state": nested_signal_int(
+                                dut, f"{chroma_path}.emit_state_q"
+                            ),
+                            "chroma_residual_level": nested_signal_int(
+                                dut, f"{chroma_path}.level_q"
+                            ),
+                            "chroma_residual_high_value": nested_signal_int(
+                                dut, f"{chroma_path}.high_value_w"
+                            ),
+                            "chroma_residual_hr_q": nested_signal_int(
+                                dut, f"{chroma_path}.hr_q_w"
+                            ),
+                        }
+                    )
             if phase in (AV2_PHASE_U_COEFF, AV2_PHASE_V_COEFF):
                 record.update(
                     {

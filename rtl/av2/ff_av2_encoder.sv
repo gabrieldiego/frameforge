@@ -925,9 +925,8 @@ module ff_av2_encoder #(
     .zero_delta(lossy420_luma_known_zero_w)
   );
 
-  ff_av2_chroma_bdpcm_symbolizer #(
-    .LUMA_PALETTE_RESIDUAL(1),
-    .DC_DELTA_ONLY(1)
+  ff_av2_dc_delta_txb_symbolizer #(
+    .LUMA_PLANE(1)
   ) lossy420_luma_residual_symbolizer (
     .clk(clk),
     .rst_n(rst_n),
@@ -936,9 +935,6 @@ module ff_av2_encoder #(
     .plane_v(1'b0),
     .skip_ctx(luma_residual_skip_ctx_w),
     .dc_sign_ctx(luma_residual_dc_sign_ctx_w),
-    .txb_samples(128'd0),
-    .predictor_samples(32'd0),
-    .predictor_txb_samples(128'd0),
     .dc_delta(lossy420_luma_delta_w),
     .dc_recon_sample(lossy420_luma_recon_sample_w),
     .known_zero_txb(lossy420_luma_known_zero_w),
@@ -994,9 +990,8 @@ module ff_av2_encoder #(
     .zero_delta(lossy420_chroma_known_zero_w)
   );
 
-  ff_av2_chroma_bdpcm_symbolizer #(
-    .LUMA_PALETTE_RESIDUAL(0),
-    .DC_DELTA_ONLY(1)
+  ff_av2_dc_delta_txb_symbolizer #(
+    .LUMA_PLANE(0)
   ) lossy420_chroma_bdpcm_symbolizer (
     .clk(clk),
     .rst_n(rst_n),
@@ -1005,9 +1000,6 @@ module ff_av2_encoder #(
     .plane_v(phase_q == PHASE_V_COEFF),
     .skip_ctx(chroma_bdpcm_skip_ctx_w),
     .dc_sign_ctx(2'd0),
-    .txb_samples(128'd0),
-    .predictor_samples(32'd0),
-    .predictor_txb_samples(128'd0),
     .dc_delta(lossy420_chroma_delta_w),
     .dc_recon_sample(lossy420_chroma_recon_sample_w),
     .known_zero_txb(lossy420_chroma_known_zero_w),
