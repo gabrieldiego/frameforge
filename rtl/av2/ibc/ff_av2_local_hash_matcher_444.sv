@@ -235,74 +235,18 @@ module ff_av2_local_hash_matcher_444 #(
     end
   end
 
-  always @* begin
-    case (decide_index_q)
-      6'd0: decide_block_id_w = 6'd0;
-      6'd1: decide_block_id_w = 6'd1;
-      6'd2: decide_block_id_w = 6'd8;
-      6'd3: decide_block_id_w = 6'd9;
-      6'd4: decide_block_id_w = 6'd2;
-      6'd5: decide_block_id_w = 6'd3;
-      6'd6: decide_block_id_w = 6'd10;
-      6'd7: decide_block_id_w = 6'd11;
-      6'd8: decide_block_id_w = 6'd16;
-      6'd9: decide_block_id_w = 6'd17;
-      6'd10: decide_block_id_w = 6'd24;
-      6'd11: decide_block_id_w = 6'd25;
-      6'd12: decide_block_id_w = 6'd18;
-      6'd13: decide_block_id_w = 6'd19;
-      6'd14: decide_block_id_w = 6'd26;
-      6'd15: decide_block_id_w = 6'd27;
-      6'd16: decide_block_id_w = 6'd4;
-      6'd17: decide_block_id_w = 6'd5;
-      6'd18: decide_block_id_w = 6'd12;
-      6'd19: decide_block_id_w = 6'd13;
-      6'd20: decide_block_id_w = 6'd6;
-      6'd21: decide_block_id_w = 6'd7;
-      6'd22: decide_block_id_w = 6'd14;
-      6'd23: decide_block_id_w = 6'd15;
-      6'd24: decide_block_id_w = 6'd20;
-      6'd25: decide_block_id_w = 6'd21;
-      6'd26: decide_block_id_w = 6'd28;
-      6'd27: decide_block_id_w = 6'd29;
-      6'd28: decide_block_id_w = 6'd22;
-      6'd29: decide_block_id_w = 6'd23;
-      6'd30: decide_block_id_w = 6'd30;
-      6'd31: decide_block_id_w = 6'd31;
-      6'd32: decide_block_id_w = 6'd32;
-      6'd33: decide_block_id_w = 6'd33;
-      6'd34: decide_block_id_w = 6'd40;
-      6'd35: decide_block_id_w = 6'd41;
-      6'd36: decide_block_id_w = 6'd34;
-      6'd37: decide_block_id_w = 6'd35;
-      6'd38: decide_block_id_w = 6'd42;
-      6'd39: decide_block_id_w = 6'd43;
-      6'd40: decide_block_id_w = 6'd48;
-      6'd41: decide_block_id_w = 6'd49;
-      6'd42: decide_block_id_w = 6'd56;
-      6'd43: decide_block_id_w = 6'd57;
-      6'd44: decide_block_id_w = 6'd50;
-      6'd45: decide_block_id_w = 6'd51;
-      6'd46: decide_block_id_w = 6'd58;
-      6'd47: decide_block_id_w = 6'd59;
-      6'd48: decide_block_id_w = 6'd36;
-      6'd49: decide_block_id_w = 6'd37;
-      6'd50: decide_block_id_w = 6'd44;
-      6'd51: decide_block_id_w = 6'd45;
-      6'd52: decide_block_id_w = 6'd38;
-      6'd53: decide_block_id_w = 6'd39;
-      6'd54: decide_block_id_w = 6'd46;
-      6'd55: decide_block_id_w = 6'd47;
-      6'd56: decide_block_id_w = 6'd52;
-      6'd57: decide_block_id_w = 6'd53;
-      6'd58: decide_block_id_w = 6'd60;
-      6'd59: decide_block_id_w = 6'd61;
-      6'd60: decide_block_id_w = 6'd54;
-      6'd61: decide_block_id_w = 6'd55;
-      6'd62: decide_block_id_w = 6'd62;
-      default: decide_block_id_w = 6'd63;
-    endcase
-  end
+  // Fixed 8x8 leaf walk for a 64x64 superblock. The partition traversal visits
+  // 2x2 leaf groups recursively, which is the bit permutation
+  // row={b5,b3,b1}, col={b4,b2,b0}; keep it structural instead of a 64-way
+  // decode table.
+  assign decide_block_id_w = {
+    decide_index_q[5],
+    decide_index_q[3],
+    decide_index_q[1],
+    decide_index_q[4],
+    decide_index_q[2],
+    decide_index_q[0]
+  };
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
