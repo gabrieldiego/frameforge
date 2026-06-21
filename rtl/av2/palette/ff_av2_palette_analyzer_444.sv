@@ -94,7 +94,6 @@ module ff_av2_palette_analyzer_444 #(
 
   logic [7:0] block_luma_sample_q [0:63];
   logic [191:0] current_palette_index_q;
-  logic [191:0] block_palette_index_q [0:63];
   logic [1:0] block_luma_mode_q [0:63];
   logic [63:0] terminal_luma_predictor_edge_q;
   logic [63:0] terminal_luma_predictor_inner_edge_q;
@@ -176,6 +175,8 @@ module ff_av2_palette_analyzer_444 #(
   logic [11:0] sample_store_read_addr_w;
   logic [11:0] chroma_write_addr_w;
   logic [11:0] chroma_read_addr_w;
+  logic [5:0] palette_index_read_addr_w;
+  logic [191:0] palette_index_read_data_w;
   logic luma_write_w;
   logic chroma_write_u_w;
   logic chroma_write_v_w;
@@ -349,6 +350,8 @@ module ff_av2_palette_analyzer_444 #(
   assign luma_fetch_read_addr_w = {luma_fetch_txb_block_id_w, luma_fetch_local_index_w};
   assign sample_store_write_addr_w = luma_write_w ? {block_id_q, block_sample_q} : chroma_write_addr_w;
   assign sample_store_read_addr_w = luma_fetch_active_q ? luma_fetch_read_addr_w : chroma_read_addr_w;
+  assign palette_index_read_addr_w =
+    (query_start && !query_start_q) ? query_block_id_w : query_load_block_id_q;
   assign luma_write_w = (state_q == ST_READ) && sample_fire;
   assign chroma_write_u_w =
     chroma_sample_fire_w && !block_chroma_plane_v_w;
@@ -368,6 +371,22 @@ module ff_av2_palette_analyzer_444 #(
     .read_y_data(luma_read_y_w),
     .read_u_data(chroma_read_u_w),
     .read_v_data(chroma_read_v_w)
+  );
+
+  // One 192-bit palette-index word per 8x8 leaf. Query setup already has a
+  // registered phase, so keep this table in synchronous RAM instead of a
+  // 64-entry flip-flop bank.
+  ff_sync_block_ram_1r1w #(
+    .DATA_BITS(192),
+    .ADDR_BITS(6),
+    .DEPTH(64)
+  ) palette_index_mem (
+    .clk(clk),
+    .write_valid(state_q == ST_NEXT_BLOCK),
+    .write_addr(block_id_q),
+    .write_data(current_palette_index_q),
+    .read_addr(palette_index_read_addr_w),
+    .read_data(palette_index_read_data_w)
   );
 
   always @* begin
@@ -784,7 +803,7 @@ module ff_av2_palette_analyzer_444 #(
       end else if (query_active_q) begin
         for (pack_index_q = 0; pack_index_q < 64; pack_index_q = pack_index_q + 1) begin
           query_palette_index_q[pack_index_q] <=
-            block_palette_index_q[query_load_block_id_q][pack_index_q * 3 +: 3];
+            palette_index_read_data_w[pack_index_q * 3 +: 3];
         end
         query_palette_colors_q <= block_palette_colors_q[query_load_block_id_q];
         query_palette_size_q <= block_palette_size_q[query_load_block_id_q];
@@ -1032,7 +1051,6 @@ module ff_av2_palette_analyzer_444 #(
             end
           end
           ST_NEXT_BLOCK: begin
-            block_palette_index_q[block_id_q] <= current_palette_index_q;
             block_luma_mode_q[block_id_q] <= selected_luma_mode_w;
             if (selected_luma_mode_w != LUMA_MODE_DC) begin
               terminal_luma_predictor_edge_q <= selected_luma_predictor_edge_w;
