@@ -64,6 +64,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   };
 
   logic active_q;
+  logic prepare_context_q;
   logic [4:0] emit_state_q;
   logic [3:0] scan_q;
   logic [4:0] eob_q;
@@ -248,7 +249,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
 
     for (scan_index_w = 0; scan_index_w < 16; scan_index_w = scan_index_w + 1) begin
       tx4x4_nonzero_scan_w[scan_index_w] =
-        (level_pre_w[TX4X4_SCAN_PACK[(scan_index_w * 4) +: 4]] != 16'd0);
+        (level_q[TX4X4_SCAN_PACK[(scan_index_w * 4) +: 4]] != 16'd0);
     end
 
     // AV2 v1.0.0 Section 5.20.7.27 coeffs(): a TX_4X4 end-of-block value can
@@ -280,7 +281,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
     // EOB while avoiding an EOB-dependent adder chain.
     for (sample_index_w = 0; sample_index_w < 16; sample_index_w = sample_index_w + 1) begin
       cul_level_sat_w[sample_index_w] =
-        (level_pre_w[sample_index_w] > 16'd7) ? 4'd8 : {1'b0, level_pre_w[sample_index_w][2:0]};
+        (level_q[sample_index_w] > 16'd7) ? 4'd8 : {1'b0, level_q[sample_index_w][2:0]};
     end
     for (sample_index_w = 0; sample_index_w < 8; sample_index_w = sample_index_w + 1) begin
       cul_pair_sum_w[sample_index_w] =
@@ -306,10 +307,10 @@ module ff_av2_chroma_bdpcm_symbolizer #(
     cul_final_sum_w = {1'b0, cul_oct_sat_w[0]} + {1'b0, cul_oct_sat_w[1]};
     cul_context_level_w = (cul_final_sum_w > 5'd7) ? 4'd7 : cul_final_sum_w[3:0];
 
-    if (coeff_negative_pre_w[0]) begin
-      dc_value_w = -$signed(level_pre_w[0]);
+    if (coeff_negative_q[0]) begin
+      dc_value_w = -$signed(level_q[0]);
     end else begin
-      dc_value_w = $signed(level_pre_w[0]);
+      dc_value_w = $signed(level_q[0]);
     end
 
     entropy_context_pre_w = {4'd0, cul_context_level_w};
@@ -347,19 +348,19 @@ module ff_av2_chroma_bdpcm_symbolizer #(
         // AV2 v1.0.0 Section 5.20.7.27, LF lower-level luma context:
         // AVM get_nz_mag_lf() uses five forward neighbors for luma.
         if (row_w + 1 < 4) begin
-          mag_w = mag_w + ((level_pre_w[sample_index_w + 4] > 16'd5) ? 5 : level_pre_w[sample_index_w + 4]);
+          mag_w = mag_w + ((level_q[sample_index_w + 4] > 16'd5) ? 5 : level_q[sample_index_w + 4]);
         end
         if (col_w + 1 < 4) begin
-          mag_w = mag_w + ((level_pre_w[sample_index_w + 1] > 16'd5) ? 5 : level_pre_w[sample_index_w + 1]);
+          mag_w = mag_w + ((level_q[sample_index_w + 1] > 16'd5) ? 5 : level_q[sample_index_w + 1]);
         end
         if (row_w + 1 < 4 && col_w + 1 < 4) begin
-          mag_w = mag_w + ((level_pre_w[sample_index_w + 5] > 16'd5) ? 5 : level_pre_w[sample_index_w + 5]);
+          mag_w = mag_w + ((level_q[sample_index_w + 5] > 16'd5) ? 5 : level_q[sample_index_w + 5]);
         end
         if (col_w + 2 < 4) begin
-          mag_w = mag_w + ((level_pre_w[sample_index_w + 2] > 16'd5) ? 5 : level_pre_w[sample_index_w + 2]);
+          mag_w = mag_w + ((level_q[sample_index_w + 2] > 16'd5) ? 5 : level_q[sample_index_w + 2]);
         end
         if (row_w + 2 < 4) begin
-          mag_w = mag_w + ((level_pre_w[sample_index_w + 8] > 16'd5) ? 5 : level_pre_w[sample_index_w + 8]);
+          mag_w = mag_w + ((level_q[sample_index_w + 8] > 16'd5) ? 5 : level_q[sample_index_w + 8]);
         end
         if (sample_index_w == 0) begin
           coeff_ctx_pre_w[sample_index_w] = (((mag_w + 1) >> 1) > 8) ? 4'd8 : ((mag_w + 1) >> 1);
@@ -376,19 +377,19 @@ module ff_av2_chroma_bdpcm_symbolizer #(
           coeff_ctx_pre_w[sample_index_w] = 4'd0;
         end else begin
           if (row_w + 1 < 4) begin
-            mag_w = mag_w + ((level_pre_w[sample_index_w + 4] > 16'd3) ? 3 : level_pre_w[sample_index_w + 4]);
+            mag_w = mag_w + ((level_q[sample_index_w + 4] > 16'd3) ? 3 : level_q[sample_index_w + 4]);
           end
           if (col_w + 1 < 4) begin
-            mag_w = mag_w + ((level_pre_w[sample_index_w + 1] > 16'd3) ? 3 : level_pre_w[sample_index_w + 1]);
+            mag_w = mag_w + ((level_q[sample_index_w + 1] > 16'd3) ? 3 : level_q[sample_index_w + 1]);
           end
           if (row_w + 1 < 4 && col_w + 1 < 4) begin
-            mag_w = mag_w + ((level_pre_w[sample_index_w + 5] > 16'd3) ? 3 : level_pre_w[sample_index_w + 5]);
+            mag_w = mag_w + ((level_q[sample_index_w + 5] > 16'd3) ? 3 : level_q[sample_index_w + 5]);
           end
           if (col_w + 2 < 4) begin
-            mag_w = mag_w + ((level_pre_w[sample_index_w + 2] > 16'd3) ? 3 : level_pre_w[sample_index_w + 2]);
+            mag_w = mag_w + ((level_q[sample_index_w + 2] > 16'd3) ? 3 : level_q[sample_index_w + 2]);
           end
           if (row_w + 2 < 4) begin
-            mag_w = mag_w + ((level_pre_w[sample_index_w + 8] > 16'd3) ? 3 : level_pre_w[sample_index_w + 8]);
+            mag_w = mag_w + ((level_q[sample_index_w + 8] > 16'd3) ? 3 : level_q[sample_index_w + 8]);
           end
           coeff_ctx_pre_w[sample_index_w] = (((mag_w + 1) >> 1) > 4) ? 4'd4 : ((mag_w + 1) >> 1);
           if ((row_w + col_w) >= 6) begin
@@ -398,42 +399,42 @@ module ff_av2_chroma_bdpcm_symbolizer #(
       end else if (sample_index_w == 0) begin
         // AV2 v1.0.0 Section 5.20.7.27, LF lower-level chroma context.
         if (row_w + 1 < 4) begin
-          mag_w = mag_w + ((level_pre_w[sample_index_w + 4] > 16'd5) ? 5 : level_pre_w[sample_index_w + 4]);
+          mag_w = mag_w + ((level_q[sample_index_w + 4] > 16'd5) ? 5 : level_q[sample_index_w + 4]);
         end
         if (col_w + 1 < 4) begin
-          mag_w = mag_w + ((level_pre_w[sample_index_w + 1] > 16'd5) ? 5 : level_pre_w[sample_index_w + 1]);
+          mag_w = mag_w + ((level_q[sample_index_w + 1] > 16'd5) ? 5 : level_q[sample_index_w + 1]);
         end
         if (row_w + 1 < 4 && col_w + 1 < 4) begin
-          mag_w = mag_w + ((level_pre_w[sample_index_w + 5] > 16'd5) ? 5 : level_pre_w[sample_index_w + 5]);
+          mag_w = mag_w + ((level_q[sample_index_w + 5] > 16'd5) ? 5 : level_q[sample_index_w + 5]);
         end
       end else begin
         // AV2 v1.0.0 Section 5.20.7.27, regular chroma lower-level context.
         if (row_w + 1 < 4) begin
-          mag_w = mag_w + ((level_pre_w[sample_index_w + 4] > 16'd3) ? 3 : level_pre_w[sample_index_w + 4]);
+          mag_w = mag_w + ((level_q[sample_index_w + 4] > 16'd3) ? 3 : level_q[sample_index_w + 4]);
         end
         if (col_w + 1 < 4) begin
-          mag_w = mag_w + ((level_pre_w[sample_index_w + 1] > 16'd3) ? 3 : level_pre_w[sample_index_w + 1]);
+          mag_w = mag_w + ((level_q[sample_index_w + 1] > 16'd3) ? 3 : level_q[sample_index_w + 1]);
         end
         if (row_w + 1 < 4 && col_w + 1 < 4) begin
-          mag_w = mag_w + ((level_pre_w[sample_index_w + 5] > 16'd3) ? 3 : level_pre_w[sample_index_w + 5]);
+          mag_w = mag_w + ((level_q[sample_index_w + 5] > 16'd3) ? 3 : level_q[sample_index_w + 5]);
         end
       end
       if (LUMA_PALETTE_RESIDUAL == 0) begin
         coeff_ctx_pre_w[sample_index_w] = ((mag_w + 1) >> 1) > 3 ? 4'd3 : ((mag_w + 1) >> 1);
-        if (plane_v) begin
+        if (plane_v_q) begin
           coeff_ctx_pre_w[sample_index_w] = coeff_ctx_pre_w[sample_index_w] + 4'd4;
         end
       end
 
       mag_w = 0;
       if (row_w + 1 < 4) begin
-        mag_w = mag_w + ((LUMA_PALETTE_RESIDUAL != 0 && level_pre_w[sample_index_w + 4] > 16'd5) ? 5 : level_pre_w[sample_index_w + 4]);
+        mag_w = mag_w + ((LUMA_PALETTE_RESIDUAL != 0 && level_q[sample_index_w + 4] > 16'd5) ? 5 : level_q[sample_index_w + 4]);
       end
       if (col_w + 1 < 4) begin
-        mag_w = mag_w + ((LUMA_PALETTE_RESIDUAL != 0 && level_pre_w[sample_index_w + 1] > 16'd5) ? 5 : level_pre_w[sample_index_w + 1]);
+        mag_w = mag_w + ((LUMA_PALETTE_RESIDUAL != 0 && level_q[sample_index_w + 1] > 16'd5) ? 5 : level_q[sample_index_w + 1]);
       end
       if (row_w + 1 < 4 && col_w + 1 < 4) begin
-        mag_w = mag_w + ((LUMA_PALETTE_RESIDUAL != 0 && level_pre_w[sample_index_w + 5] > 16'd5) ? 5 : level_pre_w[sample_index_w + 5]);
+        mag_w = mag_w + ((LUMA_PALETTE_RESIDUAL != 0 && level_q[sample_index_w + 5] > 16'd5) ? 5 : level_q[sample_index_w + 5]);
       end
       if (LUMA_PALETTE_RESIDUAL != 0) begin
         br_ctx_pre_w[sample_index_w] = ((mag_w + 1) >> 1) > 6 ? 4'd6 : ((mag_w + 1) >> 1);
@@ -952,7 +953,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
     end
   end
 
-  assign start_op_w = enable && !active_q && known_zero_txb;
+  assign start_op_w = enable && !active_q && !prepare_context_q && known_zero_txb;
   assign progress_w = active_q && (advance || !op_valid);
   assign txb_done = (active_q || start_op_w) && op_valid && op_done_w;
   assign txb_nonzero = start_op_w ? 1'b0 : txb_nonzero_q;
@@ -962,6 +963,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       active_q <= 1'b0;
+      prepare_context_q <= 1'b0;
       emit_state_q <= EMIT_SKIP;
       scan_q <= 4'd15;
       eob_q <= 5'd0;
@@ -984,11 +986,13 @@ module ff_av2_chroma_bdpcm_symbolizer #(
       end
     end else if (!enable) begin
       active_q <= 1'b0;
+      prepare_context_q <= 1'b0;
       emit_state_q <= EMIT_SKIP;
       scan_q <= 4'd15;
       hr_avg_q <= 16'd0;
-    end else if (!active_q && known_zero_txb) begin
+    end else if (!active_q && !prepare_context_q && known_zero_txb) begin
       active_q <= !advance;
+      prepare_context_q <= 1'b0;
       emit_state_q <= EMIT_SKIP;
       scan_q <= 4'd15;
       eob_q <= 5'd0;
@@ -1009,7 +1013,25 @@ module ff_av2_chroma_bdpcm_symbolizer #(
         coeff_ctx_q[sample_index_w] <= 5'd0;
         br_ctx_q[sample_index_w] <= 5'd0;
       end
+    end else if (!active_q && !prepare_context_q) begin
+      // Pipeline the launch of nonzero TXBs: the first cycle registers
+      // transformed levels from samples; the next cycle derives AV2 v1.0.0
+      // Section 5.20.7.27 EOB, context, and BR tables from those levels.
+      active_q <= 1'b0;
+      prepare_context_q <= 1'b1;
+      emit_state_q <= EMIT_SKIP;
+      scan_q <= 4'd15;
+      plane_v_q <= plane_v;
+      skip_ctx_q <= skip_ctx;
+      dc_sign_ctx_q <= dc_sign_ctx;
+      dc_recon_sample_q <= dc_recon_sample;
+      hr_avg_q <= 16'd0;
+      for (sample_index_w = 0; sample_index_w < 16; sample_index_w = sample_index_w + 1) begin
+        level_q[sample_index_w] <= level_pre_w[sample_index_w];
+        coeff_negative_q[sample_index_w] <= coeff_negative_pre_w[sample_index_w];
+      end
     end else if (!active_q) begin
+      prepare_context_q <= 1'b0;
       active_q <= 1'b1;
       emit_state_q <= EMIT_SKIP;
       scan_q <= 4'd15;
@@ -1020,14 +1042,8 @@ module ff_av2_chroma_bdpcm_symbolizer #(
       eob_shift_q <= eob_shift_pre_w;
       entropy_context_q <= entropy_context_pre_w;
       txb_nonzero_q <= (eob_pre_w != 5'd0);
-      plane_v_q <= plane_v;
-      skip_ctx_q <= skip_ctx;
-      dc_sign_ctx_q <= dc_sign_ctx;
-      dc_recon_sample_q <= dc_recon_sample;
       hr_avg_q <= 16'd0;
       for (sample_index_w = 0; sample_index_w < 16; sample_index_w = sample_index_w + 1) begin
-        level_q[sample_index_w] <= level_pre_w[sample_index_w];
-        coeff_negative_q[sample_index_w] <= coeff_negative_pre_w[sample_index_w];
         coeff_ctx_q[sample_index_w] <= coeff_ctx_pre_w[sample_index_w];
         br_ctx_q[sample_index_w] <= br_ctx_pre_w[sample_index_w];
       end
