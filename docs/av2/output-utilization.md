@@ -23,21 +23,23 @@ Metric definitions:
   writer for these internal counters live in `tb/av2_metrics.py`; they are
   not part of the shared top-level pass/fail contract.
 
-## 2026-06-21 Palette Index RAM Storage
+## 2026-06-21 IBC Leaf-Order Decode Simplification
 
-Measured after moving the AV2 4:4:4 palette index table from a 64-entry
-flip-flop bank into `ff_sync_block_ram_1r1w`. This reduces area while keeping
-the external palette query handshake and output schedule unchanged.
+Measured after replacing the AV2 4:4:4 local IBC leaf-order decode table with
+the equivalent structural bit permutation. This reduces decode logic slightly
+while keeping the external hash matcher behavior and output schedule
+unchanged.
 
 Baseline and current sources:
 
-- Baseline report Git SHA: `1d39efb13aca62789800ab3f21cb4f1ba9471d19`
-- Baseline validated RTL Git SHA: `28df2e21c2a44d6ba00e819616a10fb1b9686bf1`
-- Current validated RTL Git SHA: `113d850538d22e12dd5e9a29ed54ab0f25e6aa67`
-- Baseline mode: AV2 palette analyzer with terminal predictor-edge state
-  collapsed and the palette-index table still stored in flip-flops.
-- Current mode: same codec behavior, with one 192-bit palette-index RAM word
-  per 8x8 leaf.
+- Baseline report Git SHA: `eeef80f49ae3c713e2b3f4f931d9976dc3a1660e`
+- Baseline validated RTL Git SHA: `113d850538d22e12dd5e9a29ed54ab0f25e6aa67`
+- Current validated RTL Git SHA: `874fb312adf735387f53551bcbed5254fdc98051`
+- Baseline mode: AV2 palette analyzer using block RAM for palette-index
+  storage, with local IBC leaf-order mapping still implemented as a 64-way
+  decode table.
+- Current mode: same codec behavior, with the local IBC leaf-order mapping
+  expressed as the structural row/column bit permutation.
 - Delta columns compare against the immediate previous validated 4:4:4
   checkpoint. Output scheduling is unchanged, so all cycle deltas are zero.
 
