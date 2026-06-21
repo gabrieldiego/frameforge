@@ -144,13 +144,17 @@ module ff_av2_encoder #(
   state_t state_q;
   logic start_invalid_w;
   logic [15:0] precarry_mem_q [0:AV2_MAX_TILE_BYTES - 1];
-  logic [7:0] payload_mem_q [0:AV2_MAX_TILE_BYTES - 1];
   logic [7:0] seq_mem_q [0:AV2_MAX_SEQUENCE_BYTES - 1];
   logic [15:0] precarry_read_addr_q;
   logic [15:0] precarry_read_data_q;
   logic precarry_write_valid_w;
   logic [15:0] precarry_write_addr_w;
   logic [15:0] precarry_write_data_w;
+  logic payload_write_valid_w;
+  logic [15:0] payload_write_addr_w;
+  logic [7:0] payload_write_data_w;
+  logic [15:0] payload_read_addr_q;
+  logic [7:0] payload_read_data_w;
   logic pending_push_valid_q;
   logic [15:0] pending_push_word_q;
   logic [15:0] precarry_len_q;
@@ -294,6 +298,9 @@ module ff_av2_encoder #(
   logic [7:0] seq_stream_byte_w;
   logic [15:0] closed_leb_index_w;
   logic [15:0] stream_lookup_index_w;
+  logic [15:0] payload_read_ahead_stream_index_w;
+  logic payload_read_ahead_valid_w;
+  logic [15:0] payload_read_ahead_addr_w;
   logic [15:0] payload_tile_start_w;
   logic [7:0] output_byte_w;
   logic [7:0] output_lookup_byte_w;
@@ -1099,7 +1106,13 @@ module ff_av2_encoder #(
       (stream_index_q + 16'd1) : stream_index_q;
   assign output_lookup_last_w = (stream_lookup_index_w == (total_stream_len_w - 16'd1));
   assign output_lookup_byte_w =
-    output_tile_payload_w ? payload_mem_q[tile_stream_index_w] : output_byte_w;
+    output_tile_payload_w ? payload_read_data_w : output_byte_w;
+  assign payload_read_ahead_stream_index_w = stream_lookup_index_w + 16'd2;
+  assign payload_read_ahead_valid_w =
+    (payload_read_ahead_stream_index_w >= tile_payload_start_w) &&
+    (payload_read_ahead_stream_index_w < total_stream_len_w);
+  assign payload_read_ahead_addr_w =
+    payload_read_ahead_stream_index_w - tile_payload_start_w;
   assign palette_query_start_w = (state_q == ST_PALETTE_QUERY);
   assign leaf_luma_palette_w = palette_mode_q && (leaf_luma_mode_q == LUMA_MODE_DC);
   assign residual_mode_w = palette_mode_q || lossy_420_mode_q;
@@ -1777,12 +1790,55 @@ module ff_av2_encoder #(
     end
   end
 
+  always @* begin
+    payload_write_valid_w = 1'b0;
+    payload_write_addr_w = 16'd0;
+    payload_write_data_w = 8'd0;
+
+    if (!start) begin
+      case (state_q)
+        ST_CARRY_WRITE: begin
+          payload_write_valid_w = 1'b1;
+          payload_write_addr_w = payload_tile_start_w + carry_index_q;
+          payload_write_data_w = carry_sum_w[7:0];
+        end
+        ST_PAYLOAD_PREFIX: begin
+          if (!tile_is_last_w && payload_prefix_index_q != 2'd3) begin
+            payload_write_valid_w = 1'b1;
+            payload_write_addr_w = payload_len_q + {14'd0, payload_prefix_index_q};
+            payload_write_data_w = payload_prefix_byte_w;
+          end else if (!tile_is_last_w) begin
+            payload_write_valid_w = 1'b1;
+            payload_write_addr_w = payload_len_q + 16'd3;
+            payload_write_data_w = payload_prefix_byte_w;
+          end
+        end
+        default: begin
+          payload_write_valid_w = 1'b0;
+        end
+      endcase
+    end
+  end
+
   always_ff @(posedge clk) begin
     precarry_read_data_q <= precarry_mem_q[precarry_read_addr_q];
     if (precarry_write_valid_w) begin
       precarry_mem_q[precarry_write_addr_w] <= precarry_write_data_w;
     end
   end
+
+  ff_sync_block_ram_1r1w #(
+    .DATA_BITS(8),
+    .ADDR_BITS(16),
+    .DEPTH(AV2_MAX_TILE_BYTES)
+  ) payload_ram (
+    .clk(clk),
+    .write_valid(payload_write_valid_w),
+    .write_addr(payload_write_addr_w),
+    .write_data(payload_write_data_w),
+    .read_addr(payload_read_addr_q),
+    .read_data(payload_read_data_w)
+  );
 
   always @* begin
     if (visible_width <= 16'd8) width_bits_w = 5'd3;
@@ -2025,6 +2081,7 @@ module ff_av2_encoder #(
       precarry_read_addr_q <= 16'd0;
       pending_push_valid_q <= 1'b0;
       pending_push_word_q <= 16'd0;
+      payload_read_addr_q <= 16'd0;
       precarry_len_q <= 16'd0;
       tile_len_q <= 16'd0;
       payload_len_q <= 16'd0;
@@ -2943,9 +3000,6 @@ module ff_av2_encoder #(
           end
           ST_CARRY_WRITE: begin
             carry_q <= carry_sum_w >> 8;
-            // The carry pass already computes the final tile byte. Stage it in
-            // payload order here and avoid the old post-carry copy sweep.
-            payload_mem_q[payload_tile_start_w + carry_index_q] <= carry_sum_w[7:0];
             if (carry_index_q == 0) begin
               payload_prefix_index_q <= 2'd0;
               precarry_read_addr_q <= 16'd0;
@@ -2962,10 +3016,8 @@ module ff_av2_encoder #(
           end
           ST_PAYLOAD_PREFIX: begin
             if (!tile_is_last_w && payload_prefix_index_q != 2'd3) begin
-              payload_mem_q[payload_len_q + {14'd0, payload_prefix_index_q}] <= payload_prefix_byte_w;
               payload_prefix_index_q <= payload_prefix_index_q + 2'd1;
             end else if (!tile_is_last_w) begin
-              payload_mem_q[payload_len_q + 16'd3] <= payload_prefix_byte_w;
               payload_len_q <= payload_len_q + 16'd4 + tile_len_q;
               tile_index_q <= tile_index_q + 16'd1;
               if (tile_col_q == (tile_cols_q - 16'd1)) begin
@@ -2997,6 +3049,7 @@ module ff_av2_encoder #(
             // the first byte immediately, then keep m_axis_valid asserted in
             // ST_OUTPUT_VALID while advancing the lookup index on each
             // accepted byte.
+            payload_read_addr_q <= 16'd0;
             output_byte_q <= output_lookup_byte_w;
             output_last_q <= output_lookup_last_w;
             m_axis_valid <= 1'b1;
@@ -3017,6 +3070,9 @@ module ff_av2_encoder #(
                 stream_index_q <= 16'd0;
               end else begin
                 stream_index_q <= stream_index_q + 16'd1;
+                if (payload_read_ahead_valid_w) begin
+                  payload_read_addr_q <= payload_read_ahead_addr_w;
+                end
                 output_byte_q <= output_lookup_byte_w;
                 output_last_q <= output_lookup_last_w;
                 m_axis_valid <= 1'b1;
