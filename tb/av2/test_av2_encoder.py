@@ -531,6 +531,16 @@ async def av2_encoder_emits_obu_stream(dut):
                 increment_counter(pipeline_counts, "chroma_bdpcm_op_valid")
             else:
                 increment_counter(pipeline_counts, "chroma_bdpcm_op_gap")
+        if nested_signal_int(dut, "chroma_bdpcm_symbolizer.start_op_w") == 1:
+            increment_counter(pipeline_counts, "chroma_bdpcm_zero_fast_start")
+        if (
+            state == AV2_STATE_LEAF
+            and signal_int(dut, "phase_q") in (AV2_PHASE_U_COEFF, AV2_PHASE_V_COEFF)
+            and signal_int(dut, "chroma_bdpcm_txb_done_w") == 1
+        ):
+            increment_counter(pipeline_counts, "chroma_bdpcm_txb_done")
+            if signal_int(dut, "chroma_bdpcm_txb_nonzero_w") == 0:
+                increment_counter(pipeline_counts, "chroma_bdpcm_zero_txb_done")
         if (
             state == AV2_STATE_LEAF
             and signal_int(dut, "phase_q") == AV2_PHASE_Y_COEFF

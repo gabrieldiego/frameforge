@@ -23,6 +23,10 @@ Metric definitions:
   The constants and JSON writer for these internal counters live in
   `tb/av2_metrics.py`; they are not part of the shared top-level pass/fail
   contract.
+- `chroma_bdpcm_zero_fast_rate` is an AV2-specific internal probe:
+  `chroma_bdpcm_zero_fast_start / chroma_bdpcm_txb_done`. It is expected to be
+  zero until a synthesized chroma zero-TXB fast path is wired; the counter is
+  present so future attempts can be measured per vector before being kept.
 
 ## 2026-06-22 Cached AXI Frame Reader Fast Path
 

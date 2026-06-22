@@ -59,6 +59,10 @@ def write_av2_cycle_metrics(
     carry_write_cycles = int(state_counts.get("carry_write", 0))
     chroma_bdpcm_active = int(pipeline_counts.get("chroma_bdpcm_active", 0))
     chroma_bdpcm_op_valid = int(pipeline_counts.get("chroma_bdpcm_op_valid", 0))
+    chroma_bdpcm_txb_done = int(pipeline_counts.get("chroma_bdpcm_txb_done", 0))
+    chroma_bdpcm_zero_fast_start = int(
+        pipeline_counts.get("chroma_bdpcm_zero_fast_start", 0)
+    )
     luma_residual_active = int(pipeline_counts.get("luma_residual_active", 0))
     luma_residual_op_valid = int(pipeline_counts.get("luma_residual_op_valid", 0))
     leaf_prefetch_active = int(pipeline_counts.get("leaf_prefetch_active", 0))
@@ -78,6 +82,11 @@ def write_av2_cycle_metrics(
         "chroma_bdpcm_op_utilization": (
             chroma_bdpcm_op_valid / chroma_bdpcm_active
             if chroma_bdpcm_active
+            else 0.0
+        ),
+        "chroma_bdpcm_zero_fast_rate": (
+            chroma_bdpcm_zero_fast_start / chroma_bdpcm_txb_done
+            if chroma_bdpcm_txb_done
             else 0.0
         ),
         "prefetch_useful_utilization": (
