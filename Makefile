@@ -142,7 +142,7 @@ test-vectors:
 	python3 scripts/generate_test_vectors.py --set "$(TEST_VECTOR_SET)" --set-dir "$(TEST_VECTOR_SET_DIR)" --out-dir "$(TEST_VECTOR_DIR)"
 
 validate-set:
-	python3 scripts/run_validation_set.py --codec "$(CODEC)" "$(VALIDATION_SET)" --set-dir "$(VALIDATION_SET_DIR)" --out-dir "$(TEST_VECTOR_DIR)" --log-dir "$(VALIDATION_LOG_DIR)" --checksum-dir "$(VALIDATION_CHECKSUM_DIR)" --max-width "$(RTL_MAX_VISIBLE_WIDTH)" --max-height "$(RTL_MAX_VISIBLE_HEIGHT)" $(if $(VALIDATION_LIMIT),--limit "$(VALIDATION_LIMIT)") $(if $(filter 1,$(VALIDATION_WITH_SYNTH)),--with-synth) $(if $(filter 1,$(VALIDATION_SW_ONLY)),--sw-only) $(if $(filter 1,$(VALIDATION_STOP_ON_FAIL)),--stop-on-fail)
+	python3 scripts/run_validation_set.py --codec "$(CODEC)" "$(VALIDATION_SET)" --set-dir "$(VALIDATION_SET_DIR)" --out-dir "$(TEST_VECTOR_DIR)" --log-dir "$(VALIDATION_LOG_DIR)" --checksum-dir "$(VALIDATION_CHECKSUM_DIR)" --max-width "$(RTL_MAX_VISIBLE_WIDTH)" --max-height "$(RTL_MAX_VISIBLE_HEIGHT)" $(if $(VALIDATION_LIMIT),--limit "$(VALIDATION_LIMIT)") $(if $(filter 1,$(VALIDATION_WITH_SYNTH)),--with-synth) $(if $(filter 1,$(VALIDATION_SW_ONLY)),--sw-only) $(if $(filter 1,$(VALIDATION_BLOCK_WAVEFORM)),--block-waveform) $(if $(filter 1,$(VALIDATION_STOP_ON_FAIL)),--stop-on-fail)
 
 validate-smoke:
 	$(MAKE) validate-set VALIDATION_SET=smoke

@@ -47,6 +47,7 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=0, help="run only the first N cases")
     parser.add_argument("--with-synth", action="store_true", help="run synthesis inside each validate call")
     parser.add_argument("--sw-only", action="store_true", help="run software/VTM validation only")
+    parser.add_argument("--block-waveform", action="store_true", help="write RTL block throughput waveform artifacts")
     parser.add_argument("--stop-on-fail", action="store_true")
     args = parser.parse_args()
     codec = codec_config_from_args(args)
@@ -145,6 +146,8 @@ def run_validation(path: Path, args: argparse.Namespace) -> ValidationResult:
         cmd.append("--skip-synth")
     if args.sw_only:
         cmd.append("--sw-only")
+    if args.block_waveform:
+        cmd.append("--block-waveform")
 
     env = os.environ.copy()
     process = subprocess.run(

@@ -7,6 +7,7 @@ from pathlib import Path
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ReadOnly, RisingEdge, Timer
+from block_waveform import BlockWaveformWriter, block_state
 from encoder_axi import (
     AXI_DST_BASE,
     REG_ENCODED_BYTE_COUNT,
@@ -27,6 +28,19 @@ from encoder_axi import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+VVC_BLOCK_WAVEFORM_BLOCKS = [
+    "axi_reader",
+    "input_fifo",
+    "vvc_core_input",
+    "palette_symbolizer",
+    "ctu_symbolizer",
+    "residual_symbolizer",
+    "syntax_frontend",
+    "bin_coder",
+    "cabac_writer",
+    "rbsp_writer",
+    "axi_writer",
+]
 
 
 def fail_fast(message):
@@ -1092,6 +1106,11 @@ async def collect_stream(
     }
     state_counts = {}
     pipeline_counts = {}
+    block_waveform = BlockWaveformWriter(
+        os.environ.get("FRAMEFORGE_RTL_VVC_BLOCK_WAVEFORM_OUT"),
+        VVC_BLOCK_WAVEFORM_BLOCKS,
+        os.environ.get("FRAMEFORGE_RTL_VVC_BLOCK_WAVEFORM_JSON_OUT"),
+    )
 
     if data_path is not None:
         source_bytes = Path(data_path).read_bytes()[: software_input_byte_count(frames)]
@@ -1343,6 +1362,77 @@ async def collect_stream(
                     increment_counter(pipeline_counts, "slice_stream_accept")
                 else:
                     increment_counter(pipeline_counts, "slice_stream_backpressure")
+            block_waveform.sample(
+                cycle,
+                {
+                    "axi_reader": block_state(
+                        signal_int("m_axi_rvalid"),
+                        signal_int("m_axi_rready"),
+                        signal_int("reader_axis_valid"),
+                        signal_int("reader_axis_ready"),
+                    ),
+                    "input_fifo": block_state(
+                        signal_int("reader_axis_valid"),
+                        signal_int("reader_axis_ready"),
+                        signal_int("s_axis_valid"),
+                        signal_int("s_axis_ready"),
+                    ),
+                    "vvc_core_input": block_state(
+                        signal_int("s_axis_valid"),
+                        signal_int("s_axis_ready"),
+                        signal_int("ctu_symbol_valid"),
+                        signal_int("ctu_symbol_ready"),
+                    ),
+                    "palette_symbolizer": block_state(
+                        signal_int("s_axis_valid"),
+                        signal_int("s_axis_ready"),
+                        signal_int("palette_stream_valid"),
+                        signal_int("palette_stream_ready"),
+                    ),
+                    "ctu_symbolizer": block_state(
+                        signal_int("s_axis_valid"),
+                        signal_int("s_axis_ready"),
+                        signal_int("ctu_symbol_valid"),
+                        signal_int("ctu_symbol_ready"),
+                    ),
+                    "residual_symbolizer": block_state(
+                        signal_int("ctu_symbols.residual_emitter_start_q"),
+                        1,
+                        signal_int("ctu_symbols.residual_axis_valid"),
+                        signal_int("ctu_symbols.residual_axis_ready"),
+                    ),
+                    "syntax_frontend": block_state(
+                        signal_int("ctu_symbol_valid"),
+                        signal_int("ctu_symbol_ready"),
+                        signal_int("cabac_writer.streamed_cabac.syntax_valid"),
+                        signal_int("cabac_writer.streamed_cabac.syntax_ready"),
+                    ),
+                    "bin_coder": block_state(
+                        signal_int("cabac_writer.streamed_cabac.syntax_valid"),
+                        signal_int("cabac_writer.streamed_cabac.syntax_ready"),
+                        signal_int("cabac_writer.streamed_cabac.bin_valid"),
+                        signal_int("cabac_writer.streamed_cabac.bin_ready"),
+                    ),
+                    "cabac_writer": block_state(
+                        signal_int("cabac_writer.streamed_cabac.bin_valid"),
+                        signal_int("cabac_writer.streamed_cabac.bin_ready"),
+                        signal_int("cabac_stream_valid"),
+                        signal_int("cabac_stream_ready"),
+                    ),
+                    "rbsp_writer": block_state(
+                        signal_int("cabac_stream_valid"),
+                        signal_int("cabac_stream_ready"),
+                        signal_int("rbsp_payload_valid"),
+                        signal_int("rbsp_payload_ready"),
+                    ),
+                    "axi_writer": block_state(
+                        signal_int("m_axis_valid"),
+                        signal_int("m_axis_ready"),
+                        signal_int("m_axi_wvalid"),
+                        signal_int("m_axi_wready"),
+                    ),
+                },
+            )
             if (
                 hasattr(dut, "ctu_symbol_valid")
                 and value_is_one(dut.ctu_symbol_valid, "ctu_symbol_valid")
@@ -1532,6 +1622,7 @@ async def collect_stream(
     finally:
         if output_handle is not None:
             output_handle.close()
+        block_waveform.close()
         write_trace_records()
 
     debug_state = {

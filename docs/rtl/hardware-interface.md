@@ -63,6 +63,10 @@ port. VVC keeps its current TU-oriented 4:2:0 order internally; AV2 uses visible
 for debugging and output-utilization metrics, but board integration should only
 wire the AXI interfaces.
 
+For throughput debugging, the cocotb validation path can generate per-block
+state waveforms from these internal valid-ready handshakes. See
+[block-throughput-waveforms.md](block-throughput-waveforms.md).
+
 ## Bitstream Output
 
 The internal encoder emits bytes. `rtl/common/ff_axi4_bitstream_writer.sv`

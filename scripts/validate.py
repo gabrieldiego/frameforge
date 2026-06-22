@@ -129,6 +129,11 @@ def main() -> int:
         action="store_true",
         help="write codec-specific software/RTL trace JSONL artifacts during validation",
     )
+    parser.add_argument(
+        "--block-waveform",
+        action="store_true",
+        help="write RTL block throughput VCD/HTML/JSON waveform artifacts",
+    )
     args = parser.parse_args()
     codec = codec_config_from_args(args)
 
@@ -162,6 +167,8 @@ def main() -> int:
     sw_internal_recon = out_dir / f"{stem}_software_internal_rec.yuv"
     rtl_internal_recon = out_dir / f"{stem}_rtl_internal_rec.yuv"
     rtl_metrics = out_dir / f"{stem}_rtl_cycle_metrics.json"
+    rtl_block_waveform = out_dir / f"{stem}_rtl_block_waveform.vcd"
+    rtl_block_waveform_json = out_dir / f"{stem}_rtl_block_waveform.json"
     vtm_recon = out_dir / f"{stem}_vtm_from_decodable_bitstream.yuv"
     validation_input_path = materialized_validation_input(input_path, info, out_dir, stem, input_format)
     if codec.name == "av2":
@@ -308,6 +315,11 @@ def main() -> int:
         env["FRAMEFORGE_RTL_VVC_ENCODER_OUT"] = str(rtl_bitstream)
         env["FRAMEFORGE_RTL_VVC_ENCODER_RECON_OUT"] = str(rtl_internal_recon)
     env["FRAMEFORGE_RTL_VVC_METRICS_OUT"] = str(rtl_metrics)
+    if args.block_waveform:
+        env["FRAMEFORGE_RTL_VVC_BLOCK_WAVEFORM_OUT"] = str(rtl_block_waveform)
+        env["FRAMEFORGE_RTL_VVC_BLOCK_WAVEFORM_JSON_OUT"] = str(
+            rtl_block_waveform_json
+        )
     run(
         [
             "make",
@@ -375,6 +387,13 @@ def main() -> int:
         print("FAIL: VVC RTL cycle metrics were not written", file=sys.stderr)
         return 1
     print_rtl_cycle_report("rtl", rtl_metrics, info)
+    if args.block_waveform:
+        if not rtl_block_waveform.exists():
+            print("FAIL: VVC RTL block waveform was not written", file=sys.stderr)
+            return 1
+        print(f"rtl_block_waveform_vcd {rtl_block_waveform}")
+        print(f"rtl_block_waveform_json {rtl_block_waveform_json}")
+        print(f"rtl_block_waveform_html {rtl_block_waveform.with_suffix('.html')}")
     print_psnr_report("software_internal_recon", validation_input_path, sw_internal_recon)
     print_psnr_report("rtl_internal_recon", validation_input_path, rtl_internal_recon)
     if has_vtm_recon:
@@ -445,6 +464,8 @@ def validate_av2_fixed_black_path(
     rtl_internal_recon = out_dir / f"{stem}_rtl_internal_rec.yuv"
     rtl_trace = out_dir / f"{stem}_rtl_trace.jsonl"
     rtl_metrics = out_dir / f"{stem}_rtl_cycle_metrics.json"
+    rtl_block_waveform = out_dir / f"{stem}_rtl_block_waveform.vcd"
+    rtl_block_waveform_json = out_dir / f"{stem}_rtl_block_waveform.json"
     if av2_mvp_expected_reconstruction(info, validation_input_path) is None:
         print(
             "FAIL: AV2 software validation only supports one yuv420p8 or yuv444p8 "
@@ -527,6 +548,11 @@ def validate_av2_fixed_black_path(
         if args.trace:
             env["FRAMEFORGE_RTL_AV2_TRACE_OUT"] = str(rtl_trace)
         env["FRAMEFORGE_RTL_AV2_METRICS_OUT"] = str(rtl_metrics)
+        if args.block_waveform:
+            env["FRAMEFORGE_RTL_AV2_BLOCK_WAVEFORM_OUT"] = str(rtl_block_waveform)
+            env["FRAMEFORGE_RTL_AV2_BLOCK_WAVEFORM_JSON_OUT"] = str(
+                rtl_block_waveform_json
+            )
         env["COCOTB_TEST_FILTER"] = (
             "^test_av2_encoder\\.av2_encoder_emits_obu_stream$"
         )
@@ -582,6 +608,15 @@ def validate_av2_fixed_black_path(
             print("FAIL: AV2 RTL cycle metrics were not written", file=sys.stderr)
             return 1
         print_rtl_cycle_report("rtl", rtl_metrics, info)
+        if args.block_waveform:
+            if not rtl_block_waveform.exists():
+                print("FAIL: AV2 RTL block waveform was not written", file=sys.stderr)
+                return 1
+            print(f"rtl_block_waveform_vcd {rtl_block_waveform}")
+            print(f"rtl_block_waveform_json {rtl_block_waveform_json}")
+            print(
+                f"rtl_block_waveform_html {rtl_block_waveform.with_suffix('.html')}"
+            )
     print_psnr_report("software_internal_recon", validation_input_path, sw_internal_recon)
     print_psnr_report("software_ref_decoded_recon", validation_input_path, sw_ref_decoded_recon)
     if rtl_recon_has_data:

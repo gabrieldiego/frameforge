@@ -19,6 +19,7 @@ from av2_metrics import (
     AV2_STATE_PARTITION,
     write_av2_cycle_metrics,
 )
+from block_waveform import BlockWaveformWriter, block_state
 from encoder_axi import (
     AXI_DST_BASE,
     REG_ENCODED_BYTE_COUNT,
@@ -36,6 +37,17 @@ from encoder_axi import (
     reset_axil_signals,
     start_encoder_via_axil,
 )
+
+AV2_BLOCK_WAVEFORM_BLOCKS = [
+    "axi_reader",
+    "input_fifo",
+    "av2_core",
+    "luma_residual",
+    "chroma_residual",
+    "entropy_coder",
+    "axi_writer",
+]
+
 
 def rtl_geometry():
     return (
@@ -454,6 +466,18 @@ async def av2_encoder_emits_obu_stream(dut):
     state_counts = {name: 0 for name in AV2_STATE_NAMES.values()}
     leaf_phase_counts = {}
     pipeline_counts = {}
+    block_waveform = BlockWaveformWriter(
+        os.environ.get("FRAMEFORGE_RTL_AV2_BLOCK_WAVEFORM_OUT"),
+        AV2_BLOCK_WAVEFORM_BLOCKS,
+        os.environ.get("FRAMEFORGE_RTL_AV2_BLOCK_WAVEFORM_JSON_OUT"),
+    )
+    block_waveform_closed = False
+
+    def close_block_waveform():
+        nonlocal block_waveform_closed
+        if not block_waveform_closed:
+            block_waveform.close()
+            block_waveform_closed = True
 
     def optional_handle(path):
         handle = dut
@@ -474,6 +498,8 @@ async def av2_encoder_emits_obu_stream(dut):
     s_axis_ready_h = dut.s_axis_ready
     m_axis_valid_h = dut.m_axis_valid
     m_axis_ready_h = dut.m_axis_ready
+    m_axi_rvalid_h = dut.m_axi_rvalid
+    m_axi_rready_h = dut.m_axi_rready
     m_axi_wvalid_h = dut.m_axi_wvalid
     m_axi_wready_h = dut.m_axi_wready
     input_fifo_level_h = dut.input_fifo_level_w
@@ -524,9 +550,58 @@ async def av2_encoder_emits_obu_stream(dut):
         s_axis_ready = hot_int(s_axis_ready_h)
         m_axis_valid = hot_int(m_axis_valid_h)
         m_axis_ready = hot_int(m_axis_ready_h)
+        m_axi_rvalid = hot_int(m_axi_rvalid_h)
+        m_axi_rready = hot_int(m_axi_rready_h)
         m_axi_wvalid = hot_int(m_axi_wvalid_h)
         m_axi_wready = hot_int(m_axi_wready_h)
         input_fifo_level = hot_int(input_fifo_level_h)
+        block_waveform.sample(
+            total_cycles - 1,
+            {
+                "axi_reader": block_state(
+                    m_axi_rvalid,
+                    m_axi_rready,
+                    reader_axis_valid,
+                    reader_axis_ready,
+                ),
+                "input_fifo": block_state(
+                    reader_axis_valid,
+                    reader_axis_ready,
+                    s_axis_valid,
+                    s_axis_ready,
+                ),
+                "av2_core": block_state(
+                    s_axis_valid,
+                    s_axis_ready,
+                    op_valid,
+                    0 if pending_push else 1,
+                ),
+                "luma_residual": block_state(
+                    optional_hot_int(luma_residual_enable_h),
+                    0 if hot_int(luma_residual_active_h) else 1,
+                    hot_int(luma_residual_op_valid_h),
+                    0 if pending_push else 1,
+                ),
+                "chroma_residual": block_state(
+                    optional_hot_int(chroma_bdpcm_enable_h),
+                    0 if hot_int(chroma_bdpcm_active_h) else 1,
+                    hot_int(chroma_bdpcm_op_valid_h),
+                    0 if pending_push else 1,
+                ),
+                "entropy_coder": block_state(
+                    op_valid,
+                    0 if pending_push else 1,
+                    m_axis_valid,
+                    m_axis_ready,
+                ),
+                "axi_writer": block_state(
+                    m_axis_valid,
+                    m_axis_ready,
+                    m_axi_wvalid,
+                    m_axi_wready,
+                ),
+            },
+        )
         if reader_axis_valid == 1 and reader_axis_ready == 1:
             increment_counter(pipeline_counts, "reader_sample_accept")
         if reader_axis_valid == 1 and reader_axis_ready == 0:
@@ -878,6 +953,7 @@ async def av2_encoder_emits_obu_stream(dut):
                 "analyzer_block_id": handle_int(dut.palette_analyzer.block_id_q),
                 "analyzer_block_sample": handle_int(dut.palette_analyzer.block_sample_q),
             }
+            close_block_waveform()
             raise AssertionError(f"AV2 RTL rejected the input: {details}")
         if m_axis_valid == 1 and m_axis_ready == 1:
             output_active_cycles += 1
@@ -885,6 +961,7 @@ async def av2_encoder_emits_obu_stream(dut):
             completed = True
             break
 
+    close_block_waveform()
     if not completed:
         details = {
             "state": signal_int(dut, "state_q"),
