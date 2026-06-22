@@ -124,6 +124,11 @@ def main() -> int:
         action="store_true",
         help="skip RTL simulation and synthesis; VVC validates only the Rust software encoder against VTM",
     )
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="write codec-specific software/RTL trace JSONL artifacts during validation",
+    )
     args = parser.parse_args()
     codec = codec_config_from_args(args)
 
@@ -473,9 +478,9 @@ def validate_av2_fixed_black_path(
         str(sw_bitstream),
         "--recon",
         str(sw_internal_recon),
-        "--trace",
-        str(sw_trace),
     ]
+    if args.trace:
+        sw_cmd.extend(["--trace", str(sw_trace)])
     if normalize_format(info.fmt) == "yuv444p8":
         sw_cmd.extend(["--stats", str(sw_ibc_stats)])
     sw = subprocess.run(
@@ -519,7 +524,8 @@ def validate_av2_fixed_black_path(
         env["FRAMEFORGE_RTL_AV2_ENCODER_INPUT"] = str(validation_input_path)
         env["FRAMEFORGE_RTL_AV2_ENCODER_OUT"] = str(rtl_bitstream)
         env["FRAMEFORGE_RTL_AV2_ENCODER_RECON_OUT"] = str(rtl_internal_recon)
-        env["FRAMEFORGE_RTL_AV2_TRACE_OUT"] = str(rtl_trace)
+        if args.trace:
+            env["FRAMEFORGE_RTL_AV2_TRACE_OUT"] = str(rtl_trace)
         env["FRAMEFORGE_RTL_AV2_METRICS_OUT"] = str(rtl_metrics)
         env["COCOTB_TEST_FILTER"] = (
             "^test_av2_encoder\\.av2_encoder_emits_obu_stream$"
@@ -619,8 +625,9 @@ def validate_av2_fixed_black_path(
         print("OK: AV2 software reconstruction is lossless for this input")
     else:
         print("OK: AV2 software reconstruction is lossy relative to input")
-    print(f"AV2 software trace: {sw_trace}")
-    if ran_rtl:
+    if args.trace:
+        print(f"AV2 software trace: {sw_trace}")
+    if ran_rtl and args.trace:
         print(f"AV2 RTL trace: {rtl_trace}")
     if ran_rtl:
         if digests["rtl_bitstream"] != digests["software_bitstream"]:

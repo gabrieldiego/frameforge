@@ -18,6 +18,7 @@ import generate_test_vectors
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_VECTOR_DIR = Path("verification/generated/test_vectors")
 DEFAULT_LOG_DIR = Path("verification/generated/validation_logs")
+DEFAULT_CHECKSUM_DIR = Path("verification/generated/checksums")
 
 
 @dataclass
@@ -40,6 +41,7 @@ def main() -> int:
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_VECTOR_DIR)
     parser.add_argument("--set-dir", type=Path, default=generate_test_vectors.DEFAULT_SET_DIR)
     parser.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_DIR)
+    parser.add_argument("--checksum-dir", type=Path, default=None)
     parser.add_argument("--max-width", type=int, default=64)
     parser.add_argument("--max-height", type=int, default=64)
     parser.add_argument("--limit", type=int, default=0, help="run only the first N cases")
@@ -49,12 +51,15 @@ def main() -> int:
     args = parser.parse_args()
     codec = codec_config_from_args(args)
     args.codec_config = codec
+    if args.checksum_dir is None:
+        args.checksum_dir = DEFAULT_CHECKSUM_DIR / codec.name
 
     vector_paths = generate_test_vectors.generate_vectors(args.set, args.out_dir, args.set_dir)
     if args.limit:
         vector_paths = vector_paths[: args.limit]
 
     args.log_dir.mkdir(parents=True, exist_ok=True)
+    args.checksum_dir.mkdir(parents=True, exist_ok=True)
     results: list[ValidationResult] = []
     for index, path in enumerate(vector_paths, start=1):
         print(f"[{index:03d}/{len(vector_paths):03d}] {path.name}", flush=True)
@@ -129,6 +134,8 @@ def run_validation(path: Path, args: argparse.Namespace) -> ValidationResult:
         "--codec",
         args.codec_config.name,
         str(path),
+        "--out-dir",
+        str(args.checksum_dir),
         "--max-width",
         str(args.max_width),
         "--max-height",

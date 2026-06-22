@@ -443,6 +443,7 @@ async def av2_encoder_emits_obu_stream(dut):
     await start_encoder(dut)
 
     observed = []
+    trace_enabled = bool(os.environ.get("FRAMEFORGE_RTL_AV2_TRACE_OUT"))
     trace_records = []
     completed = False
     total_cycles = 0
@@ -453,31 +454,100 @@ async def av2_encoder_emits_obu_stream(dut):
     state_counts = {name: 0 for name in AV2_STATE_NAMES.values()}
     leaf_phase_counts = {}
     pipeline_counts = {}
+
+    def optional_handle(path):
+        handle = dut
+        try:
+            for name in path.split("."):
+                handle = getattr(handle, name)
+            return handle
+        except AttributeError:
+            return None
+
+    state_h = dut.state_q
+    phase_h = dut.phase_q
+    op_valid_h = dut.op_valid_w
+    pending_push_valid_h = dut.pending_push_valid_q
+    reader_axis_valid_h = dut.reader_axis_valid
+    reader_axis_ready_h = dut.reader_axis_ready
+    s_axis_valid_h = dut.s_axis_valid
+    s_axis_ready_h = dut.s_axis_ready
+    m_axis_valid_h = dut.m_axis_valid
+    m_axis_ready_h = dut.m_axis_ready
+    m_axi_wvalid_h = dut.m_axi_wvalid
+    m_axi_wready_h = dut.m_axi_wready
+    input_fifo_level_h = dut.input_fifo_level_w
+    txb_prefetch_started_h = dut.txb_prefetch_started_q
+    txb_prefetch_done_h = dut.txb_prefetch_done_q
+    chroma_fetch_current_cache_hit_h = dut.chroma_fetch_current_cache_hit_w
+    chroma_fetch_req_ready_h = dut.chroma_fetch_req_ready_w
+    luma_residual_enable_h = optional_handle("luma_residual_enable_w")
+    chroma_bdpcm_enable_h = optional_handle("chroma_bdpcm_enable_w")
+    luma_residual_active_h = dut.luma_palette_residual_symbolizer.active_q
+    luma_residual_op_valid_h = dut.luma_residual_op_valid_w
+    luma_residual_start_op_h = dut.luma_palette_residual_symbolizer.start_op_w
+    palette_luma_residual_zero_h = dut.palette_luma_residual_zero_w
+    chroma_bdpcm_active_h = dut.chroma_bdpcm_symbolizer.active_q
+    chroma_bdpcm_op_valid_h = dut.chroma_bdpcm_op_valid_w
+    chroma_bdpcm_start_op_h = dut.chroma_bdpcm_symbolizer.start_op_w
+    chroma_bdpcm_txb_done_h = dut.chroma_bdpcm_txb_done_w
+    chroma_bdpcm_txb_nonzero_h = dut.chroma_bdpcm_txb_nonzero_w
+    input_error_h = dut.input_error
+    done_h = dut.done
+
+    def hot_int(handle):
+        return int(handle.value)
+
+    def optional_hot_int(handle):
+        return None if handle is None else int(handle.value)
+
     default_max_cycles = max(80000, width * height * 3 * 32 + 20000)
     max_cycles = int(os.environ.get("FRAMEFORGE_RTL_AV2_MAX_CYCLES", str(default_max_cycles)))
     for _ in range(max_cycles):
         await RisingEdge(dut.clk)
         await ReadOnly()
         total_cycles += 1
-        state = signal_int(dut, "state_q")
+        state = hot_int(state_h)
         state_counts[AV2_STATE_NAMES.get(state, f"unknown_{state}")] = (
             state_counts.get(AV2_STATE_NAMES.get(state, f"unknown_{state}"), 0) + 1
         )
-        op_valid = signal_int(dut, "op_valid_w")
-        pending_push = signal_int(dut, "pending_push_valid_q") == 1
+        op_valid = hot_int(op_valid_h)
+        pending_push = hot_int(pending_push_valid_h) == 1
         op_consumed = op_valid == 1 and not pending_push
         if pending_push:
             pending_push_cycles += 1
         if op_consumed:
             entropy_op_cycles += 1
-        if int(dut.s_axis_valid.value) == 1 and int(dut.s_axis_ready.value) == 1:
+        reader_axis_valid = hot_int(reader_axis_valid_h)
+        reader_axis_ready = hot_int(reader_axis_ready_h)
+        s_axis_valid = hot_int(s_axis_valid_h)
+        s_axis_ready = hot_int(s_axis_ready_h)
+        m_axis_valid = hot_int(m_axis_valid_h)
+        m_axis_ready = hot_int(m_axis_ready_h)
+        m_axi_wvalid = hot_int(m_axi_wvalid_h)
+        m_axi_wready = hot_int(m_axi_wready_h)
+        input_fifo_level = hot_int(input_fifo_level_h)
+        if reader_axis_valid == 1 and reader_axis_ready == 1:
+            increment_counter(pipeline_counts, "reader_sample_accept")
+        if reader_axis_valid == 1 and reader_axis_ready == 0:
+            increment_counter(pipeline_counts, "reader_backpressure")
+        if s_axis_valid == 1 and s_axis_ready == 1:
             input_sample_cycles += 1
-        if int(dut.s_axis_valid.value) == 1 and int(dut.s_axis_ready.value) == 0:
+            increment_counter(pipeline_counts, "core_sample_accept")
+        if s_axis_valid == 1 and s_axis_ready == 0:
             increment_counter(pipeline_counts, "input_backpressure")
-        if int(dut.m_axis_valid.value) == 1 and int(dut.m_axis_ready.value) == 0:
+        if input_fifo_level != 0:
+            increment_counter(pipeline_counts, "input_fifo_nonempty")
+        if input_fifo_level >= 128:
+            increment_counter(pipeline_counts, "input_fifo_full")
+        if m_axis_valid == 1 and m_axis_ready == 0:
             increment_counter(pipeline_counts, "output_backpressure")
+        if m_axi_wvalid == 1 and m_axi_wready == 1:
+            increment_counter(pipeline_counts, "axi_write_beat_accept")
+        if m_axi_wvalid == 1 and m_axi_wready == 0:
+            increment_counter(pipeline_counts, "axi_write_backpressure")
         if state == AV2_STATE_LEAF:
-            phase = signal_int(dut, "phase_q")
+            phase = hot_int(phase_h)
             phase_name = {
                 AV2_PHASE_INTRA: "intra",
                 AV2_PHASE_PALETTE_HEADER: "palette_header",
@@ -494,62 +564,60 @@ async def av2_encoder_emits_obu_stream(dut):
                 increment_counter(pipeline_counts, f"leaf_entropy_op_{phase_name}")
             else:
                 increment_counter(pipeline_counts, f"leaf_entropy_gap_{phase_name}")
-            if signal_int(dut, "txb_prefetch_started_q") == 1:
+            if hot_int(txb_prefetch_started_h) == 1:
                 increment_counter(pipeline_counts, "leaf_prefetch_active")
-                if signal_int(dut, "txb_prefetch_done_q") == 1:
+                if hot_int(txb_prefetch_done_h) == 1:
                     increment_counter(pipeline_counts, "leaf_prefetch_done_wait")
         elif state == AV2_STATE_CHROMA_FETCH:
-            phase = signal_int(dut, "phase_q")
+            phase = hot_int(phase_h)
             if phase == AV2_PHASE_Y_COEFF:
                 increment_counter(pipeline_counts, "fetch_wait_luma")
             elif phase == AV2_PHASE_U_COEFF:
                 increment_counter(pipeline_counts, "fetch_wait_u")
             elif phase == AV2_PHASE_V_COEFF:
                 increment_counter(pipeline_counts, "fetch_wait_v")
-            if signal_int(dut, "chroma_fetch_current_cache_hit_w") == 1:
+            if hot_int(chroma_fetch_current_cache_hit_h) == 1:
                 increment_counter(pipeline_counts, "fetch_cache_hit_wait")
-            if signal_int(dut, "chroma_fetch_req_ready_w") == 1:
+            if hot_int(chroma_fetch_req_ready_h) == 1:
                 increment_counter(pipeline_counts, "fetch_req_ready_wait")
 
-        if signal_int(dut, "luma_residual_enable_w") == 1:
+        if optional_hot_int(luma_residual_enable_h) == 1:
             increment_counter(pipeline_counts, "luma_residual_enable")
-        if signal_int(dut, "chroma_bdpcm_enable_w") == 1:
+        if optional_hot_int(chroma_bdpcm_enable_h) == 1:
             increment_counter(pipeline_counts, "chroma_bdpcm_enable")
-        luma_residual_active = nested_signal_int(
-            dut, "luma_palette_residual_symbolizer.active_q"
-        )
-        chroma_bdpcm_active = nested_signal_int(dut, "chroma_bdpcm_symbolizer.active_q")
+        luma_residual_active = hot_int(luma_residual_active_h)
+        chroma_bdpcm_active = hot_int(chroma_bdpcm_active_h)
         if luma_residual_active == 1:
             increment_counter(pipeline_counts, "luma_residual_active")
-            if signal_int(dut, "luma_residual_op_valid_w") == 1:
+            if hot_int(luma_residual_op_valid_h) == 1:
                 increment_counter(pipeline_counts, "luma_residual_op_valid")
             else:
                 increment_counter(pipeline_counts, "luma_residual_op_gap")
         if chroma_bdpcm_active == 1:
             increment_counter(pipeline_counts, "chroma_bdpcm_active")
-            if signal_int(dut, "chroma_bdpcm_op_valid_w") == 1:
+            if hot_int(chroma_bdpcm_op_valid_h) == 1:
                 increment_counter(pipeline_counts, "chroma_bdpcm_op_valid")
             else:
                 increment_counter(pipeline_counts, "chroma_bdpcm_op_gap")
-        if nested_signal_int(dut, "chroma_bdpcm_symbolizer.start_op_w") == 1:
+        if hot_int(chroma_bdpcm_start_op_h) == 1:
             increment_counter(pipeline_counts, "chroma_bdpcm_zero_fast_start")
         if (
             state == AV2_STATE_LEAF
-            and signal_int(dut, "phase_q") in (AV2_PHASE_U_COEFF, AV2_PHASE_V_COEFF)
-            and signal_int(dut, "chroma_bdpcm_txb_done_w") == 1
+            and hot_int(phase_h) in (AV2_PHASE_U_COEFF, AV2_PHASE_V_COEFF)
+            and hot_int(chroma_bdpcm_txb_done_h) == 1
         ):
             increment_counter(pipeline_counts, "chroma_bdpcm_txb_done")
-            if signal_int(dut, "chroma_bdpcm_txb_nonzero_w") == 0:
+            if hot_int(chroma_bdpcm_txb_nonzero_h) == 0:
                 increment_counter(pipeline_counts, "chroma_bdpcm_zero_txb_done")
         if (
             state == AV2_STATE_LEAF
-            and signal_int(dut, "phase_q") == AV2_PHASE_Y_COEFF
-            and signal_int(dut, "palette_luma_residual_zero_w") == 1
+            and hot_int(phase_h) == AV2_PHASE_Y_COEFF
+            and hot_int(palette_luma_residual_zero_h) == 1
         ):
             increment_counter(pipeline_counts, "luma_residual_known_zero")
-        if nested_signal_int(dut, "luma_palette_residual_symbolizer.start_op_w") == 1:
+        if hot_int(luma_residual_start_op_h) == 1:
             increment_counter(pipeline_counts, "luma_residual_zero_fast_start")
-        if state in (AV2_STATE_PARTITION, AV2_STATE_LEAF) and op_consumed:
+        if trace_enabled and state in (AV2_STATE_PARTITION, AV2_STATE_LEAF) and op_consumed:
             phase = signal_int(dut, "phase_q")
             step = signal_int(dut, "step_q")
             partition_emit_do_split = signal_int(dut, "partition_emit_do_split_w") == 1
@@ -794,7 +862,7 @@ async def av2_encoder_emits_obu_stream(dut):
                     }
                 )
             trace_records.append(record)
-        if int(dut.input_error.value) == 1:
+        if hot_int(input_error_h) == 1:
             details = {
                 "state": signal_int(dut, "state_q"),
                 "s_axis_ready": signal_int(dut, "s_axis_ready"),
@@ -811,9 +879,9 @@ async def av2_encoder_emits_obu_stream(dut):
                 "analyzer_block_sample": handle_int(dut.palette_analyzer.block_sample_q),
             }
             raise AssertionError(f"AV2 RTL rejected the input: {details}")
-        if signal_int(dut, "m_axis_valid") == 1 and signal_int(dut, "m_axis_ready") == 1:
+        if m_axis_valid == 1 and m_axis_ready == 1:
             output_active_cycles += 1
-        if signal_int(dut, "done") == 1:
+        if hot_int(done_h) == 1:
             completed = True
             break
 

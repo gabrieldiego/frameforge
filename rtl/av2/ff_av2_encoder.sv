@@ -128,6 +128,11 @@ module ff_av2_encoder #(
   logic       s_axis_ready;
   logic [SAMPLE_BITS - 1:0] s_axis_data;
   logic       s_axis_last;
+  logic       reader_axis_valid;
+  logic       reader_axis_ready;
+  logic [SAMPLE_BITS - 1:0] reader_axis_data;
+  logic       reader_axis_last;
+  logic [7:0] input_fifo_level_w;
   logic       m_axis_valid;
   logic       m_axis_ready;
   logic [7:0] m_axis_data;
@@ -478,6 +483,7 @@ module ff_av2_encoder #(
   logic [4:0] palette_chroma_bdpcm_op_fh_inc_w;
   logic palette_chroma_bdpcm_txb_done_w;
   logic palette_chroma_bdpcm_txb_nonzero_w;
+  logic palette_chroma_bdpcm_known_zero_w;
   logic [7:0] palette_chroma_bdpcm_entropy_context_w;
   logic lossy420_chroma_bdpcm_op_valid_w;
   logic lossy420_chroma_bdpcm_op_literal_w;
@@ -708,13 +714,31 @@ module ff_av2_encoder #(
     .m_axi_rdata(m_axi_rdata),
     .m_axi_rresp(m_axi_rresp),
     .m_axi_rlast(m_axi_rlast),
-    .sample_valid(s_axis_valid),
-    .sample_ready(s_axis_ready),
-    .sample_data(s_axis_data),
-    .sample_last(s_axis_last),
+    .sample_valid(reader_axis_valid),
+    .sample_ready(reader_axis_ready),
+    .sample_data(reader_axis_data),
+    .sample_last(reader_axis_last),
     .busy(frame_reader_busy_w),
     .done(frame_reader_done_w),
     .error(frame_reader_error_w)
+  );
+
+  ff_axis_sample_fifo #(
+    .DATA_BITS(SAMPLE_BITS),
+    .DEPTH(128)
+  ) input_sample_fifo (
+    .clk(clk),
+    .rst_n(rst_n),
+    .clear(frame_reader_start_w),
+    .s_axis_valid(reader_axis_valid),
+    .s_axis_ready(reader_axis_ready),
+    .s_axis_data(reader_axis_data),
+    .s_axis_last(reader_axis_last),
+    .m_axis_valid(s_axis_valid),
+    .m_axis_ready(s_axis_ready),
+    .m_axis_data(s_axis_data),
+    .m_axis_last(s_axis_last),
+    .level(input_fifo_level_w)
   );
 
   ff_axi4_bitstream_writer #(
@@ -976,7 +1000,7 @@ module ff_av2_encoder #(
     .predictor_txb_samples(128'd0),
     .dc_delta(10'sd0),
     .dc_recon_sample(8'd0),
-    .known_zero_txb(1'b0),
+    .known_zero_txb(palette_chroma_bdpcm_known_zero_w),
     .op_valid(palette_chroma_bdpcm_op_valid_w),
     .op_literal(palette_chroma_bdpcm_op_literal_w),
     .op_literal_value(palette_chroma_bdpcm_op_literal_value_w),
@@ -1699,6 +1723,27 @@ module ff_av2_encoder #(
     chroma_predictor_compute_valid_w ?
       chroma_cached_predictor_samples_w :
       chroma_fetch_predictor_samples_w;
+  // AV2 v1.0.0 Section 5.20.7.27 coeffs(): for FrameForge's staged chroma
+  // BDPCM residual path, a zero TXB is completely determined by the row
+  // predictor and horizontal reconstructed samples. Detect it before the
+  // residual symbolizer so zero chroma TXBs emit only the skip symbol.
+  assign palette_chroma_bdpcm_known_zero_w =
+    (chroma_bdpcm_txb_samples_w[0 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[0 * 8 +: 8]) &&
+    (chroma_bdpcm_txb_samples_w[1 * 8 +: 8] == chroma_bdpcm_txb_samples_w[0 * 8 +: 8]) &&
+    (chroma_bdpcm_txb_samples_w[2 * 8 +: 8] == chroma_bdpcm_txb_samples_w[1 * 8 +: 8]) &&
+    (chroma_bdpcm_txb_samples_w[3 * 8 +: 8] == chroma_bdpcm_txb_samples_w[2 * 8 +: 8]) &&
+    (chroma_bdpcm_txb_samples_w[4 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[1 * 8 +: 8]) &&
+    (chroma_bdpcm_txb_samples_w[5 * 8 +: 8] == chroma_bdpcm_txb_samples_w[4 * 8 +: 8]) &&
+    (chroma_bdpcm_txb_samples_w[6 * 8 +: 8] == chroma_bdpcm_txb_samples_w[5 * 8 +: 8]) &&
+    (chroma_bdpcm_txb_samples_w[7 * 8 +: 8] == chroma_bdpcm_txb_samples_w[6 * 8 +: 8]) &&
+    (chroma_bdpcm_txb_samples_w[8 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[2 * 8 +: 8]) &&
+    (chroma_bdpcm_txb_samples_w[9 * 8 +: 8] == chroma_bdpcm_txb_samples_w[8 * 8 +: 8]) &&
+    (chroma_bdpcm_txb_samples_w[10 * 8 +: 8] == chroma_bdpcm_txb_samples_w[9 * 8 +: 8]) &&
+    (chroma_bdpcm_txb_samples_w[11 * 8 +: 8] == chroma_bdpcm_txb_samples_w[10 * 8 +: 8]) &&
+    (chroma_bdpcm_txb_samples_w[12 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[3 * 8 +: 8]) &&
+    (chroma_bdpcm_txb_samples_w[13 * 8 +: 8] == chroma_bdpcm_txb_samples_w[12 * 8 +: 8]) &&
+    (chroma_bdpcm_txb_samples_w[14 * 8 +: 8] == chroma_bdpcm_txb_samples_w[13 * 8 +: 8]) &&
+    (chroma_bdpcm_txb_samples_w[15 * 8 +: 8] == chroma_bdpcm_txb_samples_w[14 * 8 +: 8]);
   assign luma_residual_top_level_w =
     ((y_txb_above_q[txb_col_w[4:0]] & 8'd7) > 8'd4) ?
       3'd4 : y_txb_above_q[txb_col_w[4:0]][2:0];

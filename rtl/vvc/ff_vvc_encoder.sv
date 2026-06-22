@@ -123,6 +123,11 @@ module ff_vvc_encoder #(
   logic       s_axis_ready;
   logic [SAMPLE_BITS - 1:0] s_axis_data;
   logic       s_axis_last;
+  logic       reader_axis_valid;
+  logic       reader_axis_ready;
+  logic [SAMPLE_BITS - 1:0] reader_axis_data;
+  logic       reader_axis_last;
+  logic [7:0] input_fifo_level_w;
   logic       m_axis_valid;
   logic       m_axis_ready;
   logic [7:0] m_axis_data;
@@ -1141,13 +1146,31 @@ module ff_vvc_encoder #(
     .m_axi_rdata(m_axi_rdata),
     .m_axi_rresp(m_axi_rresp),
     .m_axi_rlast(m_axi_rlast),
-    .sample_valid(s_axis_valid),
-    .sample_ready(s_axis_ready),
-    .sample_data(s_axis_data),
-    .sample_last(s_axis_last),
+    .sample_valid(reader_axis_valid),
+    .sample_ready(reader_axis_ready),
+    .sample_data(reader_axis_data),
+    .sample_last(reader_axis_last),
     .busy(frame_reader_busy_w),
     .done(frame_reader_done_w),
     .error(frame_reader_error_w)
+  );
+
+  ff_axis_sample_fifo #(
+    .DATA_BITS(SAMPLE_BITS),
+    .DEPTH(128)
+  ) input_sample_fifo (
+    .clk(clk),
+    .rst_n(rst_n),
+    .clear(frame_reader_start_w),
+    .s_axis_valid(reader_axis_valid),
+    .s_axis_ready(reader_axis_ready),
+    .s_axis_data(reader_axis_data),
+    .s_axis_last(reader_axis_last),
+    .m_axis_valid(s_axis_valid),
+    .m_axis_ready(s_axis_ready),
+    .m_axis_data(s_axis_data),
+    .m_axis_last(s_axis_last),
+    .level(input_fifo_level_w)
   );
 
   ff_axi4_bitstream_writer #(

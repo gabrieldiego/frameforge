@@ -299,6 +299,98 @@ def write_vvc_cycle_metrics(
         metrics["state_cycles"] = state_counts
     if pipeline_counts is not None:
         metrics["pipeline_cycles"] = pipeline_counts
+        frame_reader_active = 0
+        if state_counts is not None:
+            frame_reader_active = sum(
+                int(value)
+                for key, value in state_counts.items()
+                if key.startswith("frame_reader_") and key != "frame_reader_idle"
+            )
+        reader_accept = int(pipeline_counts.get("reader_sample_accept", 0))
+        reader_backpressure = int(pipeline_counts.get("reader_backpressure", 0))
+        source_accept = int(pipeline_counts.get("source_sample_accept", 0))
+        source_backpressure = int(pipeline_counts.get("source_backpressure", 0))
+        input_fifo_nonempty = int(pipeline_counts.get("input_fifo_nonempty", 0))
+        input_fifo_full = int(pipeline_counts.get("input_fifo_full", 0))
+        axi_write_accept = int(pipeline_counts.get("axi_write_beat_accept", 0))
+        axi_write_backpressure = int(pipeline_counts.get("axi_write_backpressure", 0))
+        ctu_symbol_accept = int(pipeline_counts.get("ctu_symbol_accept", 0))
+        ctu_symbol_backpressure = int(pipeline_counts.get("ctu_symbol_backpressure", 0))
+        syntax_accept = int(pipeline_counts.get("syntax_accept", 0))
+        syntax_backpressure = int(pipeline_counts.get("syntax_backpressure", 0))
+        bin_accept = int(pipeline_counts.get("bin_accept", 0))
+        bin_backpressure = int(pipeline_counts.get("bin_backpressure", 0))
+        ctu_residual_accept = int(pipeline_counts.get("ctu_residual_symbol_accept", 0))
+        ctu_residual_backpressure = int(
+            pipeline_counts.get("ctu_residual_symbol_backpressure", 0)
+        )
+        ts_residual_accept = int(pipeline_counts.get("syntax_ts_residual_symbol_accept", 0))
+        ts_residual_backpressure = int(
+            pipeline_counts.get("syntax_ts_residual_symbol_backpressure", 0)
+        )
+        stream_emit_accept = int(pipeline_counts.get("stream_emit_accept", 0))
+        stream_emit_pending = int(pipeline_counts.get("stream_emit_pending", 0))
+        bit_writer_active = int(pipeline_counts.get("bit_writer_bits_active", 0))
+        bit_writer_output_accept = int(pipeline_counts.get("bit_writer_output_accept", 0))
+        cabac_byte_accept = int(pipeline_counts.get("cabac_byte_accept", 0))
+        cabac_byte_backpressure = int(pipeline_counts.get("cabac_byte_backpressure", 0))
+        rbsp_payload_accept = int(pipeline_counts.get("rbsp_payload_accept", 0))
+        rbsp_payload_backpressure = int(pipeline_counts.get("rbsp_payload_backpressure", 0))
+
+        def ratio(numerator, denominator):
+            return numerator / denominator if denominator else 0.0
+
+        metrics["block_utilization"] = {
+            "frame_reader_sample_utilization": ratio(
+                reader_accept, frame_reader_active
+            ),
+            "frame_reader_to_fifo_utilization": ratio(
+                reader_accept, reader_accept + reader_backpressure
+            ),
+            "input_fifo_core_utilization": ratio(
+                source_accept, source_accept + source_backpressure
+            ),
+            "input_fifo_nonempty_rate": ratio(
+                input_fifo_nonempty, total_cycles
+            ),
+            "input_fifo_full_rate": ratio(
+                input_fifo_full, total_cycles
+            ),
+            "axi_write_beat_utilization": ratio(
+                axi_write_accept, axi_write_accept + axi_write_backpressure
+            ),
+            "axi_write_bus_utilization": ratio(
+                axi_write_accept, total_cycles
+            ),
+            "ctu_symbol_utilization": ratio(
+                ctu_symbol_accept, ctu_symbol_accept + ctu_symbol_backpressure
+            ),
+            "syntax_frontend_utilization": ratio(
+                syntax_accept, syntax_accept + syntax_backpressure
+            ),
+            "bin_coder_input_utilization": ratio(
+                bin_accept, bin_accept + bin_backpressure
+            ),
+            "ctu_residual_symbol_utilization": ratio(
+                ctu_residual_accept, ctu_residual_accept + ctu_residual_backpressure
+            ),
+            "syntax_ts_residual_utilization": ratio(
+                ts_residual_accept, ts_residual_accept + ts_residual_backpressure
+            ),
+            "stream_emit_utilization": ratio(
+                stream_emit_accept, stream_emit_accept + stream_emit_pending
+            ),
+            "bit_writer_output_utilization": ratio(
+                bit_writer_output_accept, bit_writer_active
+            ),
+            "cabac_byte_utilization": ratio(
+                cabac_byte_accept, cabac_byte_accept + cabac_byte_backpressure
+            ),
+            "rbsp_payload_utilization": ratio(
+                rbsp_payload_accept, rbsp_payload_accept + rbsp_payload_backpressure
+            ),
+            "final_output_utilization": output_utilization,
+        }
     if handshake_counts is not None:
         metrics["handshake_counts"] = handshake_counts
     out = Path(path)
@@ -1144,6 +1236,18 @@ async def collect_stream(
                     f"bit_writer_{bit_writer_state_names.get(bit_writer_state, f'unknown_{bit_writer_state}')}",
                 )
 
+            if hasattr(dut, "reader_axis_valid") and value_is_one(
+                dut.reader_axis_valid, "reader_axis_valid"
+            ):
+                if value_is_one(dut.reader_axis_ready, "reader_axis_ready"):
+                    increment_counter(pipeline_counts, "reader_sample_accept")
+                else:
+                    increment_counter(pipeline_counts, "reader_backpressure")
+            input_fifo_level = signal_int("input_fifo_level_w")
+            if input_fifo_level is not None and input_fifo_level != 0:
+                increment_counter(pipeline_counts, "input_fifo_nonempty")
+            if input_fifo_level is not None and input_fifo_level >= 128:
+                increment_counter(pipeline_counts, "input_fifo_full")
             if hasattr(dut, "s_axis_valid") and value_is_one(dut.s_axis_valid, "s_axis_valid"):
                 if value_is_one(dut.s_axis_ready, "s_axis_ready"):
                     increment_counter(pipeline_counts, "source_sample_accept")
@@ -1154,6 +1258,13 @@ async def collect_stream(
                     increment_counter(pipeline_counts, "output_accept")
                 else:
                     increment_counter(pipeline_counts, "output_backpressure")
+            if hasattr(dut, "m_axi_wvalid") and value_is_one(
+                dut.m_axi_wvalid, "m_axi_wvalid"
+            ):
+                if value_is_one(dut.m_axi_wready, "m_axi_wready"):
+                    increment_counter(pipeline_counts, "axi_write_beat_accept")
+                else:
+                    increment_counter(pipeline_counts, "axi_write_backpressure")
             if signal_int("input_active_q") == 1:
                 increment_counter(pipeline_counts, "input_active")
             if signal_int("pending_output_q") == 1:

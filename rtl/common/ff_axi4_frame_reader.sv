@@ -118,15 +118,25 @@ module ff_axi4_frame_reader #(
   logic [CACHE_INDEX_BITS-1:0] cache_index_w;
   logic cache_hit_w;
   logic [AXI_DATA_BITS-1:0] cache_hit_data_w;
+  logic [AXI_DATA_BITS-1:0] active_axi_word_q;
   logic [SAMPLE_BITS-1:0] pad_sample_w;
   logic in_visible_w;
   logic fast_next_same_row_w;
+  logic fast_next_contiguous_row_w;
+  logic fast_next_contiguous_addr_w;
   logic fast_next_same_axi_word_w;
   logic fast_next_visible_w;
   logic fast_next_sample_w;
+  logic [5:0] next_sample_q_w;
+  logic [15:0] next_local_x_w;
+  logic [15:0] next_local_y_w;
   logic [AXI_BYTE_INDEX_BITS-1:0] next_axi_byte_offset_w;
   logic [15:0] next_sample_x_w;
+  logic [15:0] next_sample_y_w;
   logic [15:0] next_plane_x_w;
+  logic [15:0] next_plane_y_w;
+  logic [31:0] packet_row_bytes_w;
+  logic [15:0] packet_row_start_x_w;
   logic next_sample_last_in_component_w;
   logic next_component_last_w;
   logic next_output_last_w;
@@ -232,19 +242,53 @@ module ff_axi4_frame_reader #(
     ((chroma_format_idc == 2'd1) && (component_q != 2'd0)) ?
       (sample_q[1:0] != 2'd3) :
       (sample_q[2:0] != 3'd7);
+  assign next_sample_q_w = sample_q + 6'd1;
+  assign next_local_x_w =
+    ((chroma_format_idc == 2'd1) && (component_q != 2'd0)) ?
+      {14'd0, next_sample_q_w[1:0]} :
+      {13'd0, next_sample_q_w[2:0]};
+  assign next_local_y_w =
+    ((chroma_format_idc == 2'd1) && (component_q != 2'd0)) ?
+      {12'd0, next_sample_q_w[5:2]} :
+      {13'd0, next_sample_q_w[5:3]};
+  assign next_sample_x_w =
+    segment_origin_x + ({13'd0, leaf_col_w} << 3) + next_local_x_w;
+  assign next_sample_y_w =
+    segment_origin_y + ({13'd0, leaf_row_w} << 3) + next_local_y_w;
+  assign next_plane_x_w =
+    ((chroma_format_idc == 2'd1) && (component_q != 2'd0)) ?
+      ((segment_origin_x >> 1) + ({13'd0, leaf_col_w} << 2) + next_local_x_w) :
+      next_sample_x_w;
+  assign next_plane_y_w =
+    ((chroma_format_idc == 2'd1) && (component_q != 2'd0)) ?
+      ((segment_origin_y >> 1) + ({13'd0, leaf_row_w} << 2) + next_local_y_w) :
+      next_sample_y_w;
+  assign packet_row_bytes_w =
+    ((chroma_format_idc == 2'd1) && (component_q != 2'd0)) ?
+      (32'd4 << SAMPLE_BYTE_SHIFT) :
+      (32'd8 << SAMPLE_BYTE_SHIFT);
+  assign packet_row_start_x_w =
+    ((chroma_format_idc == 2'd1) && (component_q != 2'd0)) ?
+      ((segment_origin_x >> 1) + ({13'd0, leaf_col_w} << 2)) :
+      (segment_origin_x + ({13'd0, leaf_col_w} << 3));
+  assign fast_next_contiguous_row_w =
+    !fast_next_same_row_w &&
+    !sample_last_in_component_w &&
+    (next_plane_x_w == packet_row_start_x_w) &&
+    (plane_stride_w == packet_row_bytes_w);
+  assign fast_next_contiguous_addr_w =
+    fast_next_same_row_w || fast_next_contiguous_row_w;
   assign fast_next_same_axi_word_w =
+    fast_next_contiguous_addr_w &&
     (AXI_BYTES >= (2 * SAMPLE_BYTES)) &&
     ({1'b0, axi_byte_offset_w} <= (AXI_BYTES - (2 * SAMPLE_BYTES)));
   assign next_axi_byte_offset_w = axi_byte_offset_w + AXI_BYTE_INDEX_BITS'(SAMPLE_BYTES);
-  assign next_sample_x_w = sample_x_w + 16'd1;
-  assign next_plane_x_w = plane_x_w + 16'd1;
   assign fast_next_visible_w =
     (next_sample_x_w < visible_width) &&
-    (sample_y_w < visible_height) &&
+    (next_sample_y_w < visible_height) &&
     !((chroma_format_idc == 2'd1) && (component_q != 2'd0) &&
-      ((next_plane_x_w >= (visible_width >> 1)) || (plane_y_w >= (visible_height >> 1))));
+      ((next_plane_x_w >= (visible_width >> 1)) || (next_plane_y_w >= (visible_height >> 1))));
   assign fast_next_sample_w =
-    fast_next_same_row_w &&
     fast_next_same_axi_word_w &&
     fast_next_visible_w;
   assign next_sample_last_in_component_w =
@@ -270,6 +314,7 @@ module ff_axi4_frame_reader #(
       sample_valid <= 1'b0;
       sample_data <= '0;
       sample_last <= 1'b0;
+      active_axi_word_q <= '0;
       cache_valid_q <= '0;
       done <= 1'b0;
       error <= 1'b0;
@@ -287,6 +332,7 @@ module ff_axi4_frame_reader #(
         m_axi_rready <= 1'b0;
         sample_valid <= 1'b0;
         sample_last <= 1'b0;
+        active_axi_word_q <= '0;
         cache_valid_q <= '0;
         error <= 1'b0;
       end else begin
@@ -331,6 +377,7 @@ module ff_axi4_frame_reader #(
             if (leaf_active_w) begin
               if (in_visible_w) begin
                 if (cache_hit_w) begin
+                  active_axi_word_q <= cache_hit_data_w;
                   sample_data <= cache_hit_data_w[axi_byte_offset_w * 8 +: SAMPLE_BITS];
                   sample_last <= output_last_w;
                   sample_valid <= 1'b1;
@@ -365,6 +412,7 @@ module ff_axi4_frame_reader #(
               cache_valid_q[cache_index_w] <= 1'b1;
               cache_addr_q[cache_index_w] <= axi_word_addr_w;
               cache_data_q[cache_index_w] <= m_axi_rdata;
+              active_axi_word_q <= m_axi_rdata;
               sample_data <= m_axi_rdata[axi_byte_offset_w * 8 +: SAMPLE_BITS];
               sample_last <= output_last_w;
               sample_valid <= 1'b1;
@@ -378,7 +426,7 @@ module ff_axi4_frame_reader #(
           end
           ST_VALID: begin
             if (sample_valid && sample_ready && fast_next_sample_w) begin
-              sample_data <= cache_hit_data_w[next_axi_byte_offset_w * 8 +: SAMPLE_BITS];
+              sample_data <= active_axi_word_q[next_axi_byte_offset_w * 8 +: SAMPLE_BITS];
               sample_last <= next_output_last_w;
               sample_valid <= 1'b1;
               state_q <= ST_VALID;

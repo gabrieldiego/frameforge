@@ -57,6 +57,14 @@ def write_av2_cycle_metrics(
     input_read_cycles = int(state_counts.get("input_read", 0))
     leaf_cycles = int(state_counts.get("leaf", 0))
     carry_write_cycles = int(state_counts.get("carry_write", 0))
+    reader_sample_accept = int(pipeline_counts.get("reader_sample_accept", 0))
+    reader_backpressure = int(pipeline_counts.get("reader_backpressure", 0))
+    core_sample_accept = int(pipeline_counts.get("core_sample_accept", 0))
+    input_backpressure = int(pipeline_counts.get("input_backpressure", 0))
+    input_fifo_nonempty = int(pipeline_counts.get("input_fifo_nonempty", 0))
+    input_fifo_full = int(pipeline_counts.get("input_fifo_full", 0))
+    axi_write_accept = int(pipeline_counts.get("axi_write_beat_accept", 0))
+    axi_write_backpressure = int(pipeline_counts.get("axi_write_backpressure", 0))
     chroma_bdpcm_active = int(pipeline_counts.get("chroma_bdpcm_active", 0))
     chroma_bdpcm_op_valid = int(pipeline_counts.get("chroma_bdpcm_op_valid", 0))
     chroma_bdpcm_txb_done = int(pipeline_counts.get("chroma_bdpcm_txb_done", 0))
@@ -69,7 +77,31 @@ def write_av2_cycle_metrics(
     leaf_prefetch_done_wait = int(pipeline_counts.get("leaf_prefetch_done_wait", 0))
     block_utilization = {
         "frame_reader_sample_utilization": (
-            input_sample_cycles / input_read_cycles if input_read_cycles else 0.0
+            reader_sample_accept / input_read_cycles if input_read_cycles else 0.0
+        ),
+        "frame_reader_to_fifo_utilization": (
+            reader_sample_accept / (reader_sample_accept + reader_backpressure)
+            if (reader_sample_accept + reader_backpressure)
+            else 0.0
+        ),
+        "input_fifo_core_utilization": (
+            core_sample_accept / (core_sample_accept + input_backpressure)
+            if (core_sample_accept + input_backpressure)
+            else 0.0
+        ),
+        "input_fifo_nonempty_rate": (
+            input_fifo_nonempty / total_cycles if total_cycles else 0.0
+        ),
+        "input_fifo_full_rate": (
+            input_fifo_full / total_cycles if total_cycles else 0.0
+        ),
+        "axi_write_beat_utilization": (
+            axi_write_accept / (axi_write_accept + axi_write_backpressure)
+            if (axi_write_accept + axi_write_backpressure)
+            else 0.0
+        ),
+        "axi_write_bus_utilization": (
+            axi_write_accept / total_cycles if total_cycles else 0.0
         ),
         "entropy_leaf_op_utilization": (
             entropy_op_cycles / leaf_cycles if leaf_cycles else 0.0
