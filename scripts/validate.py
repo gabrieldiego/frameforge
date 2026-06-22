@@ -865,6 +865,8 @@ def print_rtl_cycle_report(label: str, metrics_path: Path, info: InputInfo) -> N
     print(f"{output_bubble_rate:.6f}  {label}_output_bubble_rate")
     print(f"{cycles_per_bit:.6f}  {label}_cycles_per_bit")
     print(f"{cycles_per_input_pixel:.6f}  {label}_cycles_per_input_pixel")
+    for name, value in sorted(metrics.get("block_utilization", {}).items()):
+        print(f"{float(value):.6f}  {label}_{name}")
 
 
 def psnr_bytes(reference_path: Path, reconstructed_path: Path) -> float | None:

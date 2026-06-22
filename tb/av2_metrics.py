@@ -54,6 +54,42 @@ def write_av2_cycle_metrics(
     output_utilization = output_active_cycles / total_cycles if total_cycles else 0.0
     cycles_per_bit = total_cycles / bitstream_bits if bitstream_bits else 0.0
     cycles_per_input_pixel = total_cycles / input_pixels if input_pixels else 0.0
+    input_read_cycles = int(state_counts.get("input_read", 0))
+    leaf_cycles = int(state_counts.get("leaf", 0))
+    carry_write_cycles = int(state_counts.get("carry_write", 0))
+    chroma_bdpcm_active = int(pipeline_counts.get("chroma_bdpcm_active", 0))
+    chroma_bdpcm_op_valid = int(pipeline_counts.get("chroma_bdpcm_op_valid", 0))
+    luma_residual_active = int(pipeline_counts.get("luma_residual_active", 0))
+    luma_residual_op_valid = int(pipeline_counts.get("luma_residual_op_valid", 0))
+    leaf_prefetch_active = int(pipeline_counts.get("leaf_prefetch_active", 0))
+    leaf_prefetch_done_wait = int(pipeline_counts.get("leaf_prefetch_done_wait", 0))
+    block_utilization = {
+        "frame_reader_sample_utilization": (
+            input_sample_cycles / input_read_cycles if input_read_cycles else 0.0
+        ),
+        "entropy_leaf_op_utilization": (
+            entropy_op_cycles / leaf_cycles if leaf_cycles else 0.0
+        ),
+        "luma_residual_op_utilization": (
+            luma_residual_op_valid / luma_residual_active
+            if luma_residual_active
+            else 0.0
+        ),
+        "chroma_bdpcm_op_utilization": (
+            chroma_bdpcm_op_valid / chroma_bdpcm_active
+            if chroma_bdpcm_active
+            else 0.0
+        ),
+        "prefetch_useful_utilization": (
+            (leaf_prefetch_active - leaf_prefetch_done_wait) / leaf_prefetch_active
+            if leaf_prefetch_active
+            else 0.0
+        ),
+        "carry_payload_utilization": (
+            observed_bytes / carry_write_cycles if carry_write_cycles else 0.0
+        ),
+        "final_output_utilization": output_utilization,
+    }
     metrics = {
         "codec": "av2",
         "width": width,
@@ -75,6 +111,7 @@ def write_av2_cycle_metrics(
         "pending_push_cycles": pending_push_cycles,
         "entropy_op_cycles": entropy_op_cycles,
         "input_sample_cycles": input_sample_cycles,
+        "block_utilization": block_utilization,
     }
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)

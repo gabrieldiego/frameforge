@@ -120,6 +120,16 @@ module ff_axi4_frame_reader #(
   logic [AXI_DATA_BITS-1:0] cache_hit_data_w;
   logic [SAMPLE_BITS-1:0] pad_sample_w;
   logic in_visible_w;
+  logic fast_next_same_row_w;
+  logic fast_next_same_axi_word_w;
+  logic fast_next_visible_w;
+  logic fast_next_sample_w;
+  logic [AXI_BYTE_INDEX_BITS-1:0] next_axi_byte_offset_w;
+  logic [15:0] next_sample_x_w;
+  logic [15:0] next_plane_x_w;
+  logic next_sample_last_in_component_w;
+  logic next_component_last_w;
+  logic next_output_last_w;
 
   assign busy = (state_q != ST_IDLE);
   assign m_axi_arlen = 8'd0;
@@ -218,6 +228,33 @@ module ff_axi4_frame_reader #(
     (sample_y_w < visible_height) &&
     !((chroma_format_idc == 2'd1) && (component_q != 2'd0) &&
       ((plane_x_w >= (visible_width >> 1)) || (plane_y_w >= (visible_height >> 1))));
+  assign fast_next_same_row_w =
+    ((chroma_format_idc == 2'd1) && (component_q != 2'd0)) ?
+      (sample_q[1:0] != 2'd3) :
+      (sample_q[2:0] != 3'd7);
+  assign fast_next_same_axi_word_w =
+    (AXI_BYTES >= (2 * SAMPLE_BYTES)) &&
+    ({1'b0, axi_byte_offset_w} <= (AXI_BYTES - (2 * SAMPLE_BYTES)));
+  assign next_axi_byte_offset_w = axi_byte_offset_w + AXI_BYTE_INDEX_BITS'(SAMPLE_BYTES);
+  assign next_sample_x_w = sample_x_w + 16'd1;
+  assign next_plane_x_w = plane_x_w + 16'd1;
+  assign fast_next_visible_w =
+    (next_sample_x_w < visible_width) &&
+    (sample_y_w < visible_height) &&
+    !((chroma_format_idc == 2'd1) && (component_q != 2'd0) &&
+      ((next_plane_x_w >= (visible_width >> 1)) || (plane_y_w >= (visible_height >> 1))));
+  assign fast_next_sample_w =
+    fast_next_same_row_w &&
+    fast_next_same_axi_word_w &&
+    fast_next_visible_w;
+  assign next_sample_last_in_component_w =
+    ((sample_q + 6'd1) == component_sample_last_w);
+  assign next_component_last_w =
+    (component_q == 2'd2) && next_sample_last_in_component_w;
+  assign next_output_last_w =
+    next_component_last_w &&
+    (leaf_count_q == (active_leaf_count_w - 7'd1)) &&
+    (stream_last_on_segment_end || frame_last_segment);
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -340,6 +377,12 @@ module ff_axi4_frame_reader #(
           ST_PAD: begin
           end
           ST_VALID: begin
+            if (sample_valid && sample_ready && fast_next_sample_w) begin
+              sample_data <= cache_hit_data_w[next_axi_byte_offset_w * 8 +: SAMPLE_BITS];
+              sample_last <= next_output_last_w;
+              sample_valid <= 1'b1;
+              state_q <= ST_VALID;
+            end
           end
           default: begin
             state_q <= ST_IDLE;
