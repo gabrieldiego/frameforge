@@ -5,15 +5,15 @@ Older measurements are intentionally left to git history so this page stays
 focused on the current baseline and immediate delta. The shared synthesis flow
 is documented in [../synthesis.md](../synthesis.md).
 
-## 2026-06-22 Palette Syntax Scan Skip Checkpoint
+## 2026-06-23 Palette CU Serialization Checkpoint
 
 Baseline RTL/source Git SHA:
 
-- `e2fd88a0ebc7d05be240f48c61b2db9efad53023`
+- `1f2e144c57cb20f7f7ca4aa2c436a6d43162a2c8`
 
 Current RTL/source Git SHA:
 
-- `1f2e144c57cb20f7f7ca4aa2c436a6d43162a2c8`
+- `33e4c40f88f0919ed0189adcb65cea1738e5c5e2`
 
 Validation result:
 
@@ -21,7 +21,8 @@ Validation result:
 - Local `racehorses-multictu-420`: PASS (10/10), strict SW/RTL/VTM checksum parity.
 - Local `screenshot-sweep-444`: PASS (64/64), strict SW/RTL/VTM checksum parity.
 - Local `screenshot-multictu-444`: PASS (10/10), strict SW/RTL/VTM checksum parity.
-- Yosys synthesis: PASS at 25 MHz metadata target; runtime exceeded the 300 second review threshold but stayed inside the 600 second hard stop.
+- Yosys synthesis: PASS at 25 MHz metadata target; runtime exceeded the 300
+  second review threshold but stayed inside the 600 second hard stop.
 
 Yosys synthesis configuration:
 
@@ -38,43 +39,44 @@ Yosys synthesis result:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| Main Yosys elapsed time (s) | 541.30 s | 533.70 s | -7.60 s |
-| Runner-observed peak child RSS (MiB) | 2498.41 MiB | 2520.32 MiB | +21.91 MiB |
-| Topological path length | 54 | 54 | +0 |
-| Flattened cells | 181835 | 183340 | +1505 |
-| Estimated LCs | 66242 | 66597 | +355 |
-| CARRY4 | 4173 | 4190 | +17 |
-| DSP48E1 | 9 | 9 | +0 |
-| FDCE | 20011 | 20091 | +80 |
-| FDPE | 314 | 314 | +0 |
-| FDRE | 31160 | 31160 | +0 |
-| FDSE | 8 | 8 | +0 |
-| LUT1 | 1946 | 2058 | +112 |
-| LUT2 | 22781 | 23379 | +598 |
-| LUT3 | 9439 | 9475 | +36 |
-| LUT4 | 8192 | 7837 | -355 |
-| LUT5 | 9299 | 8680 | -619 |
-| LUT6 | 36737 | 37571 | +834 |
-| MUXF7 | 11201 | 11505 | +304 |
-| MUXF8 | 1928 | 2363 | +435 |
-| RAMB36E1 | 9 | 9 | +0 |
+| Main Yosys elapsed time (s) | 533.70 | 502.40 | -31.30 |
+| Runner-observed peak child RSS (MiB) | 2520.32 | 2541.29 | +20.97 |
+| Topological path length | 54 | 192 | +138 |
+| Flattened cells | 183340 | 195780 | +12440 |
+| Estimated LCs | 66597 | 70730 | +4133 |
+| CARRY4 | 4190 | 4047 | -143 |
+| DSP48E1 | 9 | 11 | +2 |
+| FDCE | 20091 | 27366 | +7275 |
+| FDPE | 314 | 315 | +1 |
+| FDRE | 31160 | 24028 | -7132 |
+| FDSE | 8 | 4 | -4 |
+| LUT1 | 2058 | 2203 | +145 |
+| LUT2 | 23379 | 24091 | +712 |
+| LUT3 | 9475 | 9171 | -304 |
+| LUT4 | 7837 | 8838 | +1001 |
+| LUT5 | 8680 | 11723 | +3043 |
+| LUT6 | 37571 | 37957 | +386 |
+| MUXF7 | 11505 | 12085 | +580 |
+| MUXF8 | 2363 | 2047 | -316 |
+| RAMB36E1 | 9 | 6 | -3 |
 
 Critical-path summary:
 
-- Longest topological path in `ff_vvc_encoder`: length 54.
-- Reported limiter: CABAC syntax frontend IBC MVD absolute-value / EG1 prefix path.
+- Longest topological path in `ff_vvc_encoder`: length 192.
+- Reported limiter: palette CU symbolizer first-come palette lookup chain
+  from `build_lane_q` through `build_found` into `indices_q`.
 
 Notes:
 
-- Palette index-level coding now builds a per-subset emit mask while processing
-  run-copy flags. The syntax frontend uses a grouped seek to skip idle palette
-  index positions without putting a 16-way priority selector on the emit path.
-- Palette escape coding records escape positions in a 64-bit CU mask and loads a
-  registered 16-sample active subset before escape values are coded. Escape seek
-  also uses four-position groups to keep the critical path at the prior baseline.
-- The 64x64 screenshot 4:4:4 smoke improved from 32982 cycles at the baseline
-  to 31387 cycles with this checkpoint while preserving exact SW/RTL/VTM bitstream
-  and reconstruction checksums.
-- The VVC output byte bubble rate remains high because the bitstreams are small
-  and CABAC byte production, not AXI write readiness, is the dominant limiter.
-- The reported area is still too large for the Z7-10 fabric; this remains a pressure target for incremental optimization rather than a fit target.
+- The palette CU builder now serializes each accepted 8-sample row one lane
+  at a time. This removes the former eight-lane parallel palette lookup from
+  the main build path and allowed Yosys to complete again within the hard
+  stop, but the serialized single-lane lookup is now the topological limiter.
+- Main synthesis runtime improved by 31.30 seconds against the previous
+  documented Yosys checkpoint. Peak runner-observed RSS increased by 20.97 MiB.
+- Mapped cell and estimated LC counts increased; the area increase should be
+  treated as the next VVC optimization target after preserving the functional
+  full-regression baseline.
+- RAMB36E1 usage dropped from 9 to 6 in the flattened estimate.
+- The reported area is still too large for the Z7-10 fabric; this remains a
+  pressure target for incremental optimization rather than a fit target.
