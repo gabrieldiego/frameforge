@@ -14,36 +14,20 @@ expected to produce bit-exact software and RTL bitstreams. The reference path
 is decode-only: VTM decodes the FrameForge bitstream and its reconstruction
 must match the software/RTL reconstruction checksum.
 
-## 2026-06-23 VVC Full Regression Checkpoint
+## 2026-06-23 VVC Multi-CTU IBC Throughput Checkpoint
 
 Source baseline:
 
-- Baseline Git SHA: `ffb4179caa0de4a4a4e52f4a21eaf9ddb39efc64`
-- Current validated RTL/source Git SHA: `33e4c40f88f0919ed0189adcb65cea1738e5c5e2`
-- Delta columns compare the latest run against the previous documented VVC
-  quality/bitrate report where the same vector was present.
+- Baseline Git SHA: `33e4c40f88f0919ed0189adcb65cea1738e5c5e2`
+- Current validated RTL/source Git SHA: `d2cb6801f111a0023d7f982b875faccbf8c17f91`
+- Delta columns for the refreshed `screenshot-multictu-444` rows compare
+  against the previous documented VVC quality/bitrate report. Retained rows
+  from the previous full-regression checkpoint keep their previous values until
+  the next full VVC regression refresh.
 
 Validation commands:
 
 ```sh
-make validate-set CODEC=vvc \
-  VALIDATION_SET=racehorses-sweep-420 \
-  VALIDATION_SET_DIR=verification/test_vector_sets/local \
-  VALIDATION_STOP_ON_FAIL=1 \
-  VALIDATION_WITH_SYNTH=0
-
-make validate-set CODEC=vvc \
-  VALIDATION_SET=racehorses-multictu-420 \
-  VALIDATION_SET_DIR=verification/test_vector_sets/local \
-  VALIDATION_STOP_ON_FAIL=1 \
-  VALIDATION_WITH_SYNTH=0
-
-make validate-set CODEC=vvc \
-  VALIDATION_SET=screenshot-sweep-444 \
-  VALIDATION_SET_DIR=verification/test_vector_sets/local \
-  VALIDATION_STOP_ON_FAIL=1 \
-  VALIDATION_WITH_SYNTH=0
-
 make validate-set CODEC=vvc \
   VALIDATION_SET=screenshot-multictu-444 \
   VALIDATION_SET_DIR=verification/test_vector_sets/local \
@@ -53,10 +37,9 @@ make validate-set CODEC=vvc \
 
 Validation result:
 
-- `racehorses-sweep-420`: PASS (64/64), strict SW/RTL/VTM checksum parity.
-- `racehorses-multictu-420`: PASS (10/10), strict SW/RTL/VTM checksum parity.
-- `screenshot-sweep-444`: PASS (64/64), strict SW/RTL/VTM checksum parity.
 - `screenshot-multictu-444`: PASS (10/10), strict SW/RTL/VTM checksum parity.
+- Other rows in this file remain from the previous full-regression checkpoint
+  until the next full VVC regression refresh.
 - 4:4:4 vectors are lossless (`inf` PSNR). 4:2:0 vectors use the current
   lossy residual path.
 
@@ -67,7 +50,7 @@ Aggregate quality/bitrate:
 | `racehorses-sweep-420` | 64 | PASS | 113168 (+0) | 1.3644 (+0.0000) | avg 23.03 dB, range 19.43-29.32 dB |
 | `racehorses-multictu-420` | 10 | PASS | 92920 (+0) | 1.0118 (+0.0000) | avg 22.35 dB, range 22.11-22.74 dB |
 | `screenshot-sweep-444` | 64 | PASS | 377168 (-21672) | 4.5473 (-0.2613) | inf |
-| `screenshot-multictu-444` | 10 | PASS | 289000 (-30168) | 3.1468 (-0.3285) | inf |
+| `screenshot-multictu-444` | 10 | PASS | 286232 (-2768) | 3.1166 (-0.0302) | inf |
 
 ### RaceHorses 4:2:0 Sweep
 
@@ -233,18 +216,18 @@ Aggregate SW bpp: `4.5473` (-0.2613).
 
 ### Screenshot 4:4:4 Multi-CTU And Partial Crops
 
-Aggregate SW bits: `289000` (-30168).
-Aggregate SW bpp: `3.1468` (-0.3285).
+Aggregate SW bits: `286232` (-2768).
+Aggregate SW bpp: `3.1166` (-0.0302).
 
 | Vector | Status | SW bits (delta) | SW bpp (delta) | PSNR |
 |---|---|---:|---:|---:|
-| screenshot_640_multictu_h2_128x64_1f_yuv444p8.yuv | PASS | 47464 (-896) | 5.7939 (-0.1094) | inf |
-| screenshot_640_multictu_v2_64x128_1f_yuv444p8.yuv | PASS | 18832 (-3424) | 2.2988 (-0.4180) | inf |
-| screenshot_640_multictu_grid2_128x128_1f_yuv444p8.yuv | PASS | 6288 (-7600) | 0.3838 (-0.4639) | inf |
-| screenshot_640_multictu_h3_192x64_1f_yuv444p8.yuv | PASS | 33776 (-4000) | 2.7487 (-0.3255) | inf |
-| screenshot_640_multictu_v3_64x192_1f_yuv444p8.yuv | PASS | 49064 (-3768) | 3.9928 (-0.3067) | inf |
-| screenshot_640_partial_h2_72x64_1f_yuv444p8.yuv | PASS | 27872 (-224) | 6.0486 (-0.0486) | inf |
-| screenshot_640_partial_v2_64x72_1f_yuv444p8.yuv | PASS | 1648 (-1376) | 0.3576 (-0.2986) | inf |
-| screenshot_640_partial_grid2_72x72_1f_yuv444p8.yuv | PASS | 2232 (-1672) | 0.4306 (-0.3225) | inf |
-| screenshot_640_partial_wide_136x80_1f_yuv444p8.yuv | PASS | 62832 (-4568) | 5.7750 (-0.4199) | inf |
-| screenshot_640_partial_tall_72x128_1f_yuv444p8.yuv | PASS | 38992 (-2640) | 4.2309 (-0.2865) | inf |
+| screenshot_640_multictu_h2_128x64_1f_yuv444p8.yuv | PASS | 47296 (-168) | 5.7734 (-0.0205) | inf |
+| screenshot_640_multictu_v2_64x128_1f_yuv444p8.yuv | PASS | 18584 (-248) | 2.2686 (-0.0302) | inf |
+| screenshot_640_multictu_grid2_128x128_1f_yuv444p8.yuv | PASS | 4992 (-1296) | 0.3047 (-0.0791) | inf |
+| screenshot_640_multictu_h3_192x64_1f_yuv444p8.yuv | PASS | 33112 (-664) | 2.6953 (-0.0534) | inf |
+| screenshot_640_multictu_v3_64x192_1f_yuv444p8.yuv | PASS | 49416 (+352) | 4.0215 (+0.0286) | inf |
+| screenshot_640_partial_h2_72x64_1f_yuv444p8.yuv | PASS | 27760 (-112) | 6.0243 (-0.0243) | inf |
+| screenshot_640_partial_v2_64x72_1f_yuv444p8.yuv | PASS | 1288 (-360) | 0.2795 (-0.0781) | inf |
+| screenshot_640_partial_grid2_72x72_1f_yuv444p8.yuv | PASS | 1848 (-384) | 0.3565 (-0.0741) | inf |
+| screenshot_640_partial_wide_136x80_1f_yuv444p8.yuv | PASS | 63200 (+368) | 5.8088 (+0.0338) | inf |
+| screenshot_640_partial_tall_72x128_1f_yuv444p8.yuv | PASS | 38736 (-256) | 4.2023 (-0.0286) | inf |

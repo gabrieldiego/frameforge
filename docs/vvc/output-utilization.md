@@ -14,26 +14,26 @@ Metric definitions:
   pipeline starvation/backpressure and is not part of the codec bitstream
   contract.
 
-## 2026-06-23 VVC Full Regression Checkpoint
+## 2026-06-23 VVC Multi-CTU IBC Throughput Checkpoint
 
 Baseline RTL/source Git SHA:
 
-- `98ab0d150875b5899c9d08f9848574373707e187`
+- `33e4c40f88f0919ed0189adcb65cea1738e5c5e2`
 
 Current RTL/source Git SHA:
 
-- `33e4c40f88f0919ed0189adcb65cea1738e5c5e2`
+- `d2cb6801f111a0023d7f982b875faccbf8c17f91`
 
 Validation result:
 
-- `racehorses-sweep-420`: PASS (64/64), strict SW/RTL/VTM checksum parity.
-- `racehorses-multictu-420`: PASS (10/10), strict SW/RTL/VTM checksum parity.
-- `screenshot-sweep-444`: PASS (64/64), strict SW/RTL/VTM checksum parity.
 - `screenshot-multictu-444`: PASS (10/10), strict SW/RTL/VTM checksum parity.
+- Other rows in this file remain from the previous full-regression checkpoint
+  until the next full VVC regression refresh.
 
-Delta columns compare against the previous documented VVC output-utilization
-report when the same vector was present. Newly covered sets use `n/a` deltas
-and become the baseline for the next report.
+Delta columns for the refreshed `screenshot-multictu-444` rows compare against
+the previous documented VVC output-utilization report. Retained rows from the
+previous full-regression checkpoint keep their previous values until the next
+full VVC regression refresh.
 
 Aggregate top-level RTL utilization:
 
@@ -42,7 +42,7 @@ Aggregate top-level RTL utilization:
 | `racehorses-sweep-420` | 64 | 113168 (n/a) | 269162 (n/a) | 14146 (n/a) | 0.0526 (n/a) | 0.947 (n/a) | 2.38 (n/a) | 3.25 (n/a) |
 | `racehorses-multictu-420` | 10 | 92920 (n/a) | 281944 (n/a) | 11615 (n/a) | 0.0412 (n/a) | 0.959 (n/a) | 3.03 (n/a) | 3.07 (n/a) |
 | `screenshot-sweep-444` | 64 | 377168 (n/a) | 261417 (n/a) | 47146 (n/a) | 0.18 (n/a) | 0.82 (n/a) | 0.693 (n/a) | 3.15 (n/a) |
-| `screenshot-multictu-444` | 10 | 289000 (+0) | 239191 (+81228) | 36125 (+0) | 0.151 (-0.078) | 0.849 (+0.078) | 0.828 (+0.281) | 2.6 (+0.884) |
+| `screenshot-multictu-444` | 10 | 286232 (-2768) | 159599 (-79592) | 35779 (-346) | 0.224 (+0.073) | 0.776 (-0.073) | 0.558 (-0.270) | 1.74 (-0.862) |
 
 Mean per-vector internal probes:
 
@@ -51,7 +51,7 @@ Mean per-vector internal probes:
 | `racehorses-sweep-420` | 0.192 | 0.279 | 0.92 | 0.972 | 0.1 |
 | `racehorses-multictu-420` | 0.171 | 0.215 | 1 | 0.988 | 0.0445 |
 | `screenshot-sweep-444` | 0.432 | 1 | 0.955 | 0.934 | 0.118 |
-| `screenshot-multictu-444` | 0.456 | 1 | 0.997 | 0.921 | 0.126 |
+| `screenshot-multictu-444` | 0.456 | 1 | 0.976 | 0.921 | 0.181 |
 
 ### RaceHorses 4:2:0 Sweep
 
@@ -210,16 +210,16 @@ Mean per-vector internal probes:
 
 | Vector | Status | RTL bits | Total cycles (delta) | Active cycles | Output util (delta) | Bubble rate (delta) | Cycles/bit (delta) | Cycles/pixel |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
-| screenshot_640_multictu_h2_128x64_1f_yuv444p8.yuv | PASS | 47464 | 29830 (+9001) | 5933 | 0.199 (-0.086) | 0.801 (+0.086) | 0.628 (+0.189) | 3.64 |
-| screenshot_640_multictu_v2_64x128_1f_yuv444p8.yuv | PASS | 18832 | 17740 (+6057) | 2354 | 0.133 (-0.068) | 0.867 (+0.068) | 0.942 (+0.322) | 2.17 |
-| screenshot_640_multictu_grid2_128x128_1f_yuv444p8.yuv | PASS | 6288 | 21957 (+9551) | 786 | 0.0358 (-0.028) | 0.964 (+0.027) | 3.49 (+1.522) | 1.34 |
-| screenshot_640_multictu_h3_192x64_1f_yuv444p8.yuv | PASS | 33776 | 27017 (+8021) | 4222 | 0.156 (-0.066) | 0.844 (+0.066) | 0.8 (+0.238) | 2.2 |
-| screenshot_640_multictu_v3_64x192_1f_yuv444p8.yuv | PASS | 49064 | 36457 (+12592) | 6133 | 0.168 (-0.089) | 0.832 (+0.089) | 0.743 (+0.257) | 2.97 |
-| screenshot_640_partial_h2_72x64_1f_yuv444p8.yuv | PASS | 27872 | 18996 (+5935) | 3484 | 0.183 (-0.084) | 0.817 (+0.084) | 0.682 (+0.213) | 4.12 |
-| screenshot_640_partial_v2_64x72_1f_yuv444p8.yuv | PASS | 1648 | 5105 (+1571) | 206 | 0.0404 (-0.018) | 0.96 (+0.018) | 3.1 (+0.958) | 1.11 |
-| screenshot_640_partial_grid2_72x72_1f_yuv444p8.yuv | PASS | 2232 | 8451 (+3349) | 279 | 0.033 (-0.022) | 0.967 (+0.022) | 3.79 (+1.496) | 1.63 |
-| screenshot_640_partial_wide_136x80_1f_yuv444p8.yuv | PASS | 62832 | 43228 (+13721) | 7854 | 0.182 (-0.084) | 0.818 (+0.084) | 0.688 (+0.218) | 3.97 |
-| screenshot_640_partial_tall_72x128_1f_yuv444p8.yuv | PASS | 38992 | 30410 (+11430) | 4874 | 0.16 (-0.097) | 0.84 (+0.097) | 0.78 (+0.293) | 3.3 |
+| screenshot_640_multictu_h2_128x64_1f_yuv444p8.yuv | PASS | 47296 | 20775 (-9055) | 5912 | 0.285 (+0.086) | 0.715 (-0.086) | 0.439 (-0.189) | 2.54 |
+| screenshot_640_multictu_v2_64x128_1f_yuv444p8.yuv | PASS | 18584 | 11899 (-5841) | 2323 | 0.195 (+0.062) | 0.805 (-0.062) | 0.640 (-0.302) | 1.45 |
+| screenshot_640_multictu_grid2_128x128_1f_yuv444p8.yuv | PASS | 4992 | 12385 (-9572) | 624 | 0.0504 (+0.0146) | 0.950 (-0.014) | 2.48 (-1.01) | 0.756 |
+| screenshot_640_multictu_h3_192x64_1f_yuv444p8.yuv | PASS | 33112 | 18975 (-8042) | 4139 | 0.218 (+0.062) | 0.782 (-0.062) | 0.573 (-0.227) | 1.54 |
+| screenshot_640_multictu_v3_64x192_1f_yuv444p8.yuv | PASS | 49416 | 24369 (-12088) | 6177 | 0.253 (+0.085) | 0.747 (-0.085) | 0.493 (-0.250) | 1.98 |
+| screenshot_640_partial_h2_72x64_1f_yuv444p8.yuv | PASS | 27760 | 13083 (-5913) | 3470 | 0.265 (+0.082) | 0.735 (-0.082) | 0.471 (-0.211) | 2.84 |
+| screenshot_640_partial_v2_64x72_1f_yuv444p8.yuv | PASS | 1288 | 3529 (-1576) | 161 | 0.0456 (+0.0052) | 0.954 (-0.006) | 2.74 (-0.36) | 0.766 |
+| screenshot_640_partial_grid2_72x72_1f_yuv444p8.yuv | PASS | 1848 | 5154 (-3297) | 231 | 0.0448 (+0.0118) | 0.955 (-0.012) | 2.79 (-1.00) | 0.994 |
+| screenshot_640_partial_wide_136x80_1f_yuv444p8.yuv | PASS | 63200 | 30270 (-12958) | 7900 | 0.261 (+0.079) | 0.739 (-0.079) | 0.479 (-0.209) | 2.78 |
+| screenshot_640_partial_tall_72x128_1f_yuv444p8.yuv | PASS | 38736 | 19160 (-11250) | 4842 | 0.253 (+0.093) | 0.747 (-0.093) | 0.495 (-0.285) | 2.08 |
 
 Regenerated waveform artifacts, when enabled for a vector, are under
 `verification/generated/checksums/vvc/`. Use the matching
