@@ -119,3 +119,39 @@ VVC 64x64 4:2:0 RaceHorses crop:
 | `cabac_writer` | 0.074 | 0.541 | 0.385 | 0.000 |
 | `rbsp_writer` | 0.000 | 0.963 | 0.037 | 0.000 |
 | `axi_writer` | 0.000 | 0.956 | 0.044 | 0.000 |
+
+## VVC Multi-CTU Checkpoint
+
+Generated on 2026-06-23 with:
+
+```sh
+make validate-set CODEC=vvc \
+  VALIDATION_SET=screenshot-multictu-444 \
+  VALIDATION_SET_DIR=verification/test_vector_sets/local \
+  VALIDATION_BLOCK_WAVEFORM=1 \
+  VALIDATION_WITH_SYNTH=0 \
+  VALIDATION_STOP_ON_FAIL=1
+```
+
+All ten vectors passed strict SW/RTL/VTM checksum parity. The aggregate final
+output bubble rate for the set was `0.771`.
+
+Representative waveform artifacts:
+
+| Vector | VCD | HTML |
+|---|---|---|
+| `screenshot_640_multictu_h2_128x64_1f_yuv444p8.yuv` | `verification/generated/checksums/vvc/screenshot_640_multictu_h2_128x64_1f_yuv444p8_128x64_1f_yuv444p8_rtl_block_waveform.vcd` | `verification/generated/checksums/vvc/screenshot_640_multictu_h2_128x64_1f_yuv444p8_128x64_1f_yuv444p8_rtl_block_waveform.html` |
+| `screenshot_640_multictu_grid2_128x128_1f_yuv444p8.yuv` | `verification/generated/checksums/vvc/screenshot_640_multictu_grid2_128x128_1f_yuv444p8_128x128_1f_yuv444p8_rtl_block_waveform.vcd` | `verification/generated/checksums/vvc/screenshot_640_multictu_grid2_128x128_1f_yuv444p8_128x128_1f_yuv444p8_rtl_block_waveform.html` |
+
+Representative block rates:
+
+| Vector | Final output util | Bubble | AXI reader work | Palette work | Syntax work | CABAC writer work | AXI writer work |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `h2_128x64` | 0.285 | 0.715 | 0.221 | 0.255 | 0.763 | 0.963 | 0.295 |
+| `grid2_128x128` | 0.063 | 0.937 | 0.743 | 0.032 | 0.367 | 0.358 | 0.066 |
+
+The `h2`, `h3`, `v2`, `v3`, `partial_h2`, `partial_wide`, and `partial_tall`
+vectors are individually at or below the requested `0.800` bubble target. The
+grid and vertical-partial outliers have very small bitstreams, so fixed CTU
+traversal and input fetch work dominate the byte-output metric even though the
+reader and CABAC handoff paths are active.
