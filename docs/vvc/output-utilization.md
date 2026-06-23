@@ -21,7 +21,7 @@ Baseline RTL/source Git SHA:
 
 Current RTL/source Git SHA:
 
-- `f9077cf78f0faf98ca5659b84e852e29603322a0`
+- `cc178d3317edc9890e957175f0c5a5d6d8e06c07`
 
 Validation result:
 
