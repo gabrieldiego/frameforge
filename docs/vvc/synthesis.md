@@ -5,21 +5,18 @@ Older measurements are intentionally left to git history so this page stays
 focused on the current baseline and immediate delta. The shared synthesis flow
 is documented in [../synthesis.md](../synthesis.md).
 
-## 2026-06-22 CABAC FIFO Throughput Checkpoint
+## 2026-06-22 CABAC Output Overlap Checkpoint
 
 Baseline RTL/source Git SHA:
 
-- `3945b1bc67a20e5cfa2ccf8d05910ab8741deef0`
+- `cc178d3317edc9890e957175f0c5a5d6d8e06c07`
 
 Current RTL/source Git SHA:
 
-- `cc178d3317edc9890e957175f0c5a5d6d8e06c07`
+- `e2fd88a0ebc7d05be240f48c61b2db9efad53023`
 
 Validation result:
 
-- `make hardware-regression CODEC=vvc`: PASS.
-- Public `sweep-420`: PASS (64/64), strict SW/RTL/VTM checksum parity.
-- Public `sweep-444`: PASS (64/64), strict SW/RTL/VTM checksum parity.
 - Local `racehorses-sweep-420`: PASS (64/64), strict SW/RTL/VTM checksum parity.
 - Local `racehorses-multictu-420`: PASS (10/10), strict SW/RTL/VTM checksum parity.
 - Local `screenshot-sweep-444`: PASS (64/64), strict SW/RTL/VTM checksum parity.
@@ -41,25 +38,25 @@ Yosys synthesis result:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| Main Yosys elapsed time (s) | 494.40 s | 528.00 s | +33.60 s |
-| Runner-observed peak child RSS (MiB) | 2303.87 MiB | 2462.58 MiB | +158.71 MiB |
-| Topological path length | 55 | 54 | -1 |
-| Flattened cells | 164059 | 180301 | +16242 |
-| Estimated LCs | 62294 | 66358 | +4064 |
-| CARRY4 | 4178 | 4169 | -9 |
+| Main Yosys elapsed time (s) | 528.00 s | 541.30 s | +13.30 s |
+| Runner-observed peak child RSS (MiB) | 2462.58 MiB | 2498.41 MiB | +35.83 MiB |
+| Topological path length | 54 | 54 | +0 |
+| Flattened cells | 180301 | 181835 | +1534 |
+| Estimated LCs | 66358 | 66242 | -116 |
+| CARRY4 | 4169 | 4173 | +4 |
 | DSP48E1 | 9 | 9 | +0 |
-| FDCE | 18467 | 20007 | +1540 |
+| FDCE | 20007 | 20011 | +4 |
 | FDPE | 314 | 314 | +0 |
-| FDRE | 23912 | 28536 | +4624 |
+| FDRE | 28536 | 31160 | +2624 |
 | FDSE | 8 | 8 | +0 |
-| LUT1 | 1607 | 1819 | +212 |
-| LUT2 | 23549 | 23647 | +98 |
-| LUT3 | 7850 | 9067 | +1217 |
-| LUT4 | 6577 | 8055 | +1478 |
-| LUT5 | 9034 | 9167 | +133 |
-| LUT6 | 34272 | 36806 | +2534 |
-| MUXF7 | 9320 | 11669 | +2349 |
-| MUXF8 | 1859 | 2406 | +547 |
+| LUT1 | 1819 | 1946 | +127 |
+| LUT2 | 23647 | 22781 | -866 |
+| LUT3 | 9067 | 9439 | +372 |
+| LUT4 | 8055 | 8192 | +137 |
+| LUT5 | 9167 | 9299 | +132 |
+| LUT6 | 36806 | 36737 | -69 |
+| MUXF7 | 11669 | 11201 | -468 |
+| MUXF8 | 2406 | 1928 | -478 |
 | RAMB36E1 | 9 | 9 | +0 |
 
 Critical-path summary:
@@ -69,10 +66,14 @@ Critical-path summary:
 
 Notes:
 
-- The CABAC throughput pass improved VVC simulation cycles materially while
-  keeping the same critical-path family and reducing topological path length by
-  one node. The added bounded FIFOs and overlap staging increased FF/LUT area and
-  synthesis runtime, so future passes should recover area once the throughput
-  shape is stable.
-- The VVC output byte bubble rate remains high because the 4:2:0 bitstreams are small and the CABAC/residual path, not AXI write readiness, limits throughput.
+- Direct CABAC byte handoff and post-write bypass-bin fusion reduce writer
+  stalls. Source-symbol prefill overlaps CTU/palette symbol production with
+  header emission before the CABAC payload is released.
+- A deeper CABAC bin FIFO was evaluated but rejected for this checkpoint. It
+  improved the 64x64 4:4:4 screenshot crop from 32982 to 32637 cycles, but
+  raised flattened cells to 187546 and FDREs to 33208, so the committed
+  checkpoint keeps the bin FIFO depth at 32.
+- The VVC output byte bubble rate remains high because the 4:2:0 bitstreams
+  are small and the CABAC/residual path, not AXI write readiness, limits
+  throughput.
 - The reported area is still too large for the Z7-10 fabric; this remains a pressure target for incremental optimization rather than a fit target.
