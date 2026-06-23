@@ -5,15 +5,15 @@ Older measurements are intentionally left to git history so this page stays
 focused on the current baseline and immediate delta. The shared synthesis flow
 is documented in [../synthesis.md](../synthesis.md).
 
-## 2026-06-22 CABAC Output Overlap Checkpoint
+## 2026-06-22 Palette Syntax Scan Skip Checkpoint
 
 Baseline RTL/source Git SHA:
 
-- `cc178d3317edc9890e957175f0c5a5d6d8e06c07`
+- `e2fd88a0ebc7d05be240f48c61b2db9efad53023`
 
 Current RTL/source Git SHA:
 
-- `e2fd88a0ebc7d05be240f48c61b2db9efad53023`
+- `1f2e144c57cb20f7f7ca4aa2c436a6d43162a2c8`
 
 Validation result:
 
@@ -38,25 +38,25 @@ Yosys synthesis result:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| Main Yosys elapsed time (s) | 528.00 s | 541.30 s | +13.30 s |
-| Runner-observed peak child RSS (MiB) | 2462.58 MiB | 2498.41 MiB | +35.83 MiB |
+| Main Yosys elapsed time (s) | 541.30 s | 533.70 s | -7.60 s |
+| Runner-observed peak child RSS (MiB) | 2498.41 MiB | 2520.32 MiB | +21.91 MiB |
 | Topological path length | 54 | 54 | +0 |
-| Flattened cells | 180301 | 181835 | +1534 |
-| Estimated LCs | 66358 | 66242 | -116 |
-| CARRY4 | 4169 | 4173 | +4 |
+| Flattened cells | 181835 | 183340 | +1505 |
+| Estimated LCs | 66242 | 66597 | +355 |
+| CARRY4 | 4173 | 4190 | +17 |
 | DSP48E1 | 9 | 9 | +0 |
-| FDCE | 20007 | 20011 | +4 |
+| FDCE | 20011 | 20091 | +80 |
 | FDPE | 314 | 314 | +0 |
-| FDRE | 28536 | 31160 | +2624 |
+| FDRE | 31160 | 31160 | +0 |
 | FDSE | 8 | 8 | +0 |
-| LUT1 | 1819 | 1946 | +127 |
-| LUT2 | 23647 | 22781 | -866 |
-| LUT3 | 9067 | 9439 | +372 |
-| LUT4 | 8055 | 8192 | +137 |
-| LUT5 | 9167 | 9299 | +132 |
-| LUT6 | 36806 | 36737 | -69 |
-| MUXF7 | 11669 | 11201 | -468 |
-| MUXF8 | 2406 | 1928 | -478 |
+| LUT1 | 1946 | 2058 | +112 |
+| LUT2 | 22781 | 23379 | +598 |
+| LUT3 | 9439 | 9475 | +36 |
+| LUT4 | 8192 | 7837 | -355 |
+| LUT5 | 9299 | 8680 | -619 |
+| LUT6 | 36737 | 37571 | +834 |
+| MUXF7 | 11201 | 11505 | +304 |
+| MUXF8 | 1928 | 2363 | +435 |
 | RAMB36E1 | 9 | 9 | +0 |
 
 Critical-path summary:
@@ -66,14 +66,15 @@ Critical-path summary:
 
 Notes:
 
-- Direct CABAC byte handoff and post-write bypass-bin fusion reduce writer
-  stalls. Source-symbol prefill overlaps CTU/palette symbol production with
-  header emission before the CABAC payload is released.
-- A deeper CABAC bin FIFO was evaluated but rejected for this checkpoint. It
-  improved the 64x64 4:4:4 screenshot crop from 32982 to 32637 cycles, but
-  raised flattened cells to 187546 and FDREs to 33208, so the committed
-  checkpoint keeps the bin FIFO depth at 32.
-- The VVC output byte bubble rate remains high because the 4:2:0 bitstreams
-  are small and the CABAC/residual path, not AXI write readiness, limits
-  throughput.
+- Palette index-level coding now builds a per-subset emit mask while processing
+  run-copy flags. The syntax frontend uses a grouped seek to skip idle palette
+  index positions without putting a 16-way priority selector on the emit path.
+- Palette escape coding records escape positions in a 64-bit CU mask and loads a
+  registered 16-sample active subset before escape values are coded. Escape seek
+  also uses four-position groups to keep the critical path at the prior baseline.
+- The 64x64 screenshot 4:4:4 smoke improved from 32982 cycles at the baseline
+  to 31387 cycles with this checkpoint while preserving exact SW/RTL/VTM bitstream
+  and reconstruction checksums.
+- The VVC output byte bubble rate remains high because the bitstreams are small
+  and CABAC byte production, not AXI write readiness, is the dominant limiter.
 - The reported area is still too large for the Z7-10 fabric; this remains a pressure target for incremental optimization rather than a fit target.
