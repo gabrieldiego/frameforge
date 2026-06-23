@@ -45,11 +45,14 @@ module ff_vvc_cabac_bit_writer (
   logic [31:0] consume_chunk_w;
   logic [8:0] partial_next_w;
   logic [3:0] partial_count_next_w;
+  logic direct_byte_valid_w;
 
+  assign direct_byte_valid_w = (state_q == ST_IDLE) && s_axis_valid &&
+    !s_axis_flush_zero && (partial_count_q == 3'd0) && (s_axis_bit_count == 6'd8);
   assign s_axis_ready = (state_q == ST_IDLE);
-  assign m_axis_valid = (state_q == ST_OUT);
-  assign m_axis_data = out_byte_q;
-  assign m_axis_last = m_axis_valid && out_last_q;
+  assign m_axis_valid = (state_q == ST_OUT) || direct_byte_valid_w;
+  assign m_axis_data = direct_byte_valid_w ? s_axis_value[7:0] : out_byte_q;
+  assign m_axis_last = m_axis_valid && (direct_byte_valid_w ? s_axis_last : out_last_q);
   assign total_bit_count = total_bit_count_q;
   assign partial_bit_count = partial_count_q;
   assign idle = (state_q == ST_IDLE) && !m_axis_valid;
@@ -102,7 +105,17 @@ module ff_vvc_cabac_bit_writer (
         ST_IDLE: begin
           if (s_axis_valid && s_axis_ready) begin
             command_last_q <= s_axis_last;
-            if (s_axis_flush_zero) begin
+            if (direct_byte_valid_w) begin
+              total_bit_count_q <= total_bit_count_q + 13'd8;
+              if (m_axis_ready) begin
+                done <= s_axis_last;
+                out_last_q <= 1'b0;
+              end else begin
+                out_byte_q <= s_axis_value[7:0];
+                out_last_q <= s_axis_last;
+                state_q <= ST_OUT;
+              end
+            end else if (s_axis_flush_zero) begin
               if (partial_count_q != 3'd0) begin
                 out_byte_q <= partial_byte_q << (3'd0 - partial_count_q);
                 out_last_q <= s_axis_last;
@@ -113,16 +126,9 @@ module ff_vvc_cabac_bit_writer (
                 done <= 1'b1;
               end
             end else if (s_axis_bit_count != 6'd0) begin
-              if ((partial_count_q == 3'd0) && (s_axis_bit_count == 6'd8)) begin
-                out_byte_q <= s_axis_value[7:0];
-                out_last_q <= s_axis_last;
-                total_bit_count_q <= total_bit_count_q + 13'd8;
-                state_q <= ST_OUT;
-              end else begin
-                value_q <= s_axis_value;
-                bits_left_q <= s_axis_bit_count;
-                state_q <= ST_BITS;
-              end
+              value_q <= s_axis_value;
+              bits_left_q <= s_axis_bit_count;
+              state_q <= ST_BITS;
             end else if (s_axis_last) begin
               done <= 1'b1;
             end

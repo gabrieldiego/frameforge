@@ -74,6 +74,17 @@ module ff_vvc_cabac_stream_writer #(
   logic emit_last_q;
   logic [31:0] emit_value_q;
   logic [5:0] emit_count_q;
+  logic direct_emit_valid_w;
+  logic direct_emit_ready_w;
+  logic direct_emit_flush_w;
+  logic direct_emit_last_w;
+  logic [31:0] direct_emit_value_w;
+  logic [5:0] direct_emit_count_w;
+  logic bit_writer_s_valid_w;
+  logic bit_writer_s_flush_w;
+  logic bit_writer_s_last_w;
+  logic [31:0] bit_writer_s_value_w;
+  logic [5:0] bit_writer_s_count_w;
   logic bit_writer_ready;
   logic bit_writer_done;
   logic bit_writer_idle;
@@ -86,6 +97,8 @@ module ff_vvc_cabac_stream_writer #(
   logic [31:0] final_bits_value;
   logic [31:0] bins_ep_low_next;
   logic [7:0] bins_ep_bits_left_next;
+  logic [31:0] bins_ep_base_low_w;
+  logic [7:0]  bins_ep_base_bits_left_w;
   logic [31:0] bins_ep_source_pattern;
   logic [5:0]  bins_ep_source_count;
   logic        bins_ep_source_last;
@@ -101,6 +114,9 @@ module ff_vvc_cabac_stream_writer #(
   logic [31:0] bins_ep_pending_pattern_q;
   logic [5:0]  bins_ep_pending_count_q;
   logic        bins_ep_pending_last_q;
+  logic        write_bins_ep_fuse_w;
+  logic [31:0] write_low_w;
+  logic [7:0]  write_bits_left_w;
 
   assign selected_ctx_lps = (s_axis_kind == CABAC_BIN_CTX) ?
     (s_axis_ctx_valid ? context_ctx_lps : s_axis_lps) :
@@ -123,7 +139,12 @@ module ff_vvc_cabac_stream_writer #(
     bins_ep_pending_pattern_q : (s_axis_bins_pattern & s_axis_bins_mask);
   assign bins_ep_source_count = bins_ep_pending_q ? bins_ep_pending_count_q : s_axis_bins_count;
   assign bins_ep_source_last = bins_ep_pending_q ? bins_ep_pending_last_q : s_axis_last;
-  assign bins_ep_available_count = (bits_left_q > 8'd11) ? (bits_left_q[5:0] - 6'd11) : 6'd1;
+  assign write_low_w = low_q & low_mask;
+  assign write_bits_left_w = bits_left_q + 8'd8;
+  assign bins_ep_base_low_w = (state_q == ST_WRITE_OUT) ? write_low_w : low_q;
+  assign bins_ep_base_bits_left_w = (state_q == ST_WRITE_OUT) ? write_bits_left_w : bits_left_q;
+  assign bins_ep_available_count =
+    (bins_ep_base_bits_left_w > 8'd11) ? (bins_ep_base_bits_left_w[5:0] - 6'd11) : 6'd1;
   assign bins_ep_consume_count =
     (bins_ep_source_count == 6'd0) ? 6'd0 :
     ((bins_ep_source_count > bins_ep_available_count) ? bins_ep_available_count :
@@ -141,9 +162,20 @@ module ff_vvc_cabac_stream_writer #(
      ((32'd1 << bins_ep_remaining_count) - 32'd1));
   assign bins_ep_remaining_pattern = bins_ep_source_pattern & bins_ep_remaining_mask;
   assign bins_ep_low_next =
-    (low_q << bins_ep_consume_count) + (range_q * bins_ep_consume_pattern);
-  assign bins_ep_bits_left_next = bits_left_q - {2'd0, bins_ep_consume_count};
+    (bins_ep_base_low_w << bins_ep_consume_count) + (range_q * bins_ep_consume_pattern);
+  assign bins_ep_bits_left_next = bins_ep_base_bits_left_w - {2'd0, bins_ep_consume_count};
+  assign write_bins_ep_fuse_w =
+    bins_ep_pending_q &&
+    ((lead_byte == 9'h0ff) ||
+     (num_buffered_bytes_q == 8'd0) ||
+     (direct_emit_valid_w && (num_buffered_bytes_q <= 8'd1)));
   assign stream_last_byte_bits = stream_last_byte_bits_q;
+  assign direct_emit_ready_w = !emit_valid_q && bit_writer_ready;
+  assign bit_writer_s_valid_w = emit_valid_q || direct_emit_valid_w;
+  assign bit_writer_s_value_w = emit_valid_q ? emit_value_q : direct_emit_value_w;
+  assign bit_writer_s_count_w = emit_valid_q ? emit_count_q : direct_emit_count_w;
+  assign bit_writer_s_flush_w = emit_valid_q ? emit_flush_q : direct_emit_flush_w;
+  assign bit_writer_s_last_w = emit_valid_q ? emit_last_q : direct_emit_last_w;
 
   ff_vvc_cabac_context_model #(
     .VVC_CABAC_CTX_ID_BITS(VVC_CABAC_CTX_ID_BITS)
@@ -180,12 +212,12 @@ module ff_vvc_cabac_stream_writer #(
     .clk(clk),
     .rst_n(rst_n),
     .clear(clear || start),
-    .s_axis_valid(emit_valid_q),
+    .s_axis_valid(bit_writer_s_valid_w),
     .s_axis_ready(bit_writer_ready),
-    .s_axis_value(emit_value_q),
-    .s_axis_bit_count(emit_count_q),
-    .s_axis_flush_zero(emit_flush_q),
-    .s_axis_last(emit_last_q),
+    .s_axis_value(bit_writer_s_value_w),
+    .s_axis_bit_count(bit_writer_s_count_w),
+    .s_axis_flush_zero(bit_writer_s_flush_w),
+    .s_axis_last(bit_writer_s_last_w),
     .m_axis_ready(m_axis_ready),
     .m_axis_valid(m_axis_valid),
     .m_axis_data(m_axis_data),
@@ -195,6 +227,63 @@ module ff_vvc_cabac_stream_writer #(
     .idle(bit_writer_idle),
     .done(bit_writer_done)
   );
+
+  always @* begin
+    direct_emit_valid_w = 1'b0;
+    direct_emit_value_w = 32'd0;
+    direct_emit_count_w = 6'd0;
+    direct_emit_flush_w = 1'b0;
+    direct_emit_last_w = 1'b0;
+
+    case (state_q)
+      ST_WRITE_OUT: begin
+        if ((lead_byte != 9'h0ff) && (num_buffered_bytes_q != 8'd0) &&
+            direct_emit_ready_w) begin
+          direct_emit_valid_w = 1'b1;
+          direct_emit_value_w = {23'd0, buffered_byte_q + {8'd0, lead_byte[8]}};
+          direct_emit_count_w = 6'd8;
+        end
+      end
+
+      ST_EMIT_REPEAT: begin
+        if (direct_emit_ready_w) begin
+          direct_emit_valid_w = 1'b1;
+          direct_emit_value_w = {24'd0, finish_carry_q ? 8'h00 : 8'hff};
+          direct_emit_count_w = 6'd8;
+        end
+      end
+
+      ST_FINISH_BUFFERED: begin
+        if (!((num_buffered_bytes_q <= 8'd1) && (final_bits_q == 6'd0)) &&
+            direct_emit_ready_w) begin
+          direct_emit_valid_w = 1'b1;
+          direct_emit_value_w = {23'd0, buffered_byte_q + {8'd0, finish_carry_q}};
+          direct_emit_count_w = 6'd8;
+        end
+      end
+
+      ST_FINISH_REPEAT: begin
+        if (!((num_buffered_bytes_q <= 8'd1) && (final_bits_q == 6'd0)) &&
+            direct_emit_ready_w) begin
+          direct_emit_valid_w = 1'b1;
+          direct_emit_value_w = {24'd0, finish_carry_q ? 8'h00 : 8'hff};
+          direct_emit_count_w = 6'd8;
+        end
+      end
+
+      ST_FINISH_FINAL_BITS: begin
+        if ((final_bits_q[2:0] != 3'd0) && direct_emit_ready_w) begin
+          direct_emit_valid_w = 1'b1;
+          direct_emit_value_w = final_bits_value;
+          direct_emit_count_w = final_bits_q;
+          direct_emit_last_w = 1'b0;
+        end
+      end
+
+      default: begin
+      end
+    endcase
+  end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -302,43 +391,102 @@ module ff_vvc_cabac_stream_writer #(
           end
 
           ST_WRITE_OUT: begin
-            bits_left_q <= bits_left_q + 8'd8;
-            low_q <= low_q & low_mask;
+            if (write_bins_ep_fuse_w) begin
+              bits_left_q <= bins_ep_bits_left_next;
+              low_q <= bins_ep_low_next;
+              bins_ep_pending_q <= bins_ep_remaining_count != 6'd0;
+              bins_ep_pending_pattern_q <= bins_ep_remaining_pattern;
+              bins_ep_pending_count_q <= bins_ep_remaining_count;
+              finish_after_write_q <=
+                (bins_ep_remaining_count == 6'd0) && bins_ep_pending_last_q;
+            end else begin
+              bits_left_q <= write_bits_left_w;
+              low_q <= write_low_w;
+            end
             if (lead_byte == 9'h0ff) begin
               num_buffered_bytes_q <= num_buffered_bytes_q + 8'd1;
-              state_q <= bins_ep_pending_q ? ST_BINS_EP_CONT :
-                         (finish_after_write_q ? ST_FINISH_DECIDE : ST_RUN);
+              if (write_bins_ep_fuse_w) begin
+                if (bins_ep_bits_left_next < 8'd12) begin
+                  state_q <= ST_WRITE_OUT;
+                end else if (bins_ep_remaining_count != 6'd0) begin
+                  state_q <= ST_BINS_EP_CONT;
+                end else if (bins_ep_pending_last_q) begin
+                  state_q <= ST_FINISH_DECIDE;
+                end else begin
+                  state_q <= ST_RUN;
+                end
+              end else begin
+                state_q <= bins_ep_pending_q ? ST_BINS_EP_CONT :
+                           (finish_after_write_q ? ST_FINISH_DECIDE : ST_RUN);
+              end
             end else if (num_buffered_bytes_q != 8'd0) begin
               finish_carry_q <= lead_byte[8];
-              emit_value_q <= {23'd0, buffered_byte_q + {8'd0, lead_byte[8]}};
-              emit_count_q <= 6'd8;
-              emit_flush_q <= 1'b0;
-              emit_last_q <= 1'b0;
-              emit_valid_q <= 1'b1;
               buffered_byte_q <= {1'b0, lead_byte[7:0]};
-              return_state_q <= (num_buffered_bytes_q > 8'd1) ? ST_EMIT_REPEAT :
-                                (bins_ep_pending_q ? ST_BINS_EP_CONT :
-                                 (finish_after_write_q ? ST_FINISH_DECIDE : ST_RUN));
-              state_q <= ST_WAIT_EMIT;
+              if (direct_emit_valid_w) begin
+                if (num_buffered_bytes_q > 8'd1) begin
+                  state_q <= ST_EMIT_REPEAT;
+                end else if (write_bins_ep_fuse_w) begin
+                  if (bins_ep_bits_left_next < 8'd12) begin
+                    state_q <= ST_WRITE_OUT;
+                  end else if (bins_ep_remaining_count != 6'd0) begin
+                    state_q <= ST_BINS_EP_CONT;
+                  end else if (bins_ep_pending_last_q) begin
+                    state_q <= ST_FINISH_DECIDE;
+                  end else begin
+                    state_q <= ST_RUN;
+                  end
+                end else begin
+                  state_q <= bins_ep_pending_q ? ST_BINS_EP_CONT :
+                             (finish_after_write_q ? ST_FINISH_DECIDE : ST_RUN);
+                end
+              end else begin
+                emit_value_q <= {23'd0, buffered_byte_q + {8'd0, lead_byte[8]}};
+                emit_count_q <= 6'd8;
+                emit_flush_q <= 1'b0;
+                emit_last_q <= 1'b0;
+                emit_valid_q <= 1'b1;
+                return_state_q <= (num_buffered_bytes_q > 8'd1) ? ST_EMIT_REPEAT :
+                                  (bins_ep_pending_q ? ST_BINS_EP_CONT :
+                                   (finish_after_write_q ? ST_FINISH_DECIDE : ST_RUN));
+                state_q <= ST_WAIT_EMIT;
+              end
             end else begin
               num_buffered_bytes_q <= 8'd1;
               buffered_byte_q <= lead_byte;
-              state_q <= bins_ep_pending_q ? ST_BINS_EP_CONT :
-                         (finish_after_write_q ? ST_FINISH_DECIDE : ST_RUN);
+              if (write_bins_ep_fuse_w) begin
+                if (bins_ep_bits_left_next < 8'd12) begin
+                  state_q <= ST_WRITE_OUT;
+                end else if (bins_ep_remaining_count != 6'd0) begin
+                  state_q <= ST_BINS_EP_CONT;
+                end else if (bins_ep_pending_last_q) begin
+                  state_q <= ST_FINISH_DECIDE;
+                end else begin
+                  state_q <= ST_RUN;
+                end
+              end else begin
+                state_q <= bins_ep_pending_q ? ST_BINS_EP_CONT :
+                           (finish_after_write_q ? ST_FINISH_DECIDE : ST_RUN);
+              end
             end
           end
 
           ST_EMIT_REPEAT: begin
-            emit_value_q <= {24'd0, finish_carry_q ? 8'h00 : 8'hff};
-            emit_count_q <= 6'd8;
-            emit_flush_q <= 1'b0;
-            emit_last_q <= 1'b0;
-            emit_valid_q <= 1'b1;
             num_buffered_bytes_q <= num_buffered_bytes_q - 8'd1;
-            return_state_q <= (num_buffered_bytes_q > 8'd2) ? ST_EMIT_REPEAT :
-                              (bins_ep_pending_q ? ST_BINS_EP_CONT :
-                               (finish_after_write_q ? ST_FINISH_DECIDE : ST_RUN));
-            state_q <= ST_WAIT_EMIT;
+            if (direct_emit_valid_w) begin
+              state_q <= (num_buffered_bytes_q > 8'd2) ? ST_EMIT_REPEAT :
+                         (bins_ep_pending_q ? ST_BINS_EP_CONT :
+                          (finish_after_write_q ? ST_FINISH_DECIDE : ST_RUN));
+            end else begin
+              emit_value_q <= {24'd0, finish_carry_q ? 8'h00 : 8'hff};
+              emit_count_q <= 6'd8;
+              emit_flush_q <= 1'b0;
+              emit_last_q <= 1'b0;
+              emit_valid_q <= 1'b1;
+              return_state_q <= (num_buffered_bytes_q > 8'd2) ? ST_EMIT_REPEAT :
+                                (bins_ep_pending_q ? ST_BINS_EP_CONT :
+                                 (finish_after_write_q ? ST_FINISH_DECIDE : ST_RUN));
+              state_q <= ST_WAIT_EMIT;
+            end
           end
 
           ST_BINS_EP_CONT: begin
@@ -386,54 +534,76 @@ module ff_vvc_cabac_stream_writer #(
           end
 
           ST_FINISH_BUFFERED: begin
-            emit_value_q <= {23'd0, buffered_byte_q + {8'd0, finish_carry_q}};
-            emit_count_q <= 6'd8;
-            emit_flush_q <= 1'b0;
-            emit_last_q <= (num_buffered_bytes_q <= 8'd1) && (final_bits_q == 6'd0);
-            emit_valid_q <= 1'b1;
             if ((num_buffered_bytes_q <= 8'd1) && (final_bits_q == 6'd0)) begin
               stream_last_byte_bits_q <= 3'd0;
             end
-            if (num_buffered_bytes_q > 8'd1) begin
-              num_buffered_bytes_q <= num_buffered_bytes_q - 8'd1;
-              return_state_q <= ST_FINISH_REPEAT;
-            end else if (final_bits_q != 6'd0) begin
-              return_state_q <= ST_FINISH_FINAL_BITS;
+            if (direct_emit_valid_w) begin
+              if (num_buffered_bytes_q > 8'd1) begin
+                num_buffered_bytes_q <= num_buffered_bytes_q - 8'd1;
+                state_q <= ST_FINISH_REPEAT;
+              end else begin
+                state_q <= ST_FINISH_FINAL_BITS;
+              end
             end else begin
-              return_state_q <= ST_RUN;
+              emit_value_q <= {23'd0, buffered_byte_q + {8'd0, finish_carry_q}};
+              emit_count_q <= 6'd8;
+              emit_flush_q <= 1'b0;
+              emit_last_q <= (num_buffered_bytes_q <= 8'd1) && (final_bits_q == 6'd0);
+              emit_valid_q <= 1'b1;
+              if (num_buffered_bytes_q > 8'd1) begin
+                num_buffered_bytes_q <= num_buffered_bytes_q - 8'd1;
+                return_state_q <= ST_FINISH_REPEAT;
+              end else if (final_bits_q != 6'd0) begin
+                return_state_q <= ST_FINISH_FINAL_BITS;
+              end else begin
+                return_state_q <= ST_RUN;
+              end
+              state_q <= ST_WAIT_EMIT;
             end
-            state_q <= ST_WAIT_EMIT;
           end
 
           ST_FINISH_REPEAT: begin
-            emit_value_q <= {24'd0, finish_carry_q ? 8'h00 : 8'hff};
-            emit_count_q <= 6'd8;
-            emit_flush_q <= 1'b0;
-            emit_last_q <= (num_buffered_bytes_q <= 8'd1) && (final_bits_q == 6'd0);
-            emit_valid_q <= 1'b1;
             if ((num_buffered_bytes_q <= 8'd1) && (final_bits_q == 6'd0)) begin
               stream_last_byte_bits_q <= 3'd0;
             end
-            if (num_buffered_bytes_q > 8'd1) begin
-              num_buffered_bytes_q <= num_buffered_bytes_q - 8'd1;
-              return_state_q <= ST_FINISH_REPEAT;
-            end else if (final_bits_q != 6'd0) begin
-              return_state_q <= ST_FINISH_FINAL_BITS;
+            if (direct_emit_valid_w) begin
+              if (num_buffered_bytes_q > 8'd1) begin
+                num_buffered_bytes_q <= num_buffered_bytes_q - 8'd1;
+                state_q <= ST_FINISH_REPEAT;
+              end else begin
+                state_q <= ST_FINISH_FINAL_BITS;
+              end
             end else begin
-              return_state_q <= ST_RUN;
+              emit_value_q <= {24'd0, finish_carry_q ? 8'h00 : 8'hff};
+              emit_count_q <= 6'd8;
+              emit_flush_q <= 1'b0;
+              emit_last_q <= (num_buffered_bytes_q <= 8'd1) && (final_bits_q == 6'd0);
+              emit_valid_q <= 1'b1;
+              if (num_buffered_bytes_q > 8'd1) begin
+                num_buffered_bytes_q <= num_buffered_bytes_q - 8'd1;
+                return_state_q <= ST_FINISH_REPEAT;
+              end else if (final_bits_q != 6'd0) begin
+                return_state_q <= ST_FINISH_FINAL_BITS;
+              end else begin
+                return_state_q <= ST_RUN;
+              end
+              state_q <= ST_WAIT_EMIT;
             end
-            state_q <= ST_WAIT_EMIT;
           end
 
           ST_FINISH_FINAL_BITS: begin
-            emit_value_q <= final_bits_value;
-            emit_count_q <= final_bits_q;
-            emit_flush_q <= 1'b0;
-            emit_last_q <= final_bits_q[2:0] == 3'd0;
-            emit_valid_q <= 1'b1;
             stream_last_byte_bits_q <= final_bits_q[2:0];
-            return_state_q <= (final_bits_q[2:0] == 3'd0) ? ST_RUN : ST_FINISH_FLUSH;
-            state_q <= ST_WAIT_EMIT;
+            if (direct_emit_valid_w) begin
+              state_q <= ST_FINISH_FLUSH;
+            end else begin
+              emit_value_q <= final_bits_value;
+              emit_count_q <= final_bits_q;
+              emit_flush_q <= 1'b0;
+              emit_last_q <= final_bits_q[2:0] == 3'd0;
+              emit_valid_q <= 1'b1;
+              return_state_q <= (final_bits_q[2:0] == 3'd0) ? ST_RUN : ST_FINISH_FLUSH;
+              state_q <= ST_WAIT_EMIT;
+            end
           end
 
           ST_FINISH_FLUSH: begin

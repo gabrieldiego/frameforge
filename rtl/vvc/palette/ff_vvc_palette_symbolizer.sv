@@ -91,7 +91,11 @@ module ff_vvc_palette_symbolizer #(
   logic [15:0] feed_y;
   logic [15:0] feed_abs_x;
   logic [15:0] feed_abs_y;
+  logic [7:0] feed_next_sample_w;
+  logic [15:0] feed_next_y;
   logic [PLANE_COUNT_BITS - 1:0] feed_frame_index;
+  logic [PLANE_COUNT_BITS - 1:0] feed_next_sample_ext_w;
+  logic [PLANE_COUNT_BITS - 1:0] feed_next_frame_index;
   logic [3:0] visible_cu_cols_w;
   logic [3:0] visible_cu_rows_w;
   logic [2:0] drain_cu_col_w;
@@ -166,6 +170,13 @@ module ff_vvc_palette_symbolizer #(
   logic request_cu_above_ibc_w;
   logic [PLANE_COUNT_BITS - 1:0] feed_left_frame_index;
   logic [PLANE_COUNT_BITS - 1:0] feed_left_boundary_frame_index;
+  logic [PLANE_COUNT_BITS - 1:0] feed_next_left_frame_index;
+  logic [PLANE_COUNT_BITS - 1:0] feed_next_left_boundary_frame_index;
+  logic feed_read_enable_w;
+  logic feed_read_next_w;
+  logic [PLANE_COUNT_BITS - 1:0] feed_read_frame_index_w;
+  logic [PLANE_COUNT_BITS - 1:0] feed_read_left_frame_index_w;
+  logic [PLANE_COUNT_BITS - 1:0] feed_read_left_boundary_frame_index_w;
   logic signed [8:0] ts_coeff_value_w;
   logic signed [8:0] bdpcm_coeff_value_w;
   logic signed [8:0] residual_coeff_value_w;
@@ -218,6 +229,8 @@ module ff_vvc_palette_symbolizer #(
   assign feed_y = {13'd0, feed_sample_q[5:3]};
   assign feed_abs_x = drain_origin_x + feed_x;
   assign feed_abs_y = drain_origin_y + feed_y;
+  assign feed_next_sample_w = feed_sample_q + 8'd1;
+  assign feed_next_y = {13'd0, feed_next_sample_w[5:3]};
   assign visible_cu_cols_w = coded_cu_count_x;
   assign visible_cu_rows_w = coded_cu_count_y;
   assign drain_cu_col_w = drain_origin_x_q[5:3];
@@ -227,6 +240,8 @@ module ff_vvc_palette_symbolizer #(
   assign feed_left_order_index_ext_w =
     {{(PLANE_COUNT_BITS - 6){1'b0}}, feed_left_order_index_w};
   assign feed_sample_ext_w = {{(PLANE_COUNT_BITS - 8){1'b0}}, feed_sample_q};
+  assign feed_next_sample_ext_w =
+    {{(PLANE_COUNT_BITS - 8){1'b0}}, feed_next_sample_w};
   // H.266 7.3.11.4 coding_tree() leaf traversal requests the CU payload by
   // origin. The input stream is the compact fixed-8x8 TU order used by the
   // top-level interface, so address the stored block by origin rather than by
@@ -234,6 +249,9 @@ module ff_vvc_palette_symbolizer #(
   assign feed_frame_index =
     ((drain_cu_order_valid_w ? drain_cu_order_index_ext_w : '0) *
      MAX_CU_SAMPLES_L) + feed_sample_ext_w;
+  assign feed_next_frame_index =
+    ((drain_cu_order_valid_w ? drain_cu_order_index_ext_w : '0) *
+     MAX_CU_SAMPLES_L) + feed_next_sample_ext_w;
   assign feed_left_cu_col_w = drain_cu_col_w - 3'd1;
   // H.266 8.6.2.2 uses spatial A1 as the left IBC neighbour. The TU input
   // stream is coding-tree ordered, so the left CU is not always the preceding
@@ -246,6 +264,24 @@ module ff_vvc_palette_symbolizer #(
     (drain_cu_order_valid_w && (drain_cu_col_w != 3'd0) && feed_left_order_valid_w) ?
     ((feed_left_order_index_ext_w * MAX_CU_SAMPLES_L) +
      {{(PLANE_COUNT_BITS - 6){1'b0}}, feed_y[2:0], 3'b111}) : '0;
+  assign feed_next_left_frame_index =
+    (drain_cu_order_valid_w && (drain_cu_col_w != 3'd0) && feed_left_order_valid_w) ?
+    ((feed_left_order_index_ext_w * MAX_CU_SAMPLES_L) + feed_next_sample_ext_w) : '0;
+  assign feed_next_left_boundary_frame_index =
+    (drain_cu_order_valid_w && (drain_cu_col_w != 3'd0) && feed_left_order_valid_w) ?
+    ((feed_left_order_index_ext_w * MAX_CU_SAMPLES_L) +
+     {{(PLANE_COUNT_BITS - 6){1'b0}}, feed_next_y[2:0], 3'b111}) : '0;
+  assign feed_read_next_w =
+    (state_q == ST_FEED_CU) && cu_s_axis_ready && feed_sample_valid_q &&
+    !feed_sample_last_q;
+  assign feed_read_enable_w =
+    !input_valid && ((state_q == ST_FEED_READ) || feed_read_next_w);
+  assign feed_read_frame_index_w =
+    feed_read_next_w ? feed_next_frame_index : feed_frame_index;
+  assign feed_read_left_frame_index_w =
+    feed_read_next_w ? feed_next_left_frame_index : feed_left_frame_index;
+  assign feed_read_left_boundary_frame_index_w =
+    feed_read_next_w ? feed_next_left_boundary_frame_index : feed_left_boundary_frame_index;
   assign feed_y_sample = feed_y_sample_q;
   assign feed_cb_sample = feed_cb_sample_q;
   assign feed_cr_sample = feed_cr_sample_q;
@@ -553,9 +589,10 @@ module ff_vvc_palette_symbolizer #(
                 feed_sample_q <= 8'd0;
                 feed_sample_valid_q <= 1'b0;
               end else begin
-                feed_sample_q <= feed_sample_q + 8'd1;
-                feed_sample_valid_q <= 1'b0;
-                state_q <= ST_FEED_READ;
+                feed_sample_q <= feed_next_sample_w;
+                feed_sample_last_q <= feed_next_sample_w == (MAX_CU_SAMPLES - 1);
+                feed_sample_valid_q <= 1'b1;
+                state_q <= ST_FEED_CU;
               end
             end
           end
@@ -633,16 +670,16 @@ module ff_vvc_palette_symbolizer #(
       endcase
     end
 
-    if (!input_valid && (state_q == ST_FEED_READ)) begin
-      feed_y_sample_q <= frame_y[feed_frame_index];
-      feed_cb_sample_q <= frame_cb[feed_frame_index];
-      feed_cr_sample_q <= frame_cr[feed_frame_index];
-      feed_left_y_sample_q <= frame_y[feed_left_frame_index];
-      feed_left_cb_sample_q <= frame_cb[feed_left_frame_index];
-      feed_left_cr_sample_q <= frame_cr[feed_left_frame_index];
-      feed_left_boundary_y_sample_q <= frame_y[feed_left_boundary_frame_index];
-      feed_left_boundary_cb_sample_q <= frame_cb[feed_left_boundary_frame_index];
-      feed_left_boundary_cr_sample_q <= frame_cr[feed_left_boundary_frame_index];
+    if (feed_read_enable_w) begin
+      feed_y_sample_q <= frame_y[feed_read_frame_index_w];
+      feed_cb_sample_q <= frame_cb[feed_read_frame_index_w];
+      feed_cr_sample_q <= frame_cr[feed_read_frame_index_w];
+      feed_left_y_sample_q <= frame_y[feed_read_left_frame_index_w];
+      feed_left_cb_sample_q <= frame_cb[feed_read_left_frame_index_w];
+      feed_left_cr_sample_q <= frame_cr[feed_read_left_frame_index_w];
+      feed_left_boundary_y_sample_q <= frame_y[feed_read_left_boundary_frame_index_w];
+      feed_left_boundary_cb_sample_q <= frame_cb[feed_read_left_boundary_frame_index_w];
+      feed_left_boundary_cr_sample_q <= frame_cr[feed_read_left_boundary_frame_index_w];
     end
   end
 endmodule

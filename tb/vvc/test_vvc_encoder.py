@@ -1353,11 +1353,22 @@ async def collect_stream(
                     increment_counter(pipeline_counts, "bin_fifo_accept")
                 else:
                     increment_counter(pipeline_counts, "bin_fifo_backpressure")
-            if signal_int("cabac_writer.streamed_cabac.stream_writer.emit_valid_q") == 1:
-                if signal_int("cabac_writer.streamed_cabac.stream_writer.bit_writer_ready") == 1:
+            stream_emit_registered_valid = (
+                signal_int("cabac_writer.streamed_cabac.stream_writer.emit_valid_q") == 1
+            )
+            stream_emit_direct_valid = (
+                signal_int("cabac_writer.streamed_cabac.stream_writer.direct_emit_valid_w") == 1
+            )
+            stream_emit_ready = (
+                signal_int("cabac_writer.streamed_cabac.stream_writer.bit_writer_ready") == 1
+            )
+            if stream_emit_registered_valid:
+                if stream_emit_ready:
                     increment_counter(pipeline_counts, "stream_emit_accept")
                 else:
                     increment_counter(pipeline_counts, "stream_emit_pending")
+            if stream_emit_direct_valid and stream_emit_ready:
+                increment_counter(pipeline_counts, "stream_emit_accept")
             if signal_int("cabac_writer.streamed_cabac.stream_writer.state_q") == 10:
                 if signal_int("cabac_writer.streamed_cabac.stream_writer.bit_writer_idle") == 1:
                     increment_counter(pipeline_counts, "stream_wait_emit_idle")

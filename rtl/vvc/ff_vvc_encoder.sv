@@ -131,7 +131,7 @@ module ff_vvc_encoder #(
   localparam int INPUT_PACKET_FIFO_DEPTH = 16;
   localparam int INPUT_PACKET_FIFO_LEVEL_BITS = $clog2(INPUT_PACKET_FIFO_DEPTH + 1);
   localparam int SOURCE_SYMBOL_FIFO_BITS = 40;
-  localparam int SOURCE_SYMBOL_FIFO_DEPTH = 64;
+  localparam int SOURCE_SYMBOL_FIFO_DEPTH = 128;
   localparam int SOURCE_SYMBOL_FIFO_LEVEL_BITS = $clog2(SOURCE_SYMBOL_FIFO_DEPTH + 1);
   logic [INPUT_PACKET_BITS - 1:0] reader_axis_data;
   logic [3:0] reader_axis_count;
@@ -239,6 +239,7 @@ module ff_vvc_encoder #(
   logic [SOURCE_SYMBOL_FIFO_BITS - 1:0] source_symbol_fifo_data;
   logic        source_symbol_fifo_last;
   logic [SOURCE_SYMBOL_FIFO_LEVEL_BITS - 1:0] source_symbol_fifo_level_w;
+  logic        source_symbol_fifo_to_cabac_ready_w;
   logic [1:0]  palette_mux_state_q;
   logic [2:0]  palette_current_pred_ibc_ctx_q;
   logic [5:0]  palette_current_leaf_index_q;
@@ -264,6 +265,7 @@ module ff_vvc_encoder #(
   logic [7:0]  slice_stream_data;
   logic        slice_stream_last;
   logic        cabac_start_q;
+  logic        ctu_symbol_start_q;
   logic        pending_output_q;
   logic        resume_input_q;
   logic        frame_clear_q;
@@ -1082,8 +1084,8 @@ module ff_vvc_encoder #(
     ctu_has_palette_cu && (palette_mux_state_q == PALETTE_MUX_PARTITION) &&
     ctu_symbol_valid && (ctu_symbol_kind == SYMBOL_PALETTE_LEAF);
   assign palette_request_valid =
-    palette_leaf_marker_valid && (generated_out_state_q == GENERATED_OUT_CABAC) &&
-    !cabac_start_q && !palette_leaf_is_ibc_w;
+    palette_leaf_marker_valid && (generated_out_state_q != GENERATED_OUT_IDLE) &&
+    !palette_leaf_is_ibc_w;
   assign palette_request_origin_x = ctu_symbol_data[31:16];
   assign palette_request_origin_y = ctu_symbol_data[15:0];
   assign palette_request_last = ctu_symbol_last;
@@ -1106,10 +1108,11 @@ module ff_vvc_encoder #(
     ((palette_mux_state_q == PALETTE_MUX_CU) ? palette_stream_last : ctu_symbol_last) :
     ctu_symbol_last;
   assign source_symbol_ready =
-    (generated_out_state_q == GENERATED_OUT_CABAC) && !cabac_start_q &&
-    source_symbol_fifo_ready;
+    (generated_out_state_q != GENERATED_OUT_IDLE) && source_symbol_fifo_ready;
   assign palette_stream_ready =
     ctu_has_palette_cu && (palette_mux_state_q == PALETTE_MUX_CU) && source_symbol_ready;
+  assign source_symbol_fifo_to_cabac_ready_w =
+    (generated_out_state_q == GENERATED_OUT_CABAC) && !cabac_start_q && cabac_symbol_ready;
 
   ff_encoder_axil_regs #(
     .AXI_ADDR_BITS(AXI_ADDR_BITS),
@@ -1454,17 +1457,16 @@ module ff_vvc_encoder #(
   ) source_symbol_fifo (
     .clk(clk),
     .rst_n(rst_n),
-    .clear(frame_pipeline_clear_w || cabac_start_q),
+    .clear(frame_pipeline_clear_w),
     .s_axis_valid(
       source_symbol_valid &&
-      (generated_out_state_q == GENERATED_OUT_CABAC) &&
-      !cabac_start_q
+      (generated_out_state_q != GENERATED_OUT_IDLE)
     ),
     .s_axis_ready(source_symbol_fifo_ready),
     .s_axis_data({source_symbol_kind, source_symbol_data}),
     .s_axis_last(source_symbol_last),
     .m_axis_valid(source_symbol_fifo_valid),
-    .m_axis_ready(cabac_symbol_ready),
+    .m_axis_ready(source_symbol_fifo_to_cabac_ready_w),
     .m_axis_data(source_symbol_fifo_data),
     .m_axis_last(source_symbol_fifo_last),
     .level(source_symbol_fifo_level_w)
@@ -1476,7 +1478,11 @@ module ff_vvc_encoder #(
     .start(cabac_start_q),
     .enable(cabac_enable),
     .lossless_slice_qp(ctu_has_palette_cu),
-    .s_axis_valid(!cabac_start_q && source_symbol_fifo_valid),
+    .s_axis_valid(
+      (generated_out_state_q == GENERATED_OUT_CABAC) &&
+      !cabac_start_q &&
+      source_symbol_fifo_valid
+    ),
     .s_axis_ready(cabac_symbol_ready),
     .s_axis_kind(source_symbol_fifo_data[39:32]),
     .s_axis_data(source_symbol_fifo_data[31:0]),
@@ -1556,7 +1562,7 @@ module ff_vvc_encoder #(
     .clk(clk),
     .rst_n(rst_n),
     .clear(frame_pipeline_clear_w),
-    .start(cabac_start_q),
+    .start(ctu_symbol_start_q),
     .visible_width(ctu_visible_width_w),
     .visible_height(ctu_visible_height_w),
     .chroma_format_idc(chroma_format_idc),
@@ -1602,6 +1608,7 @@ module ff_vvc_encoder #(
       m_axis_data  <= '0;
       m_axis_last  <= 1'b0;
       cabac_start_q <= 1'b0;
+      ctu_symbol_start_q <= 1'b0;
       pending_output_q <= 1'b0;
       resume_input_q <= 1'b0;
       frame_clear_q <= 1'b0;
@@ -1659,6 +1666,7 @@ module ff_vvc_encoder #(
       end
     end else begin
       cabac_start_q <= 1'b0;
+      ctu_symbol_start_q <= 1'b0;
       generated_header_start_q <= 1'b0;
       generated_picture_header_start_q <= 1'b0;
       frame_clear_q <= 1'b0;
@@ -1989,11 +1997,12 @@ module ff_vvc_encoder #(
         end else begin
           generated_out_state_q <= GENERATED_OUT_SLICE_START;
         end
+        ctu_symbol_start_q <= 1'b1;
         m_axis_valid <= 1'b0;
         m_axis_data <= 8'd0;
         m_axis_last <= 1'b0;
       end
-      if (cabac_start_q) begin
+      if (ctu_symbol_start_q) begin
         palette_mux_state_q <= PALETTE_MUX_PARTITION;
         palette_current_pred_ibc_ctx_q <= 3'd0;
         ctu_prior_ibc_seen_q <= 1'b0;
@@ -2006,8 +2015,7 @@ module ff_vvc_encoder #(
           ctu_cu_coded_ibc_bv_y_q[ibc_state_i] <= 16'sd0;
         end
       end
-      if (ctu_has_palette_cu && !cabac_start_q &&
-          (generated_out_state_q == GENERATED_OUT_CABAC)) begin
+      if (ctu_has_palette_cu && (generated_out_state_q != GENERATED_OUT_IDLE)) begin
         if ((palette_mux_state_q == PALETTE_MUX_PARTITION) &&
             ctu_symbol_valid && ctu_symbol_ready &&
             (ctu_symbol_kind == SYMBOL_PALETTE_LEAF) && palette_leaf_is_ibc_w) begin
