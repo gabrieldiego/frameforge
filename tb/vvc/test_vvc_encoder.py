@@ -1085,11 +1085,12 @@ async def collect_stream(
         0: "input",
         1: "wait_cu",
         2: "feed_read",
-        3: "feed_cu",
-        4: "select_cu",
-        5: "drain_cu",
-        6: "drain_ts_start",
-        7: "drain_ts_coeff",
+        3: "feed_read_left",
+        4: "feed_cu",
+        5: "select_cu",
+        6: "drain_cu",
+        7: "drain_ts_start",
+        8: "drain_ts_coeff",
     }
     syntax_state_names = {
         0: "idle",

@@ -1127,14 +1127,15 @@ module ff_vvc_encoder #(
     ctu_has_palette_cu && (palette_mux_state_q == PALETTE_MUX_PARTITION) &&
     ctu_symbol_valid && (ctu_symbol_kind == SYMBOL_PALETTE_LEAF);
   // H.266 7.3.11.4 coding_tree() split syntax is sample independent, but
-  // H.266 8.6.2 IBC predictor selection for a palette leaf must only see
-  // previously coded CUs. The input fetch order can differ from CTU syntax
-  // order, so exact-hash decisions are resolved after the whole CTU hash table
-  // is available; leaf payloads wait for that map while split/header syntax
-  // can still run ahead.
+  // H.266 8.6.2 IBC predictor selection for a palette leaf depends on already
+  // coded CUs only. The hash matcher resolves each 8x8 leaf when its Cr samples
+  // finish, so split/header syntax can run ahead and a leaf payload waits only
+  // until that specific leaf has been fetched in the CTU-local TU order.
   assign palette_leaf_payload_ready_w =
     !ctu_has_palette_cu || !palette_leaf_marker_valid ||
-    (palette_input_complete_q && ibc_matcher_idle);
+    !input_active_q ||
+    (palette_leaf_order_valid_w &&
+     (input_stream_leaf_q > {1'b0, palette_leaf_order_index_w}));
   assign palette_request_valid =
     palette_leaf_marker_valid && (generated_out_state_q != GENERATED_OUT_IDLE) &&
     palette_leaf_payload_ready_w && !palette_leaf_is_ibc_w;

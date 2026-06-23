@@ -60,10 +60,11 @@ impl VvcIbcHashSearch {
         }
 
         let hash = vvc_ibc_hash_8x8(frame, origin_x, origin_y);
-        // Candidate priority is coding-tree leaf order. The RTL stores entries
-        // by row-major CU index for cheap neighbour lookup, but scans them in
-        // the same Morton/Z order before choosing the first hash match.
-        let reference = self.entries.iter().find(|entry| entry.hash == hash)?;
+        // H.266 8.6.2 allows only already-coded IBC predictors. Keep this
+        // first hardware-oriented subset to three local exact-hash candidates
+        // so the RTL can resolve a CU as soon as its TU samples arrive instead
+        // of synthesizing a 64-way CTU hash search: A1, then B1, then B0.
+        let reference = self.local_hash_candidate(origin_x, origin_y, hash)?;
         let predictor = self.bvp_for(origin_x, origin_y);
         let bv = VvcIbcBv {
             x: ((reference.origin_x as i16 - origin_x as i16) << 4),
@@ -225,6 +226,38 @@ impl VvcIbcHashSearch {
         }
     }
 
+    fn local_hash_candidate(
+        &self,
+        origin_x: usize,
+        origin_y: usize,
+        hash: u32,
+    ) -> Option<VvcIbcHashEntry> {
+        if origin_x >= VVC_IBC_CU_SIZE {
+            if let Some(entry) = self.hash_entry_at(origin_x - VVC_IBC_CU_SIZE, origin_y) {
+                if entry.hash == hash {
+                    return Some(entry);
+                }
+            }
+        }
+        if origin_y >= VVC_IBC_CU_SIZE {
+            if let Some(entry) = self.hash_entry_at(origin_x, origin_y - VVC_IBC_CU_SIZE) {
+                if entry.hash == hash {
+                    return Some(entry);
+                }
+            }
+        }
+        if origin_x >= VVC_IBC_CU_SIZE && origin_y >= VVC_IBC_CU_SIZE {
+            if let Some(entry) =
+                self.hash_entry_at(origin_x - VVC_IBC_CU_SIZE, origin_y - VVC_IBC_CU_SIZE)
+            {
+                if entry.hash == hash {
+                    return Some(entry);
+                }
+            }
+        }
+        None
+    }
+
     fn record_hmvp(&mut self, bv: VvcIbcBv) {
         if let Some(pos) = self.hmvp.iter().position(|entry| *entry == bv) {
             self.hmvp.remove(pos);
@@ -243,6 +276,13 @@ impl VvcIbcHashSearch {
     fn ibc_bv_at(&self, origin_x: usize, origin_y: usize) -> Option<VvcIbcBv> {
         let index = vvc_ibc_cu_index(origin_x, origin_y)?;
         self.ibc_mode_by_cu[index].then_some(self.bv_by_cu[index])
+    }
+
+    fn hash_entry_at(&self, origin_x: usize, origin_y: usize) -> Option<VvcIbcHashEntry> {
+        self.entries
+            .iter()
+            .find(|entry| entry.origin_x == origin_x && entry.origin_y == origin_y)
+            .copied()
     }
 }
 
