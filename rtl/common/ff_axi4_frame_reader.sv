@@ -5,6 +5,7 @@ module ff_axi4_frame_reader #(
   parameter int AXI_DATA_BITS = 128,
   parameter int SAMPLE_BITS = 8,
   parameter int CTU_SIZE = 64,
+  parameter int OUTPUT_SAMPLES = 1,
   // 0: VVC fixed-TU scan order, 1: raster 8x8 block order.
   parameter bit RASTER_BLOCK_ORDER = 1'b0
 ) (
@@ -42,7 +43,8 @@ module ff_axi4_frame_reader #(
 
   output logic                       sample_valid,
   input  logic                       sample_ready,
-  output logic [SAMPLE_BITS-1:0]     sample_data,
+  output logic [OUTPUT_SAMPLES*SAMPLE_BITS-1:0] sample_data,
+  output logic [3:0]                 sample_count,
   output logic                       sample_last,
   output logic                       busy,
   output logic                       done,
@@ -67,6 +69,11 @@ module ff_axi4_frame_reader #(
   localparam logic [2:0] AXI_SIZE = AXI_BYTE_SHIFT;
   localparam int CACHE_WORDS = 24;
   localparam int CACHE_INDEX_BITS = 5;
+  localparam int OUTPUT_SAMPLES_CLAMPED =
+    (OUTPUT_SAMPLES < 1) ? 1 :
+    (OUTPUT_SAMPLES > 8) ? 8 :
+    OUTPUT_SAMPLES;
+  localparam logic [3:0] OUTPUT_SAMPLES_COUNT = OUTPUT_SAMPLES_CLAMPED;
 
   typedef enum logic [2:0] {
     ST_IDLE,
@@ -140,6 +147,26 @@ module ff_axi4_frame_reader #(
   logic next_sample_last_in_component_w;
   logic next_component_last_w;
   logic next_output_last_w;
+  logic [3:0] row_width_samples_w;
+  logic [3:0] row_pos_w;
+  logic [3:0] row_remaining_w;
+  logic [31:0] axi_word_remaining_bytes_w;
+  logic [3:0] axi_word_remaining_samples_w;
+  logic [3:0] packet_candidate_count_w;
+  logic [3:0] packet_count_w;
+  logic [5:0] packet_last_sample_w;
+  logic packet_sample_last_in_component_w;
+  logic packet_component_last_w;
+  logic packet_block_last_w;
+  logic packet_segment_last_w;
+  logic packet_output_last_w;
+  logic packet_all_visible_w;
+  logic [15:0] plane_visible_width_w;
+  logic [15:0] plane_visible_height_w;
+  logic [OUTPUT_SAMPLES*SAMPLE_BITS-1:0] packet_cache_data_w;
+  logic [OUTPUT_SAMPLES*SAMPLE_BITS-1:0] packet_rdata_w;
+  logic [OUTPUT_SAMPLES*SAMPLE_BITS-1:0] packet_pad_data_w;
+  integer packet_i;
 
   assign busy = (state_q != ST_IDLE);
   assign m_axi_arlen = 8'd0;
@@ -238,6 +265,70 @@ module ff_axi4_frame_reader #(
     (sample_y_w < visible_height) &&
     !((chroma_format_idc == 2'd1) && (component_q != 2'd0) &&
       ((plane_x_w >= (visible_width >> 1)) || (plane_y_w >= (visible_height >> 1))));
+  assign row_width_samples_w =
+    ((chroma_format_idc == 2'd1) && (component_q != 2'd0)) ? 4'd4 : 4'd8;
+  assign row_pos_w =
+    ((chroma_format_idc == 2'd1) && (component_q != 2'd0)) ?
+      {2'd0, sample_q[1:0]} :
+      {1'b0, sample_q[2:0]};
+  assign row_remaining_w = row_width_samples_w - row_pos_w;
+  assign axi_word_remaining_bytes_w = AXI_BYTES - {28'd0, axi_byte_offset_w};
+  assign axi_word_remaining_samples_w =
+    (SAMPLE_BYTES <= 1) ?
+      axi_word_remaining_bytes_w[3:0] :
+      (axi_word_remaining_bytes_w >> SAMPLE_BYTE_SHIFT);
+  always_comb begin
+    packet_candidate_count_w = row_remaining_w;
+    if (packet_candidate_count_w > OUTPUT_SAMPLES_COUNT) begin
+      packet_candidate_count_w = OUTPUT_SAMPLES_COUNT;
+    end
+    if (packet_candidate_count_w > axi_word_remaining_samples_w) begin
+      packet_candidate_count_w = axi_word_remaining_samples_w;
+    end
+    if (packet_candidate_count_w == 4'd0) begin
+      packet_candidate_count_w = 4'd1;
+    end
+  end
+  assign plane_visible_width_w =
+    ((chroma_format_idc == 2'd1) && (component_q != 2'd0)) ?
+      (visible_width >> 1) :
+      visible_width;
+  assign plane_visible_height_w =
+    ((chroma_format_idc == 2'd1) && (component_q != 2'd0)) ?
+      (visible_height >> 1) :
+      visible_height;
+  assign packet_all_visible_w =
+    in_visible_w &&
+    (plane_y_w < plane_visible_height_w) &&
+    (({16'd0, plane_x_w} + {28'd0, packet_candidate_count_w}) <=
+      {16'd0, plane_visible_width_w});
+  assign packet_count_w =
+    packet_all_visible_w ? packet_candidate_count_w : 4'd1;
+  assign packet_last_sample_w = sample_q + {2'd0, packet_count_w} - 6'd1;
+  assign packet_sample_last_in_component_w =
+    (packet_last_sample_w == component_sample_last_w);
+  assign packet_component_last_w =
+    (component_q == 2'd2) && packet_sample_last_in_component_w;
+  assign packet_block_last_w =
+    packet_component_last_w &&
+    (leaf_count_q == (active_leaf_count_w - 7'd1));
+  assign packet_segment_last_w = packet_block_last_w;
+  assign packet_output_last_w = packet_segment_last_w &&
+    (stream_last_on_segment_end || frame_last_segment);
+  always_comb begin
+    packet_cache_data_w = '0;
+    packet_rdata_w = '0;
+    packet_pad_data_w = '0;
+    for (packet_i = 0; packet_i < OUTPUT_SAMPLES; packet_i = packet_i + 1) begin
+      if (packet_i < packet_count_w) begin
+        packet_cache_data_w[packet_i * SAMPLE_BITS +: SAMPLE_BITS] =
+          cache_hit_data_w[(axi_byte_offset_w + (packet_i * SAMPLE_BYTES)) * 8 +: SAMPLE_BITS];
+        packet_rdata_w[packet_i * SAMPLE_BITS +: SAMPLE_BITS] =
+          m_axi_rdata[(axi_byte_offset_w + (packet_i * SAMPLE_BYTES)) * 8 +: SAMPLE_BITS];
+        packet_pad_data_w[packet_i * SAMPLE_BITS +: SAMPLE_BITS] = pad_sample_w;
+      end
+    end
+  end
   assign fast_next_same_row_w =
     ((chroma_format_idc == 2'd1) && (component_q != 2'd0)) ?
       (sample_q[1:0] != 2'd3) :
@@ -313,6 +404,7 @@ module ff_axi4_frame_reader #(
       m_axi_rready <= 1'b0;
       sample_valid <= 1'b0;
       sample_data <= '0;
+      sample_count <= 4'd0;
       sample_last <= 1'b0;
       active_axi_word_q <= '0;
       cache_valid_q <= '0;
@@ -331,6 +423,7 @@ module ff_axi4_frame_reader #(
         m_axi_arvalid <= 1'b0;
         m_axi_rready <= 1'b0;
         sample_valid <= 1'b0;
+        sample_count <= 4'd0;
         sample_last <= 1'b0;
         active_axi_word_q <= '0;
         cache_valid_q <= '0;
@@ -339,12 +432,13 @@ module ff_axi4_frame_reader #(
         if (sample_valid && sample_ready) begin
           sample_valid <= 1'b0;
           sample_last <= 1'b0;
-          if (segment_last_w) begin
+          sample_count <= 4'd0;
+          if (packet_segment_last_w) begin
             state_q <= ST_IDLE;
             done <= 1'b1;
           end else begin
             state_q <= ST_SKIP;
-            if (sample_last_in_component_w) begin
+            if (packet_sample_last_in_component_w) begin
               sample_q <= 6'd0;
               if (component_q == 2'd2) begin
                 component_q <= 2'd0;
@@ -363,7 +457,7 @@ module ff_axi4_frame_reader #(
                 component_q <= component_q + 2'd1;
               end
             end else begin
-              sample_q <= sample_q + 6'd1;
+              sample_q <= sample_q + {2'd0, sample_count};
             end
           end
         end
@@ -378,8 +472,9 @@ module ff_axi4_frame_reader #(
               if (in_visible_w) begin
                 if (cache_hit_w) begin
                   active_axi_word_q <= cache_hit_data_w;
-                  sample_data <= cache_hit_data_w[axi_byte_offset_w * 8 +: SAMPLE_BITS];
-                  sample_last <= output_last_w;
+                  sample_data <= packet_cache_data_w;
+                  sample_count <= packet_count_w;
+                  sample_last <= packet_output_last_w;
                   sample_valid <= 1'b1;
                   state_q <= ST_VALID;
                 end else begin
@@ -387,8 +482,9 @@ module ff_axi4_frame_reader #(
                   state_q <= ST_ADDR;
                 end
               end else begin
-                sample_data <= pad_sample_w;
-                sample_last <= output_last_w;
+                sample_data <= packet_pad_data_w;
+                sample_count <= packet_count_w;
+                sample_last <= packet_output_last_w;
                 sample_valid <= 1'b1;
                 state_q <= ST_PAD;
               end
@@ -413,8 +509,9 @@ module ff_axi4_frame_reader #(
               cache_addr_q[cache_index_w] <= axi_word_addr_w;
               cache_data_q[cache_index_w] <= m_axi_rdata;
               active_axi_word_q <= m_axi_rdata;
-              sample_data <= m_axi_rdata[axi_byte_offset_w * 8 +: SAMPLE_BITS];
-              sample_last <= output_last_w;
+              sample_data <= packet_rdata_w;
+              sample_count <= packet_count_w;
+              sample_last <= packet_output_last_w;
               sample_valid <= 1'b1;
               state_q <= ST_VALID;
               if (m_axi_rresp != 2'b00 || !m_axi_rlast) begin
@@ -425,12 +522,6 @@ module ff_axi4_frame_reader #(
           ST_PAD: begin
           end
           ST_VALID: begin
-            if (sample_valid && sample_ready && fast_next_sample_w) begin
-              sample_data <= active_axi_word_q[next_axi_byte_offset_w * 8 +: SAMPLE_BITS];
-              sample_last <= next_output_last_w;
-              sample_valid <= 1'b1;
-              state_q <= ST_VALID;
-            end
           end
           default: begin
             state_q <= ST_IDLE;

@@ -60,17 +60,17 @@ AV2 16x16 4:4:4 screenshot crop:
   `verification/generated/checksums/av2/screenshot_640_sweep_16x16_1f_yuv444p8_16x16_1f_yuv444p8_rtl_block_waveform.vcd`
 - HTML:
   `verification/generated/checksums/av2/screenshot_640_sweep_16x16_1f_yuv444p8_16x16_1f_yuv444p8_rtl_block_waveform.html`
-- Total cycles: `4697`
+- Total cycles: `4466`
 
 | Block | Idle | Waiting | Working | Backpressure |
 |---|---:|---:|---:|---:|
-| `axi_reader` | 0.816 | 0.010 | 0.174 | 0.000 |
-| `input_fifo` | 0.000 | 0.816 | 0.184 | 0.000 |
-| `av2_core` | 0.313 | 0.050 | 0.636 | 0.000 |
-| `luma_residual` | 0.000 | 0.888 | 0.112 | 0.000 |
-| `chroma_residual` | 0.000 | 0.688 | 0.312 | 0.000 |
-| `entropy_coder` | 0.000 | 0.404 | 0.595 | 0.000 |
-| `axi_writer` | 0.001 | 0.875 | 0.124 | 0.000 |
+| `axi_reader` | 0.899 | 0.011 | 0.043 | 0.047 |
+| `input_fifo` | 0.000 | 0.827 | 0.172 | 0.001 |
+| `av2_core` | 0.329 | 0.001 | 0.669 | 0.000 |
+| `luma_residual` | 0.000 | 0.882 | 0.118 | 0.000 |
+| `chroma_residual` | 0.000 | 0.672 | 0.328 | 0.000 |
+| `entropy_coder` | 0.000 | 0.373 | 0.626 | 0.000 |
+| `axi_writer` | 0.001 | 0.869 | 0.130 | 0.000 |
 
 VVC 16x16 4:2:0 RaceHorses crop:
 
@@ -78,18 +78,44 @@ VVC 16x16 4:2:0 RaceHorses crop:
   `verification/generated/checksums/vvc/racehorses_crop_16x16_1f_yuv420p8_16x16_1f_yuv420p8_rtl_block_waveform.vcd`
 - HTML:
   `verification/generated/checksums/vvc/racehorses_crop_16x16_1f_yuv420p8_16x16_1f_yuv420p8_rtl_block_waveform.html`
-- Total cycles: `1813`
+- Total cycles: `1277`
 
 | Block | Idle | Waiting | Working | Backpressure |
 |---|---:|---:|---:|---:|
-| `axi_reader` | 0.753 | 0.018 | 0.229 | 0.000 |
-| `input_fifo` | 0.000 | 0.629 | 0.217 | 0.154 |
-| `vvc_core_input` | 0.472 | 0.017 | 0.370 | 0.142 |
-| `palette_symbolizer` | 0.771 | 0.017 | 0.212 | 0.000 |
-| `ctu_symbolizer` | 0.472 | 0.017 | 0.370 | 0.142 |
-| `residual_symbolizer` | 0.000 | 0.746 | 0.141 | 0.113 |
-| `syntax_frontend` | 0.589 | 0.096 | 0.312 | 0.003 |
-| `bin_coder` | 0.000 | 0.680 | 0.300 | 0.020 |
-| `cabac_writer` | 0.048 | 0.790 | 0.162 | 0.000 |
-| `rbsp_writer` | 0.000 | 0.978 | 0.022 | 0.001 |
-| `axi_writer` | 0.000 | 0.942 | 0.058 | 0.000 |
+| `axi_reader` | 0.861 | 0.025 | 0.094 | 0.020 |
+| `input_fifo` | 0.000 | 0.697 | 0.303 | 0.000 |
+| `vvc_core_input` | 0.467 | 0.009 | 0.525 | 0.000 |
+| `palette_symbolizer` | 0.691 | 0.009 | 0.301 | 0.000 |
+| `ctu_symbolizer` | 0.467 | 0.009 | 0.525 | 0.000 |
+| `source_symbol_fifo` | 0.597 | 0.145 | 0.258 | 0.000 |
+| `residual_symbolizer` | 0.000 | 0.800 | 0.200 | 0.000 |
+| `syntax_frontend` | 0.000 | 0.742 | 0.258 | 0.000 |
+| `bin_coder` | 0.000 | 0.742 | 0.258 | 0.000 |
+| `bin_fifo` | 0.000 | 0.709 | 0.238 | 0.052 |
+| `cabac_writer` | 0.063 | 0.704 | 0.233 | 0.000 |
+| `rbsp_writer` | 0.000 | 0.969 | 0.031 | 0.001 |
+| `axi_writer` | 0.000 | 0.918 | 0.082 | 0.000 |
+
+VVC 64x64 4:2:0 RaceHorses crop:
+
+- VCD:
+  `verification/generated/checksums/vvc/racehorses_crop_64x64_1f_yuv420p8_64x64_1f_yuv420p8_rtl_block_waveform.vcd`
+- HTML:
+  `verification/generated/checksums/vvc/racehorses_crop_64x64_1f_yuv420p8_64x64_1f_yuv420p8_rtl_block_waveform.html`
+- Total cycles: `12869`
+
+| Block | Idle | Waiting | Working | Backpressure |
+|---|---:|---:|---:|---:|
+| `axi_reader` | 0.678 | 0.040 | 0.149 | 0.133 |
+| `input_fifo` | 0.000 | 0.522 | 0.478 | 0.000 |
+| `vvc_core_input` | 0.145 | 0.001 | 0.854 | 0.000 |
+| `palette_symbolizer` | 0.521 | 0.001 | 0.477 | 0.000 |
+| `ctu_symbolizer` | 0.145 | 0.001 | 0.854 | 0.000 |
+| `source_symbol_fifo` | 0.508 | 0.048 | 0.410 | 0.034 |
+| `residual_symbolizer` | 0.000 | 0.664 | 0.336 | 0.000 |
+| `syntax_frontend` | 0.000 | 0.555 | 0.410 | 0.035 |
+| `bin_coder` | 0.000 | 0.555 | 0.410 | 0.035 |
+| `bin_fifo` | 0.000 | 0.533 | 0.393 | 0.074 |
+| `cabac_writer` | 0.074 | 0.541 | 0.385 | 0.000 |
+| `rbsp_writer` | 0.000 | 0.963 | 0.037 | 0.000 |
+| `axi_writer` | 0.000 | 0.956 | 0.044 | 0.000 |

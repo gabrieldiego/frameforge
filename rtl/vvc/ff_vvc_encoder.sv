@@ -125,9 +125,22 @@ module ff_vvc_encoder #(
   logic       s_axis_last;
   logic       reader_axis_valid;
   logic       reader_axis_ready;
-  logic [SAMPLE_BITS - 1:0] reader_axis_data;
+  localparam int INPUT_PACKET_SAMPLES = 8;
+  localparam int INPUT_PACKET_BITS = INPUT_PACKET_SAMPLES * SAMPLE_BITS;
+  localparam int INPUT_FIFO_BITS = INPUT_PACKET_BITS + 4;
+  localparam int INPUT_PACKET_FIFO_DEPTH = 16;
+  localparam int INPUT_PACKET_FIFO_LEVEL_BITS = $clog2(INPUT_PACKET_FIFO_DEPTH + 1);
+  localparam int SOURCE_SYMBOL_FIFO_BITS = 40;
+  localparam int SOURCE_SYMBOL_FIFO_DEPTH = 64;
+  localparam int SOURCE_SYMBOL_FIFO_LEVEL_BITS = $clog2(SOURCE_SYMBOL_FIFO_DEPTH + 1);
+  logic [INPUT_PACKET_BITS - 1:0] reader_axis_data;
+  logic [3:0] reader_axis_count;
   logic       reader_axis_last;
-  logic [7:0] input_fifo_level_w;
+  logic       packet_axis_valid;
+  logic       packet_axis_ready;
+  logic [INPUT_FIFO_BITS - 1:0] packet_axis_data;
+  logic       packet_axis_last;
+  logic [INPUT_PACKET_FIFO_LEVEL_BITS - 1:0] input_fifo_level_w;
   logic       m_axis_valid;
   logic       m_axis_ready;
   logic [7:0] m_axis_data;
@@ -221,10 +234,11 @@ module ff_vvc_encoder #(
   logic [7:0]  source_symbol_kind;
   logic [31:0] source_symbol_data;
   logic        source_symbol_last;
-  logic        cabac_input_valid_q;
-  logic [7:0]  cabac_input_kind_q;
-  logic [31:0] cabac_input_data_q;
-  logic        cabac_input_last_q;
+  logic        source_symbol_fifo_valid;
+  logic        source_symbol_fifo_ready;
+  logic [SOURCE_SYMBOL_FIFO_BITS - 1:0] source_symbol_fifo_data;
+  logic        source_symbol_fifo_last;
+  logic [SOURCE_SYMBOL_FIFO_LEVEL_BITS - 1:0] source_symbol_fifo_level_w;
   logic [1:0]  palette_mux_state_q;
   logic [2:0]  palette_current_pred_ibc_ctx_q;
   logic [5:0]  palette_current_leaf_index_q;
@@ -346,11 +360,25 @@ module ff_vvc_encoder #(
   logic [15:0] input_chroma_tu_local_y_w;
   logic [5:0]  input_chroma_tu_sample_index_w;
   logic [VVC_LUMA_TU_SAMPLE_BITS - 1:0] luma_sample_tu_q;
+  logic [VVC_LUMA_TU_SAMPLE_BITS - 1:0] luma_sample_tu_with_input_w;
+  logic [VVC_LUMA_TU_SAMPLE_BITS - 1:0] luma_quant_sample_tu_q;
+  logic [VVC_LUMA_TU_SAMPLE_BITS - 1:0] luma_quant_queued_sample_tu_q;
+  logic [5:0]  luma_quant_queued_tu_q;
+  logic        luma_quant_queued_q;
   logic [(8 * VVC_LUMA_TU_SIZE) - 1:0] luma_top_ref_row_q [0:VVC_LUMA_TU_COLS - 1];
   logic [(8 * VVC_LUMA_TU_SIZE) - 1:0] luma_left_ref_col_q [0:VVC_LUMA_TU_COLS - 1];
   logic        luma_tu_quant_pending_q;
   logic [VVC_CHROMA_TU_SAMPLE_BITS - 1:0] cb_sample_tu_q;
   logic [VVC_CHROMA_TU_SAMPLE_BITS - 1:0] cr_sample_tu_q;
+  logic [VVC_CHROMA_TU_SAMPLE_BITS - 1:0] cb_sample_tu_with_input_w;
+  logic [VVC_CHROMA_TU_SAMPLE_BITS - 1:0] cr_sample_tu_with_input_w;
+  logic [VVC_CHROMA_TU_SAMPLE_BITS - 1:0] chroma_quant_cb_sample_tu_q;
+  logic [VVC_CHROMA_TU_SAMPLE_BITS - 1:0] chroma_quant_cr_sample_tu_q;
+  logic [VVC_CHROMA_TU_SAMPLE_BITS - 1:0] chroma_quant_queued_cb_sample_tu_q;
+  logic [VVC_CHROMA_TU_SAMPLE_BITS - 1:0] chroma_quant_queued_cr_sample_tu_q;
+  logic [5:0]  chroma_quant_queued_tu_q;
+  logic        chroma_quant_queued_frame_last_q;
+  logic        chroma_quant_queued_q;
   logic [(8 * VVC_CHROMA_TU_SIZE) - 1:0] chroma_cb_top_ref_row_q [0:VVC_CHROMA_TU_COLS - 1];
   logic [(8 * VVC_CHROMA_TU_SIZE) - 1:0] chroma_cb_left_ref_col_q [0:VVC_CHROMA_TU_COLS - 1];
   logic [(8 * VVC_CHROMA_TU_SIZE) - 1:0] chroma_cr_top_ref_row_q [0:VVC_CHROMA_TU_COLS - 1];
@@ -672,7 +700,7 @@ module ff_vvc_encoder #(
     !luma_quant_tu_visible_w ? 4'd0 :
     ((luma_quant_tu_remaining_height_w > VVC_LUMA_TU_SIZE_L) ?
       4'd8 : luma_quant_tu_remaining_height_w[3:0]);
-  assign luma_quant_sample_tu_w = luma_sample_tu_q;
+  assign luma_quant_sample_tu_w = luma_quant_sample_tu_q;
 
   ff_vvc_luma_tu_node_8x8 #(
     .CTU_SIZE(CTU_SIZE)
@@ -723,6 +751,28 @@ module ff_vvc_encoder #(
     (input_chroma_tu_index_full_w < active_chroma_tu_count_w) &&
     (input_chroma_tu_sample_index_w == input_chroma_stream_last_sample_w);
 
+  always @* begin
+    luma_sample_tu_with_input_w = luma_sample_tu_q;
+    cb_sample_tu_with_input_w = cb_sample_tu_q;
+    cr_sample_tu_with_input_w = cr_sample_tu_q;
+    if (input_luma_tu_sample_w) begin
+      luma_sample_tu_with_input_w[residual_luma_sample_index_w * 8 +: 8] =
+        input_sample_8bit_w;
+    end
+    if ((chroma_format_idc == 2'd1) &&
+        (input_stream_component_q == 2'd1) &&
+        input_chroma_tu_sample_w) begin
+      cb_sample_tu_with_input_w[input_chroma_tu_sample_index_w * 8 +: 8] =
+        input_sample_8bit_w;
+    end
+    if ((chroma_format_idc == 2'd1) &&
+        (input_stream_component_q == 2'd2) &&
+        input_chroma_tu_sample_w) begin
+      cr_sample_tu_with_input_w[input_chroma_tu_sample_index_w * 8 +: 8] =
+        input_sample_8bit_w;
+    end
+  end
+
   ff_vvc_chroma_tu_node_420 #(
     .CTU_SIZE(CTU_SIZE)
   ) input_chroma_tu_node (
@@ -736,8 +786,8 @@ module ff_vvc_encoder #(
     .tu_height(input_chroma_tu_height_w)
   );
 
-  assign chroma_quant_cb_sample_tu_w = cb_sample_tu_q;
-  assign chroma_quant_cr_sample_tu_w = cr_sample_tu_q;
+  assign chroma_quant_cb_sample_tu_w = chroma_quant_cb_sample_tu_q;
+  assign chroma_quant_cr_sample_tu_w = chroma_quant_cr_sample_tu_q;
 
   always @* begin
     luma_quant_samples_w = '0;
@@ -1057,7 +1107,7 @@ module ff_vvc_encoder #(
     ctu_symbol_last;
   assign source_symbol_ready =
     (generated_out_state_q == GENERATED_OUT_CABAC) && !cabac_start_q &&
-    (!cabac_input_valid_q || cabac_symbol_ready);
+    source_symbol_fifo_ready;
   assign palette_stream_ready =
     ctu_has_palette_cu && (palette_mux_state_q == PALETTE_MUX_CU) && source_symbol_ready;
 
@@ -1114,6 +1164,7 @@ module ff_vvc_encoder #(
     .AXI_DATA_BITS(AXI_DATA_BITS),
     .SAMPLE_BITS(SAMPLE_BITS),
     .CTU_SIZE(CTU_SIZE),
+    .OUTPUT_SAMPLES(INPUT_PACKET_SAMPLES),
     .RASTER_BLOCK_ORDER(1'b0)
   ) frame_reader (
     .clk(clk),
@@ -1149,6 +1200,7 @@ module ff_vvc_encoder #(
     .sample_valid(reader_axis_valid),
     .sample_ready(reader_axis_ready),
     .sample_data(reader_axis_data),
+    .sample_count(reader_axis_count),
     .sample_last(reader_axis_last),
     .busy(frame_reader_busy_w),
     .done(frame_reader_done_w),
@@ -1156,21 +1208,39 @@ module ff_vvc_encoder #(
   );
 
   ff_axis_sample_fifo #(
-    .DATA_BITS(SAMPLE_BITS),
-    .DEPTH(128)
+    .DATA_BITS(INPUT_FIFO_BITS),
+    .DEPTH(INPUT_PACKET_FIFO_DEPTH)
   ) input_sample_fifo (
     .clk(clk),
     .rst_n(rst_n),
     .clear(frame_reader_start_w),
     .s_axis_valid(reader_axis_valid),
     .s_axis_ready(reader_axis_ready),
-    .s_axis_data(reader_axis_data),
+    .s_axis_data({reader_axis_count, reader_axis_data}),
     .s_axis_last(reader_axis_last),
+    .m_axis_valid(packet_axis_valid),
+    .m_axis_ready(packet_axis_ready),
+    .m_axis_data(packet_axis_data),
+    .m_axis_last(packet_axis_last),
+    .level(input_fifo_level_w)
+  );
+
+  ff_axis_sample_packet_unpacker #(
+    .SAMPLE_BITS(SAMPLE_BITS),
+    .MAX_SAMPLES(INPUT_PACKET_SAMPLES)
+  ) input_packet_unpacker (
+    .clk(clk),
+    .rst_n(rst_n),
+    .clear(frame_reader_start_w),
+    .s_axis_valid(packet_axis_valid),
+    .s_axis_ready(packet_axis_ready),
+    .s_axis_data(packet_axis_data[INPUT_PACKET_BITS - 1:0]),
+    .s_axis_count(packet_axis_data[INPUT_FIFO_BITS - 1:INPUT_PACKET_BITS]),
+    .s_axis_last(packet_axis_last),
     .m_axis_valid(s_axis_valid),
     .m_axis_ready(s_axis_ready),
     .m_axis_data(s_axis_data),
-    .m_axis_last(s_axis_last),
-    .level(input_fifo_level_w)
+    .m_axis_last(s_axis_last)
   );
 
   ff_axi4_bitstream_writer #(
@@ -1378,17 +1448,39 @@ module ff_vvc_encoder #(
     end
   endgenerate
 
+  ff_axis_sample_fifo #(
+    .DATA_BITS(SOURCE_SYMBOL_FIFO_BITS),
+    .DEPTH(SOURCE_SYMBOL_FIFO_DEPTH)
+  ) source_symbol_fifo (
+    .clk(clk),
+    .rst_n(rst_n),
+    .clear(frame_pipeline_clear_w || cabac_start_q),
+    .s_axis_valid(
+      source_symbol_valid &&
+      (generated_out_state_q == GENERATED_OUT_CABAC) &&
+      !cabac_start_q
+    ),
+    .s_axis_ready(source_symbol_fifo_ready),
+    .s_axis_data({source_symbol_kind, source_symbol_data}),
+    .s_axis_last(source_symbol_last),
+    .m_axis_valid(source_symbol_fifo_valid),
+    .m_axis_ready(cabac_symbol_ready),
+    .m_axis_data(source_symbol_fifo_data),
+    .m_axis_last(source_symbol_fifo_last),
+    .level(source_symbol_fifo_level_w)
+  );
+
   ff_vvc_cabac cabac_writer (
     .clk(clk),
     .rst_n(rst_n),
     .start(cabac_start_q),
     .enable(cabac_enable),
     .lossless_slice_qp(ctu_has_palette_cu),
-    .s_axis_valid(!cabac_start_q && cabac_input_valid_q),
+    .s_axis_valid(!cabac_start_q && source_symbol_fifo_valid),
     .s_axis_ready(cabac_symbol_ready),
-    .s_axis_kind(cabac_input_kind_q),
-    .s_axis_data(cabac_input_data_q),
-    .s_axis_last(cabac_input_last_q),
+    .s_axis_kind(source_symbol_fifo_data[39:32]),
+    .s_axis_data(source_symbol_fifo_data[31:0]),
+    .s_axis_last(source_symbol_fifo_last),
     .m_axis_ready(cabac_stream_ready),
     .m_axis_valid(cabac_stream_valid),
     .m_axis_data(cabac_stream_data),
@@ -1524,8 +1616,19 @@ module ff_vvc_encoder #(
       luma_quant_active_q <= 1'b0;
       luma_tu_quant_pending_q <= 1'b0;
       luma_sample_tu_q <= '0;
+      luma_quant_sample_tu_q <= '0;
+      luma_quant_queued_sample_tu_q <= '0;
+      luma_quant_queued_tu_q <= 6'd0;
+      luma_quant_queued_q <= 1'b0;
       cb_sample_tu_q <= '0;
       cr_sample_tu_q <= '0;
+      chroma_quant_cb_sample_tu_q <= '0;
+      chroma_quant_cr_sample_tu_q <= '0;
+      chroma_quant_queued_cb_sample_tu_q <= '0;
+      chroma_quant_queued_cr_sample_tu_q <= '0;
+      chroma_quant_queued_tu_q <= 6'd0;
+      chroma_quant_queued_frame_last_q <= 1'b0;
+      chroma_quant_queued_q <= 1'b0;
       for (luma_ref_i = 0; luma_ref_i < VVC_LUMA_TU_COLS; luma_ref_i = luma_ref_i + 1) begin
         luma_top_ref_row_q[luma_ref_i] <= {VVC_LUMA_TU_SIZE{8'd128}};
         luma_left_ref_col_q[luma_ref_i] <= {VVC_LUMA_TU_SIZE{8'd128}};
@@ -1542,10 +1645,6 @@ module ff_vvc_encoder #(
       current_slice_q <= 16'd0;
       current_ctu_x_q <= 16'd0;
       current_ctu_y_q <= 16'd0;
-      cabac_input_valid_q <= 1'b0;
-      cabac_input_kind_q <= 8'd0;
-      cabac_input_data_q <= 32'd0;
-      cabac_input_last_q <= 1'b0;
       palette_mux_state_q <= PALETTE_MUX_PARTITION;
       palette_current_pred_ibc_ctx_q <= 3'd0;
       palette_current_leaf_index_q <= 6'd0;
@@ -1572,6 +1671,109 @@ module ff_vvc_encoder #(
       if (frame_reader_error_w || bitstream_writer_error_w) begin
         input_error <= 1'b1;
       end
+      // Keep TU input streaming while quant/reconstruction consumes the
+      // previous TU. The quant modules read their sample buses over multiple
+      // cycles, so completed input TUs are snapshotted before collection of
+      // the next TU resumes.
+      if (luma_tu_quant_pending_q) begin
+        if (!luma_quant_active_q && !luma_quant_busy_w) begin
+          luma_quant_start_q <= 1'b1;
+          luma_quant_active_q <= 1'b1;
+        end else if (luma_quant_done_w) begin
+          quant_luma_rem_ctu_q[luma_quant_tu_q] <= luma_quant_abs_level_w;
+          quant_luma_negative_ctu_q[luma_quant_tu_q] <= luma_quant_negative_w;
+          quant_luma_ac_levels_ctu_q[luma_quant_tu_q] <= luma_quant_ac_levels_w;
+          for (luma_ref_i = 0; luma_ref_i < VVC_LUMA_TU_SIZE; luma_ref_i = luma_ref_i + 1) begin
+            luma_top_ref_row_q[luma_quant_tu_col_w][luma_ref_i * 8 +: 8] <=
+              luma_quant_bottom_ref_w[luma_ref_i * 8 +: 8];
+            luma_left_ref_col_q[luma_quant_tu_row_w][luma_ref_i * 8 +: 8] <=
+              luma_quant_right_ref_w[luma_ref_i * 8 +: 8];
+          end
+          luma_quant_active_q <= 1'b0;
+          if (luma_quant_queued_q) begin
+            luma_quant_sample_tu_q <= luma_quant_queued_sample_tu_q;
+            luma_quant_tu_q <= luma_quant_queued_tu_q;
+            luma_quant_queued_q <= 1'b0;
+            luma_tu_quant_pending_q <= 1'b1;
+          end else begin
+            luma_tu_quant_pending_q <= 1'b0;
+          end
+        end
+      end else if (luma_quant_queued_q) begin
+        luma_quant_sample_tu_q <= luma_quant_queued_sample_tu_q;
+        luma_quant_tu_q <= luma_quant_queued_tu_q;
+        luma_quant_queued_q <= 1'b0;
+        luma_tu_quant_pending_q <= 1'b1;
+      end
+
+      if (chroma_tu_quant_pending_q) begin
+        if (!chroma_quant_tu_valid_w) begin
+          quant_cb_dc_level_ctu_q[chroma_quant_tu_q] <= 9'sd0;
+          quant_cr_dc_level_ctu_q[chroma_quant_tu_q] <= 9'sd0;
+          quant_cb_ac_levels_ctu_q[chroma_quant_tu_q] <= '0;
+          quant_cr_ac_levels_ctu_q[chroma_quant_tu_q] <= '0;
+          chroma_quant_active_q <= 1'b0;
+          if (chroma_quant_queued_q) begin
+            chroma_quant_cb_sample_tu_q <= chroma_quant_queued_cb_sample_tu_q;
+            chroma_quant_cr_sample_tu_q <= chroma_quant_queued_cr_sample_tu_q;
+            chroma_quant_tu_q <= chroma_quant_queued_tu_q;
+            chroma_tu_quant_frame_last_q <= chroma_quant_queued_frame_last_q;
+            chroma_quant_queued_q <= 1'b0;
+            chroma_tu_quant_pending_q <= 1'b1;
+          end else begin
+            chroma_tu_quant_pending_q <= 1'b0;
+            if (chroma_tu_quant_frame_last_q) begin
+              chroma_tu_quant_frame_last_q <= 1'b0;
+              pending_output_q <= 1'b1;
+              luma_quant_tu_q <= 6'd0;
+              luma_quant_active_q <= 1'b0;
+            end
+          end
+        end else if (!chroma_quant_active_q && !chroma_quant_busy_w) begin
+          chroma_quant_start_q <= 1'b1;
+          chroma_quant_active_q <= 1'b1;
+        end else if (chroma_quant_done_w) begin
+          quant_cb_dc_level_ctu_q[chroma_quant_tu_q] <= chroma_quant_cb_dc_level_w;
+          quant_cr_dc_level_ctu_q[chroma_quant_tu_q] <= chroma_quant_cr_dc_level_w;
+          quant_cb_ac_levels_ctu_q[chroma_quant_tu_q] <= chroma_quant_cb_ac_levels_w;
+          quant_cr_ac_levels_ctu_q[chroma_quant_tu_q] <= chroma_quant_cr_ac_levels_w;
+          for (luma_ref_i = 0; luma_ref_i < VVC_CHROMA_TU_SIZE; luma_ref_i = luma_ref_i + 1) begin
+            chroma_cb_top_ref_row_q[chroma_quant_tu_col_w][luma_ref_i * 8 +: 8] <=
+              chroma_quant_cb_bottom_ref_w[luma_ref_i * 8 +: 8];
+            chroma_cr_top_ref_row_q[chroma_quant_tu_col_w][luma_ref_i * 8 +: 8] <=
+              chroma_quant_cr_bottom_ref_w[luma_ref_i * 8 +: 8];
+            chroma_cb_left_ref_col_q[chroma_quant_tu_row_w][luma_ref_i * 8 +: 8] <=
+              chroma_quant_cb_right_ref_w[luma_ref_i * 8 +: 8];
+            chroma_cr_left_ref_col_q[chroma_quant_tu_row_w][luma_ref_i * 8 +: 8] <=
+              chroma_quant_cr_right_ref_w[luma_ref_i * 8 +: 8];
+          end
+          chroma_quant_active_q <= 1'b0;
+          if (chroma_quant_queued_q) begin
+            chroma_quant_cb_sample_tu_q <= chroma_quant_queued_cb_sample_tu_q;
+            chroma_quant_cr_sample_tu_q <= chroma_quant_queued_cr_sample_tu_q;
+            chroma_quant_tu_q <= chroma_quant_queued_tu_q;
+            chroma_tu_quant_frame_last_q <= chroma_quant_queued_frame_last_q;
+            chroma_quant_queued_q <= 1'b0;
+            chroma_tu_quant_pending_q <= 1'b1;
+          end else begin
+            chroma_tu_quant_pending_q <= 1'b0;
+            if (chroma_tu_quant_frame_last_q) begin
+              chroma_tu_quant_frame_last_q <= 1'b0;
+              pending_output_q <= 1'b1;
+              luma_quant_tu_q <= 6'd0;
+              luma_quant_active_q <= 1'b0;
+            end
+          end
+        end
+      end else if (chroma_quant_queued_q) begin
+        chroma_quant_cb_sample_tu_q <= chroma_quant_queued_cb_sample_tu_q;
+        chroma_quant_cr_sample_tu_q <= chroma_quant_queued_cr_sample_tu_q;
+        chroma_quant_tu_q <= chroma_quant_queued_tu_q;
+        chroma_tu_quant_frame_last_q <= chroma_quant_queued_frame_last_q;
+        chroma_quant_queued_q <= 1'b0;
+        chroma_tu_quant_pending_q <= 1'b1;
+      end
+
       if (start && !busy) begin
         input_active_q <= 1'b1;
         s_axis_ready   <= 1'b1;
@@ -1598,8 +1800,19 @@ module ff_vvc_encoder #(
         luma_quant_active_q <= 1'b0;
         luma_tu_quant_pending_q <= 1'b0;
         luma_sample_tu_q <= '0;
+        luma_quant_sample_tu_q <= '0;
+        luma_quant_queued_sample_tu_q <= '0;
+        luma_quant_queued_tu_q <= 6'd0;
+        luma_quant_queued_q <= 1'b0;
         cb_sample_tu_q <= '0;
         cr_sample_tu_q <= '0;
+        chroma_quant_cb_sample_tu_q <= '0;
+        chroma_quant_cr_sample_tu_q <= '0;
+        chroma_quant_queued_cb_sample_tu_q <= '0;
+        chroma_quant_queued_cr_sample_tu_q <= '0;
+        chroma_quant_queued_tu_q <= 6'd0;
+        chroma_quant_queued_frame_last_q <= 1'b0;
+        chroma_quant_queued_q <= 1'b0;
         for (luma_ref_i = 0; luma_ref_i < VVC_LUMA_TU_COLS; luma_ref_i = luma_ref_i + 1) begin
           luma_top_ref_row_q[luma_ref_i] <= {VVC_LUMA_TU_SIZE{8'd128}};
           luma_left_ref_col_q[luma_ref_i] <= {VVC_LUMA_TU_SIZE{8'd128}};
@@ -1616,10 +1829,6 @@ module ff_vvc_encoder #(
         current_slice_q <= 16'd0;
         current_ctu_x_q <= 16'd0;
         current_ctu_y_q <= 16'd0;
-        cabac_input_valid_q <= 1'b0;
-        cabac_input_kind_q <= 8'd0;
-        cabac_input_data_q <= 32'd0;
-        cabac_input_last_q <= 1'b0;
         palette_mux_state_q <= PALETTE_MUX_PARTITION;
         palette_current_pred_ibc_ctx_q <= 3'd0;
         palette_current_leaf_index_q <= 6'd0;
@@ -1649,8 +1858,19 @@ module ff_vvc_encoder #(
         luma_quant_active_q <= 1'b0;
         luma_tu_quant_pending_q <= 1'b0;
         luma_sample_tu_q <= '0;
+        luma_quant_sample_tu_q <= '0;
+        luma_quant_queued_sample_tu_q <= '0;
+        luma_quant_queued_tu_q <= 6'd0;
+        luma_quant_queued_q <= 1'b0;
         cb_sample_tu_q <= '0;
         cr_sample_tu_q <= '0;
+        chroma_quant_cb_sample_tu_q <= '0;
+        chroma_quant_cr_sample_tu_q <= '0;
+        chroma_quant_queued_cb_sample_tu_q <= '0;
+        chroma_quant_queued_cr_sample_tu_q <= '0;
+        chroma_quant_queued_tu_q <= 6'd0;
+        chroma_quant_queued_frame_last_q <= 1'b0;
+        chroma_quant_queued_q <= 1'b0;
         for (luma_ref_i = 0; luma_ref_i < VVC_LUMA_TU_COLS; luma_ref_i = luma_ref_i + 1) begin
           luma_top_ref_row_q[luma_ref_i] <= {VVC_LUMA_TU_SIZE{8'd128}};
           luma_left_ref_col_q[luma_ref_i] <= {VVC_LUMA_TU_SIZE{8'd128}};
@@ -1659,10 +1879,6 @@ module ff_vvc_encoder #(
           chroma_cr_top_ref_row_q[luma_ref_i] <= {VVC_CHROMA_TU_SIZE{8'd128}};
           chroma_cr_left_ref_col_q[luma_ref_i] <= {VVC_CHROMA_TU_SIZE{8'd128}};
         end
-        cabac_input_valid_q <= 1'b0;
-        cabac_input_kind_q <= 8'd0;
-        cabac_input_data_q <= 32'd0;
-        cabac_input_last_q <= 1'b0;
         palette_mux_state_q <= PALETTE_MUX_PARTITION;
         palette_current_pred_ibc_ctx_q <= 3'd0;
         palette_current_leaf_index_q <= 6'd0;
@@ -1705,104 +1921,59 @@ module ff_vvc_encoder #(
           if (ctu_has_palette_cu) begin
             pending_output_q <= 1'b1;
           end else if (input_chroma_tu_last_cr_sample_w) begin
-            chroma_tu_quant_pending_q <= 1'b1;
-            chroma_tu_quant_frame_last_q <= 1'b1;
-            chroma_quant_tu_q <= input_chroma_tu_index_w;
+            if (!chroma_tu_quant_pending_q && !chroma_quant_active_q &&
+                !chroma_quant_busy_w && !chroma_quant_queued_q) begin
+              chroma_quant_cb_sample_tu_q <= cb_sample_tu_with_input_w;
+              chroma_quant_cr_sample_tu_q <= cr_sample_tu_with_input_w;
+              chroma_tu_quant_pending_q <= 1'b1;
+              chroma_tu_quant_frame_last_q <= 1'b1;
+              chroma_quant_tu_q <= input_chroma_tu_index_w;
+            end else if (!chroma_quant_queued_q) begin
+              chroma_quant_queued_cb_sample_tu_q <= cb_sample_tu_with_input_w;
+              chroma_quant_queued_cr_sample_tu_q <= cr_sample_tu_with_input_w;
+              chroma_quant_queued_tu_q <= input_chroma_tu_index_w;
+              chroma_quant_queued_frame_last_q <= 1'b1;
+              chroma_quant_queued_q <= 1'b1;
+            end else begin
+              input_error <= 1'b1;
+            end
           end else begin
             pending_output_q <= 1'b1;
           end
-          luma_quant_tu_q <= 6'd0;
         end else if (input_luma_tu_last_sample_w) begin
-          input_active_q <= 1'b0;
-          s_axis_ready <= 1'b0;
-          luma_tu_quant_pending_q <= 1'b1;
-          luma_quant_tu_q <= input_luma_tu_index_w;
-          luma_quant_active_q <= 1'b0;
+          if (!luma_tu_quant_pending_q && !luma_quant_active_q &&
+              !luma_quant_busy_w && !luma_quant_queued_q) begin
+            luma_quant_sample_tu_q <= luma_sample_tu_with_input_w;
+            luma_quant_tu_q <= input_luma_tu_index_w;
+            luma_tu_quant_pending_q <= 1'b1;
+          end else if (!luma_quant_queued_q) begin
+            luma_quant_queued_sample_tu_q <= luma_sample_tu_with_input_w;
+            luma_quant_queued_tu_q <= input_luma_tu_index_w;
+            luma_quant_queued_q <= 1'b1;
+          end else begin
+            input_error <= 1'b1;
+          end
           input_count_q <= input_count_q + 1'b1;
         end else if (input_chroma_tu_last_cr_sample_w) begin
-          input_active_q <= 1'b0;
-          s_axis_ready <= 1'b0;
-          chroma_tu_quant_pending_q <= 1'b1;
-          chroma_tu_quant_frame_last_q <= 1'b0;
-          chroma_quant_tu_q <= input_chroma_tu_index_w;
+          if (!chroma_tu_quant_pending_q && !chroma_quant_active_q &&
+              !chroma_quant_busy_w && !chroma_quant_queued_q) begin
+            chroma_quant_cb_sample_tu_q <= cb_sample_tu_with_input_w;
+            chroma_quant_cr_sample_tu_q <= cr_sample_tu_with_input_w;
+            chroma_tu_quant_pending_q <= 1'b1;
+            chroma_tu_quant_frame_last_q <= 1'b0;
+            chroma_quant_tu_q <= input_chroma_tu_index_w;
+          end else if (!chroma_quant_queued_q) begin
+            chroma_quant_queued_cb_sample_tu_q <= cb_sample_tu_with_input_w;
+            chroma_quant_queued_cr_sample_tu_q <= cr_sample_tu_with_input_w;
+            chroma_quant_queued_tu_q <= input_chroma_tu_index_w;
+            chroma_quant_queued_frame_last_q <= 1'b0;
+            chroma_quant_queued_q <= 1'b1;
+          end else begin
+            input_error <= 1'b1;
+          end
           input_count_q <= input_count_q + 1'b1;
         end else begin
           input_count_q <= input_count_q + 1'b1;
-        end
-      end else if (luma_tu_quant_pending_q) begin
-        // H.266 8.4.5 reconstructed-neighbor prediction, H.266 7.3.11.10
-        // transform_unit() residual payload generation, and H.266 8.7.3
-        // inverse coefficient scaling are implemented in
-        // ff_vvc_luma_quant_recon_8x8. This stage consumes one streamed 8x8
-        // luma TU and keeps only reconstructed neighbour edges for the next TU.
-        if (!luma_quant_active_q && !luma_quant_busy_w) begin
-          luma_quant_start_q <= 1'b1;
-          luma_quant_active_q <= 1'b1;
-        end else if (luma_quant_done_w) begin
-          quant_luma_rem_ctu_q[luma_quant_tu_q] <= luma_quant_abs_level_w;
-          quant_luma_negative_ctu_q[luma_quant_tu_q] <= luma_quant_negative_w;
-          quant_luma_ac_levels_ctu_q[luma_quant_tu_q] <= luma_quant_ac_levels_w;
-          for (luma_ref_i = 0; luma_ref_i < VVC_LUMA_TU_SIZE; luma_ref_i = luma_ref_i + 1) begin
-            luma_top_ref_row_q[luma_quant_tu_col_w][luma_ref_i * 8 +: 8] <=
-              luma_quant_bottom_ref_w[luma_ref_i * 8 +: 8];
-            luma_left_ref_col_q[luma_quant_tu_row_w][luma_ref_i * 8 +: 8] <=
-              luma_quant_right_ref_w[luma_ref_i * 8 +: 8];
-          end
-          luma_quant_active_q <= 1'b0;
-          luma_tu_quant_pending_q <= 1'b0;
-          input_active_q <= 1'b1;
-          s_axis_ready <= 1'b1;
-        end
-      end else if (chroma_tu_quant_pending_q) begin
-        if (!chroma_quant_tu_valid_w) begin
-          quant_cb_dc_level_ctu_q[chroma_quant_tu_q] <= 9'sd0;
-          quant_cr_dc_level_ctu_q[chroma_quant_tu_q] <= 9'sd0;
-          quant_cb_ac_levels_ctu_q[chroma_quant_tu_q] <= '0;
-          quant_cr_ac_levels_ctu_q[chroma_quant_tu_q] <= '0;
-          chroma_tu_quant_pending_q <= 1'b0;
-          chroma_quant_active_q <= 1'b0;
-          cb_sample_tu_q <= '0;
-          cr_sample_tu_q <= '0;
-          if (chroma_tu_quant_frame_last_q) begin
-            chroma_tu_quant_frame_last_q <= 1'b0;
-            pending_output_q <= 1'b1;
-            luma_quant_tu_q <= 6'd0;
-            luma_quant_active_q <= 1'b0;
-          end else begin
-            input_active_q <= 1'b1;
-            s_axis_ready <= 1'b1;
-          end
-        end else if (!chroma_quant_active_q && !chroma_quant_busy_w) begin
-          chroma_quant_start_q <= 1'b1;
-          chroma_quant_active_q <= 1'b1;
-        end else if (chroma_quant_done_w) begin
-          quant_cb_dc_level_ctu_q[chroma_quant_tu_q] <= chroma_quant_cb_dc_level_w;
-          quant_cr_dc_level_ctu_q[chroma_quant_tu_q] <= chroma_quant_cr_dc_level_w;
-          quant_cb_ac_levels_ctu_q[chroma_quant_tu_q] <= chroma_quant_cb_ac_levels_w;
-          quant_cr_ac_levels_ctu_q[chroma_quant_tu_q] <= chroma_quant_cr_ac_levels_w;
-          for (luma_ref_i = 0; luma_ref_i < VVC_CHROMA_TU_SIZE; luma_ref_i = luma_ref_i + 1) begin
-            chroma_cb_top_ref_row_q[chroma_quant_tu_col_w][luma_ref_i * 8 +: 8] <=
-              chroma_quant_cb_bottom_ref_w[luma_ref_i * 8 +: 8];
-            chroma_cr_top_ref_row_q[chroma_quant_tu_col_w][luma_ref_i * 8 +: 8] <=
-              chroma_quant_cr_bottom_ref_w[luma_ref_i * 8 +: 8];
-            chroma_cb_left_ref_col_q[chroma_quant_tu_row_w][luma_ref_i * 8 +: 8] <=
-              chroma_quant_cb_right_ref_w[luma_ref_i * 8 +: 8];
-            chroma_cr_left_ref_col_q[chroma_quant_tu_row_w][luma_ref_i * 8 +: 8] <=
-              chroma_quant_cr_right_ref_w[luma_ref_i * 8 +: 8];
-          end
-          chroma_tu_quant_pending_q <= 1'b0;
-          chroma_quant_active_q <= 1'b0;
-          cb_sample_tu_q <= '0;
-          cr_sample_tu_q <= '0;
-          if (chroma_tu_quant_frame_last_q) begin
-            chroma_tu_quant_frame_last_q <= 1'b0;
-            pending_output_q <= 1'b1;
-            luma_quant_tu_q <= 6'd0;
-            luma_quant_active_q <= 1'b0;
-          end else begin
-            input_active_q <= 1'b1;
-            s_axis_ready <= 1'b1;
-          end
         end
       end else if (pending_output_q &&
                    (!ctu_has_palette_cu || ibc_matcher_idle) &&
@@ -1823,10 +1994,6 @@ module ff_vvc_encoder #(
         m_axis_last <= 1'b0;
       end
       if (cabac_start_q) begin
-        cabac_input_valid_q <= 1'b0;
-        cabac_input_kind_q <= 8'd0;
-        cabac_input_data_q <= 32'd0;
-        cabac_input_last_q <= 1'b0;
         palette_mux_state_q <= PALETTE_MUX_PARTITION;
         palette_current_pred_ibc_ctx_q <= 3'd0;
         ctu_prior_ibc_seen_q <= 1'b0;
@@ -1838,13 +2005,6 @@ module ff_vvc_encoder #(
           ctu_cu_coded_ibc_bv_x_q[ibc_state_i] <= 16'sd0;
           ctu_cu_coded_ibc_bv_y_q[ibc_state_i] <= 16'sd0;
         end
-      end else if (source_symbol_valid && source_symbol_ready) begin
-        cabac_input_valid_q <= 1'b1;
-        cabac_input_kind_q <= source_symbol_kind;
-        cabac_input_data_q <= source_symbol_data;
-        cabac_input_last_q <= source_symbol_last;
-      end else if (cabac_input_valid_q && cabac_symbol_ready) begin
-        cabac_input_valid_q <= 1'b0;
       end
       if (ctu_has_palette_cu && !cabac_start_q &&
           (generated_out_state_q == GENERATED_OUT_CABAC)) begin

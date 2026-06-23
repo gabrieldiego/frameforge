@@ -190,7 +190,7 @@ module ff_vvc_cabac_syntax_frontend #(
   logic palette_raw_cu_last;
   logic output_slot_ready;
 
-  assign output_slot_ready = !m_axis_valid;
+  assign output_slot_ready = !m_axis_valid || m_axis_ready;
   assign raw_symbol_ready =
     ((state_q == ST_IDLE) ||
      (state_q == ST_TS_COLLECT_COMPONENT) ||
@@ -458,13 +458,9 @@ module ff_vvc_cabac_syntax_frontend #(
       m_axis_kind <= SYMBOL_BIN_EP;
       m_axis_data <= 32'd0;
       m_axis_last <= 1'b0;
-    end else if (m_axis_valid && m_axis_ready) begin
+    end else if (m_axis_valid && !m_axis_ready) begin
       residual_emitter_start_q <= 1'b0;
-      m_axis_valid <= 1'b0;
-      m_axis_kind <= SYMBOL_BIN_EP;
-      m_axis_data <= 32'd0;
-      m_axis_last <= 1'b0;
-    end else if (output_slot_ready) begin
+    end else begin
       residual_emitter_start_q <= 1'b0;
       m_axis_valid <= 1'b0;
       m_axis_kind <= SYMBOL_BIN_EP;

@@ -130,9 +130,19 @@ module ff_av2_encoder #(
   logic       s_axis_last;
   logic       reader_axis_valid;
   logic       reader_axis_ready;
-  logic [SAMPLE_BITS - 1:0] reader_axis_data;
+  localparam int INPUT_PACKET_SAMPLES = 8;
+  localparam int INPUT_PACKET_BITS = INPUT_PACKET_SAMPLES * SAMPLE_BITS;
+  localparam int INPUT_FIFO_BITS = INPUT_PACKET_BITS + 4;
+  localparam int INPUT_PACKET_FIFO_DEPTH = 16;
+  localparam int INPUT_PACKET_FIFO_LEVEL_BITS = $clog2(INPUT_PACKET_FIFO_DEPTH + 1);
+  logic [INPUT_PACKET_BITS - 1:0] reader_axis_data;
+  logic [3:0] reader_axis_count;
   logic       reader_axis_last;
-  logic [7:0] input_fifo_level_w;
+  logic       packet_axis_valid;
+  logic       packet_axis_ready;
+  logic [INPUT_FIFO_BITS - 1:0] packet_axis_data;
+  logic       packet_axis_last;
+  logic [INPUT_PACKET_FIFO_LEVEL_BITS - 1:0] input_fifo_level_w;
   logic       m_axis_valid;
   logic       m_axis_ready;
   logic [7:0] m_axis_data;
@@ -682,6 +692,7 @@ module ff_av2_encoder #(
     .AXI_DATA_BITS(AXI_DATA_BITS),
     .SAMPLE_BITS(SAMPLE_BITS),
     .CTU_SIZE(CTU_SIZE),
+    .OUTPUT_SAMPLES(INPUT_PACKET_SAMPLES),
     .RASTER_BLOCK_ORDER(1'b1)
   ) frame_reader (
     .clk(clk),
@@ -717,6 +728,7 @@ module ff_av2_encoder #(
     .sample_valid(reader_axis_valid),
     .sample_ready(reader_axis_ready),
     .sample_data(reader_axis_data),
+    .sample_count(reader_axis_count),
     .sample_last(reader_axis_last),
     .busy(frame_reader_busy_w),
     .done(frame_reader_done_w),
@@ -724,21 +736,39 @@ module ff_av2_encoder #(
   );
 
   ff_axis_sample_fifo #(
-    .DATA_BITS(SAMPLE_BITS),
-    .DEPTH(128)
+    .DATA_BITS(INPUT_FIFO_BITS),
+    .DEPTH(INPUT_PACKET_FIFO_DEPTH)
   ) input_sample_fifo (
     .clk(clk),
     .rst_n(rst_n),
     .clear(frame_reader_start_w),
     .s_axis_valid(reader_axis_valid),
     .s_axis_ready(reader_axis_ready),
-    .s_axis_data(reader_axis_data),
+    .s_axis_data({reader_axis_count, reader_axis_data}),
     .s_axis_last(reader_axis_last),
+    .m_axis_valid(packet_axis_valid),
+    .m_axis_ready(packet_axis_ready),
+    .m_axis_data(packet_axis_data),
+    .m_axis_last(packet_axis_last),
+    .level(input_fifo_level_w)
+  );
+
+  ff_axis_sample_packet_unpacker #(
+    .SAMPLE_BITS(SAMPLE_BITS),
+    .MAX_SAMPLES(INPUT_PACKET_SAMPLES)
+  ) input_packet_unpacker (
+    .clk(clk),
+    .rst_n(rst_n),
+    .clear(frame_reader_start_w),
+    .s_axis_valid(packet_axis_valid),
+    .s_axis_ready(packet_axis_ready),
+    .s_axis_data(packet_axis_data[INPUT_PACKET_BITS - 1:0]),
+    .s_axis_count(packet_axis_data[INPUT_FIFO_BITS - 1:INPUT_PACKET_BITS]),
+    .s_axis_last(packet_axis_last),
     .m_axis_valid(s_axis_valid),
     .m_axis_ready(s_axis_ready),
     .m_axis_data(s_axis_data),
-    .m_axis_last(s_axis_last),
-    .level(input_fifo_level_w)
+    .m_axis_last(s_axis_last)
   );
 
   ff_axi4_bitstream_writer #(

@@ -34,9 +34,11 @@ VVC_BLOCK_WAVEFORM_BLOCKS = [
     "vvc_core_input",
     "palette_symbolizer",
     "ctu_symbolizer",
+    "source_symbol_fifo",
     "residual_symbolizer",
     "syntax_frontend",
     "bin_coder",
+    "bin_fifo",
     "cabac_writer",
     "rbsp_writer",
     "axi_writer",
@@ -334,6 +336,10 @@ def write_vvc_cycle_metrics(
         syntax_backpressure = int(pipeline_counts.get("syntax_backpressure", 0))
         bin_accept = int(pipeline_counts.get("bin_accept", 0))
         bin_backpressure = int(pipeline_counts.get("bin_backpressure", 0))
+        bin_fifo_accept = int(pipeline_counts.get("bin_fifo_accept", 0))
+        bin_fifo_backpressure = int(pipeline_counts.get("bin_fifo_backpressure", 0))
+        bin_fifo_nonempty = int(pipeline_counts.get("bin_fifo_nonempty", 0))
+        bin_fifo_full = int(pipeline_counts.get("bin_fifo_full", 0))
         ctu_residual_accept = int(pipeline_counts.get("ctu_residual_symbol_accept", 0))
         ctu_residual_backpressure = int(
             pipeline_counts.get("ctu_residual_symbol_backpressure", 0)
@@ -384,6 +390,15 @@ def write_vvc_cycle_metrics(
             ),
             "bin_coder_input_utilization": ratio(
                 bin_accept, bin_accept + bin_backpressure
+            ),
+            "bin_fifo_writer_utilization": ratio(
+                bin_fifo_accept, bin_fifo_accept + bin_fifo_backpressure
+            ),
+            "bin_fifo_nonempty_rate": ratio(
+                bin_fifo_nonempty, total_cycles
+            ),
+            "bin_fifo_full_rate": ratio(
+                bin_fifo_full, total_cycles
             ),
             "ctu_residual_symbol_utilization": ratio(
                 ctu_residual_accept, ctu_residual_accept + ctu_residual_backpressure
@@ -1265,7 +1280,7 @@ async def collect_stream(
             input_fifo_level = signal_int("input_fifo_level_w")
             if input_fifo_level is not None and input_fifo_level != 0:
                 increment_counter(pipeline_counts, "input_fifo_nonempty")
-            if input_fifo_level is not None and input_fifo_level >= 128:
+            if input_fifo_level is not None and input_fifo_level >= 16:
                 increment_counter(pipeline_counts, "input_fifo_full")
             if hasattr(dut, "s_axis_valid") and value_is_one(dut.s_axis_valid, "s_axis_valid"):
                 if value_is_one(dut.s_axis_ready, "s_axis_ready"):
@@ -1308,6 +1323,16 @@ async def collect_stream(
                     increment_counter(pipeline_counts, "ctu_symbol_accept")
                 else:
                     increment_counter(pipeline_counts, "ctu_symbol_backpressure")
+            source_symbol_fifo_level = signal_int("source_symbol_fifo_level_w")
+            if source_symbol_fifo_level is not None and source_symbol_fifo_level != 0:
+                increment_counter(pipeline_counts, "source_symbol_fifo_nonempty")
+            if source_symbol_fifo_level is not None and source_symbol_fifo_level >= 64:
+                increment_counter(pipeline_counts, "source_symbol_fifo_full")
+            if signal_int("source_symbol_fifo_valid") == 1:
+                if signal_int("cabac_symbol_ready") == 1:
+                    increment_counter(pipeline_counts, "source_symbol_fifo_accept")
+                else:
+                    increment_counter(pipeline_counts, "source_symbol_fifo_backpressure")
             if signal_int("cabac_writer.streamed_cabac.syntax_valid") == 1:
                 if signal_int("cabac_writer.streamed_cabac.syntax_ready") == 1:
                     increment_counter(pipeline_counts, "syntax_accept")
@@ -1318,6 +1343,16 @@ async def collect_stream(
                     increment_counter(pipeline_counts, "bin_accept")
                 else:
                     increment_counter(pipeline_counts, "bin_backpressure")
+            bin_fifo_level = signal_int("cabac_writer.streamed_cabac.bin_fifo_level_w")
+            if bin_fifo_level is not None and bin_fifo_level != 0:
+                increment_counter(pipeline_counts, "bin_fifo_nonempty")
+            if bin_fifo_level is not None and bin_fifo_level >= 32:
+                increment_counter(pipeline_counts, "bin_fifo_full")
+            if signal_int("cabac_writer.streamed_cabac.bin_fifo_valid") == 1:
+                if signal_int("cabac_writer.streamed_cabac.bin_fifo_ready") == 1:
+                    increment_counter(pipeline_counts, "bin_fifo_accept")
+                else:
+                    increment_counter(pipeline_counts, "bin_fifo_backpressure")
             if signal_int("cabac_writer.streamed_cabac.stream_writer.emit_valid_q") == 1:
                 if signal_int("cabac_writer.streamed_cabac.stream_writer.bit_writer_ready") == 1:
                     increment_counter(pipeline_counts, "stream_emit_accept")
@@ -1328,9 +1363,17 @@ async def collect_stream(
                     increment_counter(pipeline_counts, "stream_wait_emit_idle")
                 else:
                     increment_counter(pipeline_counts, "stream_wait_emit_busy")
-            if signal_int("cabac_writer.streamed_cabac.stream_writer.bit_writer.state_q") == 1:
+            bit_writer_state_q = signal_int(
+                "cabac_writer.streamed_cabac.stream_writer.bit_writer.state_q"
+            )
+            bit_writer_m_axis_valid = signal_int(
+                "cabac_writer.streamed_cabac.stream_writer.bit_writer.m_axis_valid"
+            )
+            if (bit_writer_state_q is not None and bit_writer_state_q != 0) or (
+                bit_writer_m_axis_valid == 1
+            ):
                 increment_counter(pipeline_counts, "bit_writer_bits_active")
-            if signal_int("cabac_writer.streamed_cabac.stream_writer.bit_writer.m_axis_valid") == 1:
+            if bit_writer_m_axis_valid == 1:
                 if signal_int("cabac_writer.streamed_cabac.stream_writer.bit_writer.m_axis_ready") == 1:
                     increment_counter(pipeline_counts, "bit_writer_output_accept")
                 else:
@@ -1395,6 +1438,12 @@ async def collect_stream(
                         signal_int("ctu_symbol_valid"),
                         signal_int("ctu_symbol_ready"),
                     ),
+                    "source_symbol_fifo": block_state(
+                        signal_int("source_symbol_valid"),
+                        signal_int("source_symbol_ready"),
+                        signal_int("source_symbol_fifo_valid"),
+                        signal_int("cabac_symbol_ready"),
+                    ),
                     "residual_symbolizer": block_state(
                         signal_int("ctu_symbols.residual_emitter_start_q"),
                         1,
@@ -1402,8 +1451,8 @@ async def collect_stream(
                         signal_int("ctu_symbols.residual_axis_ready"),
                     ),
                     "syntax_frontend": block_state(
-                        signal_int("ctu_symbol_valid"),
-                        signal_int("ctu_symbol_ready"),
+                        signal_int("source_symbol_fifo_valid"),
+                        signal_int("cabac_symbol_ready"),
                         signal_int("cabac_writer.streamed_cabac.syntax_valid"),
                         signal_int("cabac_writer.streamed_cabac.syntax_ready"),
                     ),
@@ -1413,9 +1462,15 @@ async def collect_stream(
                         signal_int("cabac_writer.streamed_cabac.bin_valid"),
                         signal_int("cabac_writer.streamed_cabac.bin_ready"),
                     ),
-                    "cabac_writer": block_state(
+                    "bin_fifo": block_state(
                         signal_int("cabac_writer.streamed_cabac.bin_valid"),
                         signal_int("cabac_writer.streamed_cabac.bin_ready"),
+                        signal_int("cabac_writer.streamed_cabac.bin_fifo_valid"),
+                        signal_int("cabac_writer.streamed_cabac.bin_fifo_ready"),
+                    ),
+                    "cabac_writer": block_state(
+                        signal_int("cabac_writer.streamed_cabac.bin_fifo_valid"),
+                        signal_int("cabac_writer.streamed_cabac.bin_fifo_ready"),
                         signal_int("cabac_stream_valid"),
                         signal_int("cabac_stream_ready"),
                     ),
@@ -1636,14 +1691,14 @@ async def collect_stream(
         "palette_stream_ready": debug_value(dut.palette_stream_ready)
         if hasattr(dut, "palette_stream_ready")
         else None,
-        "cabac_input_valid": debug_value(dut.cabac_input_valid_q)
-        if hasattr(dut, "cabac_input_valid_q")
+        "source_symbol_fifo_valid": debug_value(dut.source_symbol_fifo_valid)
+        if hasattr(dut, "source_symbol_fifo_valid")
         else None,
-        "cabac_input_kind": debug_value(dut.cabac_input_kind_q)
-        if hasattr(dut, "cabac_input_kind_q")
+        "source_symbol_fifo_ready": debug_value(dut.source_symbol_fifo_ready)
+        if hasattr(dut, "source_symbol_fifo_ready")
         else None,
-        "cabac_input_last": debug_value(dut.cabac_input_last_q)
-        if hasattr(dut, "cabac_input_last_q")
+        "source_symbol_fifo_level": debug_value(dut.source_symbol_fifo_level_w)
+        if hasattr(dut, "source_symbol_fifo_level_w")
         else None,
         "cabac_symbol_ready": debug_value(dut.cabac_symbol_ready)
         if hasattr(dut, "cabac_symbol_ready")

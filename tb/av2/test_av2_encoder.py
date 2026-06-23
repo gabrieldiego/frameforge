@@ -613,7 +613,7 @@ async def av2_encoder_emits_obu_stream(dut):
             increment_counter(pipeline_counts, "input_backpressure")
         if input_fifo_level != 0:
             increment_counter(pipeline_counts, "input_fifo_nonempty")
-        if input_fifo_level >= 128:
+        if input_fifo_level >= 16:
             increment_counter(pipeline_counts, "input_fifo_full")
         if m_axis_valid == 1 and m_axis_ready == 0:
             increment_counter(pipeline_counts, "output_backpressure")

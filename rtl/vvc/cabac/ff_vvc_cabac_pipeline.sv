@@ -22,6 +22,10 @@ module ff_vvc_cabac_pipeline #(
   output logic [2:0]  stream_last_byte_bits,
   output logic        done
 );
+  localparam int BIN_FIFO_DATA_BITS =
+    3 + 1 + 32 + 6 + 1 + VVC_CABAC_CTX_ID_BITS + 9 + 1;
+  localparam int BIN_FIFO_DEPTH = 32;
+
   logic        bin_valid;
   logic        bin_ready;
   logic [2:0]  bin_kind;
@@ -38,6 +42,30 @@ module ff_vvc_cabac_pipeline #(
   logic [7:0]  syntax_kind;
   logic [31:0] syntax_data;
   logic        syntax_last;
+  logic        bin_fifo_valid;
+  logic        bin_fifo_ready;
+  logic [BIN_FIFO_DATA_BITS - 1:0] bin_fifo_data;
+  logic        bin_fifo_last;
+  logic [2:0]  writer_bin_kind;
+  logic        writer_bin_value;
+  logic [31:0] writer_bin_pattern;
+  logic [5:0]  writer_bin_count;
+  logic        writer_bin_ctx_valid;
+  logic [VVC_CABAC_CTX_ID_BITS - 1:0] writer_bin_ctx_id;
+  logic [8:0]  writer_bin_lps;
+  logic        writer_bin_mps;
+  logic [$clog2(BIN_FIFO_DEPTH + 1)-1:0] bin_fifo_level_w;
+
+  assign {
+    writer_bin_kind,
+    writer_bin_value,
+    writer_bin_pattern,
+    writer_bin_count,
+    writer_bin_ctx_valid,
+    writer_bin_ctx_id,
+    writer_bin_lps,
+    writer_bin_mps
+  } = bin_fifo_data;
 
   ff_vvc_cabac_syntax_frontend #(
     .VVC_CABAC_CTX_ID_BITS(VVC_CABAC_CTX_ID_BITS)
@@ -91,6 +119,33 @@ module ff_vvc_cabac_pipeline #(
     .m_axis_last(bin_last)
   );
 
+  ff_axis_sample_fifo #(
+    .DATA_BITS(BIN_FIFO_DATA_BITS),
+    .DEPTH(BIN_FIFO_DEPTH)
+  ) bin_fifo (
+    .clk(clk),
+    .rst_n(rst_n),
+    .clear(clear || start),
+    .s_axis_valid(bin_valid),
+    .s_axis_ready(bin_ready),
+    .s_axis_data({
+      bin_kind,
+      bin_value,
+      bin_pattern,
+      bin_count,
+      bin_ctx_valid,
+      bin_ctx_id,
+      bin_lps,
+      bin_mps
+    }),
+    .s_axis_last(bin_last),
+    .m_axis_valid(bin_fifo_valid),
+    .m_axis_ready(bin_fifo_ready),
+    .m_axis_data(bin_fifo_data),
+    .m_axis_last(bin_fifo_last),
+    .level(bin_fifo_level_w)
+  );
+
   ff_vvc_cabac_stream_writer #(
     .VVC_CABAC_CTX_ID_BITS(VVC_CABAC_CTX_ID_BITS)
   ) stream_writer (
@@ -99,17 +154,17 @@ module ff_vvc_cabac_pipeline #(
     .start(start),
     .clear(clear),
     .lossless_slice_qp(lossless_slice_qp),
-    .s_axis_valid(bin_valid),
-    .s_axis_ready(bin_ready),
-    .s_axis_kind(bin_kind),
-    .s_axis_bin(bin_value),
-    .s_axis_bins_pattern(bin_pattern),
-    .s_axis_bins_count(bin_count),
-    .s_axis_ctx_valid(bin_ctx_valid),
-    .s_axis_ctx_id(bin_ctx_id),
-    .s_axis_lps(bin_lps),
-    .s_axis_mps(bin_mps),
-    .s_axis_last(bin_last),
+    .s_axis_valid(bin_fifo_valid),
+    .s_axis_ready(bin_fifo_ready),
+    .s_axis_kind(writer_bin_kind),
+    .s_axis_bin(writer_bin_value),
+    .s_axis_bins_pattern(writer_bin_pattern),
+    .s_axis_bins_count(writer_bin_count),
+    .s_axis_ctx_valid(writer_bin_ctx_valid),
+    .s_axis_ctx_id(writer_bin_ctx_id),
+    .s_axis_lps(writer_bin_lps),
+    .s_axis_mps(writer_bin_mps),
+    .s_axis_last(bin_fifo_last),
     .m_axis_ready(m_axis_ready),
     .m_axis_valid(m_axis_valid),
     .m_axis_data(m_axis_data),

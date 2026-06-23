@@ -100,7 +100,7 @@ module ff_vvc_cabac_bit_writer (
       done <= 1'b0;
       case (state_q)
         ST_IDLE: begin
-          if (s_axis_valid) begin
+          if (s_axis_valid && s_axis_ready) begin
             command_last_q <= s_axis_last;
             if (s_axis_flush_zero) begin
               if (partial_count_q != 3'd0) begin
@@ -113,9 +113,16 @@ module ff_vvc_cabac_bit_writer (
                 done <= 1'b1;
               end
             end else if (s_axis_bit_count != 6'd0) begin
-              value_q <= s_axis_value;
-              bits_left_q <= s_axis_bit_count;
-              state_q <= ST_BITS;
+              if ((partial_count_q == 3'd0) && (s_axis_bit_count == 6'd8)) begin
+                out_byte_q <= s_axis_value[7:0];
+                out_last_q <= s_axis_last;
+                total_bit_count_q <= total_bit_count_q + 13'd8;
+                state_q <= ST_OUT;
+              end else begin
+                value_q <= s_axis_value;
+                bits_left_q <= s_axis_bit_count;
+                state_q <= ST_BITS;
+              end
             end else if (s_axis_last) begin
               done <= 1'b1;
             end

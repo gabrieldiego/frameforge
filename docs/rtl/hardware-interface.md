@@ -56,12 +56,22 @@ plane_address = plane_base + frame_index * SRC_FRAME_STRIDE
               + y * plane_stride + x * bytes_per_sample
 ```
 
-The shared frame reader converts that planar memory layout into each codec's
-internal 8x8 block stream. That internal stream is no longer a public top-level
-port. VVC keeps its current TU-oriented 4:2:0 order internally; AV2 uses visible
-8x8 4:4:4 block packets internally. Testbenches may probe those internal wires
-for debugging and output-utilization metrics, but board integration should only
-wire the AXI interfaces.
+The shared frame reader converts that planar memory layout into an internal
+8x8 block stream. It emits up to eight same-row samples per internal packet,
+keeps the rest of the 128-bit AXI word in its row cache, and falls back to
+scalar packets at visible-frame edges where padding may be needed. A shared
+unpacker feeds the current scalar codec cores, so this packet boundary is only
+an internal AXI/FIFO optimization and not a public top-level port. VVC keeps its
+current TU-oriented 4:2:0 order internally; AV2 uses visible 8x8 4:4:4 block
+packets internally. Testbenches may probe those internal wires for debugging and
+output-utilization metrics, but board integration should only wire the AXI
+interfaces.
+
+VVC also keeps bounded internal FIFOs between the CTU symbolizer and CABAC
+frontend, and between CABAC binarization and arithmetic coding. These FIFOs let
+TU input capture, residual symbol generation, and syntax/bin production continue
+during short CABAC byte-output stalls; they are not separate board-level
+streams.
 
 For throughput debugging, the cocotb validation path can generate per-block
 state waveforms from these internal valid-ready handshakes. See
