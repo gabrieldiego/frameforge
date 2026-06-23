@@ -138,8 +138,10 @@ module ff_vvc_encoder #(
   logic       reader_axis_last;
   logic       packet_axis_valid;
   logic       packet_axis_ready;
+  logic       unpacker_packet_axis_ready;
   logic [INPUT_FIFO_BITS - 1:0] packet_axis_data;
   logic       packet_axis_last;
+  logic [3:0] packet_axis_count_w;
   logic [INPUT_PACKET_FIFO_LEVEL_BITS - 1:0] input_fifo_level_w;
   logic       m_axis_valid;
   logic       m_axis_ready;
@@ -189,7 +191,10 @@ module ff_vvc_encoder #(
   logic        exact_ibc_hash_enabled_w;
   logic        ibc_matcher_idle;
   logic        palette_sample_valid;
+  logic        palette_sample_ready;
   logic [1:0]  palette_sample_plane;
+  logic [INPUT_PACKET_BITS - 1:0] palette_sample_data;
+  logic [3:0]  palette_sample_count;
   logic        palette_stream_valid;
   logic        palette_stream_ready;
   logic [31:0] palette_stream_data;
@@ -197,6 +202,7 @@ module ff_vvc_encoder #(
   logic        palette_stream_cu_last;
   logic        palette_stream_cu_ibc_mode;
   logic        palette_leaf_marker_valid;
+  logic        palette_leaf_payload_ready_w;
   logic        palette_request_valid;
   logic        palette_request_ready;
   logic [15:0] palette_request_origin_x;
@@ -205,6 +211,8 @@ module ff_vvc_encoder #(
   logic [5:0]  palette_leaf_index_w;
   logic [2:0]  palette_leaf_col_w;
   logic [2:0]  palette_leaf_row_w;
+  logic        palette_leaf_order_valid_w;
+  logic [5:0]  palette_leaf_order_index_w;
   logic        palette_leaf_is_ibc_w;
   logic        palette_leaf_ibc_left_w;
   logic        palette_leaf_ibc_above_w;
@@ -276,6 +284,9 @@ module ff_vvc_encoder #(
   logic        generated_slice_cra_q;
   logic        generated_header_start_q;
   logic        generated_picture_header_start_q;
+  logic [2:0]  generated_output_start_state_w;
+  logic        generated_output_start_header_w;
+  logic        generated_output_start_picture_header_w;
   logic        generated_header_ready_w;
   logic        generated_header_valid_w;
   logic [7:0]  generated_header_byte_w;
@@ -314,6 +325,10 @@ module ff_vvc_encoder #(
   logic [INPUT_COUNT_BITS - 1:0] input_len_w;
   logic [INPUT_COUNT_BITS - 1:0] v_sample_index_w;
   logic        input_frame_last_w;
+  logic        input_fire_w;
+  logic        input_axis_last_w;
+  logic [3:0]  input_advance_count_w;
+  logic [INPUT_COUNT_BITS - 1:0] input_advance_count_ext_w;
   logic [6:0]  input_stream_leaf_q;
   logic [1:0]  input_stream_component_q;
   logic [5:0]  input_stream_sample_q;
@@ -321,6 +336,9 @@ module ff_vvc_encoder #(
   logic [1:0]  input_stream_component_next_w;
   logic [5:0]  input_stream_sample_next_w;
   logic [5:0]  input_chroma_stream_last_sample_w;
+  logic [5:0]  input_stream_component_last_sample_w;
+  logic [6:0]  input_stream_component_sample_count_w;
+  logic [6:0]  input_stream_sample_advance_sum_w;
   logic        input_stream_component_last_w;
   logic [1:0]  palette_sample_plane_w;
   logic [3:0]  active_luma_tu_cols_w;
@@ -425,6 +443,7 @@ module ff_vvc_encoder #(
   integer      chroma_quant_y_i;
   integer      chroma_quant_pack_i;
   integer      luma_ref_i;
+  integer      quant_clear_i;
   integer      ibc_state_i;
   logic [15:0] luma_quant_ref_x_tmp;
   logic [15:0] luma_quant_ref_y_tmp;
@@ -444,6 +463,7 @@ module ff_vvc_encoder #(
   logic luma_quant_done_w;
   logic luma_quant_busy_w;
   logic luma_quant_active_q;
+  logic residual_quant_idle_w;
   logic chroma_quant_start_q;
   logic chroma_quant_done_w;
   logic chroma_quant_busy_w;
@@ -621,7 +641,18 @@ module ff_vvc_encoder #(
   assign frame_samples_w = luma_tu_stream_samples_w + (chroma_tu_stream_samples_w << 1);
   assign input_len_w = frame_samples_w;
   assign v_sample_index_w = cr_tu_stream_base_w;
-  assign input_frame_last_w = input_active_q && (input_count_q == input_len_q - 1'b1);
+  assign packet_axis_count_w = packet_axis_data[INPUT_FIFO_BITS - 1:INPUT_PACKET_BITS];
+  assign input_advance_count_w = ctu_has_palette_cu ? packet_axis_count_w : 4'd1;
+  assign input_advance_count_ext_w =
+    {{(INPUT_COUNT_BITS - 4){1'b0}}, input_advance_count_w};
+  assign input_axis_last_w = ctu_has_palette_cu ? packet_axis_last : s_axis_last;
+  assign input_fire_w =
+    input_active_q &&
+    (ctu_has_palette_cu ?
+      (packet_axis_valid && packet_axis_ready) :
+      (s_axis_valid && s_axis_ready));
+  assign input_frame_last_w =
+    input_active_q && ((input_count_q + input_advance_count_ext_w) >= input_len_q);
   // RTL input stream contract for the current fixed-TU subset:
   // samples arrive in CTU-local coding-tree leaf order, one 8x8 leaf at a
   // time. Each leaf carries all luma samples first, then the colocated Cb
@@ -632,16 +663,22 @@ module ff_vvc_encoder #(
   // instead of buffering a full 64x64 CTU. If future dynamic partitioning is
   // added, this interface can be widened to 16x16 leaves or full CTUs.
   assign input_chroma_stream_last_sample_w = ctu_has_palette_cu ? 6'd63 : 6'd15;
+  assign input_stream_component_last_sample_w =
+    ctu_has_palette_cu ? 6'd63 :
+    ((input_stream_component_q == 2'd0) ? 6'd63 : input_chroma_stream_last_sample_w);
+  assign input_stream_component_sample_count_w =
+    {1'b0, input_stream_component_last_sample_w} + 7'd1;
   assign input_stream_component_last_w =
-    (input_stream_component_q == 2'd0) ?
-      (input_stream_sample_q == 6'd63) :
-      (input_stream_sample_q == input_chroma_stream_last_sample_w);
+    input_stream_sample_advance_sum_w >= input_stream_component_sample_count_w;
+  assign input_stream_sample_advance_sum_w =
+    {1'b0, input_stream_sample_q} + {3'd0, input_advance_count_w};
   always @* begin
     input_stream_leaf_next_w = input_stream_leaf_q;
     input_stream_component_next_w = input_stream_component_q;
     input_stream_sample_next_w = input_stream_sample_q;
     if (input_stream_component_last_w) begin
-      input_stream_sample_next_w = 6'd0;
+      input_stream_sample_next_w =
+        input_stream_sample_advance_sum_w - input_stream_component_sample_count_w;
       if (input_stream_component_q == 2'd0) begin
         input_stream_component_next_w = 2'd1;
       end else if (input_stream_component_q == 2'd1) begin
@@ -651,7 +688,7 @@ module ff_vvc_encoder #(
         input_stream_leaf_next_w = input_stream_leaf_q + 7'd1;
       end
     end else begin
-      input_stream_sample_next_w = input_stream_sample_q + 6'd1;
+      input_stream_sample_next_w = input_stream_sample_advance_sum_w[5:0];
     end
   end
 
@@ -956,6 +993,11 @@ module ff_vvc_encoder #(
 
   assign chroma_quant_done_w = chroma_quant_cb_done_w && chroma_quant_cr_done_w;
   assign chroma_quant_busy_w = chroma_quant_cb_busy_w || chroma_quant_cr_busy_w;
+  assign residual_quant_idle_w =
+    !luma_tu_quant_pending_q && !luma_quant_active_q && !luma_quant_busy_w &&
+    !luma_quant_queued_q &&
+    !chroma_tu_quant_pending_q && !chroma_quant_active_q && !chroma_quant_busy_w &&
+    !chroma_quant_queued_q;
 
   always @* begin
     selected_quant_luma_rem_w = '0;
@@ -1083,9 +1125,19 @@ module ff_vvc_encoder #(
   assign palette_leaf_marker_valid =
     ctu_has_palette_cu && (palette_mux_state_q == PALETTE_MUX_PARTITION) &&
     ctu_symbol_valid && (ctu_symbol_kind == SYMBOL_PALETTE_LEAF);
+  // H.266 7.3.11.4 coding_tree() split syntax is sample independent, but
+  // H.266 8.6.2 IBC predictor selection for a palette leaf depends on the
+  // completed hash for that leaf. The IBC matcher resolves each leaf when its
+  // Cr samples finish, so split/header syntax can run ahead while each leaf
+  // payload waits only for its own mode decision.
+  assign palette_leaf_payload_ready_w =
+    !ctu_has_palette_cu || !palette_leaf_marker_valid ||
+    !input_active_q ||
+    (palette_leaf_order_valid_w &&
+     (input_stream_leaf_q > {1'b0, palette_leaf_order_index_w}));
   assign palette_request_valid =
     palette_leaf_marker_valid && (generated_out_state_q != GENERATED_OUT_IDLE) &&
-    !palette_leaf_is_ibc_w;
+    palette_leaf_payload_ready_w && !palette_leaf_is_ibc_w;
   assign palette_request_origin_x = ctu_symbol_data[31:16];
   assign palette_request_origin_y = ctu_symbol_data[15:0];
   assign palette_request_last = ctu_symbol_last;
@@ -1093,7 +1145,8 @@ module ff_vvc_encoder #(
     ((palette_mux_state_q == PALETTE_MUX_CU) ? palette_stream_valid :
      ((palette_mux_state_q == PALETTE_MUX_PARTITION) &&
       ctu_symbol_valid &&
-      ((ctu_symbol_kind != SYMBOL_PALETTE_LEAF) || palette_leaf_is_ibc_w))) :
+      ((ctu_symbol_kind != SYMBOL_PALETTE_LEAF) ||
+       (palette_leaf_payload_ready_w && palette_leaf_is_ibc_w)))) :
     ctu_symbol_valid;
   assign source_symbol_kind = ctu_has_palette_cu ?
     ((palette_mux_state_q == PALETTE_MUX_CU) ? {4'h8, palette_stream_data[31:28]} :
@@ -1113,6 +1166,19 @@ module ff_vvc_encoder #(
     ctu_has_palette_cu && (palette_mux_state_q == PALETTE_MUX_CU) && source_symbol_ready;
   assign source_symbol_fifo_to_cabac_ready_w =
     (generated_out_state_q == GENERATED_OUT_CABAC) && !cabac_start_q && cabac_symbol_ready;
+
+  always @* begin
+    generated_output_start_state_w = GENERATED_OUT_SLICE_START;
+    generated_output_start_header_w = 1'b0;
+    generated_output_start_picture_header_w = 1'b0;
+    if ((frame_index_q == 64'd0) && (current_slice_q == 16'd0)) begin
+      generated_output_start_state_w = GENERATED_OUT_PREAMBLE;
+      generated_output_start_header_w = 1'b1;
+    end else if (multi_slice_picture_w && (current_slice_q == 16'd0)) begin
+      generated_output_start_state_w = GENERATED_OUT_PICTURE_HEADER;
+      generated_output_start_picture_header_w = 1'b1;
+    end
+  end
 
   ff_encoder_axil_regs #(
     .AXI_ADDR_BITS(AXI_ADDR_BITS),
@@ -1235,16 +1301,20 @@ module ff_vvc_encoder #(
     .clk(clk),
     .rst_n(rst_n),
     .clear(frame_reader_start_w),
-    .s_axis_valid(packet_axis_valid),
-    .s_axis_ready(packet_axis_ready),
+    .s_axis_valid(packet_axis_valid && !ctu_has_palette_cu),
+    .s_axis_ready(unpacker_packet_axis_ready),
     .s_axis_data(packet_axis_data[INPUT_PACKET_BITS - 1:0]),
-    .s_axis_count(packet_axis_data[INPUT_FIFO_BITS - 1:INPUT_PACKET_BITS]),
+    .s_axis_count(packet_axis_count_w),
     .s_axis_last(packet_axis_last),
     .m_axis_valid(s_axis_valid),
     .m_axis_ready(s_axis_ready),
     .m_axis_data(s_axis_data),
     .m_axis_last(s_axis_last)
   );
+
+  assign packet_axis_ready =
+    ctu_has_palette_cu ? (input_active_q && palette_sample_ready) :
+    unpacker_packet_axis_ready;
 
   ff_axi4_bitstream_writer #(
     .AXI_ADDR_BITS(AXI_ADDR_BITS),
@@ -1289,13 +1359,27 @@ module ff_vvc_encoder #(
     .cu_active_mask(ctu_cu_active_mask)
   );
 
+  ff_vvc_tu_order_8x8 palette_leaf_order (
+    .visible_cols(active_luma_tu_cols_w),
+    .visible_rows(active_luma_tu_rows_w),
+    .sample_col(palette_leaf_col_w),
+    .sample_row(palette_leaf_row_w),
+    .target_index(6'd0),
+    .sample_valid(palette_leaf_order_valid_w),
+    .sample_index(palette_leaf_order_index_w),
+    .target_valid(),
+    .target_col(),
+    .target_row()
+  );
+
   // H.266 8.6.2.2 builds the IBC BVP list from already decoded neighbouring
   // IBC CUs and HMVP entries. The fixed 4:4:4 screen-content path always keeps
   // the CTU-local exact-hash matcher live so repeated 8x8 CUs can use IBC
   // prediction before falling back to residual/BDPCM/palette coding.
   assign exact_ibc_hash_enabled_w = ctu_screen_444_mode;
   assign ibc_sample_valid =
-    exact_ibc_hash_enabled_w && input_active_q && s_axis_valid && s_axis_ready &&
+    exact_ibc_hash_enabled_w && ctu_has_palette_cu &&
+    input_active_q && packet_axis_valid && packet_axis_ready &&
     (input_count_q < frame_samples_w);
   assign ibc_cu_full_visible_w =
     input_luma_tu_valid_w &&
@@ -1304,7 +1388,7 @@ module ff_vvc_encoder #(
   assign ibc_cu_last_sample_w =
     ibc_sample_valid &&
     (input_stream_component_q == 2'd2) &&
-    (input_stream_sample_q == 6'd63);
+    input_stream_component_last_w;
 
   ff_vvc_ibc_hash_matcher #(
     .CTU_SIZE(CTU_SIZE),
@@ -1316,7 +1400,8 @@ module ff_vvc_encoder #(
     .clear(frame_pipeline_clear_w),
     .enable(exact_ibc_hash_enabled_w),
     .sample_valid(ibc_sample_valid),
-    .sample_data(input_sample_8bit_w),
+    .sample_data(packet_axis_data[INPUT_PACKET_BITS - 1:0]),
+    .sample_count(packet_axis_count_w),
     .cu_index(input_luma_tu_index_w),
     .cu_origin_x(input_luma_tu_origin_x_w),
     .cu_origin_y(input_luma_tu_origin_y_w),
@@ -1396,10 +1481,14 @@ module ff_vvc_encoder #(
   always @* begin
     palette_sample_valid = 1'b0;
     palette_sample_plane = 2'd0;
-    if (ctu_has_palette_cu && input_active_q && s_axis_valid && s_axis_ready &&
+    palette_sample_data = '0;
+    palette_sample_count = 4'd0;
+    if (ctu_has_palette_cu && input_active_q && packet_axis_valid &&
         (input_count_q < frame_samples_w)) begin
       palette_sample_valid = 1'b1;
       palette_sample_plane = palette_sample_plane_w;
+      palette_sample_data = packet_axis_data[INPUT_PACKET_BITS - 1:0];
+      palette_sample_count = packet_axis_count_w;
     end
   end
 
@@ -1428,10 +1517,11 @@ module ff_vvc_encoder #(
         .cu_request_last(palette_request_last),
         .cu_request_prior_ibc_seen(ctu_prior_ibc_seen_q),
         .s_axis_valid(palette_sample_valid),
-        .s_axis_ready(),
+        .s_axis_ready(palette_sample_ready),
         .s_axis_plane(palette_sample_plane),
-        .s_axis_sample(s_axis_data),
-        .s_axis_last(s_axis_last),
+        .s_axis_samples(palette_sample_data),
+        .s_axis_count(palette_sample_count),
+        .s_axis_last(packet_axis_last),
         .m_axis_valid(palette_stream_valid),
         .m_axis_ready(palette_stream_ready),
         .m_axis_data(palette_stream_data),
@@ -1442,6 +1532,7 @@ module ff_vvc_encoder #(
       );
     end else begin : gen_no_palette_symbolizer
       assign palette_request_ready = 1'b0;
+      assign palette_sample_ready = 1'b0;
       assign palette_stream_valid = 1'b0;
       assign palette_stream_data = 32'd0;
       assign palette_stream_last = 1'b0;
@@ -1590,7 +1681,8 @@ module ff_vvc_encoder #(
     ctu_has_palette_cu ?
       ((palette_mux_state_q == PALETTE_MUX_PARTITION) &&
        ((ctu_symbol_kind == SYMBOL_PALETTE_LEAF) ?
-         (palette_leaf_is_ibc_w ? source_symbol_ready : palette_request_ready) :
+         (palette_leaf_payload_ready_w &&
+          (palette_leaf_is_ibc_w ? source_symbol_ready : palette_request_ready)) :
          source_symbol_ready)) :
       source_symbol_ready;
 
@@ -1643,6 +1735,15 @@ module ff_vvc_encoder #(
         chroma_cb_left_ref_col_q[luma_ref_i] <= {VVC_CHROMA_TU_SIZE{8'd128}};
         chroma_cr_top_ref_row_q[luma_ref_i] <= {VVC_CHROMA_TU_SIZE{8'd128}};
         chroma_cr_left_ref_col_q[luma_ref_i] <= {VVC_CHROMA_TU_SIZE{8'd128}};
+      end
+      for (quant_clear_i = 0; quant_clear_i < VVC_LUMA_TUS_PER_CTU; quant_clear_i = quant_clear_i + 1) begin
+        quant_luma_rem_ctu_q[quant_clear_i] <= 8'd0;
+        quant_luma_negative_ctu_q[quant_clear_i] <= 1'b0;
+        quant_luma_ac_levels_ctu_q[quant_clear_i] <= '0;
+        quant_cb_dc_level_ctu_q[quant_clear_i] <= 9'sd0;
+        quant_cr_dc_level_ctu_q[quant_clear_i] <= 9'sd0;
+        quant_cb_ac_levels_ctu_q[quant_clear_i] <= '0;
+        quant_cr_ac_levels_ctu_q[quant_clear_i] <= '0;
       end
       frame_index_q <= 64'd0;
       generated_out_state_q <= GENERATED_OUT_IDLE;
@@ -1829,11 +1930,28 @@ module ff_vvc_encoder #(
           chroma_cr_top_ref_row_q[luma_ref_i] <= {VVC_CHROMA_TU_SIZE{8'd128}};
           chroma_cr_left_ref_col_q[luma_ref_i] <= {VVC_CHROMA_TU_SIZE{8'd128}};
         end
+        for (quant_clear_i = 0; quant_clear_i < VVC_LUMA_TUS_PER_CTU; quant_clear_i = quant_clear_i + 1) begin
+          quant_luma_rem_ctu_q[quant_clear_i] <= 8'd0;
+          quant_luma_negative_ctu_q[quant_clear_i] <= 1'b0;
+          quant_luma_ac_levels_ctu_q[quant_clear_i] <= '0;
+          quant_cb_dc_level_ctu_q[quant_clear_i] <= 9'sd0;
+          quant_cr_dc_level_ctu_q[quant_clear_i] <= 9'sd0;
+          quant_cb_ac_levels_ctu_q[quant_clear_i] <= '0;
+          quant_cr_ac_levels_ctu_q[quant_clear_i] <= '0;
+        end
         frame_index_q <= 64'd0;
-        generated_out_state_q <= GENERATED_OUT_IDLE;
-        generated_slice_cra_q <= 1'b0;
-        generated_header_start_q <= 1'b0;
-        generated_picture_header_start_q <= 1'b0;
+        if (ctu_has_palette_cu) begin
+          generated_out_state_q <= GENERATED_OUT_PREAMBLE;
+          generated_slice_cra_q <= 1'b0;
+          generated_header_start_q <= 1'b1;
+          generated_picture_header_start_q <= 1'b0;
+          ctu_symbol_start_q <= 1'b1;
+        end else begin
+          generated_out_state_q <= GENERATED_OUT_IDLE;
+          generated_slice_cra_q <= 1'b0;
+          generated_header_start_q <= 1'b0;
+          generated_picture_header_start_q <= 1'b0;
+        end
         current_slice_q <= 16'd0;
         current_ctu_x_q <= 16'd0;
         current_ctu_y_q <= 16'd0;
@@ -1887,6 +2005,15 @@ module ff_vvc_encoder #(
           chroma_cr_top_ref_row_q[luma_ref_i] <= {VVC_CHROMA_TU_SIZE{8'd128}};
           chroma_cr_left_ref_col_q[luma_ref_i] <= {VVC_CHROMA_TU_SIZE{8'd128}};
         end
+        for (quant_clear_i = 0; quant_clear_i < VVC_LUMA_TUS_PER_CTU; quant_clear_i = quant_clear_i + 1) begin
+          quant_luma_rem_ctu_q[quant_clear_i] <= 8'd0;
+          quant_luma_negative_ctu_q[quant_clear_i] <= 1'b0;
+          quant_luma_ac_levels_ctu_q[quant_clear_i] <= '0;
+          quant_cb_dc_level_ctu_q[quant_clear_i] <= 9'sd0;
+          quant_cr_dc_level_ctu_q[quant_clear_i] <= 9'sd0;
+          quant_cb_ac_levels_ctu_q[quant_clear_i] <= '0;
+          quant_cr_ac_levels_ctu_q[quant_clear_i] <= '0;
+        end
         palette_mux_state_q <= PALETTE_MUX_PARTITION;
         palette_current_pred_ibc_ctx_q <= 3'd0;
         palette_current_leaf_index_q <= 6'd0;
@@ -1899,24 +2026,36 @@ module ff_vvc_encoder #(
           ctu_cu_coded_ibc_bv_x_q[ibc_state_i] <= 16'sd0;
           ctu_cu_coded_ibc_bv_y_q[ibc_state_i] <= 16'sd0;
         end
-      end else if (input_active_q && s_axis_valid && s_axis_ready) begin
+        if (ctu_has_palette_cu) begin
+          generated_slice_cra_q <= frame_index_q != 64'd0;
+          generated_out_state_q <= generated_output_start_state_w;
+          generated_header_start_q <= generated_output_start_header_w;
+          generated_picture_header_start_q <= generated_output_start_picture_header_w;
+          ctu_symbol_start_q <= 1'b1;
+          m_axis_valid <= 1'b0;
+          m_axis_data <= 8'd0;
+          m_axis_last <= 1'b0;
+        end
+      end else if (input_fire_w) begin
         input_stream_leaf_q <= input_stream_leaf_next_w;
         input_stream_component_q <= input_stream_component_next_w;
         input_stream_sample_q <= input_stream_sample_next_w;
-        if (s_axis_last != input_frame_last_w) begin
+        if (input_axis_last_w != input_frame_last_w) begin
           input_error <= 1'b1;
         end
-        if (input_luma_tu_sample_w) begin
+        if (!ctu_has_palette_cu && input_luma_tu_sample_w) begin
           luma_sample_tu_q[residual_luma_sample_index_w * 8 +: 8] <=
             input_sample_8bit_w;
         end
-        if ((chroma_format_idc == 2'd1) &&
+        if (!ctu_has_palette_cu &&
+            (chroma_format_idc == 2'd1) &&
             (input_stream_component_q == 2'd1) &&
             input_chroma_tu_sample_w) begin
           cb_sample_tu_q[input_chroma_tu_sample_index_w * 8 +: 8] <=
             input_sample_8bit_w;
         end
-        if ((chroma_format_idc == 2'd1) &&
+        if (!ctu_has_palette_cu &&
+            (chroma_format_idc == 2'd1) &&
             (input_stream_component_q == 2'd2) &&
             input_chroma_tu_sample_w) begin
           cr_sample_tu_q[input_chroma_tu_sample_index_w * 8 +: 8] <=
@@ -1927,7 +2066,7 @@ module ff_vvc_encoder #(
           input_active_q <= 1'b0;
           s_axis_ready   <= 1'b0;
           if (ctu_has_palette_cu) begin
-            pending_output_q <= 1'b1;
+            pending_output_q <= (generated_out_state_q == GENERATED_OUT_IDLE);
           end else if (input_chroma_tu_last_cr_sample_w) begin
             if (!chroma_tu_quant_pending_q && !chroma_quant_active_q &&
                 !chroma_quant_busy_w && !chroma_quant_queued_q) begin
@@ -1961,7 +2100,7 @@ module ff_vvc_encoder #(
           end else begin
             input_error <= 1'b1;
           end
-          input_count_q <= input_count_q + 1'b1;
+          input_count_q <= input_count_q + input_advance_count_ext_w;
         end else if (input_chroma_tu_last_cr_sample_w) begin
           if (!chroma_tu_quant_pending_q && !chroma_quant_active_q &&
               !chroma_quant_busy_w && !chroma_quant_queued_q) begin
@@ -1979,24 +2118,19 @@ module ff_vvc_encoder #(
           end else begin
             input_error <= 1'b1;
           end
-          input_count_q <= input_count_q + 1'b1;
+          input_count_q <= input_count_q + input_advance_count_ext_w;
         end else begin
-          input_count_q <= input_count_q + 1'b1;
+          input_count_q <= input_count_q + input_advance_count_ext_w;
         end
       end else if (pending_output_q &&
                    (!ctu_has_palette_cu || ibc_matcher_idle) &&
+                   (ctu_has_palette_cu || residual_quant_idle_w) &&
                    (generated_out_state_q == GENERATED_OUT_IDLE)) begin
         pending_output_q <= 1'b0;
         generated_slice_cra_q <= frame_index_q != 64'd0;
-        if ((frame_index_q == 64'd0) && (current_slice_q == 16'd0)) begin
-          generated_out_state_q <= GENERATED_OUT_PREAMBLE;
-          generated_header_start_q <= 1'b1;
-        end else if (multi_slice_picture_w && (current_slice_q == 16'd0)) begin
-          generated_out_state_q <= GENERATED_OUT_PICTURE_HEADER;
-          generated_picture_header_start_q <= 1'b1;
-        end else begin
-          generated_out_state_q <= GENERATED_OUT_SLICE_START;
-        end
+        generated_out_state_q <= generated_output_start_state_w;
+        generated_header_start_q <= generated_output_start_header_w;
+        generated_picture_header_start_q <= generated_output_start_picture_header_w;
         ctu_symbol_start_q <= 1'b1;
         m_axis_valid <= 1'b0;
         m_axis_data <= 8'd0;

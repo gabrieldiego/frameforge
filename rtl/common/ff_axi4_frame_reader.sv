@@ -151,7 +151,7 @@ module ff_axi4_frame_reader #(
   logic [3:0] row_pos_w;
   logic [3:0] row_remaining_w;
   logic [31:0] axi_word_remaining_bytes_w;
-  logic [3:0] axi_word_remaining_samples_w;
+  logic [4:0] axi_word_remaining_samples_w;
   logic [3:0] packet_candidate_count_w;
   logic [3:0] packet_count_w;
   logic [5:0] packet_last_sample_w;
@@ -166,9 +166,76 @@ module ff_axi4_frame_reader #(
   logic [OUTPUT_SAMPLES*SAMPLE_BITS-1:0] packet_cache_data_w;
   logic [OUTPUT_SAMPLES*SAMPLE_BITS-1:0] packet_rdata_w;
   logic [OUTPUT_SAMPLES*SAMPLE_BITS-1:0] packet_pad_data_w;
+  logic [5:0] advance_scan_w;
+  logic [2:0] advance_raster_col_w;
+  logic [2:0] advance_raster_row_w;
+  logic [6:0] advance_leaf_count_w;
+  logic [1:0] advance_component_w;
+  logic [5:0] advance_sample_w;
+  logic [2:0] advance_vvc_col_w;
+  logic [2:0] advance_vvc_row_w;
+  logic [2:0] advance_leaf_col_w;
+  logic [2:0] advance_leaf_row_w;
+  logic advance_leaf_active_w;
+  logic [5:0] advance_component_sample_last_w;
+  logic [15:0] advance_local_x_w;
+  logic [15:0] advance_local_y_w;
+  logic [15:0] advance_sample_x_w;
+  logic [15:0] advance_sample_y_w;
+  logic [15:0] advance_plane_x_w;
+  logic [15:0] advance_plane_y_w;
+  logic [31:0] advance_plane_stride_w;
+  logic [AXI_ADDR_BITS-1:0] advance_plane_base_w;
+  logic [AXI_ADDR_BITS-1:0] advance_row_offset_w;
+  logic [AXI_ADDR_BITS-1:0] advance_col_offset_w;
+  logic [AXI_ADDR_BITS-1:0] advance_plane_offset_w;
+  logic [AXI_ADDR_BITS-1:0] advance_sample_addr_w;
+  logic [AXI_ADDR_BITS-1:0] advance_axi_word_addr_w;
+  logic [AXI_BYTE_INDEX_BITS-1:0] advance_axi_byte_offset_w;
+  logic [CACHE_INDEX_BITS-1:0] advance_cache_index_w;
+  logic advance_cache_hit_w;
+  logic [AXI_DATA_BITS-1:0] advance_cache_hit_data_w;
+  logic [SAMPLE_BITS-1:0] advance_pad_sample_w;
+  logic advance_in_visible_w;
+  logic [3:0] advance_row_width_samples_w;
+  logic [3:0] advance_row_pos_w;
+  logic [3:0] advance_row_remaining_w;
+  logic [31:0] advance_axi_word_remaining_bytes_w;
+  logic [4:0] advance_axi_word_remaining_samples_w;
+  logic [3:0] advance_packet_candidate_count_w;
+  logic [3:0] advance_packet_count_w;
+  logic [5:0] advance_packet_last_sample_w;
+  logic advance_packet_sample_last_in_component_w;
+  logic advance_packet_component_last_w;
+  logic advance_packet_block_last_w;
+  logic advance_packet_segment_last_w;
+  logic advance_packet_output_last_w;
+  logic advance_packet_all_visible_w;
+  logic [15:0] advance_plane_visible_width_w;
+  logic [15:0] advance_plane_visible_height_w;
+  logic [OUTPUT_SAMPLES*SAMPLE_BITS-1:0] advance_packet_cache_data_w;
+  logic [OUTPUT_SAMPLES*SAMPLE_BITS-1:0] advance_packet_pad_data_w;
+  logic arvalid_hold_q;
+  logic [AXI_ADDR_BITS-1:0] araddr_hold_q;
+  logic sample_fire_w;
+  logic current_read_request_w;
+  logic advance_read_request_w;
+  logic ar_request_valid_w;
+  logic [AXI_ADDR_BITS-1:0] ar_request_addr_w;
   integer packet_i;
 
   assign busy = (state_q != ST_IDLE);
+  assign sample_fire_w = sample_valid && sample_ready;
+  assign current_read_request_w =
+    (state_q == ST_SKIP) && leaf_active_w && in_visible_w && !cache_hit_w;
+  assign advance_read_request_w =
+    sample_fire_w && !packet_segment_last_w &&
+    advance_leaf_active_w && advance_in_visible_w && !advance_cache_hit_w;
+  assign ar_request_valid_w =
+    !arvalid_hold_q && (advance_read_request_w || current_read_request_w);
+  assign ar_request_addr_w = advance_read_request_w ? advance_axi_word_addr_w : axi_word_addr_w;
+  assign m_axi_arvalid = arvalid_hold_q || ar_request_valid_w;
+  assign m_axi_araddr = arvalid_hold_q ? araddr_hold_q : ar_request_addr_w;
   assign m_axi_arlen = 8'd0;
   assign m_axi_arsize = AXI_SIZE;
   assign m_axi_arburst = 2'b01;
@@ -258,7 +325,6 @@ module ff_axi4_frame_reader #(
   assign cache_hit_w =
     cache_valid_q[cache_index_w] && (cache_addr_q[cache_index_w] == axi_word_addr_w);
   assign cache_hit_data_w = cache_data_q[cache_index_w];
-  assign m_axi_araddr = axi_word_addr_w;
   assign pad_sample_w = (component_q == 2'd0) ? '0 : {{(SAMPLE_BITS-8){1'b0}}, 8'd128};
   assign in_visible_w =
     (sample_x_w < visible_width) &&
@@ -275,7 +341,7 @@ module ff_axi4_frame_reader #(
   assign axi_word_remaining_bytes_w = AXI_BYTES - {28'd0, axi_byte_offset_w};
   assign axi_word_remaining_samples_w =
     (SAMPLE_BYTES <= 1) ?
-      axi_word_remaining_bytes_w[3:0] :
+      axi_word_remaining_bytes_w[4:0] :
       (axi_word_remaining_bytes_w >> SAMPLE_BYTE_SHIFT);
   always_comb begin
     packet_candidate_count_w = row_remaining_w;
@@ -391,6 +457,166 @@ module ff_axi4_frame_reader #(
     (leaf_count_q == (active_leaf_count_w - 7'd1)) &&
     (stream_last_on_segment_end || frame_last_segment);
 
+  always_comb begin
+    advance_scan_w = scan_q;
+    advance_raster_col_w = raster_col_q;
+    advance_raster_row_w = raster_row_q;
+    advance_leaf_count_w = leaf_count_q;
+    advance_component_w = component_q;
+    advance_sample_w = sample_q;
+
+    if (packet_sample_last_in_component_w) begin
+      advance_sample_w = 6'd0;
+      if (component_q == 2'd2) begin
+        advance_component_w = 2'd0;
+        advance_leaf_count_w = leaf_count_q + 7'd1;
+        if (RASTER_BLOCK_ORDER) begin
+          if ({1'b0, raster_col_q} == (active_cols_w - 4'd1)) begin
+            advance_raster_col_w = 3'd0;
+            advance_raster_row_w = raster_row_q + 3'd1;
+          end else begin
+            advance_raster_col_w = raster_col_q + 3'd1;
+          end
+        end else begin
+          advance_scan_w = scan_q + 6'd1;
+        end
+      end else begin
+        advance_component_w = component_q + 2'd1;
+      end
+    end else begin
+      advance_sample_w = sample_q + {2'd0, packet_count_w};
+    end
+  end
+
+  assign advance_vvc_col_w = {advance_scan_w[4], advance_scan_w[2], advance_scan_w[0]};
+  assign advance_vvc_row_w = {advance_scan_w[5], advance_scan_w[3], advance_scan_w[1]};
+  assign advance_leaf_col_w = RASTER_BLOCK_ORDER ? advance_raster_col_w : advance_vvc_col_w;
+  assign advance_leaf_row_w = RASTER_BLOCK_ORDER ? advance_raster_row_w : advance_vvc_row_w;
+  assign advance_leaf_active_w =
+    ({1'b0, advance_leaf_col_w} < active_cols_w) &&
+    ({1'b0, advance_leaf_row_w} < active_rows_w);
+  assign advance_component_sample_last_w =
+    ((chroma_format_idc == 2'd1) && (advance_component_w != 2'd0)) ? 6'd15 : 6'd63;
+  assign advance_local_x_w =
+    ((chroma_format_idc == 2'd1) && (advance_component_w != 2'd0)) ?
+      {14'd0, advance_sample_w[1:0]} :
+      {13'd0, advance_sample_w[2:0]};
+  assign advance_local_y_w =
+    ((chroma_format_idc == 2'd1) && (advance_component_w != 2'd0)) ?
+      {12'd0, advance_sample_w[5:2]} :
+      {13'd0, advance_sample_w[5:3]};
+  assign advance_sample_x_w =
+    segment_origin_x + ({13'd0, advance_leaf_col_w} << 3) + advance_local_x_w;
+  assign advance_sample_y_w =
+    segment_origin_y + ({13'd0, advance_leaf_row_w} << 3) + advance_local_y_w;
+  assign advance_plane_x_w =
+    ((chroma_format_idc == 2'd1) && (advance_component_w != 2'd0)) ?
+      ((segment_origin_x >> 1) + ({13'd0, advance_leaf_col_w} << 2) + advance_local_x_w) :
+      advance_sample_x_w;
+  assign advance_plane_y_w =
+    ((chroma_format_idc == 2'd1) && (advance_component_w != 2'd0)) ?
+      ((segment_origin_y >> 1) + ({13'd0, advance_leaf_row_w} << 2) + advance_local_y_w) :
+      advance_sample_y_w;
+  assign advance_plane_base_w =
+    (advance_component_w == 2'd0) ? src_y_base :
+    (advance_component_w == 2'd1) ? src_u_base :
+    src_v_base;
+  assign advance_plane_stride_w =
+    (advance_component_w == 2'd0) ? src_y_stride :
+    (advance_component_w == 2'd1) ? src_u_stride :
+    src_v_stride;
+  assign advance_row_offset_w = {32'd0, advance_plane_y_w} * advance_plane_stride_w;
+  assign advance_col_offset_w = {32'd0, advance_plane_x_w} << SAMPLE_BYTE_SHIFT;
+  assign advance_plane_offset_w = src_frame_offset + advance_row_offset_w + advance_col_offset_w;
+  assign advance_sample_addr_w = advance_plane_base_w + advance_plane_offset_w;
+  assign advance_axi_byte_offset_w =
+    (AXI_BYTES <= 1) ? '0 : advance_sample_addr_w[AXI_BYTE_INDEX_BITS-1:0];
+  assign advance_axi_word_addr_w =
+    (AXI_BYTES <= 1) ?
+      advance_sample_addr_w :
+      {advance_sample_addr_w[AXI_ADDR_BITS-1:AXI_BYTE_INDEX_BITS], {AXI_BYTE_INDEX_BITS{1'b0}}};
+  assign advance_cache_index_w =
+    (advance_component_w == 2'd0) ? {2'd0, advance_local_y_w[2:0]} :
+    (advance_component_w == 2'd1) ? {2'd1, advance_local_y_w[2:0]} :
+    {2'd2, advance_local_y_w[2:0]};
+  assign advance_cache_hit_w =
+    cache_valid_q[advance_cache_index_w] &&
+    (cache_addr_q[advance_cache_index_w] == advance_axi_word_addr_w);
+  assign advance_cache_hit_data_w = cache_data_q[advance_cache_index_w];
+  assign advance_pad_sample_w =
+    (advance_component_w == 2'd0) ? '0 : {{(SAMPLE_BITS-8){1'b0}}, 8'd128};
+  assign advance_in_visible_w =
+    (advance_sample_x_w < visible_width) &&
+    (advance_sample_y_w < visible_height) &&
+    !((chroma_format_idc == 2'd1) && (advance_component_w != 2'd0) &&
+      ((advance_plane_x_w >= (visible_width >> 1)) ||
+       (advance_plane_y_w >= (visible_height >> 1))));
+  assign advance_row_width_samples_w =
+    ((chroma_format_idc == 2'd1) && (advance_component_w != 2'd0)) ? 4'd4 : 4'd8;
+  assign advance_row_pos_w =
+    ((chroma_format_idc == 2'd1) && (advance_component_w != 2'd0)) ?
+      {2'd0, advance_sample_w[1:0]} :
+      {1'b0, advance_sample_w[2:0]};
+  assign advance_row_remaining_w = advance_row_width_samples_w - advance_row_pos_w;
+  assign advance_axi_word_remaining_bytes_w =
+    AXI_BYTES - {28'd0, advance_axi_byte_offset_w};
+  assign advance_axi_word_remaining_samples_w =
+    (SAMPLE_BYTES <= 1) ?
+      advance_axi_word_remaining_bytes_w[4:0] :
+      (advance_axi_word_remaining_bytes_w >> SAMPLE_BYTE_SHIFT);
+  always_comb begin
+    advance_packet_candidate_count_w = advance_row_remaining_w;
+    if (advance_packet_candidate_count_w > OUTPUT_SAMPLES_COUNT) begin
+      advance_packet_candidate_count_w = OUTPUT_SAMPLES_COUNT;
+    end
+    if (advance_packet_candidate_count_w > advance_axi_word_remaining_samples_w) begin
+      advance_packet_candidate_count_w = advance_axi_word_remaining_samples_w;
+    end
+    if (advance_packet_candidate_count_w == 4'd0) begin
+      advance_packet_candidate_count_w = 4'd1;
+    end
+  end
+  assign advance_plane_visible_width_w =
+    ((chroma_format_idc == 2'd1) && (advance_component_w != 2'd0)) ?
+      (visible_width >> 1) :
+      visible_width;
+  assign advance_plane_visible_height_w =
+    ((chroma_format_idc == 2'd1) && (advance_component_w != 2'd0)) ?
+      (visible_height >> 1) :
+      visible_height;
+  assign advance_packet_all_visible_w =
+    advance_in_visible_w &&
+    (advance_plane_y_w < advance_plane_visible_height_w) &&
+    (({16'd0, advance_plane_x_w} + {28'd0, advance_packet_candidate_count_w}) <=
+      {16'd0, advance_plane_visible_width_w});
+  assign advance_packet_count_w =
+    advance_packet_all_visible_w ? advance_packet_candidate_count_w : 4'd1;
+  assign advance_packet_last_sample_w =
+    advance_sample_w + {2'd0, advance_packet_count_w} - 6'd1;
+  assign advance_packet_sample_last_in_component_w =
+    (advance_packet_last_sample_w == advance_component_sample_last_w);
+  assign advance_packet_component_last_w =
+    (advance_component_w == 2'd2) && advance_packet_sample_last_in_component_w;
+  assign advance_packet_block_last_w =
+    advance_packet_component_last_w &&
+    (advance_leaf_count_w == (active_leaf_count_w - 7'd1));
+  assign advance_packet_segment_last_w = advance_packet_block_last_w;
+  assign advance_packet_output_last_w =
+    advance_packet_segment_last_w &&
+    (stream_last_on_segment_end || frame_last_segment);
+  always_comb begin
+    advance_packet_cache_data_w = '0;
+    advance_packet_pad_data_w = '0;
+    for (int i = 0; i < OUTPUT_SAMPLES; i = i + 1) begin
+      if (i < advance_packet_count_w) begin
+        advance_packet_cache_data_w[i * SAMPLE_BITS +: SAMPLE_BITS] =
+          advance_cache_hit_data_w[
+            (advance_axi_byte_offset_w + (i * SAMPLE_BYTES)) * 8 +: SAMPLE_BITS];
+        advance_packet_pad_data_w[i * SAMPLE_BITS +: SAMPLE_BITS] = advance_pad_sample_w;
+      end
+    end
+  end
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       state_q <= ST_IDLE;
@@ -400,7 +626,8 @@ module ff_axi4_frame_reader #(
       leaf_count_q <= 7'd0;
       component_q <= 2'd0;
       sample_q <= 6'd0;
-      m_axi_arvalid <= 1'b0;
+      arvalid_hold_q <= 1'b0;
+      araddr_hold_q <= '0;
       m_axi_rready <= 1'b0;
       sample_valid <= 1'b0;
       sample_data <= '0;
@@ -420,7 +647,8 @@ module ff_axi4_frame_reader #(
         leaf_count_q <= 7'd0;
         component_q <= 2'd0;
         sample_q <= 6'd0;
-        m_axi_arvalid <= 1'b0;
+        arvalid_hold_q <= 1'b0;
+        araddr_hold_q <= '0;
         m_axi_rready <= 1'b0;
         sample_valid <= 1'b0;
         sample_count <= 4'd0;
@@ -437,34 +665,51 @@ module ff_axi4_frame_reader #(
             state_q <= ST_IDLE;
             done <= 1'b1;
           end else begin
-            state_q <= ST_SKIP;
-            if (packet_sample_last_in_component_w) begin
-              sample_q <= 6'd0;
-              if (component_q == 2'd2) begin
-                component_q <= 2'd0;
-                leaf_count_q <= leaf_count_q + 7'd1;
-                if (RASTER_BLOCK_ORDER) begin
-                  if ({1'b0, raster_col_q} == (active_cols_w - 4'd1)) begin
-                    raster_col_q <= 3'd0;
-                    raster_row_q <= raster_row_q + 3'd1;
-                  end else begin
-                    raster_col_q <= raster_col_q + 3'd1;
-                  end
+            scan_q <= advance_scan_w;
+            raster_col_q <= advance_raster_col_w;
+            raster_row_q <= advance_raster_row_w;
+            leaf_count_q <= advance_leaf_count_w;
+            component_q <= advance_component_w;
+            sample_q <= advance_sample_w;
+
+            // Packet-aware lookahead: after a packet is accepted, immediately
+            // prepare the next packet or issue its AXI read. The slow ST_SKIP
+            // fallback remains for inactive Morton leaves in partial CTUs.
+            if (advance_leaf_active_w) begin
+              if (advance_in_visible_w) begin
+                if (advance_cache_hit_w) begin
+                  active_axi_word_q <= advance_cache_hit_data_w;
+                  sample_data <= advance_packet_cache_data_w;
+                  sample_count <= advance_packet_count_w;
+                  sample_last <= advance_packet_output_last_w;
+                  sample_valid <= 1'b1;
+                  state_q <= ST_VALID;
                 end else begin
-                  scan_q <= scan_q + 6'd1;
+                  if (m_axi_arready) begin
+                    m_axi_rready <= 1'b1;
+                    state_q <= ST_WAIT_R;
+                  end else begin
+                    arvalid_hold_q <= 1'b1;
+                    araddr_hold_q <= advance_axi_word_addr_w;
+                    state_q <= ST_ADDR;
+                  end
                 end
               end else begin
-                component_q <= component_q + 2'd1;
+                sample_data <= advance_packet_pad_data_w;
+                sample_count <= advance_packet_count_w;
+                sample_last <= advance_packet_output_last_w;
+                sample_valid <= 1'b1;
+                state_q <= ST_PAD;
               end
             end else begin
-              sample_q <= sample_q + {2'd0, sample_count};
+              state_q <= ST_SKIP;
             end
           end
         end
 
         case (state_q)
           ST_IDLE: begin
-            m_axi_arvalid <= 1'b0;
+            arvalid_hold_q <= 1'b0;
             m_axi_rready <= 1'b0;
           end
           ST_SKIP: begin
@@ -478,8 +723,14 @@ module ff_axi4_frame_reader #(
                   sample_valid <= 1'b1;
                   state_q <= ST_VALID;
                 end else begin
-                  m_axi_arvalid <= 1'b1;
-                  state_q <= ST_ADDR;
+                  if (m_axi_arready) begin
+                    m_axi_rready <= 1'b1;
+                    state_q <= ST_WAIT_R;
+                  end else begin
+                    arvalid_hold_q <= 1'b1;
+                    araddr_hold_q <= axi_word_addr_w;
+                    state_q <= ST_ADDR;
+                  end
                 end
               end else begin
                 sample_data <= packet_pad_data_w;
@@ -497,7 +748,7 @@ module ff_axi4_frame_reader #(
           end
           ST_ADDR: begin
             if (m_axi_arvalid && m_axi_arready) begin
-              m_axi_arvalid <= 1'b0;
+              arvalid_hold_q <= 1'b0;
               m_axi_rready <= 1'b1;
               state_q <= ST_WAIT_R;
             end

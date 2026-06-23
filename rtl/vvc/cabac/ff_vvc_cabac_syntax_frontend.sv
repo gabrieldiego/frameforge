@@ -43,6 +43,7 @@ module ff_vvc_cabac_syntax_frontend #(
   localparam logic [7:0] PALETTE_PKT_ESCAPE_Y  = 8'h86;
   localparam logic [7:0] PALETTE_PKT_ESCAPE_CB = 8'h87;
   localparam logic [7:0] PALETTE_PKT_ESCAPE_CR = 8'h88;
+  localparam logic [7:0] PALETTE_PKT_INDEX4    = 8'h80;
   localparam logic [7:0] IBC_PKT_CU            = 8'h89;
   localparam logic [7:0] TS_PKT_CU_START       = 8'h8A;
   localparam logic [7:0] TS_PKT_COEFF_Y        = 8'h8B;
@@ -133,6 +134,8 @@ module ff_vvc_cabac_syntax_frontend #(
   logic [5:0] eg0_prefix_count;
   logic [31:0] eg0_suffix_pattern;
   logic [5:0] eg0_suffix_count;
+  logic [31:0] eg0_combined_pattern;
+  logic [5:0] eg0_combined_count;
   logic [31:0] eg0_symbol_work;
   logic [5:0] eg0_order_work;
   logic [3:0] eg0_i;
@@ -140,6 +143,8 @@ module ff_vvc_cabac_syntax_frontend #(
   logic [5:0] eg5_prefix_count;
   logic [31:0] eg5_suffix_pattern;
   logic [5:0] eg5_suffix_count;
+  logic [31:0] eg5_combined_pattern;
+  logic [5:0] eg5_combined_count;
   logic [31:0] eg5_symbol_work;
   logic [5:0] eg5_order_work;
   logic [3:0] eg5_i;
@@ -147,6 +152,8 @@ module ff_vvc_cabac_syntax_frontend #(
   logic [5:0] eg1_prefix_count;
   logic [31:0] eg1_suffix_pattern;
   logic [5:0] eg1_suffix_count;
+  logic [31:0] eg1_combined_pattern;
+  logic [5:0] eg1_combined_count;
   logic [31:0] eg1_symbol_work;
   logic [5:0] eg1_order_work;
   logic [3:0] eg1_i;
@@ -207,6 +214,10 @@ module ff_vvc_cabac_syntax_frontend #(
   logic escape_current_valid_w;
   logic palette_raw_cu_last;
   logic output_slot_ready;
+  logic [7:0] index4_pos_w [0:3];
+  logic [7:0] index4_value_w [0:3];
+  logic [7:0] palette_index_count_next4_w;
+  logic palette_index4_cu_done_w;
 
   assign output_slot_ready = !m_axis_valid || m_axis_ready;
   assign raw_symbol_ready =
@@ -216,6 +227,17 @@ module ff_vvc_cabac_syntax_frontend #(
   assign ctu_ready = 1'b0;
   assign palette_raw_cu_last = raw_symbol_data[27];
   assign residual_axis_ready = output_slot_ready;
+  assign palette_index_count_next4_w = palette_index_count_q + 8'd4;
+  assign palette_index4_cu_done_w =
+    palette_raw_cu_last || (palette_index_count_next4_w >= 8'd64);
+  assign index4_pos_w[0] = palette_index_count_q;
+  assign index4_pos_w[1] = palette_index_count_q + 8'd1;
+  assign index4_pos_w[2] = palette_index_count_q + 8'd2;
+  assign index4_pos_w[3] = palette_index_count_q + 8'd3;
+  assign index4_value_w[0] = {3'd0, raw_symbol_data[4:0]};
+  assign index4_value_w[1] = {3'd0, raw_symbol_data[9:5]};
+  assign index4_value_w[2] = {3'd0, raw_symbol_data[14:10]};
+  assign index4_value_w[3] = {3'd0, raw_symbol_data[19:15]};
 
   always @* begin
     case (ts_component_q)
@@ -253,6 +275,8 @@ module ff_vvc_cabac_syntax_frontend #(
     eg0_suffix_pattern = eg0_symbol_work;
     eg0_suffix_count = eg0_order_work;
   end
+  assign eg0_combined_pattern = (eg0_prefix_pattern << eg0_suffix_count) | eg0_suffix_pattern;
+  assign eg0_combined_count = eg0_prefix_count + eg0_suffix_count;
 
   always @* begin
     case (escape_pos_q[3:2])
@@ -303,6 +327,8 @@ module ff_vvc_cabac_syntax_frontend #(
     eg5_suffix_pattern = eg5_symbol_work;
     eg5_suffix_count = eg5_order_work;
   end
+  assign eg5_combined_pattern = (eg5_prefix_pattern << eg5_suffix_count) | eg5_suffix_pattern;
+  assign eg5_combined_count = eg5_prefix_count + eg5_suffix_count;
 
   always @* begin
     eg1_prefix_pattern = 32'd0;
@@ -324,6 +350,8 @@ module ff_vvc_cabac_syntax_frontend #(
     eg1_suffix_pattern = eg1_symbol_work;
     eg1_suffix_count = eg1_order_work;
   end
+  assign eg1_combined_pattern = (eg1_prefix_pattern << eg1_suffix_count) | eg1_suffix_pattern;
+  assign eg1_combined_count = eg1_prefix_count + eg1_suffix_count;
 
   always @* begin
     ibc_abs_mvd_x = ibc_mvd_x_q[15] ? (~ibc_mvd_x_q + 16'sd1) : ibc_mvd_x_q;
@@ -417,6 +445,7 @@ module ff_vvc_cabac_syntax_frontend #(
       trunc_pattern = {24'd0, trunc_level + trunc_val - trunc_b};
       trunc_bit_count = trunc_thresh + 6'd1;
     end
+
   end
 
   ff_vvc_residual_symbol_emitter_4x4 #(
@@ -569,11 +598,11 @@ module ff_vvc_cabac_syntax_frontend #(
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BINS_EP;
           // H.266 cu_palette_info() codes palette_predictor_run as EG0
-          // bypass syntax. Keep prefix and suffix as separate bypass groups
-          // so the RTL CABAC stream matches the Rust reference byte-for-byte.
-          m_axis_data <= (eg0_prefix_pattern << 6) | {26'd0, eg0_prefix_count};
+          // bypass syntax. Emit the whole EG0 bin string in one bypass group;
+          // the syntax has no packet boundary between prefix and suffix.
+          m_axis_data <= (eg0_combined_pattern << 6) | {26'd0, eg0_combined_count};
           m_axis_last <= 1'b0;
-          state_q <= ST_PAL_PREDICTOR_RUN_SUFFIX;
+          state_q <= ST_PAL_ENTRY_COUNT;
         end
 
         ST_PAL_PREDICTOR_RUN_SUFFIX: begin
@@ -588,10 +617,11 @@ module ff_vvc_cabac_syntax_frontend #(
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BINS_EP;
           // H.266 cu_palette_info() codes num_signalled_palette_entries as
-          // EG0 bypass syntax, matching encode_exp_golomb_ep() in software.
-          m_axis_data <= (eg0_prefix_pattern << 6) | {26'd0, eg0_prefix_count};
+          // EG0 bypass syntax. Emit prefix and suffix as one bypass group to
+          // avoid an artificial CABAC frontend cycle.
+          m_axis_data <= (eg0_combined_pattern << 6) | {26'd0, eg0_combined_count};
           m_axis_last <= 1'b0;
-          state_q <= ST_PAL_ENTRY_COUNT_SUFFIX;
+          state_q <= pending_raw_last_q ? ST_PAL_TERMINATE : ST_IDLE;
         end
 
         ST_PAL_ENTRY_COUNT_SUFFIX: begin
@@ -718,6 +748,10 @@ module ff_vvc_cabac_syntax_frontend #(
                        (trunc_num_symbols > 8'd1)) begin
             m_axis_valid <= 1'b1;
             m_axis_kind <= SYMBOL_BINS_EP;
+            // H.266 7.3.11.6 emits palette_idx_idc values as consecutive
+            // bypass bins within each 16-sample palette subset. Preserve one
+            // truncated-binary packet per index so the aligned-bypass CABAC
+            // path stays byte-exact with the software reference.
             m_axis_data <= (trunc_pattern << 6) | {26'd0, trunc_bit_count};
             m_axis_last <= 1'b0;
             palette_level_emit_mask_q[index_level_pos_q[3:0]] <= 1'b0;
@@ -767,14 +801,16 @@ module ff_vvc_cabac_syntax_frontend #(
             m_axis_kind <= SYMBOL_BINS_EP;
             // H.266 7.3.11.6 places palette_escape_val after each 16-sample
             // index subset. Table 130 marks it as bypass-coded and 9.3.3 uses
-            // EG5 binarization, split here into prefix and suffix groups to
-            // mirror the Rust CABAC writer.
+            // EG5 binarization. Emit the full EG5 bin string as one bypass
+            // group; the syntax has no packet boundary between prefix/suffix,
+            // and this avoids an artificial CABAC frontend cycle per escape.
             // TODO(area): once escape values are streamed by subset, consume
             // the live escape packet here instead of indexing the full-CU
             // palette_escape_*_q banks.
-            m_axis_data <= (eg5_prefix_pattern << 6) | {26'd0, eg5_prefix_count};
+            m_axis_data <= (eg5_combined_pattern << 6) | {26'd0, eg5_combined_count};
             m_axis_last <= 1'b0;
-            state_q <= ST_PAL_ESCAPE_SUFFIX;
+            escape_pos_q <= escape_pos_q + 8'd1;
+            state_q <= ST_PAL_ESCAPE_SEEK;
           end else begin
             state_q <= ST_PAL_ESCAPE_SEEK;
           end
@@ -863,9 +899,9 @@ module ff_vvc_cabac_syntax_frontend #(
         ST_IBC_MVD_MINUS2_X_PREFIX: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BINS_EP;
-          m_axis_data <= (eg1_prefix_pattern << 6) | {26'd0, eg1_prefix_count};
+          m_axis_data <= (eg1_combined_pattern << 6) | {26'd0, eg1_combined_count};
           m_axis_last <= 1'b0;
-          state_q <= ST_IBC_MVD_MINUS2_X_SUFFIX;
+          state_q <= ST_IBC_MVD_SIGN_X;
         end
 
         ST_IBC_MVD_MINUS2_X_SUFFIX: begin
@@ -893,9 +929,9 @@ module ff_vvc_cabac_syntax_frontend #(
         ST_IBC_MVD_MINUS2_Y_PREFIX: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BINS_EP;
-          m_axis_data <= (eg1_prefix_pattern << 6) | {26'd0, eg1_prefix_count};
+          m_axis_data <= (eg1_combined_pattern << 6) | {26'd0, eg1_combined_count};
           m_axis_last <= 1'b0;
-          state_q <= ST_IBC_MVD_MINUS2_Y_SUFFIX;
+          state_q <= ST_IBC_MVD_SIGN_Y;
         end
 
         ST_IBC_MVD_MINUS2_Y_SUFFIX: begin
@@ -1160,6 +1196,33 @@ module ff_vvc_cabac_syntax_frontend #(
                   // flags, and truncated index bins. End-of-CU and end-of-CABAC
                   // are separate signals: every CU must flush its own index map,
                   // while only the final CU terminates the CABAC stream.
+                  state_q <= palette_raw_cu_last ? ST_PAL_INDEX_TRANSPOSE : ST_IDLE;
+                end else if (raw_symbol_last) begin
+                  m_axis_valid <= 1'b1;
+                  m_axis_kind <= SYMBOL_BIN_TRM;
+                  m_axis_data <= 32'd1;
+                  m_axis_last <= 1'b1;
+                  state_q <= ST_IDLE;
+                end
+              end
+
+              PALETTE_PKT_INDEX4: begin
+                // Internal packetization only: four palette_idx_idc values are
+                // packed into one source symbol to reduce RTL collection
+                // bubbles. The following ST_PAL_INDEX_* states still emit the
+                // H.266 7.3.11.6 index-map syntax in the same subset order as
+                // the software model.
+                for (int i = 0; i < 4; i = i + 1) begin
+                  if (index4_pos_w[i] < 8'd64) begin
+                    palette_indices_q[index4_pos_w[i][5:0]] <= index4_value_w[i];
+                    if (palette_escape_present_q &&
+                        (index4_value_w[i] == palette_max_index_q)) begin
+                      palette_escape_mask_q[index4_pos_w[i][5:0]] <= 1'b1;
+                    end
+                  end
+                end
+                palette_index_count_q <= palette_index_count_next4_w;
+                if (palette_index4_cu_done_w && (palette_max_index_q > 8'd0)) begin
                   state_q <= palette_raw_cu_last ? ST_PAL_INDEX_TRANSPOSE : ST_IDLE;
                 end else if (raw_symbol_last) begin
                   m_axis_valid <= 1'b1;

@@ -45,8 +45,7 @@ module ff_vvc_rbsp_payload_stream (
   end
 
   assign s_axis_ready = (state_q == ST_STREAM) && (!hold_valid_q || m_axis_ready);
-  assign m_axis_valid =
-    (state_q == ST_STREAM) ? (hold_valid_q && s_axis_valid) : 1'b1;
+  assign m_axis_valid = (state_q == ST_STREAM) ? hold_valid_q : 1'b1;
   assign m_axis_data = (state_q == ST_STREAM) ? hold_byte_q : tail_byte_q;
   assign m_axis_last =
     (state_q == ST_TAIL_FINAL) || (state_q == ST_TAIL_EXTRA);
@@ -69,13 +68,20 @@ module ff_vvc_rbsp_payload_stream (
 
       case (state_q)
         ST_STREAM: begin
+          if (hold_valid_q && m_axis_ready) begin
+            hold_valid_q <= 1'b0;
+          end
           if (s_axis_valid && s_axis_ready) begin
             if (s_axis_last) begin
               hold_valid_q <= 1'b0;
               if (s_axis_last_byte_bits == 3'd0) begin
+                // H.266 7.3.7 byte_alignment(): byte-aligned CABAC payloads
+                // keep the final CABAC byte, then append rbsp_trailing_bits().
                 tail_byte_q <= s_axis_data;
                 state_q <= ST_TAIL_HELD;
               end else begin
+                // H.266 7.3.7 byte_alignment(): non-byte-aligned final bytes
+                // replace unused bits with a stop bit and zero padding.
                 tail_byte_q <= rbsp_tail_byte;
                 state_q <= ST_TAIL_FINAL;
               end

@@ -41,6 +41,9 @@ VVC_BLOCK_WAVEFORM_BLOCKS = [
     "bin_fifo",
     "cabac_writer",
     "rbsp_writer",
+    "annexb_slice",
+    "slice_ep",
+    "top_output_mux",
     "axi_writer",
 ]
 
@@ -324,6 +327,14 @@ def write_vvc_cycle_metrics(
             )
         reader_accept = int(pipeline_counts.get("reader_sample_accept", 0))
         reader_backpressure = int(pipeline_counts.get("reader_backpressure", 0))
+        reader_cache_hit = int(pipeline_counts.get("frame_reader_cache_hit", 0))
+        reader_cache_miss = int(pipeline_counts.get("frame_reader_cache_miss", 0))
+        reader_advance_cache_hit = int(
+            pipeline_counts.get("frame_reader_advance_cache_hit", 0)
+        )
+        reader_advance_cache_miss = int(
+            pipeline_counts.get("frame_reader_advance_cache_miss", 0)
+        )
         source_accept = int(pipeline_counts.get("source_sample_accept", 0))
         source_backpressure = int(pipeline_counts.get("source_backpressure", 0))
         input_fifo_nonempty = int(pipeline_counts.get("input_fifo_nonempty", 0))
@@ -366,6 +377,13 @@ def write_vvc_cycle_metrics(
             ),
             "frame_reader_to_fifo_utilization": ratio(
                 reader_accept, reader_accept + reader_backpressure
+            ),
+            "frame_reader_cache_hit_rate": ratio(
+                reader_cache_hit, reader_cache_hit + reader_cache_miss
+            ),
+            "frame_reader_advance_cache_hit_rate": ratio(
+                reader_advance_cache_hit,
+                reader_advance_cache_hit + reader_advance_cache_miss,
             ),
             "input_fifo_core_utilization": ratio(
                 source_accept, source_accept + source_backpressure
@@ -914,6 +932,30 @@ async def collect_stream(
         try:
             return int(node.value)
         except ValueError:
+            if name == "ctu_symbol_data":
+                ctu_debug = {
+                    "ctu_state": signal_debug_value("ctu_symbols.state_q"),
+                    "leaf_cbf": signal_debug_value("ctu_symbols.leaf_cbf_q"),
+                    "chroma_cbf_cb": signal_debug_value("ctu_symbols.chroma_cbf_cb_q"),
+                    "chroma_cbf_cr": signal_debug_value("ctu_symbols.chroma_cbf_cr_q"),
+                    "cur_luma_abs": signal_debug_value("ctu_symbols.cur_luma_abs_level"),
+                    "cur_luma_negative": signal_debug_value("ctu_symbols.cur_luma_negative"),
+                    "selected_luma_abs": signal_debug_value("ctu_symbols.selected_luma_abs_level_w"),
+                    "luma_has_coeff": signal_debug_value("ctu_symbols.luma_has_coeff"),
+                    "residual_quant_idle": signal_debug_value("residual_quant_idle_w"),
+                    "luma_quant_pending": signal_debug_value("luma_tu_quant_pending_q"),
+                    "luma_quant_active": signal_debug_value("luma_quant_active_q"),
+                    "luma_quant_busy": signal_debug_value("luma_quant_busy_w"),
+                    "luma_quant_queued": signal_debug_value("luma_quant_queued_q"),
+                    "chroma_quant_pending": signal_debug_value("chroma_tu_quant_pending_q"),
+                    "chroma_quant_active": signal_debug_value("chroma_quant_active_q"),
+                    "chroma_quant_busy": signal_debug_value("chroma_quant_busy_w"),
+                    "chroma_quant_queued": signal_debug_value("chroma_quant_queued_q"),
+                }
+                raise AssertionError(
+                    f"sampled {name} while it contains unknown bits: {node.value}; "
+                    f"debug={ctu_debug}"
+                ) from None
             raise AssertionError(f"sampled {name} while it contains unknown bits: {node.value}") from None
 
     def debug_value(node):
@@ -936,8 +978,12 @@ async def collect_stream(
     syntax_records = []
     input_leaf_trace_path = os.environ.get(f"FRAMEFORGE_RTL_VVC_INPUT_LEAVES_OUT_{frames}F")
     palette_fetch_trace_path = os.environ.get(f"FRAMEFORGE_RTL_VVC_PALETTE_FETCH_OUT_{frames}F")
+    ibc_hash_trace_path = os.environ.get(f"FRAMEFORGE_RTL_VVC_IBC_HASH_OUT_{frames}F")
+    ibc_mask_trace_path = os.environ.get(f"FRAMEFORGE_RTL_VVC_IBC_MASK_OUT_{frames}F")
     input_leaf_records = []
     palette_fetch_records = []
+    ibc_hash_records = []
+    ibc_mask_records = []
 
     def write_trace_records():
         if path := os.environ.get(f"FRAMEFORGE_RTL_CTU_SYMBOLS_OUT_{frames}F"):
@@ -965,6 +1011,18 @@ async def collect_stream(
             lines = [
                 f"{origin_x:02d} {origin_y:02d} {index:04d} {valid:d} {y:02x} {cb:02x} {cr:02x}\n"
                 for origin_x, origin_y, index, valid, y, cb, cr in palette_fetch_records
+            ]
+            Path(path).write_text("".join(lines))
+        if path := ibc_hash_trace_path:
+            lines = [
+                f"{index:02d} {origin_x:02d} {origin_y:02d} {full:d} {hash_value:08x} {count:d} {last:d}\n"
+                for index, origin_x, origin_y, full, hash_value, count, last in ibc_hash_records
+            ]
+            Path(path).write_text("".join(lines))
+        if path := ibc_mask_trace_path:
+            lines = [
+                f"{mask:016x} {refs:096x}\n"
+                for mask, refs in ibc_mask_records
             ]
             Path(path).write_text("".join(lines))
 
@@ -1119,6 +1177,16 @@ async def collect_stream(
         2: "flush",
         3: "out",
     }
+    annexb_slice_state_names = {
+        0: "idle",
+        1: "start_code",
+        2: "nal_header",
+        3: "prefix_clear",
+        4: "prefix_fields",
+        5: "prefix_flush",
+        6: "prefix_drain",
+        7: "payload_rbsp",
+    }
     state_counts = {}
     pipeline_counts = {}
     block_waveform = BlockWaveformWriter(
@@ -1206,6 +1274,25 @@ async def collect_stream(
                     state_counts,
                     f"frame_reader_{frame_reader_state_names.get(frame_reader_state, f'unknown_{frame_reader_state}')}",
                 )
+            if signal_int("frame_reader.cache_hit_w") == 1:
+                if (
+                    signal_int("frame_reader.state_q") == 1
+                    and signal_int("frame_reader.leaf_active_w") == 1
+                    and signal_int("frame_reader.in_visible_w") == 1
+                ):
+                    increment_counter(pipeline_counts, "frame_reader_cache_hit")
+            if signal_int("frame_reader.current_read_request_w") == 1:
+                increment_counter(pipeline_counts, "frame_reader_cache_miss")
+            if signal_int("frame_reader.advance_cache_hit_w") == 1:
+                if (
+                    signal_int("frame_reader.sample_fire_w") == 1
+                    and signal_int("frame_reader.packet_segment_last_w") != 1
+                    and signal_int("frame_reader.advance_leaf_active_w") == 1
+                    and signal_int("frame_reader.advance_in_visible_w") == 1
+                ):
+                    increment_counter(pipeline_counts, "frame_reader_advance_cache_hit")
+            if signal_int("frame_reader.advance_read_request_w") == 1:
+                increment_counter(pipeline_counts, "frame_reader_advance_cache_miss")
             ctu_state = signal_int("ctu_symbols.state_q")
             if ctu_state is not None:
                 increment_counter(
@@ -1268,6 +1355,13 @@ async def collect_stream(
                 increment_counter(
                     state_counts,
                     f"bit_writer_{bit_writer_state_names.get(bit_writer_state, f'unknown_{bit_writer_state}')}",
+                )
+            annexb_slice_state = signal_int("annexb_slice_stream.state_q")
+            if annexb_slice_state is not None:
+                increment_counter(
+                    state_counts,
+                    "annexb_slice_"
+                    f"{annexb_slice_state_names.get(annexb_slice_state, f'unknown_{annexb_slice_state}')}",
                 )
 
             if hasattr(dut, "reader_axis_valid") and value_is_one(
@@ -1389,6 +1483,28 @@ async def collect_stream(
                     increment_counter(pipeline_counts, "bit_writer_output_accept")
                 else:
                     increment_counter(pipeline_counts, "bit_writer_output_backpressure")
+                    blocked_generated_state = signal_int("generated_out_state_q")
+                    blocked_annexb_state = signal_int("annexb_slice_stream.state_q")
+                    increment_counter(
+                        pipeline_counts,
+                        f"bit_writer_blocked_generated_state_{blocked_generated_state}",
+                    )
+                    increment_counter(
+                        pipeline_counts,
+                        f"bit_writer_blocked_annexb_state_{blocked_annexb_state}",
+                    )
+                    if blocked_generated_state != 2:
+                        increment_counter(pipeline_counts, "bit_writer_blocked_not_cabac")
+                    if blocked_annexb_state != 7:
+                        increment_counter(pipeline_counts, "bit_writer_blocked_annexb_not_payload")
+                    if signal_int("slice_stream_ready") != 1:
+                        increment_counter(pipeline_counts, "bit_writer_blocked_slice_not_ready")
+                    if signal_int("annexb_slice_stream.ep_s_ready") != 1:
+                        increment_counter(pipeline_counts, "bit_writer_blocked_ep_s_not_ready")
+                    if signal_int("annexb_slice_stream.ep_m_ready") != 1:
+                        increment_counter(pipeline_counts, "bit_writer_blocked_ep_m_not_ready")
+                    if signal_int("rbsp_output_ready") != 1:
+                        increment_counter(pipeline_counts, "bit_writer_blocked_top_not_ready")
             if signal_int("ctu_symbols.residual_axis_valid") == 1:
                 if signal_int("ctu_symbols.residual_axis_ready") == 1:
                     increment_counter(pipeline_counts, "ctu_residual_symbol_accept")
@@ -1407,7 +1523,7 @@ async def collect_stream(
                 else:
                     increment_counter(pipeline_counts, "cabac_byte_backpressure")
             if signal_int("rbsp_payload_valid") == 1:
-                if signal_int("rbsp_payload_ready") == 1:
+                if signal_int("slice_stream_ready") == 1:
                     increment_counter(pipeline_counts, "rbsp_payload_accept")
                 else:
                     increment_counter(pipeline_counts, "rbsp_payload_backpressure")
@@ -1489,7 +1605,25 @@ async def collect_stream(
                         signal_int("cabac_stream_valid"),
                         signal_int("cabac_stream_ready"),
                         signal_int("rbsp_payload_valid"),
-                        signal_int("rbsp_payload_ready"),
+                        signal_int("slice_stream_ready"),
+                    ),
+                    "annexb_slice": block_state(
+                        signal_int("rbsp_payload_valid"),
+                        signal_int("slice_stream_ready"),
+                        signal_int("slice_stream_valid"),
+                        signal_int("rbsp_output_ready"),
+                    ),
+                    "slice_ep": block_state(
+                        signal_int("annexb_slice_stream.ep_s_valid"),
+                        signal_int("annexb_slice_stream.ep_s_ready"),
+                        signal_int("annexb_slice_stream.ep_m_valid"),
+                        signal_int("annexb_slice_stream.ep_m_ready"),
+                    ),
+                    "top_output_mux": block_state(
+                        signal_int("slice_stream_valid"),
+                        signal_int("rbsp_output_ready"),
+                        signal_int("m_axis_valid"),
+                        signal_int("m_axis_ready"),
                     ),
                     "axi_writer": block_state(
                         signal_int("m_axis_valid"),
@@ -1547,6 +1681,34 @@ async def collect_stream(
                         signal_int("gen_palette_symbolizer.palette_symbolizer.feed_y_sample_q"),
                         signal_int("gen_palette_symbolizer.palette_symbolizer.feed_cb_sample_q"),
                         signal_int("gen_palette_symbolizer.palette_symbolizer.feed_cr_sample_q"),
+                    )
+                )
+            if (
+                ibc_hash_trace_path is not None
+                and signal_int("ibc_sample_valid") == 1
+                and signal_int("ibc_cu_last_sample_w") == 1
+            ):
+                ibc_hash_records.append(
+                    (
+                        signal_int("input_luma_tu_index_w"),
+                        signal_int("input_luma_tu_origin_x_w"),
+                        signal_int("input_luma_tu_origin_y_w"),
+                        signal_int("ibc_cu_full_visible_w"),
+                        signal_int("ibc_hash_matcher.hash_after_packet"),
+                        signal_int("packet_axis_count_w"),
+                        signal_int("input_frame_last_w"),
+                    )
+                )
+            if (
+                ibc_mask_trace_path is not None
+                and not ibc_mask_records
+                and signal_int("input_active_q") == 0
+                and signal_int("ibc_matcher_idle") == 1
+            ):
+                ibc_mask_records.append(
+                    (
+                        signal_int("ctu_cu_ibc_mask"),
+                        signal_int("ctu_cu_ibc_ref_indices"),
                     )
                 )
             if (
@@ -1875,27 +2037,63 @@ async def vvc_encoder_matches_software_stream(dut):
             return
         if not hasattr(dut, "frame_quant_pending_q") and not hasattr(dut, "pending_output_q"):
             return
-        for _ in range(5000):
+        luma_last_count = 0
+        luma_quant_start_count = 0
+        luma_quant_done_count = 0
+        chroma_last_count = 0
+        chroma_quant_start_count = 0
+        chroma_quant_done_count = 0
+        for _ in range(100000):
             await RisingEdge(dut.clk)
+            await ReadOnly()
             try:
-                pending = int(dut.frame_quant_pending_q.value)
-            except ValueError:
-                pending = 0
+                luma_last_count += int(dut.input_luma_tu_last_sample_w.value)
+            except (AttributeError, ValueError):
+                pass
+            try:
+                luma_quant_start_count += int(dut.luma_quant_start_q.value)
+            except (AttributeError, ValueError):
+                pass
+            try:
+                luma_quant_done_count += int(dut.luma_quant_done_w.value)
+            except (AttributeError, ValueError):
+                pass
+            try:
+                chroma_last_count += int(dut.input_chroma_tu_last_cr_sample_w.value)
+            except (AttributeError, ValueError):
+                pass
+            try:
+                chroma_quant_start_count += int(dut.chroma_quant_start_q.value)
+            except (AttributeError, ValueError):
+                pass
+            try:
+                chroma_quant_done_count += int(dut.chroma_quant_done_w.value)
+            except (AttributeError, ValueError):
+                pass
+            pending = 0
+            for pending_name in (
+                "frame_quant_pending_q",
+                "luma_tu_quant_pending_q",
+                "chroma_tu_quant_pending_q",
+            ):
+                try:
+                    pending |= int(getattr(dut, pending_name).value)
+                except (AttributeError, ValueError):
+                    pass
             try:
                 output_pending = int(dut.pending_output_q.value)
             except (AttributeError, ValueError):
                 output_pending = 0
-            if pending or output_pending:
-                await RisingEdge(dut.clk)
-                await ReadOnly()
-                cb_direct = unpack_chroma_ac_levels(int(dut.quant_cb_ac_levels_q.value), bits=4)
-                cr_direct = unpack_chroma_ac_levels(int(dut.quant_cr_ac_levels_q.value), bits=4)
+            if output_pending:
                 dut._log.info(
-                    "RTL chroma quant direct cb_dc=%d cb_ac=%s cr_dc=%d cr_ac=%s",
-                    signed_value(int(dut.quant_cb_dc_level_q.value), 9),
-                    cb_direct,
-                    signed_value(int(dut.quant_cr_dc_level_q.value), 9),
-                    cr_direct,
+                    "RTL quant event counts luma_last=%d luma_start=%d luma_done=%d "
+                    "chroma_last=%d chroma_start=%d chroma_done=%d",
+                    luma_last_count,
+                    luma_quant_start_count,
+                    luma_quant_done_count,
+                    chroma_last_count,
+                    chroma_quant_start_count,
+                    chroma_quant_done_count,
                 )
                 try:
                     cb_ctu = unpack_chroma_ac_levels(int(dut.quant_cb_ac_levels_ctu_q[0].value), bits=4)

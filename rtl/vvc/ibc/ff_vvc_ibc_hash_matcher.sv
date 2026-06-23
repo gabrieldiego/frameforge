@@ -11,7 +11,8 @@ module ff_vvc_ibc_hash_matcher #(
   input  logic enable,
 
   input  logic sample_valid,
-  input  logic [7:0] sample_data,
+  input  logic [63:0] sample_data,
+  input  logic [3:0] sample_count,
   input  logic [5:0] cu_index,
   input  logic [15:0] cu_origin_x,
   input  logic [15:0] cu_origin_y,
@@ -45,10 +46,9 @@ module ff_vvc_ibc_hash_matcher #(
   localparam int STACK_DEPTH = 16;
 
   logic [31:0] current_hash_q;
-  logic [31:0] hash_after_xor;
-  logic [31:0] hash_after_mix0;
-  logic [31:0] hash_after_mix1;
-  logic [31:0] hash_after_sample;
+  logic [31:0] hash_lane_q [0:8];
+  logic [31:0] hash_after_packet;
+  logic [7:0] hash_sample_w [0:7];
   logic [31:0] hash_table_q [0:CU_COUNT - 1];
   logic hash_valid_q [0:CU_COUNT - 1];
   logic [5:0] ref_index_q [0:CU_COUNT - 1];
@@ -112,7 +112,7 @@ module ff_vvc_ibc_hash_matcher #(
   logic cur_luma_can_th_w;
   logic cur_luma_can_tv_w;
   logic [5:0] resolved_order_q [0:CU_COUNT - 1];
-  logic [5:0] resolved_count_q;
+  logic [6:0] resolved_count_q;
   logic [5:0] scan_pos_q;
   logic [5:0] pending_cu_index_q;
   logic scan_match_valid_q;
@@ -124,14 +124,31 @@ module ff_vvc_ibc_hash_matcher #(
   logic [5:0] selected_index_w;
   logic [5:0] cur_leaf_index_w;
   logic cur_leaf_hash_valid_w;
+  logic [5:0] stream_candidate_index_w;
+  logic stream_match_valid_w;
+  logic [5:0] stream_match_index_w;
 
   integer clear_i;
   genvar pack_i;
 
-  assign hash_after_xor = current_hash_q ^ {24'd0, sample_data};
-  assign hash_after_mix0 = hash_after_xor ^ (hash_after_xor << 13);
-  assign hash_after_mix1 = hash_after_mix0 ^ (hash_after_mix0 >> 17);
-  assign hash_after_sample = hash_after_mix1 ^ (hash_after_mix1 << 5);
+  always @* begin
+    hash_lane_q[0] = current_hash_q;
+    for (int i = 0; i < 8; i = i + 1) begin
+      hash_sample_w[i] = sample_data[i * 8 +: 8];
+      if (i < sample_count) begin
+        hash_lane_q[i + 1] =
+          ((hash_lane_q[i] ^ {24'd0, hash_sample_w[i]}) ^
+           ((hash_lane_q[i] ^ {24'd0, hash_sample_w[i]}) << 13));
+        hash_lane_q[i + 1] =
+          hash_lane_q[i + 1] ^ (hash_lane_q[i + 1] >> 17);
+        hash_lane_q[i + 1] =
+          hash_lane_q[i + 1] ^ (hash_lane_q[i + 1] << 5);
+      end else begin
+        hash_lane_q[i + 1] = hash_lane_q[i];
+      end
+    end
+    hash_after_packet = hash_lane_q[8];
+  end
 
   assign stack_pop_index = stack_count_q[3:0] - 4'd1;
   assign stack_pop_w_log2 = stack_w_log2[stack_pop_index];
@@ -191,10 +208,26 @@ module ff_vvc_ibc_hash_matcher #(
     cur_leaf_hash_valid_w &&
     hash_valid_q[scan_candidate_index_w] &&
     (hash_table_q[scan_candidate_index_w] == hash_table_q[pending_cu_index_q]);
-  assign scan_last_w = (scan_pos_q == (resolved_count_q - 6'd1));
+  assign scan_last_w = ({1'b0, scan_pos_q} == (resolved_count_q - 7'd1));
   assign selected_valid_w = scan_match_valid_q || scan_hit_w;
   assign selected_index_w = scan_match_valid_q ? scan_match_index_q : scan_candidate_index_w;
   assign idle = (state_q == ST_IDLE);
+
+  always @* begin
+    stream_match_valid_w = 1'b0;
+    stream_match_index_w = 6'd0;
+    stream_candidate_index_w = 6'd0;
+    for (int i = 0; i < CU_COUNT; i = i + 1) begin
+      if (({1'b0, i[5:0]} < resolved_count_q) && !stream_match_valid_w) begin
+        stream_candidate_index_w = resolved_order_q[i];
+        if (hash_valid_q[stream_candidate_index_w] &&
+            (hash_table_q[stream_candidate_index_w] == hash_after_packet)) begin
+          stream_match_valid_w = 1'b1;
+          stream_match_index_w = stream_candidate_index_w;
+        end
+      end
+    end
+  end
 
   generate
     for (pack_i = 0; pack_i < CU_COUNT; pack_i = pack_i + 1) begin : gen_pack_outputs
@@ -231,7 +264,7 @@ module ff_vvc_ibc_hash_matcher #(
       split_mtt_q <= 3'd0;
       split_implicit_mtt_q <= 3'd0;
       split_push_phase_q <= 2'd0;
-      resolved_count_q <= 6'd0;
+      resolved_count_q <= 7'd0;
       scan_pos_q <= 6'd0;
       pending_cu_index_q <= 6'd0;
       scan_match_valid_q <= 1'b0;
@@ -248,7 +281,7 @@ module ff_vvc_ibc_hash_matcher #(
       state_q <= ST_IDLE;
       clear_index_q <= 6'd0;
       stack_count_q <= 6'd0;
-      resolved_count_q <= 6'd0;
+      resolved_count_q <= 7'd0;
       scan_pos_q <= 6'd0;
       pending_cu_index_q <= 6'd0;
       scan_match_valid_q <= 1'b0;
@@ -275,7 +308,7 @@ module ff_vvc_ibc_hash_matcher #(
             stack_implicit_mtt[0] <= 3'd0;
             stack_count_q <= 6'd1;
             clear_index_q <= 6'd0;
-            resolved_count_q <= 6'd0;
+            resolved_count_q <= 7'd0;
             state_q <= ST_POP;
           end else begin
             clear_index_q <= clear_index_q + 6'd1;
@@ -415,7 +448,7 @@ module ff_vvc_ibc_hash_matcher #(
         end
 
         ST_RESOLVE_INIT: begin
-          if (!cur_leaf_hash_valid_w || (resolved_count_q == 6'd0)) begin
+          if (!cur_leaf_hash_valid_w || (resolved_count_q == 7'd0)) begin
             state_q <= ST_RESOLVE_COMMIT;
           end else begin
             state_q <= ST_RESOLVE_SCAN;
@@ -443,8 +476,8 @@ module ff_vvc_ibc_hash_matcher #(
           ibc_cu_mask[pending_cu_index_q] <= selected_valid_w;
           ref_index_q[pending_cu_index_q] <= selected_valid_w ? selected_index_w : 6'd0;
           if (cur_leaf_hash_valid_w) begin
-            resolved_order_q[resolved_count_q] <= pending_cu_index_q;
-            resolved_count_q <= resolved_count_q + 6'd1;
+            resolved_order_q[resolved_count_q[5:0]] <= pending_cu_index_q;
+            resolved_count_q <= resolved_count_q + 7'd1;
           end
           scan_pos_q <= 6'd0;
           scan_match_valid_q <= 1'b0;
@@ -465,8 +498,12 @@ module ff_vvc_ibc_hash_matcher #(
         if (cu_last_sample) begin
           current_hash_q <= HASH_OFFSET;
           if (cu_full_visible) begin
-            hash_table_q[cu_index] <= hash_after_sample;
+            hash_table_q[cu_index] <= hash_after_packet;
             hash_valid_q[cu_index] <= 1'b1;
+            ibc_cu_mask[cu_index] <= stream_match_valid_w;
+            ref_index_q[cu_index] <= stream_match_valid_w ? stream_match_index_w : 6'd0;
+            resolved_order_q[resolved_count_q[5:0]] <= cu_index;
+            resolved_count_q <= resolved_count_q + 7'd1;
           end else begin
             ibc_cu_mask[cu_index] <= 1'b0;
             hash_table_q[cu_index] <= 32'd0;
@@ -474,11 +511,11 @@ module ff_vvc_ibc_hash_matcher #(
             ref_index_q[cu_index] <= 6'd0;
           end
           if (ctu_last_sample) begin
-            state_q <= ST_CLEAR;
+            state_q <= ST_IDLE;
             clear_index_q <= 6'd0;
           end
         end else begin
-          current_hash_q <= hash_after_sample;
+          current_hash_q <= hash_after_packet;
         end
       end
     end

@@ -921,13 +921,13 @@ fn append_vvc_ibc_mvd_coding(
     }
     if abs_x > 0 {
         if abs_x > 1 {
-            encode_exp_golomb_ep(cabac, abs_x - 2, 1);
+            encode_exp_golomb_ep_combined(cabac, abs_x - 2, 1);
         }
         cabac.encode_bin_ep(mvd_x < 0);
     }
     if abs_y > 0 {
         if abs_y > 1 {
-            encode_exp_golomb_ep(cabac, abs_y - 2, 1);
+            encode_exp_golomb_ep_combined(cabac, abs_y - 2, 1);
         }
         cabac.encode_bin_ep(mvd_y < 0);
     }
@@ -1025,7 +1025,7 @@ fn append_vvc_palette_444_index_map(
                     // PaletteIndexMap equals MaxPaletteIndex. Per Table 130,
                     // palette_escape_val is bypass-coded; H.266 9.3.3 uses
                     // EG5 binarization for this syntax element.
-                    encode_exp_golomb_ep(cabac, value as u32, 5);
+                    encode_exp_golomb_ep_combined(cabac, value as u32, 5);
                 }
             }
         }
@@ -1393,7 +1393,7 @@ fn append_palette_syntax_token_bits(bits: &mut Vec<bool>, token: VvcPaletteSynta
 
 fn append_palette_syntax_token_cabac(cabac: &mut VvcCabacEncoder, token: VvcPaletteSyntaxToken) {
     match token.kind {
-        VvcPaletteSyntaxTokenKind::Eg0 { value } => encode_exp_golomb_ep(cabac, value, 0),
+        VvcPaletteSyntaxTokenKind::Eg0 { value } => encode_exp_golomb_ep_combined(cabac, value, 0),
         VvcPaletteSyntaxTokenKind::FixedLength { value, bit_count } => {
             cabac.encode_bins_ep(value, bit_count as u32);
         }
@@ -1412,7 +1412,7 @@ fn encode_trunc_bin_code_ep(cabac: &mut VvcCabacEncoder, symbol: u32, num_symbol
     }
 }
 
-fn encode_exp_golomb_ep(cabac: &mut VvcCabacEncoder, mut symbol: u32, mut count: u32) {
+fn encode_exp_golomb_ep_combined(cabac: &mut VvcCabacEncoder, mut symbol: u32, mut count: u32) {
     let mut bins = 0;
     let mut num_bins = 0;
     while symbol >= (1 << count) {
@@ -1424,8 +1424,7 @@ fn encode_exp_golomb_ep(cabac: &mut VvcCabacEncoder, mut symbol: u32, mut count:
     }
     bins <<= 1;
     num_bins += 1;
-    cabac.encode_bins_ep(bins, num_bins);
-    cabac.encode_bins_ep(symbol, count);
+    cabac.encode_bins_ep((bins << count) | symbol, num_bins + count);
 }
 
 #[cfg(test)]
