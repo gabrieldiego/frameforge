@@ -65,7 +65,9 @@ module ff_vvc_cabac_syntax_frontend #(
     ST_PAL_INDEX_TRANSPOSE,
     ST_PAL_INDEX_RUN_FLAG,
     ST_PAL_INDEX_COPY_ABOVE,
+    ST_PAL_INDEX_LEVEL_SEEK,
     ST_PAL_INDEX_LEVEL,
+    ST_PAL_ESCAPE_SEEK,
     ST_PAL_ESCAPE_PREFIX,
     ST_PAL_ESCAPE_SUFFIX,
     ST_IBC_CU_SKIP,
@@ -111,6 +113,7 @@ module ff_vvc_cabac_syntax_frontend #(
   logic       palette_have_previous_cu_q;
   logic       palette_predictor_run_present_q;
   logic [7:0] palette_indices_q [0:63];
+  logic [63:0] palette_escape_mask_q;
   // TODO(area): these escape banks mirror the upstream CU symbolizer storage.
   // Replace them with a subset-level escape stream so palette_escape_val can
   // be coded as packets arrive instead of buffering 3x64 bytes per palette CU.
@@ -118,6 +121,7 @@ module ff_vvc_cabac_syntax_frontend #(
   logic [7:0] palette_escape_cb_q [0:63];
   logic [7:0] palette_escape_cr_q [0:63];
   logic       palette_run_copy_flags_q [0:15];
+  logic [15:0] palette_level_emit_mask_q;
   logic [7:0] index_cur_pos_q;
   logic [7:0] index_min_sub_pos_q;
   logic [7:0] index_max_sub_pos_q;
@@ -184,9 +188,23 @@ module ff_vvc_cabac_syntax_frontend #(
   logic [5:0] trunc_thresh;
   logic [7:0] trunc_val;
   logic [7:0] trunc_b;
+  logic [7:0] index_level_seek_pos_w;
+  logic [3:0] index_level_group_mask_w;
+  logic [3:0] index_level_group_search_mask_w;
+  logic [7:0] index_level_next_group_pos_w;
+  logic index_level_seek_valid_w;
+  logic [3:0] index_level_next_rel_w;
+  logic index_level_next_emit_w;
   logic [7:0] escape_pos_q;
   logic [1:0] escape_component_q;
   logic [7:0] escape_cur_value;
+  logic [7:0] escape_seek_pos_w;
+  logic [15:0] escape_active_mask_q;
+  logic [3:0] escape_group_mask_w;
+  logic [3:0] escape_group_search_mask_w;
+  logic [7:0] escape_next_group_pos_w;
+  logic escape_seek_valid_w;
+  logic escape_current_valid_w;
   logic palette_raw_cu_last;
   logic output_slot_ready;
 
@@ -237,6 +255,27 @@ module ff_vvc_cabac_syntax_frontend #(
   end
 
   always @* begin
+    case (escape_pos_q[3:2])
+      2'd0: escape_group_mask_w = escape_active_mask_q[3:0];
+      2'd1: escape_group_mask_w = escape_active_mask_q[7:4];
+      2'd2: escape_group_mask_w = escape_active_mask_q[11:8];
+      default: escape_group_mask_w = escape_active_mask_q[15:12];
+    endcase
+    escape_group_search_mask_w = escape_group_mask_w & (4'hf << escape_pos_q[1:0]);
+    escape_seek_valid_w = |escape_group_search_mask_w;
+    escape_seek_pos_w = {index_min_sub_pos_q[7:4], escape_pos_q[3:2], 2'b00};
+    if (escape_group_search_mask_w[0]) begin
+      escape_seek_pos_w[1:0] = 2'd0;
+    end else if (escape_group_search_mask_w[1]) begin
+      escape_seek_pos_w[1:0] = 2'd1;
+    end else if (escape_group_search_mask_w[2]) begin
+      escape_seek_pos_w[1:0] = 2'd2;
+    end else begin
+      escape_seek_pos_w[1:0] = 2'd3;
+    end
+    escape_next_group_pos_w = {index_min_sub_pos_q[7:4], escape_pos_q[3:2], 2'b00} + 8'd4;
+    escape_current_valid_w =
+      (escape_pos_q < index_max_sub_pos_q) && escape_active_mask_q[escape_pos_q[3:0]];
     case (escape_component_q)
       2'd0: escape_cur_value = palette_escape_y_q[escape_pos_q[5:0]];
       2'd1: escape_cur_value = palette_escape_cb_q[escape_pos_q[5:0]];
@@ -301,6 +340,34 @@ module ff_vvc_cabac_syntax_frontend #(
   assign index_dist = index_cur_pos_q - index_prev_run_pos_q - 8'd1;
   assign index_scan_y = index_cur_pos_q[5:3];
   assign index_copy_above_present = (index_cur_pos_q != 8'd0) && (index_scan_y != 3'd0);
+  assign index_level_next_rel_w = index_level_pos_q[3:0] + 4'd1;
+  assign index_level_next_emit_w =
+    ((index_level_pos_q + 8'd1) < index_max_sub_pos_q) &&
+    palette_level_emit_mask_q[index_level_next_rel_w];
+
+  always @* begin
+    case (index_level_pos_q[3:2])
+      2'd0: index_level_group_mask_w = palette_level_emit_mask_q[3:0];
+      2'd1: index_level_group_mask_w = palette_level_emit_mask_q[7:4];
+      2'd2: index_level_group_mask_w = palette_level_emit_mask_q[11:8];
+      default: index_level_group_mask_w = palette_level_emit_mask_q[15:12];
+    endcase
+    index_level_group_search_mask_w =
+      index_level_group_mask_w & (4'hf << index_level_pos_q[1:0]);
+    index_level_seek_valid_w = |index_level_group_search_mask_w;
+    index_level_seek_pos_w = {index_min_sub_pos_q[7:4], index_level_pos_q[3:2], 2'b00};
+    if (index_level_group_search_mask_w[0]) begin
+      index_level_seek_pos_w[1:0] = 2'd0;
+    end else if (index_level_group_search_mask_w[1]) begin
+      index_level_seek_pos_w[1:0] = 2'd1;
+    end else if (index_level_group_search_mask_w[2]) begin
+      index_level_seek_pos_w[1:0] = 2'd2;
+    end else begin
+      index_level_seek_pos_w[1:0] = 2'd3;
+    end
+    index_level_next_group_pos_w =
+      {index_min_sub_pos_q[7:4], index_level_pos_q[3:2], 2'b00} + 8'd4;
+  end
 
   always @* begin
     if (index_previous_run_type_copy_above_q) begin
@@ -385,6 +452,9 @@ module ff_vvc_cabac_syntax_frontend #(
       palette_index_count_q <= 8'd0;
       palette_max_index_q <= 8'd0;
       palette_escape_present_q <= 1'b0;
+      palette_escape_mask_q <= 64'd0;
+      palette_level_emit_mask_q <= 16'd0;
+      escape_active_mask_q <= 16'd0;
       palette_have_previous_cu_q <= 1'b0;
       palette_predictor_run_present_q <= 1'b0;
       index_cur_pos_q <= 8'd0;
@@ -430,6 +500,9 @@ module ff_vvc_cabac_syntax_frontend #(
       palette_index_count_q <= 8'd0;
       palette_max_index_q <= 8'd0;
       palette_escape_present_q <= 1'b0;
+      palette_escape_mask_q <= 64'd0;
+      palette_level_emit_mask_q <= 16'd0;
+      escape_active_mask_q <= 16'd0;
       palette_have_previous_cu_q <= 1'b0;
       palette_predictor_run_present_q <= 1'b0;
       index_cur_pos_q <= 8'd0;
@@ -552,6 +625,7 @@ module ff_vvc_cabac_syntax_frontend #(
           index_prev_run_pos_q <= 8'd0;
           index_previous_run_type_copy_above_q <= 1'b0;
           index_prev_index_q <= 8'd0;
+          palette_level_emit_mask_q <= 16'd0;
           for (int i = 0; i < 16; i = i + 1) begin
             palette_run_copy_flags_q[i] <= 1'b0;
           end
@@ -561,9 +635,10 @@ module ff_vvc_cabac_syntax_frontend #(
         ST_PAL_INDEX_RUN_FLAG: begin
           if (index_cur_pos_q >= index_max_sub_pos_q) begin
             index_level_pos_q <= index_min_sub_pos_q;
-            state_q <= ST_PAL_INDEX_LEVEL;
+            state_q <= ST_PAL_INDEX_LEVEL_SEEK;
           end else if (index_cur_pos_q == 8'd0) begin
             palette_run_copy_flags_q[0] <= 1'b0;
+            palette_level_emit_mask_q[0] <= (palette_max_index_q > 8'd0);
             index_prev_run_pos_q <= 8'd0;
             index_previous_run_type_copy_above_q <= 1'b0;
             index_prev_index_q <= index_cur_value;
@@ -575,6 +650,8 @@ module ff_vvc_cabac_syntax_frontend #(
                            {31'd0, index_identity};
             m_axis_last <= 1'b0;
             palette_run_copy_flags_q[index_cur_pos_q[3:0]] <= index_identity;
+            palette_level_emit_mask_q[index_cur_pos_q[3:0]] <=
+              !index_identity && (palette_max_index_q > 8'd1);
             if (!index_identity) begin
               index_prev_run_pos_q <= index_cur_pos_q;
               index_previous_run_type_copy_above_q <= 1'b0;
@@ -597,12 +674,18 @@ module ff_vvc_cabac_syntax_frontend #(
           state_q <= ST_PAL_INDEX_RUN_FLAG;
         end
 
-        ST_PAL_INDEX_LEVEL: begin
+        ST_PAL_INDEX_LEVEL_SEEK: begin
           if (index_level_pos_q >= index_max_sub_pos_q) begin
             if (palette_escape_present_q) begin
               escape_pos_q <= index_min_sub_pos_q;
               escape_component_q <= 2'd0;
-              state_q <= ST_PAL_ESCAPE_PREFIX;
+              case (index_min_sub_pos_q[5:4])
+                2'd0: escape_active_mask_q <= palette_escape_mask_q[15:0];
+                2'd1: escape_active_mask_q <= palette_escape_mask_q[31:16];
+                2'd2: escape_active_mask_q <= palette_escape_mask_q[47:32];
+                default: escape_active_mask_q <= palette_escape_mask_q[63:48];
+              endcase
+              state_q <= ST_PAL_ESCAPE_SEEK;
             end else if (index_max_sub_pos_q >= palette_index_count_q) begin
               state_q <= pending_raw_last_q ? ST_PAL_TERMINATE : ST_IDLE;
             end else begin
@@ -610,28 +693,49 @@ module ff_vvc_cabac_syntax_frontend #(
               index_max_sub_pos_q <= ((palette_index_count_q - index_max_sub_pos_q) < 8'd16) ?
                                      palette_index_count_q : (index_max_sub_pos_q + 8'd16);
               index_cur_pos_q <= index_max_sub_pos_q;
+              palette_level_emit_mask_q <= 16'd0;
               for (int i = 0; i < 16; i = i + 1) begin
                 palette_run_copy_flags_q[i] <= 1'b0;
               end
               state_q <= ST_PAL_INDEX_RUN_FLAG;
             end
-          end else if (palette_run_copy_flags_q[index_level_pos_q[3:0]] ||
-                       (trunc_num_symbols <= 8'd1)) begin
-            index_level_pos_q <= index_level_pos_q + 8'd1;
+          end else if (palette_level_emit_mask_q[index_level_pos_q[3:0]]) begin
+            state_q <= ST_PAL_INDEX_LEVEL;
+          end else if (index_level_seek_valid_w) begin
+            index_level_pos_q <= index_level_seek_pos_w;
+            state_q <= ST_PAL_INDEX_LEVEL;
           end else begin
+            index_level_pos_q <= (index_level_next_group_pos_w < index_max_sub_pos_q) ?
+                                 index_level_next_group_pos_w : index_max_sub_pos_q;
+            state_q <= ST_PAL_INDEX_LEVEL_SEEK;
+          end
+        end
+
+        ST_PAL_INDEX_LEVEL: begin
+          if (index_level_pos_q >= index_max_sub_pos_q) begin
+            state_q <= ST_PAL_INDEX_LEVEL_SEEK;
+          end else if (palette_level_emit_mask_q[index_level_pos_q[3:0]] &&
+                       (trunc_num_symbols > 8'd1)) begin
             m_axis_valid <= 1'b1;
             m_axis_kind <= SYMBOL_BINS_EP;
             m_axis_data <= (trunc_pattern << 6) | {26'd0, trunc_bit_count};
             m_axis_last <= 1'b0;
+            palette_level_emit_mask_q[index_level_pos_q[3:0]] <= 1'b0;
             index_level_pos_q <= index_level_pos_q + 8'd1;
+            state_q <= index_level_next_emit_w ? ST_PAL_INDEX_LEVEL : ST_PAL_INDEX_LEVEL_SEEK;
+          end else begin
+            palette_level_emit_mask_q[index_level_pos_q[3:0]] <= 1'b0;
+            index_level_pos_q <= index_level_pos_q + 8'd1;
+            state_q <= index_level_next_emit_w ? ST_PAL_INDEX_LEVEL : ST_PAL_INDEX_LEVEL_SEEK;
           end
         end
 
-        ST_PAL_ESCAPE_PREFIX: begin
+        ST_PAL_ESCAPE_SEEK: begin
           if (escape_pos_q >= index_max_sub_pos_q) begin
             if (escape_component_q < 2'd2) begin
               escape_component_q <= escape_component_q + 2'd1;
               escape_pos_q <= index_min_sub_pos_q;
+              state_q <= ST_PAL_ESCAPE_SEEK;
             end else if (index_max_sub_pos_q >= palette_index_count_q) begin
               state_q <= pending_raw_last_q ? ST_PAL_TERMINATE : ST_IDLE;
             end else begin
@@ -639,12 +743,26 @@ module ff_vvc_cabac_syntax_frontend #(
               index_max_sub_pos_q <= ((palette_index_count_q - index_max_sub_pos_q) < 8'd16) ?
                                      palette_index_count_q : (index_max_sub_pos_q + 8'd16);
               index_cur_pos_q <= index_max_sub_pos_q;
+              palette_level_emit_mask_q <= 16'd0;
               for (int i = 0; i < 16; i = i + 1) begin
                 palette_run_copy_flags_q[i] <= 1'b0;
               end
               state_q <= ST_PAL_INDEX_RUN_FLAG;
             end
-          end else if (palette_indices_q[escape_pos_q[5:0]] == palette_max_index_q) begin
+          end else if (escape_current_valid_w) begin
+            state_q <= ST_PAL_ESCAPE_PREFIX;
+          end else if (escape_seek_valid_w) begin
+            escape_pos_q <= escape_seek_pos_w;
+            state_q <= ST_PAL_ESCAPE_PREFIX;
+          end else begin
+            escape_pos_q <= (escape_next_group_pos_w < index_max_sub_pos_q) ?
+                            escape_next_group_pos_w : index_max_sub_pos_q;
+            state_q <= ST_PAL_ESCAPE_SEEK;
+          end
+        end
+
+        ST_PAL_ESCAPE_PREFIX: begin
+          if (escape_current_valid_w) begin
             m_axis_valid <= 1'b1;
             m_axis_kind <= SYMBOL_BINS_EP;
             // H.266 7.3.11.6 places palette_escape_val after each 16-sample
@@ -658,7 +776,7 @@ module ff_vvc_cabac_syntax_frontend #(
             m_axis_last <= 1'b0;
             state_q <= ST_PAL_ESCAPE_SUFFIX;
           end else begin
-            escape_pos_q <= escape_pos_q + 8'd1;
+            state_q <= ST_PAL_ESCAPE_SEEK;
           end
         end
 
@@ -668,7 +786,7 @@ module ff_vvc_cabac_syntax_frontend #(
           m_axis_data <= (eg5_suffix_pattern << 6) | {26'd0, eg5_suffix_count};
           m_axis_last <= 1'b0;
           escape_pos_q <= escape_pos_q + 8'd1;
-          state_q <= ST_PAL_ESCAPE_PREFIX;
+          state_q <= ST_PAL_ESCAPE_SEEK;
         end
 
         ST_IBC_CU_SKIP: begin
@@ -990,6 +1108,9 @@ module ff_vvc_cabac_syntax_frontend #(
                   (raw_symbol_data[23:16] - 8'd1 + {7'd0, raw_symbol_data[25]});
                 palette_entry_cr_count_q <= 8'd0;
                 palette_index_count_q <= 8'd0;
+                palette_escape_mask_q <= 64'd0;
+                palette_level_emit_mask_q <= 16'd0;
+                escape_active_mask_q <= 16'd0;
                 if (raw_symbol_data[24]) begin
                   palette_predictor_run_present_q <= palette_have_previous_cu_q;
                   palette_have_previous_cu_q <= 1'b1;
@@ -1029,6 +1150,9 @@ module ff_vvc_cabac_syntax_frontend #(
 
               PALETTE_PKT_INDEX: begin
                 palette_indices_q[palette_index_count_q[5:0]] <= raw_symbol_data[7:0];
+                if (palette_escape_present_q && (raw_symbol_data[7:0] == palette_max_index_q)) begin
+                  palette_escape_mask_q[palette_index_count_q[5:0]] <= 1'b1;
+                end
                 palette_index_count_q <= palette_index_count_q + 8'd1;
                 if (palette_max_index_q > 8'd0) begin
                   // H.266 7.3.11.6/9.3.4.2.11: palette index maps are coded
