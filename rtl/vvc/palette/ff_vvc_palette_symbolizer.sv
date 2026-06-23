@@ -57,10 +57,11 @@ module ff_vvc_palette_symbolizer #(
   localparam int PLANE_ROW_BITS = $clog2(MAX_PLANE_ROWS);
   localparam logic [PLANE_COUNT_BITS - 1:0] MAX_CU_SAMPLES_L = MAX_CU_SAMPLES;
 
-  typedef enum logic [2:0] {
+  typedef enum logic [3:0] {
     ST_INPUT,
     ST_WAIT_CU,
     ST_FEED_READ,
+    ST_FEED_READ_LEFT,
     ST_FEED_CU,
     ST_SELECT_CU,
     ST_DRAIN_CU,
@@ -79,14 +80,11 @@ module ff_vvc_palette_symbolizer #(
   logic [3:0] coded_cu_count_y;
   logic [7:0] root_leaf_count_value;
   logic input_valid;
-  logic [3:0] input_lane_i;
   logic [7:0] input_lane_sample_w [0:7];
+  logic [63:0] input_write_row_w;
   logic [PLANE_ROW_BITS - 1:0] y_write_row_w;
   logic [PLANE_ROW_BITS - 1:0] cb_write_row_w;
   logic [PLANE_ROW_BITS - 1:0] cr_write_row_w;
-  logic [2:0] y_write_lane_w;
-  logic [2:0] cb_write_lane_w;
-  logic [2:0] cr_write_lane_w;
   logic [PLANE_COUNT_BITS - 1:0] drain_cu_order_index_ext_w;
   logic [PLANE_COUNT_BITS - 1:0] feed_sample_ext_w;
   logic drain_cu_selected;
@@ -98,13 +96,8 @@ module ff_vvc_palette_symbolizer #(
   logic        drain_cu_is_last_selected_q;
   logic [15:0] feed_x;
   logic [15:0] feed_y;
-  logic [15:0] feed_abs_x;
-  logic [15:0] feed_abs_y;
   logic [7:0] feed_next_sample_w;
-  logic [15:0] feed_next_y;
   logic [PLANE_COUNT_BITS - 1:0] feed_frame_index;
-  logic [PLANE_COUNT_BITS - 1:0] feed_next_sample_ext_w;
-  logic [PLANE_COUNT_BITS - 1:0] feed_next_frame_index;
   logic [3:0] visible_cu_cols_w;
   logic [3:0] visible_cu_rows_w;
   logic [2:0] drain_cu_col_w;
@@ -115,18 +108,6 @@ module ff_vvc_palette_symbolizer #(
   logic       feed_left_order_valid_w;
   logic [5:0] feed_left_order_index_w;
   logic [PLANE_COUNT_BITS - 1:0] feed_left_order_index_ext_w;
-  logic [7:0] feed_y_sample;
-  logic [7:0] feed_cb_sample;
-  logic [7:0] feed_cr_sample;
-  logic [7:0] feed_y_sample_q;
-  logic [7:0] feed_cb_sample_q;
-  logic [7:0] feed_cr_sample_q;
-  logic [7:0] feed_left_y_sample_q;
-  logic [7:0] feed_left_cb_sample_q;
-  logic [7:0] feed_left_cr_sample_q;
-  logic [7:0] feed_left_boundary_y_sample_q;
-  logic [7:0] feed_left_boundary_cb_sample_q;
-  logic [7:0] feed_left_boundary_cr_sample_q;
   logic [63:0] feed_y_row_q;
   logic [63:0] feed_cb_row_q;
   logic [63:0] feed_cr_row_q;
@@ -145,7 +126,6 @@ module ff_vvc_palette_symbolizer #(
   logic signed [8:0] row_bdpcm_y_diff_w [0:7];
   logic signed [8:0] row_bdpcm_cb_diff_w [0:7];
   logic signed [8:0] row_bdpcm_cr_diff_w [0:7];
-  logic [3:0] row_coeff_lane_w [0:7];
   logic row_ts_cbf_y_w;
   logic row_ts_cbf_cb_w;
   logic row_ts_cbf_cr_w;
@@ -170,9 +150,6 @@ module ff_vvc_palette_symbolizer #(
   logic [(9 * 16) - 1:0] bdpcm_y_coeff_q;
   logic [(9 * 16) - 1:0] bdpcm_cb_coeff_q;
   logic [(9 * 16) - 1:0] bdpcm_cr_coeff_q;
-  logic [7:0] bdpcm_prev_y_sample_q;
-  logic [7:0] bdpcm_prev_cb_sample_q;
-  logic [7:0] bdpcm_prev_cr_sample_q;
   logic       drain_bdpcm_q;
   logic [3:0] ts_coeff_index_q;
   logic [1:0] ts_coeff_component_q;
@@ -190,14 +167,6 @@ module ff_vvc_palette_symbolizer #(
   logic ts_residual_drain_w;
   logic ts_coeff_last_w;
   logic [3:0] ts_coeff_packet_kind_w;
-  logic signed [8:0] feed_y_diff_w;
-  logic signed [8:0] feed_cb_diff_w;
-  logic signed [8:0] feed_cr_diff_w;
-  logic signed [8:0] feed_bdpcm_y_coeff_w;
-  logic signed [8:0] feed_bdpcm_cb_coeff_w;
-  logic signed [8:0] feed_bdpcm_cr_coeff_w;
-  logic [3:0] feed_coeff_lane_w;
-  logic feed_in_ts_subset_w;
   logic row_in_ts_subset_w [0:7];
   logic prior_runtime_ibc_seen_q;
   logic [2:0] request_cu_col_w;
@@ -206,23 +175,13 @@ module ff_vvc_palette_symbolizer #(
   logic request_cu_left_ibc_w;
   logic request_cu_above_ibc_w;
   logic [PLANE_COUNT_BITS - 1:0] feed_left_frame_index;
-  logic [PLANE_COUNT_BITS - 1:0] feed_left_boundary_frame_index;
-  logic [PLANE_COUNT_BITS - 1:0] feed_next_left_frame_index;
-  logic [PLANE_COUNT_BITS - 1:0] feed_next_left_boundary_frame_index;
-  logic feed_read_enable_w;
-  logic feed_read_next_w;
-  logic [PLANE_COUNT_BITS - 1:0] feed_read_frame_index_w;
-  logic [PLANE_COUNT_BITS - 1:0] feed_read_left_frame_index_w;
-  logic [PLANE_COUNT_BITS - 1:0] feed_read_left_boundary_frame_index_w;
   logic [PLANE_ROW_BITS - 1:0] feed_read_row_w;
   logic [PLANE_ROW_BITS - 1:0] feed_read_left_row_w;
-  logic [PLANE_ROW_BITS - 1:0] feed_read_left_boundary_row_w;
-  logic [2:0] feed_read_lane_w;
-  logic [2:0] feed_read_left_lane_w;
-  logic [2:0] feed_read_left_boundary_lane_w;
   logic signed [8:0] ts_coeff_value_w;
   logic signed [8:0] bdpcm_coeff_value_w;
   logic signed [8:0] residual_coeff_value_w;
+  logic [(9 * 16) - 1:0] ts_coeff_bank_w;
+  logic [(9 * 16) - 1:0] bdpcm_coeff_bank_w;
   logic [3:0] residual_start_packet_kind_w;
   logic residual_cbf_y_w;
   logic residual_cbf_cb_w;
@@ -269,9 +228,6 @@ module ff_vvc_palette_symbolizer #(
   assign y_write_row_w = y_write_count_q[PLANE_COUNT_BITS - 1:3];
   assign cb_write_row_w = cb_write_count_q[PLANE_COUNT_BITS - 1:3];
   assign cr_write_row_w = cr_write_count_q[PLANE_COUNT_BITS - 1:3];
-  assign y_write_lane_w = y_write_count_q[2:0];
-  assign cb_write_lane_w = cb_write_count_q[2:0];
-  assign cr_write_lane_w = cr_write_count_q[2:0];
 
   always @* begin
     for (int i = 0; i < 8; i = i + 1) begin
@@ -285,6 +241,16 @@ module ff_vvc_palette_symbolizer #(
       end
     end
   end
+
+  // The AXI sample bridge presents VVC palette input as complete 8x8 TU rows.
+  // Store one 8-sample row per write so the CTU plane store remains a simple
+  // write-plus-read memory instead of a byte read-modify-write register bank.
+  assign input_write_row_w = {
+    input_lane_sample_w[7], input_lane_sample_w[6],
+    input_lane_sample_w[5], input_lane_sample_w[4],
+    input_lane_sample_w[3], input_lane_sample_w[2],
+    input_lane_sample_w[1], input_lane_sample_w[0]
+  };
 
   assign cu_request_ready =
     enable &&
@@ -300,10 +266,7 @@ module ff_vvc_palette_symbolizer #(
 
   assign feed_x = {13'd0, feed_sample_q[2:0]};
   assign feed_y = {13'd0, feed_sample_q[5:3]};
-  assign feed_abs_x = drain_origin_x + feed_x;
-  assign feed_abs_y = drain_origin_y + feed_y;
   assign feed_next_sample_w = feed_sample_q + 8'd8;
-  assign feed_next_y = {13'd0, feed_next_sample_w[5:3]};
   assign visible_cu_cols_w = coded_cu_count_x;
   assign visible_cu_rows_w = coded_cu_count_y;
   assign drain_cu_col_w = drain_origin_x_q[5:3];
@@ -313,8 +276,6 @@ module ff_vvc_palette_symbolizer #(
   assign feed_left_order_index_ext_w =
     {{(PLANE_COUNT_BITS - 6){1'b0}}, feed_left_order_index_w};
   assign feed_sample_ext_w = {{(PLANE_COUNT_BITS - 8){1'b0}}, feed_sample_q};
-  assign feed_next_sample_ext_w =
-    {{(PLANE_COUNT_BITS - 8){1'b0}}, feed_next_sample_w};
   // H.266 7.3.11.4 coding_tree() leaf traversal requests the CU payload by
   // origin. The input stream is the compact fixed-8x8 TU order used by the
   // top-level interface, so address the stored block by origin rather than by
@@ -322,9 +283,6 @@ module ff_vvc_palette_symbolizer #(
   assign feed_frame_index =
     ((drain_cu_order_valid_w ? drain_cu_order_index_ext_w : '0) *
      MAX_CU_SAMPLES_L) + feed_sample_ext_w;
-  assign feed_next_frame_index =
-    ((drain_cu_order_valid_w ? drain_cu_order_index_ext_w : '0) *
-     MAX_CU_SAMPLES_L) + feed_next_sample_ext_w;
   assign feed_left_cu_col_w = drain_cu_col_w - 3'd1;
   // H.266 8.6.2.2 uses spatial A1 as the left IBC neighbour. The TU input
   // stream is coding-tree ordered, so the left CU is not always the preceding
@@ -333,38 +291,8 @@ module ff_vvc_palette_symbolizer #(
   assign feed_left_frame_index =
     (drain_cu_order_valid_w && (drain_cu_col_w != 3'd0) && feed_left_order_valid_w) ?
     ((feed_left_order_index_ext_w * MAX_CU_SAMPLES_L) + feed_sample_ext_w) : '0;
-  assign feed_left_boundary_frame_index =
-    (drain_cu_order_valid_w && (drain_cu_col_w != 3'd0) && feed_left_order_valid_w) ?
-    ((feed_left_order_index_ext_w * MAX_CU_SAMPLES_L) +
-     {{(PLANE_COUNT_BITS - 6){1'b0}}, feed_y[2:0], 3'b111}) : '0;
-  assign feed_next_left_frame_index =
-    (drain_cu_order_valid_w && (drain_cu_col_w != 3'd0) && feed_left_order_valid_w) ?
-    ((feed_left_order_index_ext_w * MAX_CU_SAMPLES_L) + feed_next_sample_ext_w) : '0;
-  assign feed_next_left_boundary_frame_index =
-    (drain_cu_order_valid_w && (drain_cu_col_w != 3'd0) && feed_left_order_valid_w) ?
-    ((feed_left_order_index_ext_w * MAX_CU_SAMPLES_L) +
-     {{(PLANE_COUNT_BITS - 6){1'b0}}, feed_next_y[2:0], 3'b111}) : '0;
-  assign feed_read_next_w =
-    (state_q == ST_FEED_CU) && cu_s_axis_ready && feed_sample_valid_q &&
-    !feed_sample_last_q;
-  assign feed_read_enable_w =
-    (state_q == ST_FEED_READ) || feed_read_next_w;
-  assign feed_read_frame_index_w =
-    feed_read_next_w ? feed_next_frame_index : feed_frame_index;
-  assign feed_read_left_frame_index_w =
-    feed_read_next_w ? feed_next_left_frame_index : feed_left_frame_index;
-  assign feed_read_left_boundary_frame_index_w =
-    feed_read_next_w ? feed_next_left_boundary_frame_index : feed_left_boundary_frame_index;
-  assign feed_read_row_w = feed_read_frame_index_w[PLANE_COUNT_BITS - 1:3];
-  assign feed_read_left_row_w = feed_read_left_frame_index_w[PLANE_COUNT_BITS - 1:3];
-  assign feed_read_left_boundary_row_w =
-    feed_read_left_boundary_frame_index_w[PLANE_COUNT_BITS - 1:3];
-  assign feed_read_lane_w = feed_read_frame_index_w[2:0];
-  assign feed_read_left_lane_w = feed_read_left_frame_index_w[2:0];
-  assign feed_read_left_boundary_lane_w = feed_read_left_boundary_frame_index_w[2:0];
-  assign feed_y_sample = feed_y_sample_q;
-  assign feed_cb_sample = feed_cb_sample_q;
-  assign feed_cr_sample = feed_cr_sample_q;
+  assign feed_read_row_w = feed_frame_index[PLANE_COUNT_BITS - 1:3];
+  assign feed_read_left_row_w = feed_left_frame_index[PLANE_COUNT_BITS - 1:3];
   assign cu_s_axis_valid = (state_q == ST_FEED_CU) && feed_sample_valid_q;
   assign cu_s_axis_last = feed_sample_last_q;
   assign ts_residual_selected_w =
@@ -383,16 +311,88 @@ module ff_vvc_palette_symbolizer #(
     ((ts_coeff_component_q == 2'd1) ? TS_PKT_COEFF_CB : TS_PKT_COEFF_CR);
   always @* begin
     case (ts_coeff_component_q)
-      2'd0: ts_coeff_value_w = ts_y_coeff_q[ts_coeff_index_q * 9 +: 9];
-      2'd1: ts_coeff_value_w = ts_cb_coeff_q[ts_coeff_index_q * 9 +: 9];
-      default: ts_coeff_value_w = ts_cr_coeff_q[ts_coeff_index_q * 9 +: 9];
+      2'd0: begin
+        ts_coeff_bank_w = ts_y_coeff_q;
+        bdpcm_coeff_bank_w = bdpcm_y_coeff_q;
+      end
+      2'd1: begin
+        ts_coeff_bank_w = ts_cb_coeff_q;
+        bdpcm_coeff_bank_w = bdpcm_cb_coeff_q;
+      end
+      default: begin
+        ts_coeff_bank_w = ts_cr_coeff_q;
+        bdpcm_coeff_bank_w = bdpcm_cr_coeff_q;
+      end
     endcase
-  end
-  always @* begin
-    case (ts_coeff_component_q)
-      2'd0: bdpcm_coeff_value_w = bdpcm_y_coeff_q[ts_coeff_index_q * 9 +: 9];
-      2'd1: bdpcm_coeff_value_w = bdpcm_cb_coeff_q[ts_coeff_index_q * 9 +: 9];
-      default: bdpcm_coeff_value_w = bdpcm_cr_coeff_q[ts_coeff_index_q * 9 +: 9];
+
+    // Coefficients are emitted in fixed 4x4 scan slots. H.266 7.3.11.11
+    // codes those residual values by scan position; enumerate the 16 slots
+    // explicitly so synthesis does not infer a variable 9-bit barrel shifter.
+    case (ts_coeff_index_q)
+      4'd0: begin
+        ts_coeff_value_w = ts_coeff_bank_w[8:0];
+        bdpcm_coeff_value_w = bdpcm_coeff_bank_w[8:0];
+      end
+      4'd1: begin
+        ts_coeff_value_w = ts_coeff_bank_w[17:9];
+        bdpcm_coeff_value_w = bdpcm_coeff_bank_w[17:9];
+      end
+      4'd2: begin
+        ts_coeff_value_w = ts_coeff_bank_w[26:18];
+        bdpcm_coeff_value_w = bdpcm_coeff_bank_w[26:18];
+      end
+      4'd3: begin
+        ts_coeff_value_w = ts_coeff_bank_w[35:27];
+        bdpcm_coeff_value_w = bdpcm_coeff_bank_w[35:27];
+      end
+      4'd4: begin
+        ts_coeff_value_w = ts_coeff_bank_w[44:36];
+        bdpcm_coeff_value_w = bdpcm_coeff_bank_w[44:36];
+      end
+      4'd5: begin
+        ts_coeff_value_w = ts_coeff_bank_w[53:45];
+        bdpcm_coeff_value_w = bdpcm_coeff_bank_w[53:45];
+      end
+      4'd6: begin
+        ts_coeff_value_w = ts_coeff_bank_w[62:54];
+        bdpcm_coeff_value_w = bdpcm_coeff_bank_w[62:54];
+      end
+      4'd7: begin
+        ts_coeff_value_w = ts_coeff_bank_w[71:63];
+        bdpcm_coeff_value_w = bdpcm_coeff_bank_w[71:63];
+      end
+      4'd8: begin
+        ts_coeff_value_w = ts_coeff_bank_w[80:72];
+        bdpcm_coeff_value_w = bdpcm_coeff_bank_w[80:72];
+      end
+      4'd9: begin
+        ts_coeff_value_w = ts_coeff_bank_w[89:81];
+        bdpcm_coeff_value_w = bdpcm_coeff_bank_w[89:81];
+      end
+      4'd10: begin
+        ts_coeff_value_w = ts_coeff_bank_w[98:90];
+        bdpcm_coeff_value_w = bdpcm_coeff_bank_w[98:90];
+      end
+      4'd11: begin
+        ts_coeff_value_w = ts_coeff_bank_w[107:99];
+        bdpcm_coeff_value_w = bdpcm_coeff_bank_w[107:99];
+      end
+      4'd12: begin
+        ts_coeff_value_w = ts_coeff_bank_w[116:108];
+        bdpcm_coeff_value_w = bdpcm_coeff_bank_w[116:108];
+      end
+      4'd13: begin
+        ts_coeff_value_w = ts_coeff_bank_w[125:117];
+        bdpcm_coeff_value_w = bdpcm_coeff_bank_w[125:117];
+      end
+      4'd14: begin
+        ts_coeff_value_w = ts_coeff_bank_w[134:126];
+        bdpcm_coeff_value_w = bdpcm_coeff_bank_w[134:126];
+      end
+      default: begin
+        ts_coeff_value_w = ts_coeff_bank_w[143:135];
+        bdpcm_coeff_value_w = bdpcm_coeff_bank_w[143:135];
+      end
     endcase
   end
   assign residual_coeff_value_w = drain_bdpcm_q ? bdpcm_coeff_value_w : ts_coeff_value_w;
@@ -415,23 +415,6 @@ module ff_vvc_palette_symbolizer #(
     (cu_m_axis_last && drain_cu_is_last_selected);
   assign m_axis_cu_last = ts_residual_drain_w ? ts_coeff_last_w : cu_m_axis_last;
   assign m_axis_cu_ibc_mode = ts_residual_drain_w && !drain_bdpcm_q;
-  assign feed_y_diff_w = $signed({1'b0, feed_y_sample_q}) -
-                         $signed({1'b0, feed_left_y_sample_q});
-  assign feed_cb_diff_w = $signed({1'b0, feed_cb_sample_q}) -
-                          $signed({1'b0, feed_left_cb_sample_q});
-  assign feed_cr_diff_w = $signed({1'b0, feed_cr_sample_q}) -
-                          $signed({1'b0, feed_left_cr_sample_q});
-  assign feed_bdpcm_y_coeff_w = (feed_x == 16'd0) ?
-    ($signed({1'b0, feed_y_sample_q}) - $signed({1'b0, feed_left_boundary_y_sample_q})) :
-    ($signed({1'b0, feed_y_sample_q}) - $signed({1'b0, bdpcm_prev_y_sample_q}));
-  assign feed_bdpcm_cb_coeff_w = (feed_x == 16'd0) ?
-    ($signed({1'b0, feed_cb_sample_q}) - $signed({1'b0, feed_left_boundary_cb_sample_q})) :
-    ($signed({1'b0, feed_cb_sample_q}) - $signed({1'b0, bdpcm_prev_cb_sample_q}));
-  assign feed_bdpcm_cr_coeff_w = (feed_x == 16'd0) ?
-    ($signed({1'b0, feed_cr_sample_q}) - $signed({1'b0, feed_left_boundary_cr_sample_q})) :
-    ($signed({1'b0, feed_cr_sample_q}) - $signed({1'b0, bdpcm_prev_cr_sample_q}));
-  assign feed_in_ts_subset_w = (feed_x < 16'd4) && (feed_y < 16'd4);
-  assign feed_coeff_lane_w = {feed_y[1:0], feed_x[1:0]};
   always @* begin
     row_ts_cbf_y_w = 1'b0;
     row_ts_cbf_cb_w = 1'b0;
@@ -479,14 +462,19 @@ module ff_vvc_palette_symbolizer #(
           $signed({1'b0, row_cr_sample_w[lane - 1]});
       end
       row_in_ts_subset_w[lane] = (feed_y < 16'd4) && (lane[2:0] < 3'd4);
-      row_coeff_lane_w[lane] = {feed_y[1:0], lane[1:0]};
       if (row_in_ts_subset_w[lane]) begin
-        row_ts_cbf_y_w = row_ts_cbf_y_w || (row_ts_y_diff_w[lane] != 9'sd0);
-        row_ts_cbf_cb_w = row_ts_cbf_cb_w || (row_ts_cb_diff_w[lane] != 9'sd0);
-        row_ts_cbf_cr_w = row_ts_cbf_cr_w || (row_ts_cr_diff_w[lane] != 9'sd0);
-        row_bdpcm_cbf_y_w = row_bdpcm_cbf_y_w || (row_bdpcm_y_diff_w[lane] != 9'sd0);
-        row_bdpcm_cbf_cb_w = row_bdpcm_cbf_cb_w || (row_bdpcm_cb_diff_w[lane] != 9'sd0);
-        row_bdpcm_cbf_cr_w = row_bdpcm_cbf_cr_w || (row_bdpcm_cr_diff_w[lane] != 9'sd0);
+        row_ts_cbf_y_w =
+          row_ts_cbf_y_w || (row_ts_y_diff_w[lane] != 9'sd0);
+        row_ts_cbf_cb_w =
+          row_ts_cbf_cb_w || (row_ts_cb_diff_w[lane] != 9'sd0);
+        row_ts_cbf_cr_w =
+          row_ts_cbf_cr_w || (row_ts_cr_diff_w[lane] != 9'sd0);
+        row_bdpcm_cbf_y_w =
+          row_bdpcm_cbf_y_w || (row_bdpcm_y_diff_w[lane] != 9'sd0);
+        row_bdpcm_cbf_cb_w =
+          row_bdpcm_cbf_cb_w || (row_bdpcm_cb_diff_w[lane] != 9'sd0);
+        row_bdpcm_cbf_cr_w =
+          row_bdpcm_cbf_cr_w || (row_bdpcm_cr_diff_w[lane] != 9'sd0);
       end
       if (!row_in_ts_subset_w[lane] &&
           ((row_ts_y_diff_w[lane] != 9'sd0) ||
@@ -502,6 +490,7 @@ module ff_vvc_palette_symbolizer #(
       end
     end
   end
+
   assign request_cu_col_w = cu_request_origin_x[5:3];
   assign request_cu_row_w = cu_request_origin_y[5:3];
   assign request_cu_index_w = {request_cu_row_w, request_cu_col_w};
@@ -571,12 +560,6 @@ module ff_vvc_palette_symbolizer #(
       drain_cu_is_last_selected_q <= 1'b0;
       feed_sample_last_q <= 1'b0;
       feed_sample_valid_q <= 1'b0;
-      feed_y_row_q <= 64'd0;
-      feed_cb_row_q <= 64'd0;
-      feed_cr_row_q <= 64'd0;
-      feed_left_y_row_q <= 64'd0;
-      feed_left_cb_row_q <= 64'd0;
-      feed_left_cr_row_q <= 64'd0;
       ts_candidate_q <= 1'b0;
       ts_cbf_y_q <= 1'b0;
       ts_cbf_cb_q <= 1'b0;
@@ -591,9 +574,6 @@ module ff_vvc_palette_symbolizer #(
       bdpcm_y_coeff_q <= '0;
       bdpcm_cb_coeff_q <= '0;
       bdpcm_cr_coeff_q <= '0;
-      bdpcm_prev_y_sample_q <= 8'd0;
-      bdpcm_prev_cb_sample_q <= 8'd0;
-      bdpcm_prev_cr_sample_q <= 8'd0;
       drain_bdpcm_q <= 1'b0;
       ts_coeff_index_q <= 4'd0;
       ts_coeff_component_q <= 2'd0;
@@ -611,12 +591,6 @@ module ff_vvc_palette_symbolizer #(
       drain_cu_is_last_selected_q <= 1'b0;
       feed_sample_last_q <= 1'b0;
       feed_sample_valid_q <= 1'b0;
-      feed_y_row_q <= 64'd0;
-      feed_cb_row_q <= 64'd0;
-      feed_cr_row_q <= 64'd0;
-      feed_left_y_row_q <= 64'd0;
-      feed_left_cb_row_q <= 64'd0;
-      feed_left_cr_row_q <= 64'd0;
       ts_candidate_q <= 1'b0;
       ts_cbf_y_q <= 1'b0;
       ts_cbf_cb_q <= 1'b0;
@@ -631,9 +605,6 @@ module ff_vvc_palette_symbolizer #(
       bdpcm_y_coeff_q <= '0;
       bdpcm_cb_coeff_q <= '0;
       bdpcm_cr_coeff_q <= '0;
-      bdpcm_prev_y_sample_q <= 8'd0;
-      bdpcm_prev_cb_sample_q <= 8'd0;
-      bdpcm_prev_cr_sample_q <= 8'd0;
       drain_bdpcm_q <= 1'b0;
       ts_coeff_index_q <= 4'd0;
       ts_coeff_component_q <= 2'd0;
@@ -697,9 +668,6 @@ module ff_vvc_palette_symbolizer #(
               bdpcm_y_coeff_q <= '0;
               bdpcm_cb_coeff_q <= '0;
               bdpcm_cr_coeff_q <= '0;
-              bdpcm_prev_y_sample_q <= 8'd0;
-              bdpcm_prev_cb_sample_q <= 8'd0;
-              bdpcm_prev_cr_sample_q <= 8'd0;
               drain_bdpcm_q <= 1'b0;
               ts_coeff_index_q <= 4'd0;
               ts_coeff_component_q <= 2'd0;
@@ -707,6 +675,11 @@ module ff_vvc_palette_symbolizer #(
           end
 
           ST_FEED_READ: begin
+            feed_sample_valid_q <= 1'b0;
+            state_q <= ST_FEED_READ_LEFT;
+          end
+
+          ST_FEED_READ_LEFT: begin
             feed_sample_last_q <= feed_sample_q >= (MAX_CU_SAMPLES - 8);
             feed_sample_valid_q <= 1'b1;
             state_q <= ST_FEED_CU;
@@ -715,12 +688,65 @@ module ff_vvc_palette_symbolizer #(
           ST_FEED_CU: begin
             if (cu_s_axis_ready && feed_sample_valid_q) begin
               if (ts_candidate_q) begin
-                for (int lane = 0; lane < 8; lane = lane + 1) begin
-                  if (row_in_ts_subset_w[lane]) begin
-                    ts_y_coeff_q[row_coeff_lane_w[lane] * 9 +: 9] <= row_ts_y_diff_w[lane];
-                    ts_cb_coeff_q[row_coeff_lane_w[lane] * 9 +: 9] <= row_ts_cb_diff_w[lane];
-                    ts_cr_coeff_q[row_coeff_lane_w[lane] * 9 +: 9] <= row_ts_cr_diff_w[lane];
-                  end
+                if (feed_y < 16'd4) begin
+                  case (feed_y[1:0])
+                    2'd0: begin
+                      ts_y_coeff_q[8:0] <= row_ts_y_diff_w[0];
+                      ts_cb_coeff_q[8:0] <= row_ts_cb_diff_w[0];
+                      ts_cr_coeff_q[8:0] <= row_ts_cr_diff_w[0];
+                      ts_y_coeff_q[17:9] <= row_ts_y_diff_w[1];
+                      ts_cb_coeff_q[17:9] <= row_ts_cb_diff_w[1];
+                      ts_cr_coeff_q[17:9] <= row_ts_cr_diff_w[1];
+                      ts_y_coeff_q[26:18] <= row_ts_y_diff_w[2];
+                      ts_cb_coeff_q[26:18] <= row_ts_cb_diff_w[2];
+                      ts_cr_coeff_q[26:18] <= row_ts_cr_diff_w[2];
+                      ts_y_coeff_q[35:27] <= row_ts_y_diff_w[3];
+                      ts_cb_coeff_q[35:27] <= row_ts_cb_diff_w[3];
+                      ts_cr_coeff_q[35:27] <= row_ts_cr_diff_w[3];
+                    end
+                    2'd1: begin
+                      ts_y_coeff_q[44:36] <= row_ts_y_diff_w[0];
+                      ts_cb_coeff_q[44:36] <= row_ts_cb_diff_w[0];
+                      ts_cr_coeff_q[44:36] <= row_ts_cr_diff_w[0];
+                      ts_y_coeff_q[53:45] <= row_ts_y_diff_w[1];
+                      ts_cb_coeff_q[53:45] <= row_ts_cb_diff_w[1];
+                      ts_cr_coeff_q[53:45] <= row_ts_cr_diff_w[1];
+                      ts_y_coeff_q[62:54] <= row_ts_y_diff_w[2];
+                      ts_cb_coeff_q[62:54] <= row_ts_cb_diff_w[2];
+                      ts_cr_coeff_q[62:54] <= row_ts_cr_diff_w[2];
+                      ts_y_coeff_q[71:63] <= row_ts_y_diff_w[3];
+                      ts_cb_coeff_q[71:63] <= row_ts_cb_diff_w[3];
+                      ts_cr_coeff_q[71:63] <= row_ts_cr_diff_w[3];
+                    end
+                    2'd2: begin
+                      ts_y_coeff_q[80:72] <= row_ts_y_diff_w[0];
+                      ts_cb_coeff_q[80:72] <= row_ts_cb_diff_w[0];
+                      ts_cr_coeff_q[80:72] <= row_ts_cr_diff_w[0];
+                      ts_y_coeff_q[89:81] <= row_ts_y_diff_w[1];
+                      ts_cb_coeff_q[89:81] <= row_ts_cb_diff_w[1];
+                      ts_cr_coeff_q[89:81] <= row_ts_cr_diff_w[1];
+                      ts_y_coeff_q[98:90] <= row_ts_y_diff_w[2];
+                      ts_cb_coeff_q[98:90] <= row_ts_cb_diff_w[2];
+                      ts_cr_coeff_q[98:90] <= row_ts_cr_diff_w[2];
+                      ts_y_coeff_q[107:99] <= row_ts_y_diff_w[3];
+                      ts_cb_coeff_q[107:99] <= row_ts_cb_diff_w[3];
+                      ts_cr_coeff_q[107:99] <= row_ts_cr_diff_w[3];
+                    end
+                    default: begin
+                      ts_y_coeff_q[116:108] <= row_ts_y_diff_w[0];
+                      ts_cb_coeff_q[116:108] <= row_ts_cb_diff_w[0];
+                      ts_cr_coeff_q[116:108] <= row_ts_cr_diff_w[0];
+                      ts_y_coeff_q[125:117] <= row_ts_y_diff_w[1];
+                      ts_cb_coeff_q[125:117] <= row_ts_cb_diff_w[1];
+                      ts_cr_coeff_q[125:117] <= row_ts_cr_diff_w[1];
+                      ts_y_coeff_q[134:126] <= row_ts_y_diff_w[2];
+                      ts_cb_coeff_q[134:126] <= row_ts_cb_diff_w[2];
+                      ts_cr_coeff_q[134:126] <= row_ts_cr_diff_w[2];
+                      ts_y_coeff_q[143:135] <= row_ts_y_diff_w[3];
+                      ts_cb_coeff_q[143:135] <= row_ts_cb_diff_w[3];
+                      ts_cr_coeff_q[143:135] <= row_ts_cr_diff_w[3];
+                    end
+                  endcase
                 end
                 ts_cbf_y_q <= ts_cbf_y_q || row_ts_cbf_y_w;
                 ts_cbf_cb_q <= ts_cbf_cb_q || row_ts_cbf_cb_w;
@@ -730,12 +756,65 @@ module ff_vvc_palette_symbolizer #(
                 end
               end
               if (bdpcm_candidate_q) begin
-                for (int lane = 0; lane < 8; lane = lane + 1) begin
-                  if (row_in_ts_subset_w[lane]) begin
-                    bdpcm_y_coeff_q[row_coeff_lane_w[lane] * 9 +: 9] <= row_bdpcm_y_diff_w[lane];
-                    bdpcm_cb_coeff_q[row_coeff_lane_w[lane] * 9 +: 9] <= row_bdpcm_cb_diff_w[lane];
-                    bdpcm_cr_coeff_q[row_coeff_lane_w[lane] * 9 +: 9] <= row_bdpcm_cr_diff_w[lane];
-                  end
+                if (feed_y < 16'd4) begin
+                  case (feed_y[1:0])
+                    2'd0: begin
+                      bdpcm_y_coeff_q[8:0] <= row_bdpcm_y_diff_w[0];
+                      bdpcm_cb_coeff_q[8:0] <= row_bdpcm_cb_diff_w[0];
+                      bdpcm_cr_coeff_q[8:0] <= row_bdpcm_cr_diff_w[0];
+                      bdpcm_y_coeff_q[17:9] <= row_bdpcm_y_diff_w[1];
+                      bdpcm_cb_coeff_q[17:9] <= row_bdpcm_cb_diff_w[1];
+                      bdpcm_cr_coeff_q[17:9] <= row_bdpcm_cr_diff_w[1];
+                      bdpcm_y_coeff_q[26:18] <= row_bdpcm_y_diff_w[2];
+                      bdpcm_cb_coeff_q[26:18] <= row_bdpcm_cb_diff_w[2];
+                      bdpcm_cr_coeff_q[26:18] <= row_bdpcm_cr_diff_w[2];
+                      bdpcm_y_coeff_q[35:27] <= row_bdpcm_y_diff_w[3];
+                      bdpcm_cb_coeff_q[35:27] <= row_bdpcm_cb_diff_w[3];
+                      bdpcm_cr_coeff_q[35:27] <= row_bdpcm_cr_diff_w[3];
+                    end
+                    2'd1: begin
+                      bdpcm_y_coeff_q[44:36] <= row_bdpcm_y_diff_w[0];
+                      bdpcm_cb_coeff_q[44:36] <= row_bdpcm_cb_diff_w[0];
+                      bdpcm_cr_coeff_q[44:36] <= row_bdpcm_cr_diff_w[0];
+                      bdpcm_y_coeff_q[53:45] <= row_bdpcm_y_diff_w[1];
+                      bdpcm_cb_coeff_q[53:45] <= row_bdpcm_cb_diff_w[1];
+                      bdpcm_cr_coeff_q[53:45] <= row_bdpcm_cr_diff_w[1];
+                      bdpcm_y_coeff_q[62:54] <= row_bdpcm_y_diff_w[2];
+                      bdpcm_cb_coeff_q[62:54] <= row_bdpcm_cb_diff_w[2];
+                      bdpcm_cr_coeff_q[62:54] <= row_bdpcm_cr_diff_w[2];
+                      bdpcm_y_coeff_q[71:63] <= row_bdpcm_y_diff_w[3];
+                      bdpcm_cb_coeff_q[71:63] <= row_bdpcm_cb_diff_w[3];
+                      bdpcm_cr_coeff_q[71:63] <= row_bdpcm_cr_diff_w[3];
+                    end
+                    2'd2: begin
+                      bdpcm_y_coeff_q[80:72] <= row_bdpcm_y_diff_w[0];
+                      bdpcm_cb_coeff_q[80:72] <= row_bdpcm_cb_diff_w[0];
+                      bdpcm_cr_coeff_q[80:72] <= row_bdpcm_cr_diff_w[0];
+                      bdpcm_y_coeff_q[89:81] <= row_bdpcm_y_diff_w[1];
+                      bdpcm_cb_coeff_q[89:81] <= row_bdpcm_cb_diff_w[1];
+                      bdpcm_cr_coeff_q[89:81] <= row_bdpcm_cr_diff_w[1];
+                      bdpcm_y_coeff_q[98:90] <= row_bdpcm_y_diff_w[2];
+                      bdpcm_cb_coeff_q[98:90] <= row_bdpcm_cb_diff_w[2];
+                      bdpcm_cr_coeff_q[98:90] <= row_bdpcm_cr_diff_w[2];
+                      bdpcm_y_coeff_q[107:99] <= row_bdpcm_y_diff_w[3];
+                      bdpcm_cb_coeff_q[107:99] <= row_bdpcm_cb_diff_w[3];
+                      bdpcm_cr_coeff_q[107:99] <= row_bdpcm_cr_diff_w[3];
+                    end
+                    default: begin
+                      bdpcm_y_coeff_q[116:108] <= row_bdpcm_y_diff_w[0];
+                      bdpcm_cb_coeff_q[116:108] <= row_bdpcm_cb_diff_w[0];
+                      bdpcm_cr_coeff_q[116:108] <= row_bdpcm_cr_diff_w[0];
+                      bdpcm_y_coeff_q[125:117] <= row_bdpcm_y_diff_w[1];
+                      bdpcm_cb_coeff_q[125:117] <= row_bdpcm_cb_diff_w[1];
+                      bdpcm_cr_coeff_q[125:117] <= row_bdpcm_cr_diff_w[1];
+                      bdpcm_y_coeff_q[134:126] <= row_bdpcm_y_diff_w[2];
+                      bdpcm_cb_coeff_q[134:126] <= row_bdpcm_cb_diff_w[2];
+                      bdpcm_cr_coeff_q[134:126] <= row_bdpcm_cr_diff_w[2];
+                      bdpcm_y_coeff_q[143:135] <= row_bdpcm_y_diff_w[3];
+                      bdpcm_cb_coeff_q[143:135] <= row_bdpcm_cb_diff_w[3];
+                      bdpcm_cr_coeff_q[143:135] <= row_bdpcm_cr_diff_w[3];
+                    end
+                  endcase
                 end
                 bdpcm_cbf_y_q <= bdpcm_cbf_y_q || row_bdpcm_cbf_y_w;
                 bdpcm_cbf_cb_q <= bdpcm_cbf_cb_q || row_bdpcm_cbf_cb_w;
@@ -750,9 +829,8 @@ module ff_vvc_palette_symbolizer #(
                 feed_sample_valid_q <= 1'b0;
               end else begin
                 feed_sample_q <= feed_next_sample_w;
-                feed_sample_last_q <= feed_next_sample_w >= (MAX_CU_SAMPLES - 8);
-                feed_sample_valid_q <= 1'b1;
-                state_q <= ST_FEED_CU;
+                feed_sample_valid_q <= 1'b0;
+                state_q <= ST_FEED_READ;
               end
             end
           end
@@ -817,54 +895,30 @@ module ff_vvc_palette_symbolizer #(
   end
 
   always_ff @(posedge clk) begin
-    if (input_valid) begin
-      case (s_axis_plane)
-        PLANE_Y: begin
-          for (input_lane_i = 4'd0; input_lane_i < 4'd8; input_lane_i = input_lane_i + 4'd1) begin
-            if (input_lane_i < s_axis_count) begin
-              frame_y[y_write_row_w][(y_write_lane_w + input_lane_i[2:0]) * 8 +: 8] <=
-                input_lane_sample_w[input_lane_i];
-            end
+      if (input_valid) begin
+        case (s_axis_plane)
+          PLANE_Y: begin
+            frame_y[y_write_row_w] <= input_write_row_w;
           end
-        end
-        PLANE_CB: begin
-          for (input_lane_i = 4'd0; input_lane_i < 4'd8; input_lane_i = input_lane_i + 4'd1) begin
-            if (input_lane_i < s_axis_count) begin
-              frame_cb[cb_write_row_w][(cb_write_lane_w + input_lane_i[2:0]) * 8 +: 8] <=
-                input_lane_sample_w[input_lane_i];
-            end
+          PLANE_CB: begin
+            frame_cb[cb_write_row_w] <= input_write_row_w;
           end
-        end
-        default: begin
-          for (input_lane_i = 4'd0; input_lane_i < 4'd8; input_lane_i = input_lane_i + 4'd1) begin
-            if (input_lane_i < s_axis_count) begin
-              frame_cr[cr_write_row_w][(cr_write_lane_w + input_lane_i[2:0]) * 8 +: 8] <=
-                input_lane_sample_w[input_lane_i];
-            end
+          default: begin
+            frame_cr[cr_write_row_w] <= input_write_row_w;
           end
-        end
-      endcase
-    end
+        endcase
+      end
 
-    if (feed_read_enable_w) begin
+    if (state_q == ST_FEED_READ) begin
       feed_y_row_q <= frame_y[feed_read_row_w];
       feed_cb_row_q <= frame_cb[feed_read_row_w];
       feed_cr_row_q <= frame_cr[feed_read_row_w];
+    end
+
+    if (state_q == ST_FEED_READ_LEFT) begin
       feed_left_y_row_q <= frame_y[feed_read_left_row_w];
       feed_left_cb_row_q <= frame_cb[feed_read_left_row_w];
       feed_left_cr_row_q <= frame_cr[feed_read_left_row_w];
-      feed_y_sample_q <= frame_y[feed_read_row_w][feed_read_lane_w * 8 +: 8];
-      feed_cb_sample_q <= frame_cb[feed_read_row_w][feed_read_lane_w * 8 +: 8];
-      feed_cr_sample_q <= frame_cr[feed_read_row_w][feed_read_lane_w * 8 +: 8];
-      feed_left_y_sample_q <= frame_y[feed_read_left_row_w][feed_read_left_lane_w * 8 +: 8];
-      feed_left_cb_sample_q <= frame_cb[feed_read_left_row_w][feed_read_left_lane_w * 8 +: 8];
-      feed_left_cr_sample_q <= frame_cr[feed_read_left_row_w][feed_read_left_lane_w * 8 +: 8];
-      feed_left_boundary_y_sample_q <=
-        frame_y[feed_read_left_boundary_row_w][feed_read_left_boundary_lane_w * 8 +: 8];
-      feed_left_boundary_cb_sample_q <=
-        frame_cb[feed_read_left_boundary_row_w][feed_read_left_boundary_lane_w * 8 +: 8];
-      feed_left_boundary_cr_sample_q <=
-        frame_cr[feed_read_left_boundary_row_w][feed_read_left_boundary_lane_w * 8 +: 8];
     end
   end
 endmodule

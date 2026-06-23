@@ -160,6 +160,7 @@ module ff_vvc_encoder #(
   logic [INPUT_COUNT_BITS - 1:0] input_count_q;
   logic [INPUT_COUNT_BITS - 1:0] input_len_q;
   logic       input_active_q;
+  logic       palette_input_complete_q;
   logic [7:0] quant_luma_rem_ctu_q [0:VVC_LUMA_TUS_PER_CTU - 1];
   logic       quant_luma_negative_ctu_q [0:VVC_LUMA_TUS_PER_CTU - 1];
   logic [(VVC_RESIDUAL_AC_BITS * VVC_LUMA_AC_COEFFS) - 1:0] quant_luma_ac_levels_ctu_q [0:VVC_LUMA_TUS_PER_CTU - 1];
@@ -1126,15 +1127,14 @@ module ff_vvc_encoder #(
     ctu_has_palette_cu && (palette_mux_state_q == PALETTE_MUX_PARTITION) &&
     ctu_symbol_valid && (ctu_symbol_kind == SYMBOL_PALETTE_LEAF);
   // H.266 7.3.11.4 coding_tree() split syntax is sample independent, but
-  // H.266 8.6.2 IBC predictor selection for a palette leaf depends on the
-  // completed hash for that leaf. The IBC matcher resolves each leaf when its
-  // Cr samples finish, so split/header syntax can run ahead while each leaf
-  // payload waits only for its own mode decision.
+  // H.266 8.6.2 IBC predictor selection for a palette leaf must only see
+  // previously coded CUs. The input fetch order can differ from CTU syntax
+  // order, so exact-hash decisions are resolved after the whole CTU hash table
+  // is available; leaf payloads wait for that map while split/header syntax
+  // can still run ahead.
   assign palette_leaf_payload_ready_w =
     !ctu_has_palette_cu || !palette_leaf_marker_valid ||
-    !input_active_q ||
-    (palette_leaf_order_valid_w &&
-     (input_stream_leaf_q > {1'b0, palette_leaf_order_index_w}));
+    (palette_input_complete_q && ibc_matcher_idle);
   assign palette_request_valid =
     palette_leaf_marker_valid && (generated_out_state_q != GENERATED_OUT_IDLE) &&
     palette_leaf_payload_ready_w && !palette_leaf_is_ibc_w;
@@ -1694,6 +1694,7 @@ module ff_vvc_encoder #(
       input_stream_component_q <= 2'd0;
       input_stream_sample_q <= 6'd0;
       input_active_q <= 1'b0;
+      palette_input_complete_q <= 1'b0;
       s_axis_ready <= 1'b0;
       input_error  <= 1'b0;
       m_axis_valid <= 1'b0;
@@ -1897,6 +1898,7 @@ module ff_vvc_encoder #(
                           (visible_height > MAX_VISIBLE_HEIGHT);
         m_axis_valid   <= 1'b0;
         m_axis_last    <= 1'b0;
+        palette_input_complete_q <= 1'b0;
         pending_output_q <= 1'b0;
         resume_input_q <= 1'b0;
         frame_clear_q <= 1'b0;
@@ -1976,6 +1978,7 @@ module ff_vvc_encoder #(
         input_stream_leaf_q <= 7'd0;
         input_stream_component_q <= 2'd0;
         input_stream_sample_q <= 6'd0;
+        palette_input_complete_q <= 1'b0;
         chroma_tu_quant_pending_q <= 1'b0;
         chroma_tu_quant_frame_last_q <= 1'b0;
         chroma_quant_tu_q <= 6'd0;
@@ -2066,6 +2069,7 @@ module ff_vvc_encoder #(
           input_active_q <= 1'b0;
           s_axis_ready   <= 1'b0;
           if (ctu_has_palette_cu) begin
+            palette_input_complete_q <= 1'b1;
             pending_output_q <= (generated_out_state_q == GENERATED_OUT_IDLE);
           end else if (input_chroma_tu_last_cr_sample_w) begin
             if (!chroma_tu_quant_pending_q && !chroma_quant_active_q &&

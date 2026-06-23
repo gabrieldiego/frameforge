@@ -36,6 +36,7 @@ module ff_vvc_palette_cu_symbolizer #(
 
   typedef enum logic [3:0] {
     ST_BUILD,
+    ST_BUILD_ROW,
     ST_DRAIN_START,
     ST_DRAIN_ENTRY_Y,
     ST_DRAIN_ENTRY_CB,
@@ -51,6 +52,12 @@ module ff_vvc_palette_cu_symbolizer #(
   logic [6:0] sample_count_q;
   logic [4:0] drain_entry_q;
   logic [6:0] drain_sample_q;
+  logic [63:0] build_row_y_q;
+  logic [63:0] build_row_cb_q;
+  logic [63:0] build_row_cr_q;
+  logic [3:0] build_row_count_q;
+  logic       build_row_last_q;
+  logic [2:0] build_lane_q;
   logic [PALETTE_ENTRY_BANK_BITS - 1:0] entry_y_q;
   logic [PALETTE_ENTRY_BANK_BITS - 1:0] entry_cb_q;
   logic [PALETTE_ENTRY_BANK_BITS - 1:0] entry_cr_q;
@@ -62,21 +69,13 @@ module ff_vvc_palette_cu_symbolizer #(
   logic [7:0] escape_cb_q [0:MAX_CU_SAMPLES - 1];
   logic [7:0] escape_cr_q [0:MAX_CU_SAMPLES - 1];
   logic escape_present_q;
-  logic [7:0] lane_y_w [0:7];
-  logic [7:0] lane_cb_w [0:7];
-  logic [7:0] lane_cr_w [0:7];
-  logic [PALETTE_ENTRY_BANK_BITS - 1:0] build_entry_y_w;
-  logic [PALETTE_ENTRY_BANK_BITS - 1:0] build_entry_cb_w;
-  logic [PALETTE_ENTRY_BANK_BITS - 1:0] build_entry_cr_w;
-  logic [4:0] build_palette_size_w;
-  logic [4:0] build_indices_w [0:7];
-  logic [7:0] build_escape_y_w [0:7];
-  logic [7:0] build_escape_cb_w [0:7];
-  logic [7:0] build_escape_cr_w [0:7];
-  logic build_escape_present_w;
+  logic [7:0] build_lane_y_w;
+  logic [7:0] build_lane_cb_w;
+  logic [7:0] build_lane_cr_w;
+  logic build_lane_active_w;
+  logic build_row_done_w;
   logic build_found;
   logic [4:0] build_found_index;
-  logic [6:0] build_sample_index_w [0:7];
   logic [2:0] scan_x;
   logic [5:0] scan_index;
   logic [6:0] index4_sample_w [0:3];
@@ -92,6 +91,11 @@ module ff_vvc_palette_cu_symbolizer #(
                   drain_sample_q[2:0] :
                   (3'd7 - drain_sample_q[2:0]);
   assign scan_index = {drain_sample_q[5:3], scan_x};
+  assign build_lane_active_w =
+    ({1'b0, build_lane_q} < build_row_count_q) &&
+    (sample_count_q < MAX_CU_SAMPLES_L);
+  assign build_row_done_w =
+    ({1'b0, build_lane_q} + 4'd1) >= build_row_count_q;
 
   always @* begin
     for (int lane = 0; lane < 4; lane = lane + 1) begin
@@ -107,61 +111,59 @@ module ff_vvc_palette_cu_symbolizer #(
   end
 
   always @* begin
-    for (int lane = 0; lane < 8; lane = lane + 1) begin
-      lane_y_w[lane] = s_axis_y[lane * 8 +: 8];
-      lane_cb_w[lane] = s_axis_cb[lane * 8 +: 8];
-      lane_cr_w[lane] = s_axis_cr[lane * 8 +: 8];
-      build_indices_w[lane] = 5'd0;
-      build_escape_y_w[lane] = 8'd0;
-      build_escape_cb_w[lane] = 8'd0;
-      build_escape_cr_w[lane] = 8'd0;
-      build_sample_index_w[lane] = sample_count_q + {4'd0, lane[2:0]};
-    end
+    case (build_lane_q)
+      3'd0: begin
+        build_lane_y_w = build_row_y_q[7:0];
+        build_lane_cb_w = build_row_cb_q[7:0];
+        build_lane_cr_w = build_row_cr_q[7:0];
+      end
+      3'd1: begin
+        build_lane_y_w = build_row_y_q[15:8];
+        build_lane_cb_w = build_row_cb_q[15:8];
+        build_lane_cr_w = build_row_cr_q[15:8];
+      end
+      3'd2: begin
+        build_lane_y_w = build_row_y_q[23:16];
+        build_lane_cb_w = build_row_cb_q[23:16];
+        build_lane_cr_w = build_row_cr_q[23:16];
+      end
+      3'd3: begin
+        build_lane_y_w = build_row_y_q[31:24];
+        build_lane_cb_w = build_row_cb_q[31:24];
+        build_lane_cr_w = build_row_cr_q[31:24];
+      end
+      3'd4: begin
+        build_lane_y_w = build_row_y_q[39:32];
+        build_lane_cb_w = build_row_cb_q[39:32];
+        build_lane_cr_w = build_row_cr_q[39:32];
+      end
+      3'd5: begin
+        build_lane_y_w = build_row_y_q[47:40];
+        build_lane_cb_w = build_row_cb_q[47:40];
+        build_lane_cr_w = build_row_cr_q[47:40];
+      end
+      3'd6: begin
+        build_lane_y_w = build_row_y_q[55:48];
+        build_lane_cb_w = build_row_cb_q[55:48];
+        build_lane_cr_w = build_row_cr_q[55:48];
+      end
+      default: begin
+        build_lane_y_w = build_row_y_q[63:56];
+        build_lane_cb_w = build_row_cb_q[63:56];
+        build_lane_cr_w = build_row_cr_q[63:56];
+      end
+    endcase
 
-    build_entry_y_w = entry_y_q;
-    build_entry_cb_w = entry_cb_q;
-    build_entry_cr_w = entry_cr_q;
-    build_palette_size_w = palette_size_q;
-    build_escape_present_w = escape_present_q;
     build_found = 1'b0;
     build_found_index = 5'd0;
-
-    for (int lane = 0; lane < 8; lane = lane + 1) begin
-      if ((lane[3:0] < s_axis_count) &&
-          (build_sample_index_w[lane] < MAX_CU_SAMPLES_L)) begin
-        build_found = 1'b0;
-        build_found_index = 5'd0;
-        for (int entry = 0; entry < MAX_PALETTE_ENTRIES; entry = entry + 1) begin
-          if ((build_palette_size_w > entry[4:0]) &&
-              (build_entry_y_w[entry * 8 +: 8] == lane_y_w[lane]) &&
-              (build_entry_cb_w[entry * 8 +: 8] == lane_cb_w[lane]) &&
-              (build_entry_cr_w[entry * 8 +: 8] == lane_cr_w[lane])) begin
-            build_found = 1'b1;
-            build_found_index = entry[4:0];
-          end
-        end
-
-        if (build_found) begin
-          build_indices_w[lane] = build_found_index;
-        end else if (build_palette_size_w < MAX_PALETTE_ENTRIES_L) begin
-          build_entry_y_w[build_palette_size_w * 8 +: 8] = lane_y_w[lane];
-          build_entry_cb_w[build_palette_size_w * 8 +: 8] = lane_cb_w[lane];
-          build_entry_cr_w[build_palette_size_w * 8 +: 8] = lane_cr_w[lane];
-          build_indices_w[lane] = build_palette_size_w;
-          build_palette_size_w = build_palette_size_w + 5'd1;
-        end else begin
-          // H.266 7.3.11.6 / 7.4.12.6: once the simple first-come
-          // palette reaches 31 entries, non-matching samples use
-          // MaxPaletteIndex as an escape index and carry raw component
-          // values through palette_escape_val. The slice header selects
-          // SliceQpY 4 so H.266 8.4.5.3 reconstructs these 8-bit escape
-          // samples exactly.
-          build_indices_w[lane] = MAX_PALETTE_ENTRIES_L;
-          build_escape_y_w[lane] = lane_y_w[lane];
-          build_escape_cb_w[lane] = lane_cb_w[lane];
-          build_escape_cr_w[lane] = lane_cr_w[lane];
-          build_escape_present_w = 1'b1;
-        end
+    for (int entry = 0; entry < MAX_PALETTE_ENTRIES; entry = entry + 1) begin
+      if (!build_found &&
+          (palette_size_q > entry[4:0]) &&
+          (entry_y_q[entry * 8 +: 8] == build_lane_y_w) &&
+          (entry_cb_q[entry * 8 +: 8] == build_lane_cb_w) &&
+          (entry_cr_q[entry * 8 +: 8] == build_lane_cr_w)) begin
+        build_found = 1'b1;
+        build_found_index = entry[4:0];
       end
     end
   end
@@ -173,6 +175,12 @@ module ff_vvc_palette_cu_symbolizer #(
       sample_count_q <= 7'd0;
       drain_entry_q <= 5'd0;
       drain_sample_q <= 7'd0;
+      build_row_y_q <= 64'd0;
+      build_row_cb_q <= 64'd0;
+      build_row_cr_q <= 64'd0;
+      build_row_count_q <= 4'd0;
+      build_row_last_q <= 1'b0;
+      build_lane_q <= 3'd0;
       m_axis_valid <= 1'b0;
       m_axis_data <= 32'd0;
       m_axis_last <= 1'b0;
@@ -192,6 +200,12 @@ module ff_vvc_palette_cu_symbolizer #(
       sample_count_q <= 7'd0;
       drain_entry_q <= 5'd0;
       drain_sample_q <= 7'd0;
+      build_row_y_q <= 64'd0;
+      build_row_cb_q <= 64'd0;
+      build_row_cr_q <= 64'd0;
+      build_row_count_q <= 4'd0;
+      build_row_last_q <= 1'b0;
+      build_lane_q <= 3'd0;
       m_axis_valid <= 1'b0;
       m_axis_data <= 32'd0;
       m_axis_last <= 1'b0;
@@ -214,25 +228,62 @@ module ff_vvc_palette_cu_symbolizer #(
 
       case (state_q)
         ST_BUILD: begin
-          if (accepted_packet && cu_selected) begin
-            entry_y_q <= build_entry_y_w;
-            entry_cb_q <= build_entry_cb_w;
-            entry_cr_q <= build_entry_cr_w;
-            palette_size_q <= build_palette_size_w;
-            escape_present_q <= build_escape_present_w;
-            for (int lane = 0; lane < 8; lane = lane + 1) begin
-              if ((lane[3:0] < s_axis_count) &&
-                  (build_sample_index_w[lane] < MAX_CU_SAMPLES_L)) begin
-                indices_q[build_sample_index_w[lane][5:0]] <= build_indices_w[lane];
-                escape_y_q[build_sample_index_w[lane][5:0]] <= build_escape_y_w[lane];
-                escape_cb_q[build_sample_index_w[lane][5:0]] <= build_escape_cb_w[lane];
-                escape_cr_q[build_sample_index_w[lane][5:0]] <= build_escape_cr_w[lane];
-              end
+          if (accepted_packet) begin
+            if (cu_selected) begin
+              build_row_y_q <= s_axis_y;
+              build_row_cb_q <= s_axis_cb;
+              build_row_cr_q <= s_axis_cr;
+              build_row_count_q <= s_axis_count;
+              build_row_last_q <= s_axis_last;
+              build_lane_q <= 3'd0;
+              state_q <= ST_BUILD_ROW;
+            end else if (s_axis_last) begin
+              state_q <= ST_DRAIN_START;
             end
-            sample_count_q <= sample_count_q + {3'd0, s_axis_count};
           end
-          if (accepted_packet && s_axis_last) begin
-            state_q <= ST_DRAIN_START;
+        end
+
+        ST_BUILD_ROW: begin
+          if (build_lane_active_w) begin
+            if (build_found) begin
+              indices_q[sample_count_q[5:0]] <= build_found_index;
+              escape_y_q[sample_count_q[5:0]] <= 8'd0;
+              escape_cb_q[sample_count_q[5:0]] <= 8'd0;
+              escape_cr_q[sample_count_q[5:0]] <= 8'd0;
+            end else if (palette_size_q < MAX_PALETTE_ENTRIES_L) begin
+              entry_y_q[palette_size_q * 8 +: 8] <= build_lane_y_w;
+              entry_cb_q[palette_size_q * 8 +: 8] <= build_lane_cb_w;
+              entry_cr_q[palette_size_q * 8 +: 8] <= build_lane_cr_w;
+              indices_q[sample_count_q[5:0]] <= palette_size_q;
+              escape_y_q[sample_count_q[5:0]] <= 8'd0;
+              escape_cb_q[sample_count_q[5:0]] <= 8'd0;
+              escape_cr_q[sample_count_q[5:0]] <= 8'd0;
+              palette_size_q <= palette_size_q + 5'd1;
+            end else begin
+              // H.266 7.3.11.6 / 7.4.12.6: once the simple first-come
+              // palette reaches 31 entries, non-matching samples use
+              // MaxPaletteIndex as an escape index and carry raw component
+              // values through palette_escape_val. The slice header selects
+              // SliceQpY 4 so H.266 8.4.5.3 reconstructs these 8-bit escape
+              // samples exactly.
+              indices_q[sample_count_q[5:0]] <= MAX_PALETTE_ENTRIES_L;
+              escape_y_q[sample_count_q[5:0]] <= build_lane_y_w;
+              escape_cb_q[sample_count_q[5:0]] <= build_lane_cb_w;
+              escape_cr_q[sample_count_q[5:0]] <= build_lane_cr_w;
+              escape_present_q <= 1'b1;
+            end
+            sample_count_q <= sample_count_q + 7'd1;
+          end
+
+          if (build_row_done_w) begin
+            if (build_row_last_q) begin
+              state_q <= ST_DRAIN_START;
+            end else begin
+              state_q <= ST_BUILD;
+            end
+            build_lane_q <= 3'd0;
+          end else begin
+            build_lane_q <= build_lane_q + 3'd1;
           end
         end
 

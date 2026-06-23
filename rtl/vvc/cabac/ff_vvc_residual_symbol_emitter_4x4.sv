@@ -136,11 +136,15 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
   logic [8:0] rem_code_value_w;
   logic [8:0] rem_prefix_value_w;
   logic [2:0] rem_prefix_extra_len_w;
+  logic [8:0] rem_value_for_code_w;
+  logic [8:0] rem_quotient_w;
+  logic [8:0] rem_low_bits_w;
+  logic [8:0] rem_extra_base_w;
+  logic [8:0] rem_suffix_base_w;
   logic [5:0] rem_prefix_count_w;
   logic [31:0] rem_prefix_pattern_w;
   logic [5:0] rem_suffix_count_w;
   logic [31:0] rem_suffix_pattern_w;
-  integer prefix_len_i;
 
   assign busy = (state_q != ST_IDLE);
   assign d_sum_w = {4'd0, scan_x_w} + {4'd0, scan_y_w};
@@ -616,11 +620,15 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
     rem_code_value_w = 9'd0;
     rem_prefix_value_w = 9'd0;
     rem_prefix_extra_len_w = 3'd0;
+    rem_value_for_code_w = 9'd0;
+    rem_quotient_w = 9'd0;
+    rem_low_bits_w = 9'd0;
+    rem_extra_base_w = 9'd0;
+    rem_suffix_base_w = 9'd0;
     rem_prefix_count_w = 6'd0;
     rem_prefix_pattern_w = 32'd0;
     rem_suffix_count_w = 6'd0;
     rem_suffix_pattern_w = 32'd0;
-    prefix_len_i = 0;
     if (mode_q && (state_q == ST_SECOND)) begin
       sum_abs_for_rice_w = rice_sum_abs_w;
       if (sum_abs_for_rice_w <= 11'd6) begin
@@ -632,7 +640,12 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
       end else begin
         rice_param_w = 3'd3;
       end
-      bypass_zero_pos_w = 9'd1 << rice_param_w;
+      case (rice_param_w)
+        3'd0: bypass_zero_pos_w = 9'd1;
+        3'd1: bypass_zero_pos_w = 9'd2;
+        3'd2: bypass_zero_pos_w = 9'd4;
+        default: bypass_zero_pos_w = 9'd8;
+      endcase
       if (coeff_abs_w == 9'd0) begin
         bypass_value_w = bypass_zero_pos_w;
       end else if (coeff_abs_w <= bypass_zero_pos_w) begin
@@ -640,31 +653,7 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
       end else begin
         bypass_value_w = coeff_abs_w;
       end
-      rem_threshold_w = 9'd5 << rice_param_w;
-      if (bypass_value_w < rem_threshold_w) begin
-        rem_prefix_value_w = bypass_value_w >> rice_param_w;
-        rem_prefix_extra_len_w = 3'd0;
-        rem_prefix_count_w = {1'b0, rem_prefix_value_w[4:0]} + 6'd1;
-        rem_prefix_pattern_w = (32'd1 << rem_prefix_count_w) - 32'd2;
-        rem_suffix_count_w = {3'd0, rice_param_w};
-        rem_suffix_pattern_w = bypass_value_w & ((32'd1 << rice_param_w) - 32'd1);
-      end else begin
-        rem_code_value_w = (bypass_value_w >> rice_param_w) - 9'd5;
-        rem_prefix_extra_len_w = 3'd0;
-        for (prefix_len_i = 0; prefix_len_i < 7; prefix_len_i = prefix_len_i + 1) begin
-          if (rem_code_value_w > ((9'd2 << prefix_len_i) - 9'd2)) begin
-            rem_prefix_extra_len_w = prefix_len_i[2:0] + 3'd1;
-          end
-        end
-        rem_prefix_value_w = 9'd0;
-        rem_prefix_count_w = {3'd0, rem_prefix_extra_len_w} + 6'd5;
-        rem_prefix_pattern_w = (32'd1 << rem_prefix_count_w) - 32'd1;
-        rem_suffix_count_w =
-          {3'd0, rem_prefix_extra_len_w} + {3'd0, rice_param_w} + 6'd1;
-        rem_suffix_pattern_w =
-          ((rem_code_value_w - ((32'd1 << rem_prefix_extra_len_w) - 32'd1)) << rice_param_w) |
-          (bypass_value_w & ((32'd1 << rice_param_w) - 32'd1));
-      end
+      rem_value_for_code_w = bypass_value_w;
       rem_abs_value_w = 9'd0;
     end else begin
       rem_abs_value_w = (coeff_abs_w - 9'd4) >> 1;
@@ -684,32 +673,94 @@ module ff_vvc_residual_symbol_emitter_4x4 #(
       end else begin
         rice_param_w = 3'd3;
       end
-      rem_threshold_w = 9'd5 << rice_param_w;
-      rem_prefix_extra_len_w = 3'd0;
-      if (rem_abs_value_w < rem_threshold_w) begin
-        rem_prefix_value_w = rem_abs_value_w >> rice_param_w;
-        rem_prefix_count_w = {1'b0, rem_prefix_value_w[4:0]} + 6'd1;
-        rem_prefix_pattern_w = (32'd1 << rem_prefix_count_w) - 32'd2;
-        rem_suffix_count_w = {3'd0, rice_param_w};
-        rem_suffix_pattern_w = rem_abs_value_w & ((32'd1 << rice_param_w) - 32'd1);
-      end else begin
-        rem_code_value_w = (rem_abs_value_w >> rice_param_w) - 9'd5;
-        // Same unbounded prefix search as encode_rem_abs_ep(); large
-        // transform-skip deltas routinely exceed the old small-coefficient
-        // shortcut.
-        for (prefix_len_i = 0; prefix_len_i < 7; prefix_len_i = prefix_len_i + 1) begin
-          if (rem_code_value_w > ((9'd2 << prefix_len_i) - 9'd2)) begin
-            rem_prefix_extra_len_w = prefix_len_i[2:0] + 3'd1;
-          end
-        end
-        rem_prefix_count_w = {3'd0, rem_prefix_extra_len_w} + 6'd5;
-        rem_prefix_pattern_w = (32'd1 << rem_prefix_count_w) - 32'd1;
-        rem_suffix_count_w =
-          {3'd0, rem_prefix_extra_len_w} + {3'd0, rice_param_w} + 6'd1;
-        rem_suffix_pattern_w =
-          ((rem_code_value_w - ((32'd1 << rem_prefix_extra_len_w) - 32'd1)) << rice_param_w) |
-          (rem_abs_value_w & ((32'd1 << rice_param_w) - 32'd1));
+      rem_value_for_code_w = rem_abs_value_w;
+    end
+
+    // H.266 9.3.3 Rice/limited-EG residual remainder binarization. cRiceParam
+    // is currently limited to 0..3, so express the quotient, suffix mask, and
+    // prefix patterns with constant cases instead of variable shifts. This
+    // avoids a large Yosys share/muxtree search without changing the emitted
+    // bin strings.
+    case (rice_param_w)
+      3'd0: begin
+        rem_threshold_w = 9'd5;
+        rem_quotient_w = rem_value_for_code_w;
+        rem_low_bits_w = 9'd0;
       end
+      3'd1: begin
+        rem_threshold_w = 9'd10;
+        rem_quotient_w = {1'b0, rem_value_for_code_w[8:1]};
+        rem_low_bits_w = {8'd0, rem_value_for_code_w[0]};
+      end
+      3'd2: begin
+        rem_threshold_w = 9'd20;
+        rem_quotient_w = {2'd0, rem_value_for_code_w[8:2]};
+        rem_low_bits_w = {7'd0, rem_value_for_code_w[1:0]};
+      end
+      default: begin
+        rem_threshold_w = 9'd40;
+        rem_quotient_w = {3'd0, rem_value_for_code_w[8:3]};
+        rem_low_bits_w = {6'd0, rem_value_for_code_w[2:0]};
+      end
+    endcase
+
+    rem_prefix_extra_len_w = 3'd0;
+    if (rem_value_for_code_w < rem_threshold_w) begin
+      rem_prefix_value_w = rem_quotient_w;
+      rem_prefix_count_w = {1'b0, rem_prefix_value_w[4:0]} + 6'd1;
+      case (rem_prefix_value_w[2:0])
+        3'd0: rem_prefix_pattern_w = 32'd0;
+        3'd1: rem_prefix_pattern_w = 32'd2;
+        3'd2: rem_prefix_pattern_w = 32'd6;
+        3'd3: rem_prefix_pattern_w = 32'd14;
+        default: rem_prefix_pattern_w = 32'd30;
+      endcase
+      rem_suffix_count_w = {3'd0, rice_param_w};
+      rem_suffix_pattern_w = {23'd0, rem_low_bits_w};
+    end else begin
+      rem_code_value_w = rem_quotient_w - 9'd5;
+      rem_prefix_extra_len_w = 3'd0;
+      if (rem_code_value_w > 9'd126) begin
+        rem_prefix_extra_len_w = 3'd7;
+      end else if (rem_code_value_w > 9'd62) begin
+        rem_prefix_extra_len_w = 3'd6;
+      end else if (rem_code_value_w > 9'd30) begin
+        rem_prefix_extra_len_w = 3'd5;
+      end else if (rem_code_value_w > 9'd14) begin
+        rem_prefix_extra_len_w = 3'd4;
+      end else if (rem_code_value_w > 9'd6) begin
+        rem_prefix_extra_len_w = 3'd3;
+      end else if (rem_code_value_w > 9'd2) begin
+        rem_prefix_extra_len_w = 3'd2;
+      end else if (rem_code_value_w > 9'd0) begin
+        rem_prefix_extra_len_w = 3'd1;
+      end else begin
+        rem_prefix_extra_len_w = 3'd0;
+      end
+      case (rem_prefix_extra_len_w)
+        3'd0: begin rem_prefix_pattern_w = 32'd31; rem_extra_base_w = 9'd0; end
+        3'd1: begin rem_prefix_pattern_w = 32'd63; rem_extra_base_w = 9'd1; end
+        3'd2: begin rem_prefix_pattern_w = 32'd127; rem_extra_base_w = 9'd3; end
+        3'd3: begin rem_prefix_pattern_w = 32'd255; rem_extra_base_w = 9'd7; end
+        3'd4: begin rem_prefix_pattern_w = 32'd511; rem_extra_base_w = 9'd15; end
+        3'd5: begin rem_prefix_pattern_w = 32'd1023; rem_extra_base_w = 9'd31; end
+        3'd6: begin rem_prefix_pattern_w = 32'd2047; rem_extra_base_w = 9'd63; end
+        default: begin rem_prefix_pattern_w = 32'd4095; rem_extra_base_w = 9'd127; end
+      endcase
+      rem_prefix_value_w = 9'd0;
+      rem_prefix_count_w = {3'd0, rem_prefix_extra_len_w} + 6'd5;
+      rem_suffix_count_w =
+        {3'd0, rem_prefix_extra_len_w} + {3'd0, rice_param_w} + 6'd1;
+      rem_suffix_base_w = rem_code_value_w - rem_extra_base_w;
+      case (rice_param_w)
+        3'd0: rem_suffix_pattern_w = {23'd0, rem_suffix_base_w};
+        3'd1: rem_suffix_pattern_w = ({22'd0, rem_suffix_base_w, 1'b0}) |
+                                      {23'd0, rem_low_bits_w};
+        3'd2: rem_suffix_pattern_w = ({21'd0, rem_suffix_base_w, 2'd0}) |
+                                      {23'd0, rem_low_bits_w};
+        default: rem_suffix_pattern_w = ({20'd0, rem_suffix_base_w, 3'd0}) |
+                                        {23'd0, rem_low_bits_w};
+      endcase
     end
   end
 

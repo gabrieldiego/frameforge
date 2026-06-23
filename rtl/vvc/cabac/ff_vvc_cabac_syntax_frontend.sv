@@ -137,8 +137,6 @@ module ff_vvc_cabac_syntax_frontend #(
   logic [31:0] eg0_combined_pattern;
   logic [5:0] eg0_combined_count;
   logic [31:0] eg0_symbol_work;
-  logic [5:0] eg0_order_work;
-  logic [3:0] eg0_i;
   logic [31:0] eg5_prefix_pattern;
   logic [5:0] eg5_prefix_count;
   logic [31:0] eg5_suffix_pattern;
@@ -146,24 +144,26 @@ module ff_vvc_cabac_syntax_frontend #(
   logic [31:0] eg5_combined_pattern;
   logic [5:0] eg5_combined_count;
   logic [31:0] eg5_symbol_work;
-  logic [5:0] eg5_order_work;
-  logic [3:0] eg5_i;
-  logic [31:0] eg1_prefix_pattern;
-  logic [5:0] eg1_prefix_count;
-  logic [31:0] eg1_suffix_pattern;
-  logic [5:0] eg1_suffix_count;
-  logic [31:0] eg1_combined_pattern;
-  logic [5:0] eg1_combined_count;
-  logic [31:0] eg1_symbol_work;
-  logic [5:0] eg1_order_work;
-  logic [3:0] eg1_i;
+  logic signed [15:0] ibc_raw_mvd_x_w;
+  logic signed [15:0] ibc_raw_mvd_y_w;
+  logic [15:0] ibc_raw_abs_mvd_x_w;
+  logic [15:0] ibc_raw_abs_mvd_y_w;
+  logic [31:0] ibc_raw_eg1_x_symbol_work_w;
+  logic [31:0] ibc_raw_eg1_y_symbol_work_w;
+  logic [31:0] ibc_raw_eg1_x_combined_pattern_w;
+  logic [31:0] ibc_raw_eg1_y_combined_pattern_w;
+  logic [5:0] ibc_raw_eg1_x_combined_count_w;
+  logic [5:0] ibc_raw_eg1_y_combined_count_w;
   logic signed [15:0] ibc_mvd_x_q;
   logic signed [15:0] ibc_mvd_y_q;
   logic ibc_residual_q;
   logic bdpcm_residual_q;
-  logic [15:0] ibc_abs_mvd_x;
-  logic [15:0] ibc_abs_mvd_y;
-  logic [15:0] ibc_abs_mvd_cur;
+  logic [15:0] ibc_abs_mvd_x_q;
+  logic [15:0] ibc_abs_mvd_y_q;
+  logic [31:0] ibc_eg1_x_combined_pattern_q;
+  logic [31:0] ibc_eg1_y_combined_pattern_q;
+  logic [5:0] ibc_eg1_x_combined_count_q;
+  logic [5:0] ibc_eg1_y_combined_count_q;
   logic [2:0] ibc_pred_mode_ctx_q;
   logic ts_cbf_y_q;
   logic ts_cbf_cb_q;
@@ -238,6 +238,72 @@ module ff_vvc_cabac_syntax_frontend #(
   assign index4_value_w[1] = {3'd0, raw_symbol_data[9:5]};
   assign index4_value_w[2] = {3'd0, raw_symbol_data[14:10]};
   assign index4_value_w[3] = {3'd0, raw_symbol_data[19:15]};
+  assign ibc_raw_mvd_x_w = {{3{raw_symbol_data[12]}}, raw_symbol_data[12:0]};
+  assign ibc_raw_mvd_y_w = {{3{raw_symbol_data[25]}}, raw_symbol_data[25:13]};
+  assign ibc_raw_abs_mvd_x_w =
+    ibc_raw_mvd_x_w[15] ? (~ibc_raw_mvd_x_w + 16'sd1) : ibc_raw_mvd_x_w;
+  assign ibc_raw_abs_mvd_y_w =
+    ibc_raw_mvd_y_w[15] ? (~ibc_raw_mvd_y_w + 16'sd1) : ibc_raw_mvd_y_w;
+  assign ibc_raw_eg1_x_symbol_work_w =
+    (ibc_raw_abs_mvd_x_w > 16'd1) ?
+      {16'd0, ibc_raw_abs_mvd_x_w - 16'd2} : 32'd0;
+  assign ibc_raw_eg1_y_symbol_work_w =
+    (ibc_raw_abs_mvd_y_w > 16'd1) ?
+      {16'd0, ibc_raw_abs_mvd_y_w - 16'd2} : 32'd0;
+
+  always @* begin
+    // H.266 9.3.3 EG1 for abs_mvd_minus2, precomputed when the compact IBC
+    // packet is accepted so the output path does not carry the full ladder.
+    if (ibc_raw_eg1_x_symbol_work_w < 32'd2) begin
+      ibc_raw_eg1_x_combined_pattern_w = ibc_raw_eg1_x_symbol_work_w;
+      ibc_raw_eg1_x_combined_count_w = 6'd2;
+    end else if (ibc_raw_eg1_x_symbol_work_w < 32'd6) begin
+      ibc_raw_eg1_x_combined_pattern_w =
+        32'd8 | (ibc_raw_eg1_x_symbol_work_w - 32'd2);
+      ibc_raw_eg1_x_combined_count_w = 6'd4;
+    end else if (ibc_raw_eg1_x_symbol_work_w < 32'd14) begin
+      ibc_raw_eg1_x_combined_pattern_w =
+        32'd48 | (ibc_raw_eg1_x_symbol_work_w - 32'd6);
+      ibc_raw_eg1_x_combined_count_w = 6'd6;
+    end else if (ibc_raw_eg1_x_symbol_work_w < 32'd30) begin
+      ibc_raw_eg1_x_combined_pattern_w =
+        32'd224 | (ibc_raw_eg1_x_symbol_work_w - 32'd14);
+      ibc_raw_eg1_x_combined_count_w = 6'd8;
+    end else if (ibc_raw_eg1_x_symbol_work_w < 32'd62) begin
+      ibc_raw_eg1_x_combined_pattern_w =
+        32'd960 | (ibc_raw_eg1_x_symbol_work_w - 32'd30);
+      ibc_raw_eg1_x_combined_count_w = 6'd10;
+    end else begin
+      ibc_raw_eg1_x_combined_pattern_w =
+        32'd3968 | (ibc_raw_eg1_x_symbol_work_w - 32'd62);
+      ibc_raw_eg1_x_combined_count_w = 6'd12;
+    end
+
+    if (ibc_raw_eg1_y_symbol_work_w < 32'd2) begin
+      ibc_raw_eg1_y_combined_pattern_w = ibc_raw_eg1_y_symbol_work_w;
+      ibc_raw_eg1_y_combined_count_w = 6'd2;
+    end else if (ibc_raw_eg1_y_symbol_work_w < 32'd6) begin
+      ibc_raw_eg1_y_combined_pattern_w =
+        32'd8 | (ibc_raw_eg1_y_symbol_work_w - 32'd2);
+      ibc_raw_eg1_y_combined_count_w = 6'd4;
+    end else if (ibc_raw_eg1_y_symbol_work_w < 32'd14) begin
+      ibc_raw_eg1_y_combined_pattern_w =
+        32'd48 | (ibc_raw_eg1_y_symbol_work_w - 32'd6);
+      ibc_raw_eg1_y_combined_count_w = 6'd6;
+    end else if (ibc_raw_eg1_y_symbol_work_w < 32'd30) begin
+      ibc_raw_eg1_y_combined_pattern_w =
+        32'd224 | (ibc_raw_eg1_y_symbol_work_w - 32'd14);
+      ibc_raw_eg1_y_combined_count_w = 6'd8;
+    end else if (ibc_raw_eg1_y_symbol_work_w < 32'd62) begin
+      ibc_raw_eg1_y_combined_pattern_w =
+        32'd960 | (ibc_raw_eg1_y_symbol_work_w - 32'd30);
+      ibc_raw_eg1_y_combined_count_w = 6'd10;
+    end else begin
+      ibc_raw_eg1_y_combined_pattern_w =
+        32'd3968 | (ibc_raw_eg1_y_symbol_work_w - 32'd62);
+      ibc_raw_eg1_y_combined_count_w = 6'd12;
+    end
+  end
 
   always @* begin
     case (ts_component_q)
@@ -258,25 +324,79 @@ module ff_vvc_cabac_syntax_frontend #(
     eg0_prefix_count = 6'd0;
     eg0_suffix_pattern = 32'd0;
     eg0_suffix_count = 6'd0;
+    eg0_combined_pattern = 32'd0;
+    eg0_combined_count = 6'd1;
     eg0_symbol_work =
       ((state_q == ST_PAL_PREDICTOR_RUN) ||
        (state_q == ST_PAL_PREDICTOR_RUN_SUFFIX)) ? 32'd1 : {24'd0, palette_entry_count_q};
-    eg0_order_work = 6'd0;
-    for (eg0_i = 4'd0; eg0_i < 4'd8; eg0_i = eg0_i + 4'd1) begin
-      if (eg0_symbol_work >= (32'd1 << eg0_order_work)) begin
-        eg0_prefix_pattern = (eg0_prefix_pattern << 1) | 32'd1;
-        eg0_prefix_count = eg0_prefix_count + 6'd1;
-        eg0_symbol_work = eg0_symbol_work - (32'd1 << eg0_order_work);
-        eg0_order_work = eg0_order_work + 6'd1;
-      end
+    // H.266 9.3.3 EG0 binarization. Keep this as constant-range logic instead
+    // of a variable-shift loop; Yosys resource sharing can otherwise spend
+    // excessive time proving large shift/subtract cones around this frontend.
+    if (eg0_symbol_work < 32'd1) begin
+      eg0_prefix_pattern = 32'd0;
+      eg0_prefix_count = 6'd1;
+      eg0_suffix_pattern = 32'd0;
+      eg0_suffix_count = 6'd0;
+      eg0_combined_pattern = 32'd0;
+      eg0_combined_count = 6'd1;
+    end else if (eg0_symbol_work < 32'd3) begin
+      eg0_prefix_pattern = 32'd2;
+      eg0_prefix_count = 6'd2;
+      eg0_suffix_pattern = eg0_symbol_work - 32'd1;
+      eg0_suffix_count = 6'd1;
+      eg0_combined_pattern = 32'd4 | (eg0_symbol_work - 32'd1);
+      eg0_combined_count = 6'd3;
+    end else if (eg0_symbol_work < 32'd7) begin
+      eg0_prefix_pattern = 32'd6;
+      eg0_prefix_count = 6'd3;
+      eg0_suffix_pattern = eg0_symbol_work - 32'd3;
+      eg0_suffix_count = 6'd2;
+      eg0_combined_pattern = 32'd24 | (eg0_symbol_work - 32'd3);
+      eg0_combined_count = 6'd5;
+    end else if (eg0_symbol_work < 32'd15) begin
+      eg0_prefix_pattern = 32'd14;
+      eg0_prefix_count = 6'd4;
+      eg0_suffix_pattern = eg0_symbol_work - 32'd7;
+      eg0_suffix_count = 6'd3;
+      eg0_combined_pattern = 32'd112 | (eg0_symbol_work - 32'd7);
+      eg0_combined_count = 6'd7;
+    end else if (eg0_symbol_work < 32'd31) begin
+      eg0_prefix_pattern = 32'd30;
+      eg0_prefix_count = 6'd5;
+      eg0_suffix_pattern = eg0_symbol_work - 32'd15;
+      eg0_suffix_count = 6'd4;
+      eg0_combined_pattern = 32'd480 | (eg0_symbol_work - 32'd15);
+      eg0_combined_count = 6'd9;
+    end else if (eg0_symbol_work < 32'd63) begin
+      eg0_prefix_pattern = 32'd62;
+      eg0_prefix_count = 6'd6;
+      eg0_suffix_pattern = eg0_symbol_work - 32'd31;
+      eg0_suffix_count = 6'd5;
+      eg0_combined_pattern = 32'd1984 | (eg0_symbol_work - 32'd31);
+      eg0_combined_count = 6'd11;
+    end else if (eg0_symbol_work < 32'd127) begin
+      eg0_prefix_pattern = 32'd126;
+      eg0_prefix_count = 6'd7;
+      eg0_suffix_pattern = eg0_symbol_work - 32'd63;
+      eg0_suffix_count = 6'd6;
+      eg0_combined_pattern = 32'd8064 | (eg0_symbol_work - 32'd63);
+      eg0_combined_count = 6'd13;
+    end else if (eg0_symbol_work < 32'd255) begin
+      eg0_prefix_pattern = 32'd254;
+      eg0_prefix_count = 6'd8;
+      eg0_suffix_pattern = eg0_symbol_work - 32'd127;
+      eg0_suffix_count = 6'd7;
+      eg0_combined_pattern = 32'd32512 | (eg0_symbol_work - 32'd127);
+      eg0_combined_count = 6'd15;
+    end else begin
+      eg0_prefix_pattern = 32'd510;
+      eg0_prefix_count = 6'd9;
+      eg0_suffix_pattern = eg0_symbol_work - 32'd255;
+      eg0_suffix_count = 6'd8;
+      eg0_combined_pattern = 32'd130560 | (eg0_symbol_work - 32'd255);
+      eg0_combined_count = 6'd17;
     end
-    eg0_prefix_pattern = (eg0_prefix_pattern << 1);
-    eg0_prefix_count = eg0_prefix_count + 6'd1;
-    eg0_suffix_pattern = eg0_symbol_work;
-    eg0_suffix_count = eg0_order_work;
   end
-  assign eg0_combined_pattern = (eg0_prefix_pattern << eg0_suffix_count) | eg0_suffix_pattern;
-  assign eg0_combined_count = eg0_prefix_count + eg0_suffix_count;
 
   always @* begin
     case (escape_pos_q[3:2])
@@ -285,7 +405,12 @@ module ff_vvc_cabac_syntax_frontend #(
       2'd2: escape_group_mask_w = escape_active_mask_q[11:8];
       default: escape_group_mask_w = escape_active_mask_q[15:12];
     endcase
-    escape_group_search_mask_w = escape_group_mask_w & (4'hf << escape_pos_q[1:0]);
+    case (escape_pos_q[1:0])
+      2'd0: escape_group_search_mask_w = escape_group_mask_w;
+      2'd1: escape_group_search_mask_w = escape_group_mask_w & 4'b1110;
+      2'd2: escape_group_search_mask_w = escape_group_mask_w & 4'b1100;
+      default: escape_group_search_mask_w = escape_group_mask_w & 4'b1000;
+    endcase
     escape_seek_valid_w = |escape_group_search_mask_w;
     escape_seek_pos_w = {index_min_sub_pos_q[7:4], escape_pos_q[3:2], 2'b00};
     if (escape_group_search_mask_w[0]) begin
@@ -298,8 +423,40 @@ module ff_vvc_cabac_syntax_frontend #(
       escape_seek_pos_w[1:0] = 2'd3;
     end
     escape_next_group_pos_w = {index_min_sub_pos_q[7:4], escape_pos_q[3:2], 2'b00} + 8'd4;
-    escape_current_valid_w =
-      (escape_pos_q < index_max_sub_pos_q) && escape_active_mask_q[escape_pos_q[3:0]];
+    case (escape_pos_q[3:0])
+      4'd0: escape_current_valid_w =
+        (escape_pos_q < index_max_sub_pos_q) && escape_active_mask_q[0];
+      4'd1: escape_current_valid_w =
+        (escape_pos_q < index_max_sub_pos_q) && escape_active_mask_q[1];
+      4'd2: escape_current_valid_w =
+        (escape_pos_q < index_max_sub_pos_q) && escape_active_mask_q[2];
+      4'd3: escape_current_valid_w =
+        (escape_pos_q < index_max_sub_pos_q) && escape_active_mask_q[3];
+      4'd4: escape_current_valid_w =
+        (escape_pos_q < index_max_sub_pos_q) && escape_active_mask_q[4];
+      4'd5: escape_current_valid_w =
+        (escape_pos_q < index_max_sub_pos_q) && escape_active_mask_q[5];
+      4'd6: escape_current_valid_w =
+        (escape_pos_q < index_max_sub_pos_q) && escape_active_mask_q[6];
+      4'd7: escape_current_valid_w =
+        (escape_pos_q < index_max_sub_pos_q) && escape_active_mask_q[7];
+      4'd8: escape_current_valid_w =
+        (escape_pos_q < index_max_sub_pos_q) && escape_active_mask_q[8];
+      4'd9: escape_current_valid_w =
+        (escape_pos_q < index_max_sub_pos_q) && escape_active_mask_q[9];
+      4'd10: escape_current_valid_w =
+        (escape_pos_q < index_max_sub_pos_q) && escape_active_mask_q[10];
+      4'd11: escape_current_valid_w =
+        (escape_pos_q < index_max_sub_pos_q) && escape_active_mask_q[11];
+      4'd12: escape_current_valid_w =
+        (escape_pos_q < index_max_sub_pos_q) && escape_active_mask_q[12];
+      4'd13: escape_current_valid_w =
+        (escape_pos_q < index_max_sub_pos_q) && escape_active_mask_q[13];
+      4'd14: escape_current_valid_w =
+        (escape_pos_q < index_max_sub_pos_q) && escape_active_mask_q[14];
+      default: escape_current_valid_w =
+        (escape_pos_q < index_max_sub_pos_q) && escape_active_mask_q[15];
+    endcase
     case (escape_component_q)
       2'd0: escape_cur_value = palette_escape_y_q[escape_pos_q[5:0]];
       2'd1: escape_cur_value = palette_escape_cb_q[escape_pos_q[5:0]];
@@ -312,53 +469,39 @@ module ff_vvc_cabac_syntax_frontend #(
     eg5_prefix_count = 6'd0;
     eg5_suffix_pattern = 32'd0;
     eg5_suffix_count = 6'd0;
+    eg5_combined_pattern = 32'd0;
+    eg5_combined_count = 6'd6;
     eg5_symbol_work = {24'd0, escape_cur_value};
-    eg5_order_work = 6'd5;
-    for (eg5_i = 4'd0; eg5_i < 4'd4; eg5_i = eg5_i + 4'd1) begin
-      if (eg5_symbol_work >= (32'd1 << eg5_order_work)) begin
-        eg5_prefix_pattern = (eg5_prefix_pattern << 1) | 32'd1;
-        eg5_prefix_count = eg5_prefix_count + 6'd1;
-        eg5_symbol_work = eg5_symbol_work - (32'd1 << eg5_order_work);
-        eg5_order_work = eg5_order_work + 6'd1;
-      end
+    // H.266 9.3.3 EG5 binarization for palette_escape_val.
+    if (eg5_symbol_work < 32'd32) begin
+      eg5_prefix_pattern = 32'd0;
+      eg5_prefix_count = 6'd1;
+      eg5_suffix_pattern = eg5_symbol_work;
+      eg5_suffix_count = 6'd5;
+      eg5_combined_pattern = eg5_symbol_work;
+      eg5_combined_count = 6'd6;
+    end else if (eg5_symbol_work < 32'd96) begin
+      eg5_prefix_pattern = 32'd2;
+      eg5_prefix_count = 6'd2;
+      eg5_suffix_pattern = eg5_symbol_work - 32'd32;
+      eg5_suffix_count = 6'd6;
+      eg5_combined_pattern = 32'd128 | (eg5_symbol_work - 32'd32);
+      eg5_combined_count = 6'd8;
+    end else if (eg5_symbol_work < 32'd224) begin
+      eg5_prefix_pattern = 32'd6;
+      eg5_prefix_count = 6'd3;
+      eg5_suffix_pattern = eg5_symbol_work - 32'd96;
+      eg5_suffix_count = 6'd7;
+      eg5_combined_pattern = 32'd768 | (eg5_symbol_work - 32'd96);
+      eg5_combined_count = 6'd10;
+    end else begin
+      eg5_prefix_pattern = 32'd14;
+      eg5_prefix_count = 6'd4;
+      eg5_suffix_pattern = eg5_symbol_work - 32'd224;
+      eg5_suffix_count = 6'd8;
+      eg5_combined_pattern = 32'd3584 | (eg5_symbol_work - 32'd224);
+      eg5_combined_count = 6'd12;
     end
-    eg5_prefix_pattern = eg5_prefix_pattern << 1;
-    eg5_prefix_count = eg5_prefix_count + 6'd1;
-    eg5_suffix_pattern = eg5_symbol_work;
-    eg5_suffix_count = eg5_order_work;
-  end
-  assign eg5_combined_pattern = (eg5_prefix_pattern << eg5_suffix_count) | eg5_suffix_pattern;
-  assign eg5_combined_count = eg5_prefix_count + eg5_suffix_count;
-
-  always @* begin
-    eg1_prefix_pattern = 32'd0;
-    eg1_prefix_count = 6'd0;
-    eg1_suffix_pattern = 32'd0;
-    eg1_suffix_count = 6'd0;
-    eg1_symbol_work = {16'd0, ibc_abs_mvd_cur - 16'd2};
-    eg1_order_work = 6'd1;
-    for (eg1_i = 4'd0; eg1_i < 4'd15; eg1_i = eg1_i + 4'd1) begin
-      if (eg1_symbol_work >= (32'd1 << eg1_order_work)) begin
-        eg1_prefix_pattern = (eg1_prefix_pattern << 1) | 32'd1;
-        eg1_prefix_count = eg1_prefix_count + 6'd1;
-        eg1_symbol_work = eg1_symbol_work - (32'd1 << eg1_order_work);
-        eg1_order_work = eg1_order_work + 6'd1;
-      end
-    end
-    eg1_prefix_pattern = eg1_prefix_pattern << 1;
-    eg1_prefix_count = eg1_prefix_count + 6'd1;
-    eg1_suffix_pattern = eg1_symbol_work;
-    eg1_suffix_count = eg1_order_work;
-  end
-  assign eg1_combined_pattern = (eg1_prefix_pattern << eg1_suffix_count) | eg1_suffix_pattern;
-  assign eg1_combined_count = eg1_prefix_count + eg1_suffix_count;
-
-  always @* begin
-    ibc_abs_mvd_x = ibc_mvd_x_q[15] ? (~ibc_mvd_x_q + 16'sd1) : ibc_mvd_x_q;
-    ibc_abs_mvd_y = ibc_mvd_y_q[15] ? (~ibc_mvd_y_q + 16'sd1) : ibc_mvd_y_q;
-    ibc_abs_mvd_cur =
-      ((state_q == ST_IBC_MVD_MINUS2_X_PREFIX) ||
-       (state_q == ST_IBC_MVD_MINUS2_X_SUFFIX)) ? ibc_abs_mvd_x : ibc_abs_mvd_y;
   end
 
   assign index_cur_value = palette_indices_q[index_cur_pos_q[5:0]];
@@ -369,19 +512,70 @@ module ff_vvc_cabac_syntax_frontend #(
   assign index_scan_y = index_cur_pos_q[5:3];
   assign index_copy_above_present = (index_cur_pos_q != 8'd0) && (index_scan_y != 3'd0);
   assign index_level_next_rel_w = index_level_pos_q[3:0] + 4'd1;
-  assign index_level_next_emit_w =
-    ((index_level_pos_q + 8'd1) < index_max_sub_pos_q) &&
-    palette_level_emit_mask_q[index_level_next_rel_w];
 
   always @* begin
+    case (index_level_next_rel_w)
+      4'd0: index_level_next_emit_w =
+        ((index_level_pos_q + 8'd1) < index_max_sub_pos_q) &&
+        palette_level_emit_mask_q[0];
+      4'd1: index_level_next_emit_w =
+        ((index_level_pos_q + 8'd1) < index_max_sub_pos_q) &&
+        palette_level_emit_mask_q[1];
+      4'd2: index_level_next_emit_w =
+        ((index_level_pos_q + 8'd1) < index_max_sub_pos_q) &&
+        palette_level_emit_mask_q[2];
+      4'd3: index_level_next_emit_w =
+        ((index_level_pos_q + 8'd1) < index_max_sub_pos_q) &&
+        palette_level_emit_mask_q[3];
+      4'd4: index_level_next_emit_w =
+        ((index_level_pos_q + 8'd1) < index_max_sub_pos_q) &&
+        palette_level_emit_mask_q[4];
+      4'd5: index_level_next_emit_w =
+        ((index_level_pos_q + 8'd1) < index_max_sub_pos_q) &&
+        palette_level_emit_mask_q[5];
+      4'd6: index_level_next_emit_w =
+        ((index_level_pos_q + 8'd1) < index_max_sub_pos_q) &&
+        palette_level_emit_mask_q[6];
+      4'd7: index_level_next_emit_w =
+        ((index_level_pos_q + 8'd1) < index_max_sub_pos_q) &&
+        palette_level_emit_mask_q[7];
+      4'd8: index_level_next_emit_w =
+        ((index_level_pos_q + 8'd1) < index_max_sub_pos_q) &&
+        palette_level_emit_mask_q[8];
+      4'd9: index_level_next_emit_w =
+        ((index_level_pos_q + 8'd1) < index_max_sub_pos_q) &&
+        palette_level_emit_mask_q[9];
+      4'd10: index_level_next_emit_w =
+        ((index_level_pos_q + 8'd1) < index_max_sub_pos_q) &&
+        palette_level_emit_mask_q[10];
+      4'd11: index_level_next_emit_w =
+        ((index_level_pos_q + 8'd1) < index_max_sub_pos_q) &&
+        palette_level_emit_mask_q[11];
+      4'd12: index_level_next_emit_w =
+        ((index_level_pos_q + 8'd1) < index_max_sub_pos_q) &&
+        palette_level_emit_mask_q[12];
+      4'd13: index_level_next_emit_w =
+        ((index_level_pos_q + 8'd1) < index_max_sub_pos_q) &&
+        palette_level_emit_mask_q[13];
+      4'd14: index_level_next_emit_w =
+        ((index_level_pos_q + 8'd1) < index_max_sub_pos_q) &&
+        palette_level_emit_mask_q[14];
+      default: index_level_next_emit_w =
+        ((index_level_pos_q + 8'd1) < index_max_sub_pos_q) &&
+        palette_level_emit_mask_q[15];
+    endcase
     case (index_level_pos_q[3:2])
       2'd0: index_level_group_mask_w = palette_level_emit_mask_q[3:0];
       2'd1: index_level_group_mask_w = palette_level_emit_mask_q[7:4];
       2'd2: index_level_group_mask_w = palette_level_emit_mask_q[11:8];
       default: index_level_group_mask_w = palette_level_emit_mask_q[15:12];
     endcase
-    index_level_group_search_mask_w =
-      index_level_group_mask_w & (4'hf << index_level_pos_q[1:0]);
+    case (index_level_pos_q[1:0])
+      2'd0: index_level_group_search_mask_w = index_level_group_mask_w;
+      2'd1: index_level_group_search_mask_w = index_level_group_mask_w & 4'b1110;
+      2'd2: index_level_group_search_mask_w = index_level_group_mask_w & 4'b1100;
+      default: index_level_group_search_mask_w = index_level_group_mask_w & 4'b1000;
+    endcase
     index_level_seek_valid_w = |index_level_group_search_mask_w;
     index_level_seek_pos_w = {index_min_sub_pos_q[7:4], index_level_pos_q[3:2], 2'b00};
     if (index_level_group_search_mask_w[0]) begin
@@ -431,12 +625,22 @@ module ff_vvc_cabac_syntax_frontend #(
     end
 
     trunc_thresh = 6'd0;
-    for (int i = 0; i < 5; i = i + 1) begin
-      if ((8'd1 << i) <= trunc_num_symbols) begin
-        trunc_thresh = i[5:0];
-      end
+    if (trunc_num_symbols >= 8'd16) begin
+      trunc_thresh = 6'd4;
+      trunc_val = 8'd16;
+    end else if (trunc_num_symbols >= 8'd8) begin
+      trunc_thresh = 6'd3;
+      trunc_val = 8'd8;
+    end else if (trunc_num_symbols >= 8'd4) begin
+      trunc_thresh = 6'd2;
+      trunc_val = 8'd4;
+    end else if (trunc_num_symbols >= 8'd2) begin
+      trunc_thresh = 6'd1;
+      trunc_val = 8'd2;
+    end else begin
+      trunc_thresh = 6'd0;
+      trunc_val = 8'd1;
     end
-    trunc_val = 8'd1 << trunc_thresh;
     trunc_b = trunc_num_symbols - trunc_val;
     if (trunc_level < (trunc_val - trunc_b)) begin
       trunc_pattern = {24'd0, trunc_level};
@@ -497,6 +701,12 @@ module ff_vvc_cabac_syntax_frontend #(
       escape_component_q <= 2'd0;
       ibc_mvd_x_q <= 16'sd0;
       ibc_mvd_y_q <= 16'sd0;
+      ibc_abs_mvd_x_q <= 16'd0;
+      ibc_abs_mvd_y_q <= 16'd0;
+      ibc_eg1_x_combined_pattern_q <= 32'd0;
+      ibc_eg1_y_combined_pattern_q <= 32'd0;
+      ibc_eg1_x_combined_count_q <= 6'd2;
+      ibc_eg1_y_combined_count_q <= 6'd2;
       ibc_residual_q <= 1'b0;
       bdpcm_residual_q <= 1'b0;
       ibc_pred_mode_ctx_q <= 3'd0;
@@ -545,6 +755,12 @@ module ff_vvc_cabac_syntax_frontend #(
       escape_component_q <= 2'd0;
       ibc_mvd_x_q <= 16'sd0;
       ibc_mvd_y_q <= 16'sd0;
+      ibc_abs_mvd_x_q <= 16'd0;
+      ibc_abs_mvd_y_q <= 16'd0;
+      ibc_eg1_x_combined_pattern_q <= 32'd0;
+      ibc_eg1_y_combined_pattern_q <= 32'd0;
+      ibc_eg1_x_combined_count_q <= 6'd2;
+      ibc_eg1_y_combined_count_q <= 6'd2;
       ibc_residual_q <= 1'b0;
       bdpcm_residual_q <= 1'b0;
       ibc_pred_mode_ctx_q <= 3'd0;
@@ -853,7 +1069,7 @@ module ff_vvc_cabac_syntax_frontend #(
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_CTX;
           m_axis_data <= ({22'd0, CTX_ABS_MVD_GREATER0_FLAG_0} << 8) |
-                         {31'd0, (ibc_abs_mvd_x != 16'd0)};
+                         {31'd0, (ibc_abs_mvd_x_q != 16'd0)};
           m_axis_last <= 1'b0;
           state_q <= ST_IBC_MVD_GT0_Y;
         end
@@ -862,20 +1078,20 @@ module ff_vvc_cabac_syntax_frontend #(
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_CTX;
           m_axis_data <= ({22'd0, CTX_ABS_MVD_GREATER0_FLAG_0} << 8) |
-                         {31'd0, (ibc_abs_mvd_y != 16'd0)};
+                         {31'd0, (ibc_abs_mvd_y_q != 16'd0)};
           m_axis_last <= 1'b0;
-          state_q <= (ibc_abs_mvd_x != 16'd0) ? ST_IBC_MVD_GT1_X :
-                     ((ibc_abs_mvd_y != 16'd0) ? ST_IBC_MVD_GT1_Y : ST_IBC_CU_CODED);
+          state_q <= (ibc_abs_mvd_x_q != 16'd0) ? ST_IBC_MVD_GT1_X :
+                     ((ibc_abs_mvd_y_q != 16'd0) ? ST_IBC_MVD_GT1_Y : ST_IBC_CU_CODED);
         end
 
         ST_IBC_MVD_GT1_X: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_CTX;
           m_axis_data <= ({22'd0, CTX_ABS_MVD_GREATER1_FLAG_0} << 8) |
-                         {31'd0, (ibc_abs_mvd_x > 16'd1)};
+                         {31'd0, (ibc_abs_mvd_x_q > 16'd1)};
           m_axis_last <= 1'b0;
-          state_q <= (ibc_abs_mvd_y != 16'd0) ? ST_IBC_MVD_GT1_Y :
-                     ((ibc_abs_mvd_x > 16'd1) ? ST_IBC_MVD_MINUS2_X_PREFIX :
+          state_q <= (ibc_abs_mvd_y_q != 16'd0) ? ST_IBC_MVD_GT1_Y :
+                     ((ibc_abs_mvd_x_q > 16'd1) ? ST_IBC_MVD_MINUS2_X_PREFIX :
                       ST_IBC_MVD_SIGN_X);
         end
 
@@ -883,13 +1099,13 @@ module ff_vvc_cabac_syntax_frontend #(
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BIN_CTX;
           m_axis_data <= ({22'd0, CTX_ABS_MVD_GREATER1_FLAG_0} << 8) |
-                         {31'd0, (ibc_abs_mvd_y > 16'd1)};
+                         {31'd0, (ibc_abs_mvd_y_q > 16'd1)};
           m_axis_last <= 1'b0;
-          if ((ibc_abs_mvd_x != 16'd0) && (ibc_abs_mvd_x > 16'd1)) begin
+          if ((ibc_abs_mvd_x_q != 16'd0) && (ibc_abs_mvd_x_q > 16'd1)) begin
             state_q <= ST_IBC_MVD_MINUS2_X_PREFIX;
-          end else if (ibc_abs_mvd_x != 16'd0) begin
+          end else if (ibc_abs_mvd_x_q != 16'd0) begin
             state_q <= ST_IBC_MVD_SIGN_X;
-          end else if (ibc_abs_mvd_y > 16'd1) begin
+          end else if (ibc_abs_mvd_y_q > 16'd1) begin
             state_q <= ST_IBC_MVD_MINUS2_Y_PREFIX;
           end else begin
             state_q <= ST_IBC_MVD_SIGN_Y;
@@ -899,7 +1115,8 @@ module ff_vvc_cabac_syntax_frontend #(
         ST_IBC_MVD_MINUS2_X_PREFIX: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BINS_EP;
-          m_axis_data <= (eg1_combined_pattern << 6) | {26'd0, eg1_combined_count};
+          m_axis_data <=
+            (ibc_eg1_x_combined_pattern_q << 6) | {26'd0, ibc_eg1_x_combined_count_q};
           m_axis_last <= 1'b0;
           state_q <= ST_IBC_MVD_SIGN_X;
         end
@@ -907,7 +1124,7 @@ module ff_vvc_cabac_syntax_frontend #(
         ST_IBC_MVD_MINUS2_X_SUFFIX: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BINS_EP;
-          m_axis_data <= (eg1_suffix_pattern << 6) | {26'd0, eg1_suffix_count};
+          m_axis_data <= 32'd0;
           m_axis_last <= 1'b0;
           state_q <= ST_IBC_MVD_SIGN_X;
         end
@@ -917,9 +1134,9 @@ module ff_vvc_cabac_syntax_frontend #(
           m_axis_kind <= SYMBOL_BIN_EP;
           m_axis_data <= {31'd0, ibc_mvd_x_q[15]};
           m_axis_last <= 1'b0;
-          if (ibc_abs_mvd_y > 16'd1) begin
+          if (ibc_abs_mvd_y_q > 16'd1) begin
             state_q <= ST_IBC_MVD_MINUS2_Y_PREFIX;
-          end else if (ibc_abs_mvd_y != 16'd0) begin
+          end else if (ibc_abs_mvd_y_q != 16'd0) begin
             state_q <= ST_IBC_MVD_SIGN_Y;
           end else begin
             state_q <= ST_IBC_CU_CODED;
@@ -929,7 +1146,8 @@ module ff_vvc_cabac_syntax_frontend #(
         ST_IBC_MVD_MINUS2_Y_PREFIX: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BINS_EP;
-          m_axis_data <= (eg1_combined_pattern << 6) | {26'd0, eg1_combined_count};
+          m_axis_data <=
+            (ibc_eg1_y_combined_pattern_q << 6) | {26'd0, ibc_eg1_y_combined_count_q};
           m_axis_last <= 1'b0;
           state_q <= ST_IBC_MVD_SIGN_Y;
         end
@@ -937,7 +1155,7 @@ module ff_vvc_cabac_syntax_frontend #(
         ST_IBC_MVD_MINUS2_Y_SUFFIX: begin
           m_axis_valid <= 1'b1;
           m_axis_kind <= SYMBOL_BINS_EP;
-          m_axis_data <= (eg1_suffix_pattern << 6) | {26'd0, eg1_suffix_count};
+          m_axis_data <= 32'd0;
           m_axis_last <= 1'b0;
           state_q <= ST_IBC_MVD_SIGN_Y;
         end
@@ -1249,8 +1467,14 @@ module ff_vvc_cabac_syntax_frontend #(
               end
 
               IBC_PKT_CU: begin
-                ibc_mvd_x_q <= {{3{raw_symbol_data[12]}}, raw_symbol_data[12:0]};
-                ibc_mvd_y_q <= {{3{raw_symbol_data[25]}}, raw_symbol_data[25:13]};
+                ibc_mvd_x_q <= ibc_raw_mvd_x_w;
+                ibc_mvd_y_q <= ibc_raw_mvd_y_w;
+                ibc_abs_mvd_x_q <= ibc_raw_abs_mvd_x_w;
+                ibc_abs_mvd_y_q <= ibc_raw_abs_mvd_y_w;
+                ibc_eg1_x_combined_pattern_q <= ibc_raw_eg1_x_combined_pattern_w;
+                ibc_eg1_y_combined_pattern_q <= ibc_raw_eg1_y_combined_pattern_w;
+                ibc_eg1_x_combined_count_q <= ibc_raw_eg1_x_combined_count_w;
+                ibc_eg1_y_combined_count_q <= ibc_raw_eg1_y_combined_count_w;
                 ibc_pred_mode_ctx_q <= raw_symbol_data[28:26];
                 ibc_residual_q <= 1'b0;
                 bdpcm_residual_q <= 1'b0;
@@ -1266,6 +1490,12 @@ module ff_vvc_cabac_syntax_frontend #(
                 ts_collect_count_q <= 4'd0;
                 ibc_mvd_x_q <= -16'sd8;
                 ibc_mvd_y_q <= 16'sd0;
+                ibc_abs_mvd_x_q <= 16'd8;
+                ibc_abs_mvd_y_q <= 16'd0;
+                ibc_eg1_x_combined_pattern_q <= 32'd48;
+                ibc_eg1_y_combined_pattern_q <= 32'd0;
+                ibc_eg1_x_combined_count_q <= 6'd6;
+                ibc_eg1_y_combined_count_q <= 6'd2;
                 ibc_pred_mode_ctx_q <= 3'd0;
                 ibc_residual_q <= 1'b1;
                 bdpcm_residual_q <= 1'b0;
