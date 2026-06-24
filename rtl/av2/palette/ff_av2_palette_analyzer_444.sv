@@ -14,6 +14,10 @@ module ff_av2_palette_analyzer_444 #(
   input  logic [63:0] ibc_copy_mask,
   input  logic [SAMPLE_BITS - 1:0] sample,
   input  logic       sample_last,
+  input  logic       packet_fire,
+  input  logic [8*SAMPLE_BITS - 1:0] packet_samples,
+  input  logic [3:0] packet_count,
+  input  logic       packet_last,
   output logic       sample_ready,
   input  logic [4:0] query_block_row_mi,
   input  logic [4:0] query_block_col_mi,
@@ -58,7 +62,9 @@ module ff_av2_palette_analyzer_444 #(
   output logic [127:0] luma_fetch_txb_samples,
   output logic [127:0] luma_fetch_u_txb_samples,
   output logic [127:0] luma_fetch_v_txb_samples,
-  output logic [127:0] luma_fetch_predictor_samples
+  output logic [127:0] luma_fetch_predictor_samples,
+  output logic [11:0]  luma_fetch_sample_sum,
+  output logic [11:0]  chroma_fetch_sample_sum
 );
 
   localparam logic [3:0] ST_IDLE = 4'd0;
@@ -93,6 +99,9 @@ module ff_av2_palette_analyzer_444 #(
   logic palette_supported_q;
 
   logic [7:0] block_luma_sample_q [0:63];
+  logic [11:0] lossy420_y_sum_q [0:255];
+  logic [11:0] lossy420_u_sum_q [0:63];
+  logic [11:0] lossy420_v_sum_q [0:63];
   logic [191:0] current_palette_index_q;
   logic [1:0] block_luma_mode_q [0:63];
   logic [63:0] terminal_luma_predictor_edge_q;
@@ -175,15 +184,10 @@ module ff_av2_palette_analyzer_444 #(
   logic luma_fetch_read_pending_q;
   logic [4:0] luma_fetch_capture_step_q;
   logic [11:0] fetch_read_addr_q;
-  logic [11:0] sample_store_write_addr_w;
   logic [11:0] sample_store_read_addr_w;
-  logic [11:0] chroma_write_addr_w;
   logic [11:0] chroma_read_addr_w;
   logic [5:0] palette_index_read_addr_w;
   logic [191:0] palette_index_read_data_w;
-  logic luma_write_w;
-  logic chroma_write_u_w;
-  logic chroma_write_v_w;
   logic [7:0] luma_read_y_w;
   logic [7:0] chroma_read_u_w;
   logic [7:0] chroma_read_v_w;
@@ -225,6 +229,37 @@ module ff_av2_palette_analyzer_444 #(
   logic terminal_tile_leaf_w;
   logic chroma_drain_state_w;
   logic chroma_sample_fire_w;
+  logic lossy420_mode_w;
+  logic packet_luma_fire_w;
+  logic packet_chroma_fire_w;
+  logic packet_black_ok_w;
+  logic [7:0] packet_lane_w [0:7];
+  logic [7:0] packet_palette_color_next_w [0:7];
+  logic [3:0] packet_collected_next_count_w;
+  logic packet_insert_known_w;
+  logic [3:0] packet_insert_index_w;
+  logic [11:0] packet_luma_left_sum_w;
+  logic [11:0] packet_luma_right_sum_w;
+  logic [11:0] packet_chroma_sum_w;
+  logic [5:0] packet_luma_last_sample_w;
+  logic [6:0] packet_chroma_last_sample_w;
+  logic packet_luma_done_w;
+  logic packet_chroma_done_w;
+  logic packet_chroma_plane_v_w;
+  logic packet_luma_input_error_w;
+  logic packet_chroma_input_error_w;
+  logic [7:0] lossy420_y_sum_left_index_w;
+  logic [7:0] lossy420_y_sum_right_index_w;
+  logic [7:0] lossy420_y_sum_clear0_index_w;
+  logic [7:0] lossy420_y_sum_clear1_index_w;
+  logic [7:0] lossy420_y_sum_clear2_index_w;
+  logic [7:0] lossy420_y_sum_clear3_index_w;
+  logic [7:0] lossy420_luma_fetch_sum_index_w;
+  logic [5:0] lossy420_chroma_fetch_sum_index_w;
+  logic sample_store_row_write_y_w;
+  logic sample_store_row_write_u_w;
+  logic sample_store_row_write_v_w;
+  logic [8:0] sample_store_row_write_addr_w;
   logic chroma_sample_done_w;
   logic chroma_input_error_w;
   logic [6:0] block_chroma_sample_last_w;
@@ -243,10 +278,26 @@ module ff_av2_palette_analyzer_444 #(
   integer inner_index_q;
   integer delta_index_q;
   integer insert_index_q;
+  integer packet_lane_q;
+  integer packet_insert_lane_q;
+  integer packet_insert_index_q;
 
   assign sample_u8_w = sample[7:0];
   assign black_sample_ok_w = (sample == {SAMPLE_BITS{1'b0}});
-  assign black_next_w = black_ok_q && black_sample_ok_w;
+  assign lossy420_mode_w = (chroma_format_idc == 2'd1);
+  always @* begin
+    packet_black_ok_w = 1'b1;
+    for (packet_lane_q = 0; packet_lane_q < 8; packet_lane_q = packet_lane_q + 1) begin
+      packet_lane_w[packet_lane_q] = packet_samples[packet_lane_q * SAMPLE_BITS +: 8];
+      if (packet_lane_q < packet_count &&
+          packet_samples[packet_lane_q * SAMPLE_BITS +: SAMPLE_BITS] != {SAMPLE_BITS{1'b0}}) begin
+        packet_black_ok_w = 1'b0;
+      end
+    end
+  end
+  assign black_next_w =
+    black_ok_q &&
+    ((packet_luma_fire_w || packet_chroma_fire_w) ? packet_black_ok_w : black_sample_ok_w);
   assign chroma_drain_state_w =
     (state_q == ST_PAD) ||
     (state_q == ST_SORT) ||
@@ -255,7 +306,9 @@ module ff_av2_palette_analyzer_444 #(
     (state_q == ST_NEXT_BLOCK) ||
     (state_q == ST_DRAIN_CHROMA);
   assign sample_ready =
-    (state_q == ST_READ) || (chroma_drain_state_w && !chroma_complete_q);
+    lossy420_mode_w ?
+      ((state_q == ST_READ) || ((state_q == ST_DRAIN_CHROMA) && !chroma_complete_q)) :
+      ((state_q == ST_READ) || (chroma_drain_state_w && !chroma_complete_q));
 
   // Palette analysis is block-local. The top-level input contract presents each
   // 8x8 block as 64 Y samples followed by the matching U and V samples: 16+16
@@ -288,7 +341,13 @@ module ff_av2_palette_analyzer_444 #(
   assign terminal_tile_leaf_w =
     (block_id_q[5:3] == last_block_row_q) && (block_id_q[2:0] == last_block_col_q);
   assign chroma_sample_fire_w =
-    sample_fire && chroma_drain_state_w && !chroma_complete_q;
+    !lossy420_mode_w && sample_fire && chroma_drain_state_w && !chroma_complete_q;
+  assign packet_luma_fire_w =
+    packet_fire && (state_q == ST_READ);
+  assign packet_chroma_fire_w =
+    packet_fire &&
+    (lossy420_mode_w ? (state_q == ST_DRAIN_CHROMA) : chroma_drain_state_w) &&
+    !chroma_complete_q;
   assign block_chroma_sample_last_w =
     (chroma_format_idc == 2'd1) ? 7'd31 : 7'd127;
   assign block_chroma_plane_samples_w =
@@ -334,7 +393,6 @@ module ff_av2_palette_analyzer_444 #(
       {2'd0, fetch_step_q[3:0]} :
       fetch_txb_local_index_w;
   assign fetch_above_pred_y_w = {fetch_txb_row_mi_q, 2'b00} - 6'd1;
-  assign chroma_write_addr_w = {block_id_q, block_chroma_local_sample_w};
   assign luma_fetch_txb_block_id_w = {luma_fetch_txb_row_mi_q[3:1], luma_fetch_txb_col_mi_q[3:1]};
   assign luma_fetch_txb_local_base_w =
     {luma_fetch_txb_row_mi_q[0], 5'b00000} + {3'd0, luma_fetch_txb_col_mi_q[0], 2'b00};
@@ -353,25 +411,68 @@ module ff_av2_palette_analyzer_444 #(
   assign luma_fetch_capture_palette_index_w =
     query_palette_index_q[luma_fetch_capture_local_index_w];
   assign luma_fetch_read_addr_w = {luma_fetch_txb_block_id_w, luma_fetch_local_index_w};
-  assign sample_store_write_addr_w = luma_write_w ? {block_id_q, block_sample_q} : chroma_write_addr_w;
   assign sample_store_read_addr_w = luma_fetch_active_q ? luma_fetch_read_addr_w : chroma_read_addr_w;
   assign palette_index_read_addr_w =
     (query_start && !query_start_q) ? query_block_id_w : query_load_block_id_q;
-  assign luma_write_w = (state_q == ST_READ) && sample_fire;
-  assign chroma_write_u_w =
-    chroma_sample_fire_w && !block_chroma_plane_v_w;
-  assign chroma_write_v_w =
-    chroma_sample_fire_w && block_chroma_plane_v_w;
   assign fetch_txb_read_addr_w = {fetch_txb_block_id_w, fetch_chroma_txb_local_index_w};
   assign fetch_pred_read_addr_w = {fetch_pred_block_id_w, fetch_pred_local_index_w};
+  assign packet_luma_last_sample_w =
+    block_sample_q + {2'd0, packet_count} - 6'd1;
+  assign packet_chroma_last_sample_w =
+    block_chroma_sample_q + {3'd0, packet_count} - 7'd1;
+  assign packet_luma_done_w =
+    packet_luma_fire_w && (packet_luma_last_sample_w >= 6'd63);
+  assign packet_chroma_done_w =
+    packet_chroma_fire_w && (packet_chroma_last_sample_w >= block_chroma_sample_last_w);
+  assign packet_chroma_plane_v_w =
+    block_chroma_sample_q >= block_chroma_plane_samples_w;
+  assign packet_luma_input_error_w =
+    packet_luma_fire_w && packet_last;
+  assign packet_chroma_input_error_w =
+    packet_chroma_fire_w &&
+    (packet_last != (terminal_tile_leaf_w && packet_chroma_done_w));
+  assign lossy420_y_sum_left_index_w = {
+    block_id_q[5:3],
+    block_sample_q[5],
+    block_id_q[2:0],
+    1'b0
+  };
+  assign lossy420_y_sum_right_index_w = {
+    block_id_q[5:3],
+    block_sample_q[5],
+    block_id_q[2:0],
+    1'b1
+  };
+  assign lossy420_y_sum_clear0_index_w = {block_id_q[5:3], 1'b0, block_id_q[2:0], 1'b0};
+  assign lossy420_y_sum_clear1_index_w = {block_id_q[5:3], 1'b0, block_id_q[2:0], 1'b1};
+  assign lossy420_y_sum_clear2_index_w = {block_id_q[5:3], 1'b1, block_id_q[2:0], 1'b0};
+  assign lossy420_y_sum_clear3_index_w = {block_id_q[5:3], 1'b1, block_id_q[2:0], 1'b1};
+  assign lossy420_luma_fetch_sum_index_w = {
+    luma_fetch_txb_row_mi_q[3:0],
+    luma_fetch_txb_col_mi_q[3:0]
+  };
+  assign lossy420_chroma_fetch_sum_index_w = {
+    fetch_txb_row_mi_q[3:1],
+    fetch_txb_col_mi_q[3:1]
+  };
+  assign sample_store_row_write_y_w =
+    !lossy420_mode_w && packet_luma_fire_w;
+  assign sample_store_row_write_u_w =
+    !lossy420_mode_w && packet_chroma_fire_w && !packet_chroma_plane_v_w;
+  assign sample_store_row_write_v_w =
+    !lossy420_mode_w && packet_chroma_fire_w && packet_chroma_plane_v_w;
+  assign sample_store_row_write_addr_w =
+    packet_luma_fire_w ?
+      {block_id_q, block_sample_q[5:3]} :
+      {block_id_q, block_chroma_local_sample_w[5:3]};
 
   ff_av2_chroma_sample_store chroma_sample_store (
     .clk(clk),
-    .write_y_en(luma_write_w),
-    .write_u_en(chroma_write_u_w),
-    .write_v_en(chroma_write_v_w),
-    .write_addr(sample_store_write_addr_w),
-    .write_data(sample_u8_w),
+    .row_write_y_en(sample_store_row_write_y_w),
+    .row_write_u_en(sample_store_row_write_u_w),
+    .row_write_v_en(sample_store_row_write_v_w),
+    .row_write_addr(sample_store_row_write_addr_w),
+    .row_write_data(packet_samples),
     .read_addr(sample_store_read_addr_w),
     .read_y_data(luma_read_y_w),
     .read_u_data(chroma_read_u_w),
@@ -393,6 +494,66 @@ module ff_av2_palette_analyzer_444 #(
     .read_addr(palette_index_read_addr_w),
     .read_data(palette_index_read_data_w)
   );
+
+  always @* begin
+    packet_luma_left_sum_w = 12'd0;
+    packet_luma_right_sum_w = 12'd0;
+    packet_chroma_sum_w = 12'd0;
+    for (packet_lane_q = 0; packet_lane_q < 8; packet_lane_q = packet_lane_q + 1) begin
+      if (packet_lane_q < packet_count) begin
+        if (({1'b0, block_sample_q[2:0]} + packet_lane_q[3:0]) < 4'd4) begin
+          packet_luma_left_sum_w =
+            packet_luma_left_sum_w + {4'd0, packet_lane_w[packet_lane_q]};
+        end else begin
+          packet_luma_right_sum_w =
+            packet_luma_right_sum_w + {4'd0, packet_lane_w[packet_lane_q]};
+        end
+        packet_chroma_sum_w =
+          packet_chroma_sum_w + {4'd0, packet_lane_w[packet_lane_q]};
+      end
+    end
+  end
+
+  always @* begin
+    for (packet_insert_index_q = 0; packet_insert_index_q < 8; packet_insert_index_q = packet_insert_index_q + 1) begin
+      packet_palette_color_next_w[packet_insert_index_q] = palette_color_q[packet_insert_index_q];
+    end
+    packet_collected_next_count_w = collected_count_q;
+
+    for (packet_insert_lane_q = 0; packet_insert_lane_q < 8; packet_insert_lane_q = packet_insert_lane_q + 1) begin
+      packet_insert_known_w = 1'b0;
+      packet_insert_index_w = packet_collected_next_count_w;
+      for (packet_insert_index_q = 0; packet_insert_index_q < 8; packet_insert_index_q = packet_insert_index_q + 1) begin
+        if (packet_insert_index_q < packet_collected_next_count_w &&
+            packet_palette_color_next_w[packet_insert_index_q] ==
+              packet_lane_w[packet_insert_lane_q]) begin
+          packet_insert_known_w = 1'b1;
+        end
+        if (packet_insert_index_q < packet_collected_next_count_w &&
+            packet_palette_color_next_w[packet_insert_index_q] >
+              packet_lane_w[packet_insert_lane_q] &&
+            packet_insert_index_w == packet_collected_next_count_w) begin
+          packet_insert_index_w = packet_insert_index_q[3:0];
+        end
+      end
+
+      if (packet_insert_lane_q < packet_count &&
+          !packet_insert_known_w &&
+          packet_collected_next_count_w < 4'd8) begin
+        for (packet_insert_index_q = 7; packet_insert_index_q >= 0; packet_insert_index_q = packet_insert_index_q - 1) begin
+          if (packet_insert_index_q > packet_insert_index_w &&
+              packet_insert_index_q <= packet_collected_next_count_w) begin
+            packet_palette_color_next_w[packet_insert_index_q] =
+              packet_palette_color_next_w[packet_insert_index_q - 1];
+          end else if (packet_insert_index_q == packet_insert_index_w) begin
+            packet_palette_color_next_w[packet_insert_index_q] =
+              packet_lane_w[packet_insert_lane_q];
+          end
+        end
+        packet_collected_next_count_w = packet_collected_next_count_w + 4'd1;
+      end
+    end
+  end
 
   always @* begin
     if (fetch_txb_col_mi_q != 5'd0) begin
@@ -718,6 +879,8 @@ module ff_av2_palette_analyzer_444 #(
       luma_fetch_u_txb_samples <= 128'd0;
       luma_fetch_v_txb_samples <= 128'd0;
       luma_fetch_predictor_samples <= 128'd0;
+      luma_fetch_sample_sum <= 12'd0;
+      chroma_fetch_sample_sum <= 12'd0;
       query_done <= 1'b0;
       current_palette_index_q <= 192'd0;
       current_row_same_left_q <= 8'd0;
@@ -777,6 +940,8 @@ module ff_av2_palette_analyzer_444 #(
       luma_fetch_read_pending_q <= 1'b0;
       chroma_fetch_done <= 1'b0;
       luma_fetch_done <= 1'b0;
+      luma_fetch_sample_sum <= 12'd0;
+      chroma_fetch_sample_sum <= 12'd0;
       query_done <= 1'b0;
       current_palette_index_q <= 192'd0;
       current_row_same_left_q <= 8'd0;
@@ -821,6 +986,14 @@ module ff_av2_palette_analyzer_444 #(
           block_chroma_sample_q <= block_chroma_sample_q + 7'd1;
         end
       end
+      if (!lossy420_mode_w && packet_chroma_fire_w) begin
+        black_ok_q <= black_next_w;
+        if (packet_chroma_done_w) begin
+          chroma_complete_q <= 1'b1;
+        end else begin
+          block_chroma_sample_q <= block_chroma_sample_q + {3'd0, packet_count};
+        end
+      end
 
       query_start_q <= query_start;
       if (query_start && !query_start_q) begin
@@ -861,12 +1034,19 @@ module ff_av2_palette_analyzer_444 #(
 
       luma_fetch_start_q <= luma_fetch_start;
       if (luma_fetch_start && !luma_fetch_start_q) begin
-        luma_fetch_active_q <= 1'b1;
         luma_fetch_txb_row_mi_q <= luma_fetch_txb_row_mi;
         luma_fetch_txb_col_mi_q <= luma_fetch_txb_col_mi;
         luma_fetch_step_q <= 5'd0;
         luma_fetch_read_pending_q <= 1'b0;
-        luma_fetch_done <= 1'b0;
+        if (lossy420_mode_w) begin
+          luma_fetch_active_q <= 1'b0;
+          luma_fetch_sample_sum <=
+            lossy420_y_sum_q[{luma_fetch_txb_row_mi[3:0], luma_fetch_txb_col_mi[3:0]}];
+          luma_fetch_done <= 1'b1;
+        end else begin
+          luma_fetch_active_q <= 1'b1;
+          luma_fetch_done <= 1'b0;
+        end
       end else if (luma_fetch_active_q) begin
         if (luma_fetch_read_pending_q) begin
           luma_fetch_txb_samples[luma_fetch_capture_step_q * 8 +: 8] <= luma_read_y_w;
@@ -895,13 +1075,22 @@ module ff_av2_palette_analyzer_444 #(
 
       fetch_start_q <= chroma_fetch_start;
       if (chroma_fetch_start && !fetch_start_q) begin
-        fetch_active_q <= 1'b1;
         fetch_plane_v_q <= chroma_fetch_plane_v;
         fetch_txb_row_mi_q <= chroma_fetch_txb_row_mi;
         fetch_txb_col_mi_q <= chroma_fetch_txb_col_mi;
         fetch_step_q <= chroma_fetch_predictor_only ? 5'd16 : 5'd0;
         fetch_read_pending_q <= 1'b0;
-        chroma_fetch_done <= 1'b0;
+        if (lossy420_mode_w) begin
+          fetch_active_q <= 1'b0;
+          chroma_fetch_sample_sum <=
+            chroma_fetch_plane_v ?
+              lossy420_v_sum_q[{chroma_fetch_txb_row_mi[3:1], chroma_fetch_txb_col_mi[3:1]}] :
+              lossy420_u_sum_q[{chroma_fetch_txb_row_mi[3:1], chroma_fetch_txb_col_mi[3:1]}];
+          chroma_fetch_done <= 1'b1;
+        end else begin
+          fetch_active_q <= 1'b1;
+          chroma_fetch_done <= 1'b0;
+        end
       end else if (fetch_active_q) begin
         if (fetch_read_pending_q) begin
           if (fetch_read_is_pred_q) begin
@@ -967,7 +1156,7 @@ module ff_av2_palette_analyzer_444 #(
         chroma_fetch_done <= 1'b0;
       end
 
-      if (chroma_input_error_w) begin
+      if (chroma_input_error_w || packet_luma_input_error_w || packet_chroma_input_error_w) begin
         unsupported <= 1'b1;
         done <= 1'b1;
         state_q <= ST_DONE;
@@ -976,7 +1165,49 @@ module ff_av2_palette_analyzer_444 #(
           ST_IDLE: begin
           end
           ST_READ: begin
-            if (sample_fire) begin
+            if (lossy420_mode_w) begin
+              if (packet_luma_fire_w) begin
+                black_ok_q <= black_next_w;
+                lossy420_y_sum_q[lossy420_y_sum_left_index_w] <=
+                  lossy420_y_sum_q[lossy420_y_sum_left_index_w] + packet_luma_left_sum_w;
+                lossy420_y_sum_q[lossy420_y_sum_right_index_w] <=
+                  lossy420_y_sum_q[lossy420_y_sum_right_index_w] + packet_luma_right_sum_w;
+                if (packet_luma_done_w) begin
+                  block_chroma_sample_q <= 7'd0;
+                  chroma_complete_q <= 1'b0;
+                  state_q <= ST_DRAIN_CHROMA;
+                end else begin
+                  block_sample_q <= block_sample_q + {2'd0, packet_count};
+                end
+              end
+            end else if (packet_luma_fire_w) begin
+              black_ok_q <= black_next_w;
+              for (packet_lane_q = 0; packet_lane_q < 8; packet_lane_q = packet_lane_q + 1) begin
+                if (packet_lane_q < packet_count) begin
+                  block_luma_sample_q[block_sample_q + packet_lane_q[5:0]] <=
+                    packet_lane_w[packet_lane_q];
+                end
+              end
+              for (color_index_q = 0; color_index_q < 8; color_index_q = color_index_q + 1) begin
+                palette_color_q[color_index_q] <= packet_palette_color_next_w[color_index_q];
+              end
+              collected_count_q <= packet_collected_next_count_w;
+              if (packet_luma_done_w) begin
+                if (packet_collected_next_count_w <= 4'd2) begin
+                  target_palette_size_q <= 4'd2;
+                end else if (packet_collected_next_count_w <= 4'd4) begin
+                  target_palette_size_q <= 4'd4;
+                end else begin
+                  target_palette_size_q <= 4'd8;
+                end
+                block_chroma_sample_q <= 7'd0;
+                chroma_complete_q <= 1'b0;
+                candidate_q <= 8'd0;
+                state_q <= ST_PAD;
+              end else begin
+                block_sample_q <= block_sample_q + {2'd0, packet_count};
+              end
+            end else if (sample_fire) begin
               black_ok_q <= black_next_w;
               block_luma_sample_q[block_sample_q] <= sample_u8_w;
               if (collect_add_w) begin
@@ -1021,6 +1252,14 @@ module ff_av2_palette_analyzer_444 #(
             horizontal_sad_q <= 16'd0;
             for (color_index_q = 0; color_index_q < 8; color_index_q = color_index_q + 1) begin
               palette_color_q[color_index_q] <= 8'd0;
+            end
+            if (lossy420_mode_w) begin
+              lossy420_y_sum_q[lossy420_y_sum_clear0_index_w] <= 12'd0;
+              lossy420_y_sum_q[lossy420_y_sum_clear1_index_w] <= 12'd0;
+              lossy420_y_sum_q[lossy420_y_sum_clear2_index_w] <= 12'd0;
+              lossy420_y_sum_q[lossy420_y_sum_clear3_index_w] <= 12'd0;
+              lossy420_u_sum_q[block_id_q] <= 12'd0;
+              lossy420_v_sum_q[block_id_q] <= 12'd0;
             end
             state_q <= ST_READ;
           end
@@ -1096,10 +1335,12 @@ module ff_av2_palette_analyzer_444 #(
               above_predictor_edge_q[block_id_q[2:0]][edge_index_q * 8 +: 8] <=
                 block_luma_sample_q[56 + edge_index_q];
             end
-            if (chroma_complete_q || chroma_sample_done_w) begin
+            if (chroma_complete_q || chroma_sample_done_w ||
+                (!lossy420_mode_w && packet_chroma_done_w)) begin
               if (terminal_tile_leaf_w) begin
-                black_mode <= final_black_w;
-                luma_palette_mode <= palette_supported_q && !final_black_w;
+                black_mode <= packet_chroma_done_w ? black_next_w : final_black_w;
+                luma_palette_mode <=
+                  palette_supported_q && !(packet_chroma_done_w ? black_next_w : final_black_w);
                 done <= 1'b1;
                 state_q <= ST_DONE;
               end else if (block_id_q[2:0] == last_block_col_q) begin
@@ -1120,10 +1361,45 @@ module ff_av2_palette_analyzer_444 #(
             end
           end
           ST_DRAIN_CHROMA: begin
-            if (chroma_complete_q || chroma_sample_done_w) begin
+            if (lossy420_mode_w) begin
+              if (packet_chroma_fire_w) begin
+                black_ok_q <= black_next_w;
+                if (packet_chroma_plane_v_w) begin
+                  lossy420_v_sum_q[block_id_q] <=
+                    lossy420_v_sum_q[block_id_q] + packet_chroma_sum_w;
+                end else begin
+                  lossy420_u_sum_q[block_id_q] <=
+                    lossy420_u_sum_q[block_id_q] + packet_chroma_sum_w;
+                end
+                if (packet_chroma_done_w) begin
+                  if (terminal_tile_leaf_w) begin
+                    black_mode <= black_next_w;
+                    luma_palette_mode <= 1'b0;
+                    done <= 1'b1;
+                    state_q <= ST_DONE;
+                  end else if (block_id_q[2:0] == last_block_col_q) begin
+                    block_id_q <= {block_id_q[5:3] + 3'd1, 3'd0};
+                    block_sample_q <= 6'd0;
+                    block_chroma_sample_q <= 7'd0;
+                    chroma_complete_q <= 1'b0;
+                    state_q <= ST_BLOCK_INIT;
+                  end else begin
+                    block_id_q <= block_id_q + 6'd1;
+                    block_sample_q <= 6'd0;
+                    block_chroma_sample_q <= 7'd0;
+                    chroma_complete_q <= 1'b0;
+                    state_q <= ST_BLOCK_INIT;
+                  end
+                end else begin
+                  block_chroma_sample_q <= block_chroma_sample_q + {3'd0, packet_count};
+                end
+              end
+            end else if (chroma_complete_q || chroma_sample_done_w ||
+                         (!lossy420_mode_w && packet_chroma_done_w)) begin
               if (terminal_tile_leaf_w) begin
-                black_mode <= final_black_w;
-                luma_palette_mode <= palette_supported_q && !final_black_w;
+                black_mode <= packet_chroma_done_w ? black_next_w : final_black_w;
+                luma_palette_mode <=
+                  palette_supported_q && !(packet_chroma_done_w ? black_next_w : final_black_w);
                 done <= 1'b1;
                 state_q <= ST_DONE;
               end else if (block_id_q[2:0] == last_block_col_q) begin

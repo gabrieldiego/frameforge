@@ -7,10 +7,14 @@ module ff_av2_local_hash_matcher_444 #(
   input  logic       rst_n,
   input  logic       start,
   input  logic       sample_fire,
+  input  logic       packet_fire,
   input  logic [15:0] visible_width,
   input  logic [15:0] visible_height,
   input  logic [SAMPLE_BITS - 1:0] sample,
   input  logic       sample_last,
+  input  logic [8*SAMPLE_BITS - 1:0] packet_samples,
+  input  logic [3:0] packet_count,
+  input  logic       packet_last,
   output logic       done,
   output logic       any_copy,
   output logic [63:0] copy_mask,
@@ -38,6 +42,7 @@ module ff_av2_local_hash_matcher_444 #(
   logic [31:0] hash_after_mix0_w;
   logic [31:0] hash_after_mix1_w;
   logic [31:0] hash_after_sample_w;
+  logic [31:0] hash_after_packet_w;
   logic [5:0] decide_block_id_w;
   logic [5:0] above_block_id_w;
   logic [5:0] left_block_id_w;
@@ -83,12 +88,27 @@ module ff_av2_local_hash_matcher_444 #(
   logic copy_match_w;
   logic candidate_above_w;
   logic enabled_w;
+  logic [7:0] packet_last_sample_w;
+  logic packet_block_complete_w;
+  integer packet_lane_q;
 
   assign enabled_w = (SAMPLE_BITS == 8);
   assign hash_after_xor_w = current_hash_q ^ {24'd0, sample[7:0]};
   assign hash_after_mix0_w = hash_after_xor_w ^ (hash_after_xor_w << 13);
   assign hash_after_mix1_w = hash_after_mix0_w ^ (hash_after_mix0_w >> 17);
   assign hash_after_sample_w = hash_after_mix1_w ^ (hash_after_mix1_w << 5);
+  always_comb begin
+    hash_after_packet_w = current_hash_q;
+    for (packet_lane_q = 0; packet_lane_q < 8; packet_lane_q = packet_lane_q + 1) begin
+      if (packet_lane_q < packet_count) begin
+        hash_after_packet_w =
+          hash_after_packet_w ^ {24'd0, packet_samples[packet_lane_q * SAMPLE_BITS +: 8]};
+        hash_after_packet_w = hash_after_packet_w ^ (hash_after_packet_w << 13);
+        hash_after_packet_w = hash_after_packet_w ^ (hash_after_packet_w >> 17);
+        hash_after_packet_w = hash_after_packet_w ^ (hash_after_packet_w << 5);
+      end
+    end
+  end
   assign above_block_id_w = decide_block_id_w - 6'd8;
   assign left_block_id_w = decide_block_id_w - 6'd1;
   assign top_right_block_id_w = decide_block_id_w - 6'd7;
@@ -153,6 +173,8 @@ module ff_av2_local_hash_matcher_444 #(
     (direct_count_w != 2'd0 && direct0_vec_w == 2'd0) ? 2'd0 :
     ((direct_count_w == 2'd2 && direct1_vec_w == 2'd0) ? 2'd1 : 2'd3);
   assign block_complete_w = sample_fire && (block_sample_q == 8'd191);
+  assign packet_last_sample_w = block_sample_q + {4'd0, packet_count} - 8'd1;
+  assign packet_block_complete_w = packet_fire && (packet_last_sample_w >= 8'd191);
   assign above_match_w =
     // Keep this MVP exact-match IBC selector left-copy-only until the RTL has
     // a complete AVM is_mi_coded availability mirror for vertical local BVs.
@@ -280,7 +302,32 @@ module ff_av2_local_hash_matcher_444 #(
     end else begin
       case (state_q)
         ST_READ: begin
-          if (sample_fire) begin
+          if (packet_fire) begin
+            if (packet_block_complete_w) begin
+              // AV2 v1.0.0 IntraBC syntax carries a block vector. This stage
+              // stores 32-bit hashes for the whole 64x64 tile. A second pass
+              // below walks the fixed 8x8 partition-tree order to mirror the
+              // decoder BVP availability before selecting any DRL index.
+              hash_table_q[block_id_q] <= hash_after_packet_w;
+              current_hash_q <= HASH_OFFSET;
+              block_sample_q <= 8'd0;
+              if (packet_last) begin
+                decide_index_q <= 6'd0;
+                state_q <= ST_DECIDE;
+              end else if (block_id_q[5:3] == last_block_row_q &&
+                           block_id_q[2:0] == last_block_col_q) begin
+                decide_index_q <= 6'd0;
+                state_q <= ST_DECIDE;
+              end else if (block_id_q[2:0] == last_block_col_q) begin
+                block_id_q <= {block_id_q[5:3] + 3'd1, 3'd0};
+              end else begin
+                block_id_q <= block_id_q + 6'd1;
+              end
+            end else begin
+              current_hash_q <= hash_after_packet_w;
+              block_sample_q <= block_sample_q + {4'd0, packet_count};
+            end
+          end else if (sample_fire) begin
             if (block_complete_w) begin
               // AV2 v1.0.0 IntraBC syntax carries a block vector. This stage
               // stores 32-bit hashes for the whole 64x64 tile. A second pass

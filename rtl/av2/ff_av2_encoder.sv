@@ -140,8 +140,10 @@ module ff_av2_encoder #(
   logic       reader_axis_last;
   logic       packet_axis_valid;
   logic       packet_axis_ready;
+  logic       unpacker_packet_axis_ready;
   logic [INPUT_FIFO_BITS - 1:0] packet_axis_data;
   logic       packet_axis_last;
+  logic [3:0] packet_axis_count_w;
   logic [INPUT_PACKET_FIFO_LEVEL_BITS - 1:0] input_fifo_level_w;
   logic       m_axis_valid;
   logic       m_axis_ready;
@@ -391,6 +393,10 @@ module ff_av2_encoder #(
   logic chroma_fetch_req_plane_v_w;
   logic palette_analyzer_start_w;
   logic input_sample_fire_w;
+  logic input_packet_fire_w;
+  logic input_fire_w;
+  logic [3:0] input_fire_count_w;
+  logic input_axis_last_w;
   logic palette_analyzer_sample_ready_w;
   logic palette_analyzer_done_w;
   logic palette_analyzer_unsupported_w;
@@ -441,6 +447,8 @@ module ff_av2_encoder #(
   logic [127:0] luma_fetch_u_txb_samples_w;
   logic [127:0] luma_fetch_v_txb_samples_w;
   logic [127:0] luma_fetch_predictor_samples_w;
+  logic [11:0] luma_fetch_sample_sum_w;
+  logic [11:0] chroma_fetch_sample_sum_w;
   logic [3:0] luma_residual_skip_ctx_w;
   logic [1:0] luma_residual_dc_sign_ctx_w;
   logic [2:0] luma_residual_top_level_w;
@@ -760,8 +768,8 @@ module ff_av2_encoder #(
     .clk(clk),
     .rst_n(rst_n),
     .clear(frame_reader_start_w),
-    .s_axis_valid(packet_axis_valid),
-    .s_axis_ready(packet_axis_ready),
+    .s_axis_valid(1'b0),
+    .s_axis_ready(unpacker_packet_axis_ready),
     .s_axis_data(packet_axis_data[INPUT_PACKET_BITS - 1:0]),
     .s_axis_count(packet_axis_data[INPUT_FIFO_BITS - 1:INPUT_PACKET_BITS]),
     .s_axis_last(packet_axis_last),
@@ -770,6 +778,12 @@ module ff_av2_encoder #(
     .m_axis_data(s_axis_data),
     .m_axis_last(s_axis_last)
   );
+
+  assign packet_axis_count_w = packet_axis_data[INPUT_FIFO_BITS - 1:INPUT_PACKET_BITS];
+  assign packet_axis_ready =
+    (state_q == ST_INPUT_READ) &&
+    palette_analyzer_sample_ready_w &&
+    !palette_analyzer_done_w;
 
   ff_axi4_bitstream_writer #(
     .AXI_ADDR_BITS(AXI_ADDR_BITS),
@@ -848,10 +862,14 @@ module ff_av2_encoder #(
     .rst_n(rst_n),
     .start(palette_analyzer_start_w && (chroma_format_idc == 2'd3)),
     .sample_fire(input_sample_fire_w),
+    .packet_fire(input_packet_fire_w && (chroma_format_idc == 2'd3)),
     .visible_width(tile_width_q),
     .visible_height(tile_height_q),
     .sample(s_axis_data),
     .sample_last(tile_input_last_w),
+    .packet_samples(packet_axis_data[INPUT_PACKET_BITS - 1:0]),
+    .packet_count(packet_axis_count_w),
+    .packet_last(tile_input_last_w),
     .done(ibc_done_w),
     .any_copy(ibc_any_copy_w),
     .copy_mask(ibc_copy_mask_w),
@@ -873,6 +891,10 @@ module ff_av2_encoder #(
     .ibc_copy_mask(ibc_copy_mask_w),
     .sample(s_axis_data),
     .sample_last(tile_input_last_w),
+    .packet_fire(input_packet_fire_w),
+    .packet_samples(packet_axis_data[INPUT_PACKET_BITS - 1:0]),
+    .packet_count(packet_axis_count_w),
+    .packet_last(tile_input_last_w),
     .sample_ready(palette_analyzer_sample_ready_w),
     .query_block_row_mi(block_row_mi_q),
     .query_block_col_mi(block_col_mi_q),
@@ -917,7 +939,9 @@ module ff_av2_encoder #(
     .luma_fetch_txb_samples(luma_fetch_txb_samples_w),
     .luma_fetch_u_txb_samples(luma_fetch_u_txb_samples_w),
     .luma_fetch_v_txb_samples(luma_fetch_v_txb_samples_w),
-    .luma_fetch_predictor_samples(luma_fetch_predictor_samples_w)
+    .luma_fetch_predictor_samples(luma_fetch_predictor_samples_w),
+    .luma_fetch_sample_sum(luma_fetch_sample_sum_w),
+    .chroma_fetch_sample_sum(chroma_fetch_sample_sum_w)
   );
 
   ff_av2_luma_palette_symbolizer luma_palette_symbolizer (
@@ -981,7 +1005,7 @@ module ff_av2_encoder #(
   );
 
   ff_av2_lossy420_dc_estimator lossy420_luma_dc_estimator (
-    .samples(luma_fetch_txb_samples_w),
+    .sample_sum(luma_fetch_sample_sum_w),
     .predictor(lossy420_luma_predictor_w),
     .delta(lossy420_luma_delta_w),
     .recon_sample(lossy420_luma_recon_sample_w),
@@ -1046,7 +1070,7 @@ module ff_av2_encoder #(
   );
 
   ff_av2_lossy420_dc_estimator lossy420_chroma_dc_estimator (
-    .samples(chroma_bdpcm_txb_samples_w),
+    .sample_sum(chroma_fetch_sample_sum_w),
     .predictor(lossy420_chroma_predictor_w),
     .delta(lossy420_chroma_delta_w),
     .recon_sample(lossy420_chroma_recon_sample_w),
@@ -1153,8 +1177,20 @@ module ff_av2_encoder #(
     (visible_width[2:0] != 3'd0) ||
     (visible_height[2:0] != 3'd0);
   assign palette_analyzer_start_w = (state_q == ST_TILE_START);
-  assign input_sample_fire_w = (state_q == ST_INPUT_READ) && s_axis_valid && s_axis_ready;
-  assign tile_input_last_w = input_sample_fire_w && (tile_input_index_q == (tile_samples_w - 32'd1));
+  assign input_sample_fire_w =
+    (state_q == ST_INPUT_READ) &&
+    s_axis_valid &&
+    s_axis_ready;
+  assign input_packet_fire_w =
+    (state_q == ST_INPUT_READ) &&
+    packet_axis_valid &&
+    packet_axis_ready;
+  assign input_fire_w = input_sample_fire_w || input_packet_fire_w;
+  assign input_fire_count_w = input_packet_fire_w ? packet_axis_count_w : 4'd1;
+  assign input_axis_last_w = input_packet_fire_w ? packet_axis_last : s_axis_last;
+  assign tile_input_last_w =
+    input_fire_w &&
+    ((tile_input_index_q + {28'd0, input_fire_count_w}) >= tile_samples_w);
   assign stream_lookup_index_w =
     (state_q == ST_OUTPUT_VALID && m_axis_valid && m_axis_ready && !output_last_q) ?
       (stream_index_q + 16'd1) : stream_index_q;
@@ -1341,6 +1377,7 @@ module ff_av2_encoder #(
   assign axi_error = frame_reader_error_w || bitstream_writer_error_w;
   assign s_axis_ready =
     (state_q == ST_INPUT_READ) &&
+    (chroma_format_idc != 2'd1) &&
     palette_analyzer_sample_ready_w &&
     !palette_analyzer_done_w;
   assign tile_cols_w = (visible_width + 16'd63) >> 6;
@@ -2404,9 +2441,9 @@ module ff_av2_encoder #(
             state_q <= ST_INPUT_READ;
           end
           ST_INPUT_READ: begin
-            if (input_sample_fire_w) begin
-              tile_input_index_q <= tile_input_index_q + 32'd1;
-              if (s_axis_last != (tile_is_last_w && tile_input_last_w)) begin
+            if (input_fire_w) begin
+              tile_input_index_q <= tile_input_index_q + {28'd0, input_fire_count_w};
+              if (input_axis_last_w != (tile_is_last_w && tile_input_last_w)) begin
                 input_error <= 1'b1;
                 state_q <= ST_IDLE;
               end

@@ -507,13 +507,17 @@ async def av2_encoder_emits_obu_stream(dut):
     txb_prefetch_done_h = dut.txb_prefetch_done_q
     chroma_fetch_current_cache_hit_h = dut.chroma_fetch_current_cache_hit_w
     chroma_fetch_req_ready_h = dut.chroma_fetch_req_ready_w
+    lossy_420_mode_h = dut.lossy_420_mode_q
     luma_residual_enable_h = optional_handle("luma_residual_enable_w")
     chroma_bdpcm_enable_h = optional_handle("chroma_bdpcm_enable_w")
-    luma_residual_active_h = dut.luma_palette_residual_symbolizer.active_q
+    palette_luma_residual_active_h = dut.luma_palette_residual_symbolizer.active_q
+    lossy420_luma_residual_active_h = dut.lossy420_luma_residual_symbolizer.active_q
     luma_residual_op_valid_h = dut.luma_residual_op_valid_w
-    luma_residual_start_op_h = dut.luma_palette_residual_symbolizer.start_op_w
+    palette_luma_residual_start_op_h = dut.luma_palette_residual_symbolizer.start_op_w
     palette_luma_residual_zero_h = dut.palette_luma_residual_zero_w
-    chroma_bdpcm_active_h = dut.chroma_bdpcm_symbolizer.active_q
+    lossy420_luma_residual_zero_h = dut.lossy420_luma_known_zero_w
+    palette_chroma_bdpcm_active_h = dut.chroma_bdpcm_symbolizer.active_q
+    lossy420_chroma_bdpcm_active_h = dut.lossy420_chroma_bdpcm_symbolizer.active_q
     chroma_bdpcm_op_valid_h = dut.chroma_bdpcm_op_valid_w
     chroma_bdpcm_start_op_h = dut.chroma_bdpcm_symbolizer.start_op_w
     chroma_bdpcm_txb_done_h = dut.chroma_bdpcm_txb_done_w
@@ -526,6 +530,26 @@ async def av2_encoder_emits_obu_stream(dut):
 
     def optional_hot_int(handle):
         return None if handle is None else int(handle.value)
+
+    def luma_residual_active_value():
+        if hot_int(lossy_420_mode_h) == 1:
+            return hot_int(lossy420_luma_residual_active_h)
+        return hot_int(palette_luma_residual_active_h)
+
+    def chroma_residual_active_value():
+        if hot_int(lossy_420_mode_h) == 1:
+            return hot_int(lossy420_chroma_bdpcm_active_h)
+        return hot_int(palette_chroma_bdpcm_active_h)
+
+    def luma_residual_start_value():
+        if hot_int(lossy_420_mode_h) == 1:
+            return 0
+        return hot_int(palette_luma_residual_start_op_h)
+
+    def luma_residual_zero_value():
+        if hot_int(lossy_420_mode_h) == 1:
+            return hot_int(lossy420_luma_residual_zero_h)
+        return hot_int(palette_luma_residual_zero_h)
 
     default_max_cycles = max(80000, width * height * 3 * 32 + 20000)
     max_cycles = int(os.environ.get("FRAMEFORGE_RTL_AV2_MAX_CYCLES", str(default_max_cycles)))
@@ -578,13 +602,13 @@ async def av2_encoder_emits_obu_stream(dut):
                 ),
                 "luma_residual": block_state(
                     optional_hot_int(luma_residual_enable_h),
-                    0 if hot_int(luma_residual_active_h) else 1,
+                    0 if luma_residual_active_value() else 1,
                     hot_int(luma_residual_op_valid_h),
                     0 if pending_push else 1,
                 ),
                 "chroma_residual": block_state(
                     optional_hot_int(chroma_bdpcm_enable_h),
-                    0 if hot_int(chroma_bdpcm_active_h) else 1,
+                    0 if chroma_residual_active_value() else 1,
                     hot_int(chroma_bdpcm_op_valid_h),
                     0 if pending_push else 1,
                 ),
@@ -660,8 +684,8 @@ async def av2_encoder_emits_obu_stream(dut):
             increment_counter(pipeline_counts, "luma_residual_enable")
         if optional_hot_int(chroma_bdpcm_enable_h) == 1:
             increment_counter(pipeline_counts, "chroma_bdpcm_enable")
-        luma_residual_active = hot_int(luma_residual_active_h)
-        chroma_bdpcm_active = hot_int(chroma_bdpcm_active_h)
+        luma_residual_active = luma_residual_active_value()
+        chroma_bdpcm_active = chroma_residual_active_value()
         if luma_residual_active == 1:
             increment_counter(pipeline_counts, "luma_residual_active")
             if hot_int(luma_residual_op_valid_h) == 1:
@@ -674,7 +698,7 @@ async def av2_encoder_emits_obu_stream(dut):
                 increment_counter(pipeline_counts, "chroma_bdpcm_op_valid")
             else:
                 increment_counter(pipeline_counts, "chroma_bdpcm_op_gap")
-        if hot_int(chroma_bdpcm_start_op_h) == 1:
+        if hot_int(chroma_bdpcm_start_op_h) == 1 and hot_int(lossy_420_mode_h) == 0:
             increment_counter(pipeline_counts, "chroma_bdpcm_zero_fast_start")
         if (
             state == AV2_STATE_LEAF
@@ -687,10 +711,10 @@ async def av2_encoder_emits_obu_stream(dut):
         if (
             state == AV2_STATE_LEAF
             and hot_int(phase_h) == AV2_PHASE_Y_COEFF
-            and hot_int(palette_luma_residual_zero_h) == 1
+            and luma_residual_zero_value() == 1
         ):
             increment_counter(pipeline_counts, "luma_residual_known_zero")
-        if hot_int(luma_residual_start_op_h) == 1:
+        if luma_residual_start_value() == 1:
             increment_counter(pipeline_counts, "luma_residual_zero_fast_start")
         if trace_enabled and state in (AV2_STATE_PARTITION, AV2_STATE_LEAF) and op_consumed:
             phase = signal_int(dut, "phase_q")
