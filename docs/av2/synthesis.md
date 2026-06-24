@@ -5,12 +5,12 @@ Older measurements are intentionally left to git history so this page stays
 focused on the current baseline and immediate delta. The shared synthesis flow
 is documented in [../synthesis.md](../synthesis.md).
 
-## 2026-06-24 Full AV2 Regression Checkpoint
+## 2026-06-24 Packet Ingress Checkpoint
 
 Baseline and current sources:
 
-- Baseline Git SHA: `3945b1bc67a20e5cfa2ccf8d05910ab8741deef0`
-- Current validated source Git SHA: `2ac43800abe655dd03f213a1cb3e70b604fde4c1`
+- Baseline Git SHA: `2ac43800abe655dd03f213a1cb3e70b604fde4c1`
+- Current validated source Git SHA: `a5d5f94c7c73b42920f9405bc41d6c14244de12e`
 
 Validation result:
 
@@ -35,43 +35,47 @@ Yosys synthesis result:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| Main Yosys elapsed time (s) | 244.40 s | 275.10 s | +30.70 s |
-| Runner-observed peak child RSS (MiB) | 1443.55 MiB | 1483.31 MiB | +39.76 MiB |
-| Topological path length | 55 | 55 | +0 |
-| Flattened cells | 73599 | 80823 | +7224 |
-| Estimated LCs | 26306 | 31215 | +4909 |
-| CARRY4 | 2648 | 2657 | +9 |
-| DSP48E1 | 13 | 15 | +2 |
-| FDCE | 4742 | 4771 | +29 |
+| Main Yosys elapsed time (s) | 275.10 s | 368.20 s | +93.10 s |
+| Runner-observed peak child RSS (MiB) | 1483.31 MiB | 1734.85 MiB | +251.54 MiB |
+| Topological path length | 55 | 229 | +174 |
+| Flattened cells | 80823 | 93311 | +12488 |
+| Estimated LCs | 31215 | 37032 | +5817 |
+| CARRY4 | 2657 | 2797 | +140 |
+| DSP48E1 | 15 | 15 | +0 |
+| FDCE | 4771 | 4795 | +24 |
 | FDPE | 27 | 27 | +0 |
-| FDRE | 18111 | 18063 | -48 |
+| FDRE | 18063 | 22674 | +4611 |
 | FDSE | 129 | 129 | +0 |
-| LUT1 | 682 | 606 | -76 |
-| LUT2 | 7980 | 8586 | +606 |
-| LUT3 | 5646 | 8579 | +2933 |
-| LUT4 | 4667 | 5543 | +876 |
-| LUT5 | 3189 | 3557 | +368 |
-| LUT6 | 12804 | 13536 | +732 |
-| MUXF7 | 4127 | 5541 | +1414 |
-| MUXF8 | 786 | 1119 | +333 |
+| LUT1 | 606 | 682 | +76 |
+| LUT2 | 8586 | 11886 | +3300 |
+| LUT3 | 8579 | 7450 | -1129 |
+| LUT4 | 5543 | 5412 | -131 |
+| LUT5 | 3557 | 5250 | +1693 |
+| LUT6 | 13536 | 18920 | +5384 |
+| MUXF7 | 5541 | 4187 | -1354 |
+| MUXF8 | 1119 | 949 | -170 |
 | RAMB36E1 | 30 | 30 | +0 |
 | RAM32M | 10 | 10 | +0 |
 
 Critical-path summary:
 
-- Longest topological path in `ff_av2_encoder`: length 55.
-- Reported limiter: palette query/index path through the luma palette
-  symbolizer and AV2 range-coder normalization into `low_q`.
-- `ff_av2_chroma_sample_store` remains inferred as three `RAMB36E1`
-  memories in the hierarchy report.
+- Longest topological path in `ff_av2_encoder`: length 229.
+- Reported limiter: packet palette insertion in
+  `ff_av2_palette_analyzer_444`, through the eight-lane palette-color insert
+  chain into `palette_color_q`.
+- Longest topological path in `ff_av2_chroma_sample_store`: length 1.
+- The sample store is inferred as three `RAMB36E1` memories again after
+  removing the stale byte-write fallback from the row-write path.
 
 Notes:
 
-- The retained RTL keeps the scalar palette map path. A row-wide and a
-  two-sample map experiment were rejected because they did not improve
-  top-level output utilization enough to justify the extra logic.
-- The current synthesis is still below the 600 second hard stop and below
-  the 3072 MiB memory limit, but it is slower and larger than the previous
-  documented AV2 baseline. The next throughput-focused work should target
-  packetized input/frame-store integration rather than adding combinational
-  palette analyzer fanout.
+- Packet ingress removes the scalar unpacker from the hot path and lets the
+  analyzer, IBC hash matcher, and 4:2:0 DC estimator consume eight samples per
+  accepted packet.
+- The 4:2:0 residual estimator now consumes cached 4x4 sample sums collected
+  during ingress, avoiding a repeated 16-sample adder tree during residual
+  coding.
+- The bubble-rate target is not fully met yet. Remaining multi-CTU bubbles are
+  dominated by serialized leaf entropy/residual work and by byte replay into
+  the AXI writer. Future work should target streaming carry/output and a
+  shorter packet palette insertion path before adding more syntax.
