@@ -5,17 +5,19 @@ Older measurements are intentionally left to git history so this page stays
 focused on the current baseline and immediate delta. The shared synthesis flow
 is documented in [../synthesis.md](../synthesis.md).
 
-## 2026-06-22 Shared AXI/FIFO Utilization Pass
+## 2026-06-24 Full AV2 Regression Checkpoint
 
-Validated RTL/source Git SHA:
+Baseline and current sources:
 
-- `3945b1bc67a20e5cfa2ccf8d05910ab8741deef0`
+- Baseline Git SHA: `3945b1bc67a20e5cfa2ccf8d05910ab8741deef0`
+- Current validated source Git SHA: `2ac43800abe655dd03f213a1cb3e70b604fde4c1`
 
 Validation result:
 
-- `screenshot-sweep-444`: PASS (64/64), strict SW/RTL/reference-decoder checksum parity.
-- `screenshot-multictu-444`: PASS (10/10), strict SW/RTL/reference-decoder checksum parity.
-- Focused AV2 64x64 smoke after the timing fix: PASS.
+- `screenshot-sweep-444`: PASS (64/64), strict SW/RTL/reference checksum parity.
+- `screenshot-multictu-444`: PASS (10/10), strict SW/RTL/reference checksum parity.
+- `racehorses-sweep-420`: PASS (64/64), strict SW/RTL/reference checksum parity.
+- `racehorses-multictu-420`: PASS (10/10), strict SW/RTL/reference checksum parity.
 - Yosys synthesis: PASS at 25 MHz metadata target.
 
 Yosys synthesis configuration:
@@ -33,35 +35,43 @@ Yosys synthesis result:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| Main Yosys elapsed time (s) | 250.40 s | 244.40 s | -6.00 s |
-| Runner-observed peak child RSS (MiB) | 1378.57 MiB | 1443.55 MiB | +64.98 MiB |
+| Main Yosys elapsed time (s) | 244.40 s | 275.10 s | +30.70 s |
+| Runner-observed peak child RSS (MiB) | 1443.55 MiB | 1483.31 MiB | +39.76 MiB |
 | Topological path length | 55 | 55 | +0 |
-| Flattened cells | 69410 | 73599 | +4189 |
-| Estimated LCs | 24586 | 26306 | +1720 |
-| CARRY4 | n/a | 2648 | n/a |
-| DSP48E1 | 13 | 13 | +0 |
-| FDCE | n/a | 4742 | n/a |
-| FDPE | n/a | 27 | n/a |
-| FDRE | n/a | 18111 | n/a |
-| FDSE | n/a | 129 | n/a |
-| LUT1 | n/a | 682 | n/a |
-| LUT2 | n/a | 7980 | n/a |
-| LUT3 | n/a | 5646 | n/a |
-| LUT4 | n/a | 4667 | n/a |
-| LUT5 | n/a | 3189 | n/a |
-| LUT6 | n/a | 12804 | n/a |
-| MUXF7 | n/a | 4127 | n/a |
-| MUXF8 | n/a | 786 | n/a |
+| Flattened cells | 73599 | 80823 | +7224 |
+| Estimated LCs | 26306 | 31215 | +4909 |
+| CARRY4 | 2648 | 2657 | +9 |
+| DSP48E1 | 13 | 15 | +2 |
+| FDCE | 4742 | 4771 | +29 |
+| FDPE | 27 | 27 | +0 |
+| FDRE | 18111 | 18063 | -48 |
+| FDSE | 129 | 129 | +0 |
+| LUT1 | 682 | 606 | -76 |
+| LUT2 | 7980 | 8586 | +606 |
+| LUT3 | 5646 | 8579 | +2933 |
+| LUT4 | 4667 | 5543 | +876 |
+| LUT5 | 3189 | 3557 | +368 |
+| LUT6 | 12804 | 13536 | +732 |
+| MUXF7 | 4127 | 5541 | +1414 |
+| MUXF8 | 786 | 1119 | +333 |
 | RAMB36E1 | 30 | 30 | +0 |
 | RAM32M | 10 | 10 | +0 |
 
 Critical-path summary:
 
 - Longest topological path in `ff_av2_encoder`: length 55.
-- Reported limiter: palette analyzer row/control logic after the timing-safe registered chroma zero-TXB shortcut.
+- Reported limiter: palette query/index path through the luma palette
+  symbolizer and AV2 range-coder normalization into `low_q`.
+- `ff_av2_chroma_sample_store` remains inferred as three `RAMB36E1`
+  memories in the hierarchy report.
 
 Notes:
 
-- The first same-cycle chroma zero-TXB shortcut reduced cycles but pushed the Yosys topological path to 71; the kept version registers the zero shortcut and restores the path length to 55.
-- Area increased versus the previous documented AV2 Yosys baseline, mainly from the shared input FIFO and added instrumentation/control. The critical path did not regress.
-- Bubble rate remains above the requested 0.800 target, so the next optimization needs to address serialized codec phases rather than AXI write readiness.
+- The retained RTL keeps the scalar palette map path. A row-wide and a
+  two-sample map experiment were rejected because they did not improve
+  top-level output utilization enough to justify the extra logic.
+- The current synthesis is still below the 600 second hard stop and below
+  the 3072 MiB memory limit, but it is slower and larger than the previous
+  documented AV2 baseline. The next throughput-focused work should target
+  packetized input/frame-store integration rather than adding combinational
+  palette analyzer fanout.
