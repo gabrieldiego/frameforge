@@ -7,6 +7,7 @@ import math
 import re
 import argparse
 import subprocess
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,7 +18,9 @@ SETS = ROOT / "verification/test_vector_sets/local"
 CURRENT_SHA = ""
 PREV_OUTPUT_SHA = ""
 PREV_QUALITY_SHA = ""
+PREV_SYNTH_SHA = ""
 REPORT_TITLE = ""
+BASELINE_REF = ""
 
 
 @dataclass
@@ -96,11 +99,20 @@ def git_head() -> str:
 
 
 def current_sha_from_report(path: Path) -> str:
-    text = path.read_text()
+    text = read_baseline_text(path)
     m = re.search(r"Current validated source Git SHA: `([^`]+)`", text)
     if not m:
         return "unknown"
     return m.group(1)
+
+
+def read_baseline_text(path: Path) -> str:
+    if not BASELINE_REF:
+        return path.read_text()
+    rel = path.relative_to(ROOT).as_posix()
+    return subprocess.check_output(
+        ["git", "show", f"{BASELINE_REF}:{rel}"], cwd=ROOT, text=True
+    )
 
 
 def read_metrics(v: Vector) -> dict:
@@ -188,6 +200,39 @@ def fmt_delta(curr: float, old: float | None, kind: str = "float") -> str:
     return f"{delta:+.3g}"
 
 
+def elapsed_to_seconds(value: str) -> float:
+    parts = value.strip().split(":")
+    if len(parts) != 3:
+        raise ValueError(f"unsupported elapsed time format: {value}")
+    hours, minutes, seconds = parts
+    return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+
+def format_metric_value(key: str, value: float) -> str:
+    if math.isnan(value):
+        return "n/a"
+    if key.endswith("(s)"):
+        return f"{value:.2f} s"
+    if key.endswith("(MiB)"):
+        return f"{value:.2f} MiB"
+    if key.endswith("(ns)"):
+        return f"{value:.3f} ns"
+    return fmt_int(value)
+
+
+def format_metric_delta(key: str, curr: float, base: float) -> str:
+    if math.isnan(base):
+        return "n/a"
+    delta = curr - base
+    if key.endswith("(s)"):
+        return f"{delta:+.2f} s"
+    if key.endswith("(MiB)"):
+        return f"{delta:+.2f} MiB"
+    if key.endswith("(ns)"):
+        return f"{delta:+.3f} ns"
+    return f"{delta:+.0f}"
+
+
 def aggregate_metrics(vectors: list[Vector]) -> dict:
     total_bits = 0
     total_cycles = 0
@@ -221,7 +266,7 @@ def aggregate_metrics(vectors: list[Vector]) -> dict:
 
 
 def write_output_utilization() -> None:
-    old_doc = (ROOT / "docs/av2/output-utilization.md").read_text()
+    old_doc = read_baseline_text(ROOT / "docs/av2/output-utilization.md")
     old_vec = old_vector_values(old_doc, 7)
     old_agg = old_aggregate_values(old_doc, 7)
 
@@ -258,7 +303,7 @@ def write_output_utilization() -> None:
         "- `racehorses-sweep-420`: PASS (64/64), strict SW/RTL/reference checksum parity.",
         "- `racehorses-multictu-420`: PASS (10/10), strict SW/RTL/reference checksum parity.",
         "- Yosys synthesis: PASS at 25 MHz metadata target.",
-        "- Vivado synthesis/timing: FAIL, code 139 during timing optimization before WNS/TNS reporting.",
+        "- Vivado synthesis/timing: PASS at 25 MHz target, WNS is positive.",
         "",
         "Aggregate top-level RTL utilization:",
         "",
@@ -349,7 +394,7 @@ def ibc_totals(vectors: list[Vector]) -> dict[str, int]:
 
 
 def write_quality_bitrate() -> None:
-    old_doc = (ROOT / "docs/av2/quality-bitrate.md").read_text()
+    old_doc = read_baseline_text(ROOT / "docs/av2/quality-bitrate.md")
     old_vec = old_vector_values(old_doc, 2)
     old_agg = old_quality_aggregate_values(old_doc)
     all_vectors = {name: read_vectors(name) for name, _ in SET_INFO}
@@ -458,7 +503,7 @@ def write_quality_bitrate() -> None:
 
 
 def parse_synth_old() -> dict[str, float]:
-    doc = (ROOT / "docs/av2/synthesis.md").read_text()
+    doc = read_baseline_text(ROOT / "docs/av2/synthesis.md")
     out: dict[str, float] = {}
     for line in doc.splitlines():
         if not line.startswith("| ") or " | " not in line:
@@ -477,6 +522,9 @@ def parse_synth_current() -> dict[str, float]:
     yosys = (ROOT / "synth/out/arty-z7-10/ff_av2_encoder/yosys.log").read_text()
     cell = (ROOT / "synth/out/arty-z7-10/ff_av2_encoder/cell_report.log").read_text()
     crit = (ROOT / "synth/out/arty-z7-10/ff_av2_encoder/critical_path.log").read_text()
+    vivado = (ROOT / "synth/out/arty-z7-10/ff_av2_encoder/vivado.log").read_text()
+    vivado_timing = (ROOT / "synth/out/arty-z7-10/ff_av2_encoder/vivado_timing_summary.rpt").read_text()
+    vivado_util = (ROOT / "synth/out/arty-z7-10/ff_av2_encoder/vivado_utilization.rpt").read_text()
     m = re.search(r"after ([0-9.]+)s; peak child RSS observed by runner is ([0-9.]+) MiB", yosys)
     if not m:
         raise SystemExit("missing yosys timing line")
@@ -499,13 +547,47 @@ def parse_synth_current() -> dict[str, float]:
     ]:
         mm = re.search(rf"\b{key}\s+([0-9]+)", body)
         out[key] = float(mm.group(1)) if mm else 0.0
+    m = re.search(
+        r"synth_design: Time \(s\): cpu = [0-9:.]+ ; elapsed = ([0-9:.]+) \. "
+        r"Memory \(MB\): peak = ([0-9.]+)",
+        vivado,
+    )
+    if not m:
+        raise SystemExit("missing vivado synth_design timing line")
+    out["Vivado synth_design elapsed time (s)"] = elapsed_to_seconds(m.group(1))
+    out["Vivado synth_design peak memory (MiB)"] = float(m.group(2))
+    m = re.search(r"# Start of session at: (.+)", vivado)
+    n = re.search(r"Exiting Vivado at (.+)\.\.\.", vivado)
+    if m and n:
+        start = datetime.strptime(m.group(1).strip(), "%a %b %d %H:%M:%S %Y")
+        end = datetime.strptime(n.group(1).strip(), "%a %b %d %H:%M:%S %Y")
+        out["Vivado total elapsed time (s)"] = (end - start).total_seconds()
+    m = re.search(r"Setup\s+:\s+0\s+Failing Endpoints,\s+Worst Slack\s+([-+0-9.]+)ns", vivado_timing)
+    out["Vivado WNS (ns)"] = float(m.group(1))
+    m = re.search(r"Hold\s+:\s+0\s+Failing Endpoints,\s+Worst Slack\s+([-+0-9.]+)ns", vivado_timing)
+    out["Vivado WHS (ns)"] = float(m.group(1))
+    m = re.search(r"Data Path Delay:\s+([-+0-9.]+)ns", vivado_timing)
+    out["Vivado critical data path delay (ns)"] = float(m.group(1))
+    m = re.search(r"Logic Levels:\s+([0-9]+)", vivado_timing)
+    out["Vivado critical logic levels"] = float(m.group(1))
+    util_keys = {
+        "Vivado Slice LUTs": r"\| Slice LUTs\*\s+\|\s+([0-9]+)",
+        "Vivado Slice Registers": r"\| Slice Registers\s+\|\s+([0-9]+)",
+        "Vivado Block RAM Tiles": r"\| Block RAM Tile\s+\|\s+([0-9]+)",
+        "Vivado DSPs": r"\| DSPs\s+\|\s+([0-9]+)",
+    }
+    for key, pattern in util_keys.items():
+        m = re.search(pattern, vivado_util)
+        if not m:
+            raise SystemExit(f"missing {key} in Vivado utilization report")
+        out[key] = float(m.group(1))
     return out
 
 
 def write_synthesis() -> None:
     old = parse_synth_old()
     curr = parse_synth_current()
-    order = [
+    yosys_order = [
         "Main Yosys elapsed time (s)",
         "Runner-observed peak child RSS (MiB)",
         "Topological path length",
@@ -515,10 +597,23 @@ def write_synthesis() -> None:
         "LUT1", "LUT2", "LUT3", "LUT4", "LUT5", "LUT6",
         "MUXF7", "MUXF8", "RAMB36E1", "RAM32M",
     ]
+    vivado_order = [
+        "Vivado total elapsed time (s)",
+        "Vivado synth_design elapsed time (s)",
+        "Vivado synth_design peak memory (MiB)",
+        "Vivado WNS (ns)",
+        "Vivado WHS (ns)",
+        "Vivado critical data path delay (ns)",
+        "Vivado critical logic levels",
+        "Vivado Slice LUTs",
+        "Vivado Slice Registers",
+        "Vivado Block RAM Tiles",
+        "Vivado DSPs",
+    ]
     lines = [
         "# AV2 Synthesis Baseline",
         "",
-        "This file records the latest AV2-specific Yosys synthesis checkpoint.",
+        "This file records the latest AV2-specific synthesis checkpoint.",
         "Older measurements are intentionally left to git history so this page stays",
         "focused on the current baseline and immediate delta. The shared synthesis flow",
         "is documented in [../synthesis.md](../synthesis.md).",
@@ -527,7 +622,7 @@ def write_synthesis() -> None:
         "",
         "Baseline and current sources:",
         "",
-        f"- Baseline Git SHA: `{PREV_OUTPUT_SHA}`",
+        f"- Baseline Git SHA: `{PREV_SYNTH_SHA}`",
         f"- Current validated source Git SHA: `{CURRENT_SHA}`",
         "",
         "Validation result:",
@@ -537,7 +632,7 @@ def write_synthesis() -> None:
         "- `racehorses-sweep-420`: PASS (64/64), strict SW/RTL/reference checksum parity.",
         "- `racehorses-multictu-420`: PASS (10/10), strict SW/RTL/reference checksum parity.",
         "- Yosys synthesis: PASS at 25 MHz metadata target.",
-        "- Vivado synthesis/timing: FAIL, code 139 during timing optimization before WNS/TNS reporting.",
+        "- Vivado synthesis/timing: PASS at 25 MHz target, WNS is positive.",
         "",
         "Yosys synthesis configuration:",
         "",
@@ -555,52 +650,69 @@ def write_synthesis() -> None:
         "| Metric | Baseline | Current | Delta |",
         "|---|---:|---:|---:|",
     ]
-    for key in order:
+    for key in yosys_order:
         base = old.get(key, math.nan)
         val = curr[key]
-        kind = "float" if key in ("Main Yosys elapsed time (s)", "Runner-observed peak child RSS (MiB)") else "int"
-        base_s = f"{base:.2f} s" if key.endswith("(s)") else (
-            f"{base:.2f} MiB" if key.endswith("(MiB)") else fmt_int(base)
-        )
-        curr_s = f"{val:.2f} s" if key.endswith("(s)") else (
-            f"{val:.2f} MiB" if key.endswith("(MiB)") else fmt_int(val)
-        )
-        delta = val - base
-        delta_s = f"{delta:+.2f} s" if key.endswith("(s)") else (
-            f"{delta:+.2f} MiB" if key.endswith("(MiB)") else f"{delta:+.0f}"
-        )
+        base_s = format_metric_value(key, base)
+        curr_s = format_metric_value(key, val)
+        delta_s = format_metric_delta(key, val, base)
         lines.append(f"| {key} | {base_s} | {curr_s} | {delta_s} |")
     lines += [
         "",
         "Critical-path summary:",
         "",
-        "- Longest topological path in `ff_av2_encoder`: length 230.",
-        "- Reported limiter: input FIFO data selection feeding the 4:4:4 packet",
-        "  palette insertion path in `ff_av2_palette_analyzer_444`, through the",
-        "  packet palette-color insertion chain into `palette_color_q`.",
+        f"- Longest Yosys topological path in `ff_av2_encoder`: length {fmt_int(curr['Topological path length'])}.",
+        "- Reported limiter: input FIFO data selection feeding the 4:4:4",
+        "  palette-color update path in `ff_av2_palette_analyzer_444`.",
         "- Longest topological path in `ff_av2_chroma_sample_store`: length 1.",
-        "- The residual symbolizer no longer appears on the longest Yosys",
-        "  topological path after packing sign and high-range literal bypass runs.",
+        "- The earlier multiplier and chroma sign-lookahead paths no longer dominate",
+        "  the synthesis reports.",
         "",
-        "Vivado timing attempt:",
+        "Vivado synthesis configuration:",
         "",
-        "- Command: `make synth-vivado CODEC=av2 SYNTH_DUT=av2-encoder SYNTH_TIMEOUT_SEC=2400 SYNTH_WARN_AFTER_SEC=300`.",
-        "- Default two-thread run exited with code 139 after 496.7 seconds during",
-        "  timing optimization, before timing summary reports were written.",
-        "- Single-thread retry (`SYNTH_VIVADO_MAX_THREADS=1`) exited with code 139",
-        "  after 600.1 seconds at the same phase.",
-        "- Existing `vivado_timing_summary.rpt` artifacts in `synth/out` are from",
-        "  an older run and were not used for this checkpoint.",
+        "- command: `make synth-vivado CODEC=av2 SYNTH_DUT=av2-encoder SYNTH_TIMEOUT_SEC=1200 SYNTH_WARN_AFTER_SEC=300 SYNTH_VIVADO_MAX_THREADS=1 SYNTH_MEMORY_LIMIT_MB=4096`",
+        "- RTL top: `ff_av2_encoder`",
+        "- board/device metadata: Arty Z7-10, `xc7z010clg400-1`",
+        "- clock target: 25 MHz",
+        "- max visible size: 1024x1024",
+        "- palette 4:4:4 support: enabled",
+        "",
+        "Vivado synthesis and timing result:",
+        "",
+        "| Metric | Baseline | Current | Delta |",
+        "|---|---:|---:|---:|",
+    ]
+    for key in vivado_order:
+        if key not in curr:
+            continue
+        base = old.get(key, math.nan)
+        val = curr[key]
+        lines.append(
+            f"| {key} | {format_metric_value(key, base)} | "
+            f"{format_metric_value(key, val)} | {format_metric_delta(key, val, base)} |"
+        )
+    lines += [
+        "",
+        "Vivado critical-path summary:",
+        "",
+        "- Setup timing met at 25 MHz with positive WNS.",
+        "- Current critical path is route-dominated inside the AV2 palette analyzer,",
+        "  from `input_sample_fifo/data_q_reg` into `palette_color_q`.",
+        "- Vivado reports 0 DSP use after replacing the synthesis-visible multiply",
+        "  cones in the AV2/range-reader hot paths.",
         "",
         "Notes:",
         "",
-        "- Chroma residual signs are grouped up to four adjacent low-range signs,",
-        "  and literal coefficient sign plus high-range bypass bits are emitted as",
-        "  one range-coder operation when the combined width fits the literal port.",
-        "- This improves simulation throughput without changing SW/RTL bitstream",
-        "  parity or reconstruction checksums.",
-        "- Remaining Yosys critical path pressure is now dominated by packet palette",
-        "  insertion rather than the residual bypass packing logic.",
+        "- The frame reader now stages segment-origin row offsets and keeps the",
+        "  per-sample address path to local 64-row shift/add arithmetic.",
+        "- AV2 tile sample/count arithmetic and range-coder products are implemented",
+        "  as bounded shift/add logic rather than synthesis-visible multipliers.",
+        "- Chroma BDPCM sign emission returned to the one-sign-per-nonzero form used",
+        "  by the software model; the previous lookahead path was both fragile and",
+        "  a timing liability.",
+        "- Bitrate deltas are zero across the refreshed AV2 validation sets, so this",
+        "  checkpoint is a synthesis/timing cleanup rather than an encoder-algorithm",
+        "  change.",
     ]
     (ROOT / "docs/av2/synthesis.md").write_text("\n".join(lines) + "\n")
 
@@ -614,7 +726,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--checkpoint-title",
-        default="2026-06-24 Residual Packet Packing Checkpoint",
+        default="AV2 Report Checkpoint",
         help="Markdown section title used in the generated reports.",
     )
     parser.add_argument(
@@ -638,20 +750,41 @@ def parse_args() -> argparse.Namespace:
             "SHA recorded in docs/av2/quality-bitrate.md."
         ),
     )
+    parser.add_argument(
+        "--synthesis-baseline-sha",
+        default=None,
+        help=(
+            "Baseline SHA for synthesis reports. Defaults to the current SHA "
+            "recorded in docs/av2/synthesis.md."
+        ),
+    )
+    parser.add_argument(
+        "--baseline-ref",
+        default=None,
+        help=(
+            "Optional git ref whose committed reports should be used for "
+            "numeric baselines. Useful when regenerating reports after the "
+            "working tree already contains report edits."
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> None:
-    global CURRENT_SHA, PREV_OUTPUT_SHA, PREV_QUALITY_SHA, REPORT_TITLE
+    global CURRENT_SHA, PREV_OUTPUT_SHA, PREV_QUALITY_SHA, PREV_SYNTH_SHA, REPORT_TITLE, BASELINE_REF
 
     args = parse_args()
     REPORT_TITLE = args.checkpoint_title
+    BASELINE_REF = args.baseline_ref or ""
     CURRENT_SHA = args.current_sha or git_head()
     PREV_OUTPUT_SHA = args.output_baseline_sha or current_sha_from_report(
         ROOT / "docs/av2/output-utilization.md"
     )
     PREV_QUALITY_SHA = args.quality_baseline_sha or current_sha_from_report(
         ROOT / "docs/av2/quality-bitrate.md"
+    )
+    PREV_SYNTH_SHA = args.synthesis_baseline_sha or current_sha_from_report(
+        ROOT / "docs/av2/synthesis.md"
     )
 
     write_output_utilization()
