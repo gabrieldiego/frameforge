@@ -3101,6 +3101,12 @@ module ff_av2_encoder #(
                 end else if ((step_q == 5'd3 && ibc_drl_idx_w == 2'd0) ||
                              (step_q == 5'd4 && ibc_drl_idx_w == 2'd1) ||
                              (step_q == 5'd5)) begin
+                  // AV2 v1.0.0 read_intra_frame_mode_info()/read_skip_txfm():
+                  // an IntraBC leaf updates both use_intrabc and skip_txfm
+                  // neighbor contexts. TODO(av2 entropy): if SDP, chroma
+                  // partition trees, or non-8x8 leaves are enabled, mirror the
+                  // AVM MB_MODE_INFO availability rules instead of this shared
+                  // fixed-leaf context map.
                   for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
                     if (context_index_q >= block_col_mi_q && context_index_q < (block_col_mi_q + block_w_mi_q)) begin
                       ibc_above_q[context_index_q] <= 1'b1;

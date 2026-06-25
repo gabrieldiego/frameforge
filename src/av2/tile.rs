@@ -1692,10 +1692,18 @@ impl Av2IntrabcContext {
     }
 
     fn intrabc_ctx(&self, row_mi: usize, col_mi: usize) -> usize {
+        // AV2 v1.0.0 read_intra_frame_mode_info()/get_intrabc_ctx(): the
+        // context is derived from already-decoded above and left mode info.
+        // TODO(av2 entropy): when SDP/chroma-only trees or non-8x8 leaves are
+        // enabled, replace this shared 8x8 map with the same MB_MODE_INFO
+        // availability rules used by AVM.
         usize::from(self.ibc_above[col_mi]) + usize::from(self.ibc_left[row_mi])
     }
 
     fn skip_txfm_ctx(&self, row_mi: usize, col_mi: usize) -> usize {
+        // AV2 v1.0.0 read_skip_txfm()/get_txb_ctx() uses neighboring
+        // skip_txfm state for IntraBC blocks. Keep this paired with the IBC
+        // context map so a copied block updates both contexts together.
         usize::from(self.skip_above[col_mi]) + usize::from(self.skip_left[row_mi])
     }
 
@@ -2033,6 +2041,14 @@ fn write_intrabc_copy(
     // copies the selected reference BV directly. The local hash matcher
     // mirrors AVM's BVP stack, so the selected above/left vector may be a
     // spatial candidate at DRL 0/1 or the default above/left entry at DRL 2/3.
+    // TODO(av2 entropy): add the intrabc_mode=0 branch from AVM
+    // write_intrabc_info()/assign_dv(). That path must signal optional
+    // intrabc_bv_precision when is_intraBC_bv_precision_active() is true and
+    // encode the differential BV with av2_encode_dv()/ndvc contexts.
+    // TODO(av2 entropy): do not enable vertical or wider local search until
+    // the encoder mirrors AVM setup_ref_mv_list(), is_mi_coded(), and
+    // pseudo-coded availability exactly; DRL bits are only valid when the
+    // decoder rebuilds the same BVP stack.
     let mut mode_cdf = DEFAULT_INTRABC_MODE_CDF;
     writer.write_symbol("tile.intrabc.mode", 1, &mut mode_cdf, 2, false);
     for idx in 0..(max_ref_bv_count - 1) {

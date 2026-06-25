@@ -155,6 +155,10 @@ module ff_av2_entropy_op_mux (
             // reference block vector from the BVP stack. The local matcher can
             // select spatial BVPs at DRL 0/1 or default above/left entries at
             // DRL 2/3.
+            // TODO(av2 entropy): add the intrabc_mode=0 path from AVM
+            // write_intrabc_info()/assign_dv(). That requires the optional
+            // intrabc_bv_precision symbol when is_intraBC_bv_precision_active()
+            // is true, plus differential-BV entropy using the ndvc contexts.
             op_fl = 32'd2775;
             op_fh = 32'd0;
             op_fl_inc = 8;

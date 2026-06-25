@@ -11,12 +11,12 @@ AV2 reference path used here is decode-only; these validation runs do not
 invoke `avmenc`, `aomenc`, or `vpenc`, and reference-encoder bitrates are
 not tracked in this report.
 
-## 2026-06-25 AV2 Timing Cleanup Checkpoint
+## 2026-06-25 AV2 IBC Hash Expansion Checkpoint
 
 Baseline and current sources:
 
-- Baseline Git SHA: `d5c8aea952cebba4cd835e6ddf94cdd1e26c7a47`
-- Current validated source Git SHA: `48ba35795881b898d28fbd6de13cac61147ac108`
+- Baseline Git SHA: `48ba35795881b898d28fbd6de13cac61147ac108`
+- Current validated source Git SHA: `6779c2e4b2726adef94cd7921dd62f106e454afb+working-tree`
 - Delta columns compare against the previous documented AV2 quality/bitrate
   checkpoint where the same vector or aggregate was present.
 
@@ -35,8 +35,8 @@ Aggregate results:
 
 | Set | Cases | Status | SW bits (delta) | SW bpp (delta) | PSNR |
 |---|---:|---|---:|---:|---|
-| `screenshot-sweep-444` | 64 | PASS | 749136 (+0) | 9.0318 (+0.0000) | inf |
-| `screenshot-multictu-444` | 10 | PASS | 562144 (+0) | 6.1209 (+0.0000) | inf |
+| `screenshot-sweep-444` | 64 | PASS | 749352 (+216) | 9.0344 (+0.0026) | inf |
+| `screenshot-multictu-444` | 10 | PASS | 562104 (-40) | 6.1205 (-0.0004) | inf |
 | `racehorses-sweep-420` | 64 | PASS | 182464 (+0) | 2.1998 (+0.0000) | avg 24.08 dB, range 22.47-33.31 dB |
 | `racehorses-multictu-420` | 10 | PASS | 186256 (+0) | 2.0280 (+0.0000) | avg 22.70 dB, range 22.36-23.03 dB |
 
@@ -44,8 +44,8 @@ IBC candidate summary for 4:4:4:
 
 | Set | 8x8 blocks | Raw above matches | Raw left matches | Direct above matches | Direct left matches | Selected above copies | Selected left copies |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `screenshot-sweep-444` | 1296 | 311 | 480 | 311 | 480 | 0 | 361 |
-| `screenshot-multictu-444` | 1435 | 578 | 796 | 578 | 796 | 0 | 677 |
+| `screenshot-sweep-444` | 1296 | 311 | 480 | 311 | 465 | 10 | 344 |
+| `screenshot-multictu-444` | 1435 | 578 | 796 | 578 | 796 | 3 | 676 |
 
 ### Screenshot 4:4:4 Full Sweep
 
@@ -61,12 +61,12 @@ IBC candidate summary for 4:4:4:
 | screenshot_640_sweep_64x8_1f_yuv444p8.yuv | PASS | 6960 (+0) | 13.5938 (+0.0000) | inf |
 | screenshot_640_sweep_8x16_1f_yuv444p8.yuv | PASS | 1760 (+0) | 13.7500 (+0.0000) | inf |
 | screenshot_640_sweep_16x16_1f_yuv444p8.yuv | PASS | 4880 (+0) | 19.0625 (+0.0000) | inf |
-| screenshot_640_sweep_24x16_1f_yuv444p8.yuv | PASS | 472 (+0) | 1.2292 (+0.0000) | inf |
-| screenshot_640_sweep_32x16_1f_yuv444p8.yuv | PASS | 512 (+0) | 1.0000 (+0.0000) | inf |
+| screenshot_640_sweep_24x16_1f_yuv444p8.yuv | PASS | 504 (+32) | 1.3125 (+0.0833) | inf |
+| screenshot_640_sweep_32x16_1f_yuv444p8.yuv | PASS | 552 (+40) | 1.0781 (+0.0781) | inf |
 | screenshot_640_sweep_40x16_1f_yuv444p8.yuv | PASS | 9208 (+0) | 14.3875 (+0.0000) | inf |
-| screenshot_640_sweep_48x16_1f_yuv444p8.yuv | PASS | 608 (+0) | 0.7917 (+0.0000) | inf |
+| screenshot_640_sweep_48x16_1f_yuv444p8.yuv | PASS | 704 (+96) | 0.9167 (+0.1250) | inf |
 | screenshot_640_sweep_56x16_1f_yuv444p8.yuv | PASS | 10312 (+0) | 11.5089 (+0.0000) | inf |
-| screenshot_640_sweep_64x16_1f_yuv444p8.yuv | PASS | 696 (+0) | 0.6797 (+0.0000) | inf |
+| screenshot_640_sweep_64x16_1f_yuv444p8.yuv | PASS | 824 (+128) | 0.8047 (+0.1250) | inf |
 | screenshot_640_sweep_8x24_1f_yuv444p8.yuv | PASS | 3632 (+0) | 18.9167 (+0.0000) | inf |
 | screenshot_640_sweep_16x24_1f_yuv444p8.yuv | PASS | 2672 (+0) | 6.9583 (+0.0000) | inf |
 | screenshot_640_sweep_24x24_1f_yuv444p8.yuv | PASS | 7048 (+0) | 12.2361 (+0.0000) | inf |
@@ -80,7 +80,7 @@ IBC candidate summary for 4:4:4:
 | screenshot_640_sweep_24x32_1f_yuv444p8.yuv | PASS | 1440 (+0) | 1.8750 (+0.0000) | inf |
 | screenshot_640_sweep_32x32_1f_yuv444p8.yuv | PASS | 11816 (+0) | 11.5391 (+0.0000) | inf |
 | screenshot_640_sweep_40x32_1f_yuv444p8.yuv | PASS | 688 (+0) | 0.5375 (+0.0000) | inf |
-| screenshot_640_sweep_48x32_1f_yuv444p8.yuv | PASS | 20288 (+0) | 13.2083 (+0.0000) | inf |
+| screenshot_640_sweep_48x32_1f_yuv444p8.yuv | PASS | 20232 (-56) | 13.1719 (-0.0364) | inf |
 | screenshot_640_sweep_56x32_1f_yuv444p8.yuv | PASS | 26072 (+0) | 14.5491 (+0.0000) | inf |
 | screenshot_640_sweep_64x32_1f_yuv444p8.yuv | PASS | 856 (+0) | 0.4180 (+0.0000) | inf |
 | screenshot_640_sweep_8x40_1f_yuv444p8.yuv | PASS | 6056 (+0) | 18.9250 (+0.0000) | inf |
@@ -91,7 +91,7 @@ IBC candidate summary for 4:4:4:
 | screenshot_640_sweep_48x40_1f_yuv444p8.yuv | PASS | 1712 (+0) | 0.8917 (+0.0000) | inf |
 | screenshot_640_sweep_56x40_1f_yuv444p8.yuv | PASS | 19224 (+0) | 8.5821 (+0.0000) | inf |
 | screenshot_640_sweep_64x40_1f_yuv444p8.yuv | PASS | 1144 (+0) | 0.4469 (+0.0000) | inf |
-| screenshot_640_sweep_8x48_1f_yuv444p8.yuv | PASS | 664 (+0) | 1.7292 (+0.0000) | inf |
+| screenshot_640_sweep_8x48_1f_yuv444p8.yuv | PASS | 640 (-24) | 1.6667 (-0.0625) | inf |
 | screenshot_640_sweep_16x48_1f_yuv444p8.yuv | PASS | 17104 (+0) | 22.2708 (+0.0000) | inf |
 | screenshot_640_sweep_24x48_1f_yuv444p8.yuv | PASS | 14712 (+0) | 12.7708 (+0.0000) | inf |
 | screenshot_640_sweep_32x48_1f_yuv444p8.yuv | PASS | 15952 (+0) | 10.3854 (+0.0000) | inf |
@@ -127,9 +127,9 @@ IBC candidate summary for 4:4:4:
 | screenshot_640_multictu_v3_64x192_1f_yuv444p8.yuv | PASS | 105584 (+0) | 8.5924 (+0.0000) | inf |
 | screenshot_640_partial_h2_72x64_1f_yuv444p8.yuv | PASS | 57192 (+0) | 12.4115 (+0.0000) | inf |
 | screenshot_640_partial_v2_64x72_1f_yuv444p8.yuv | PASS | 1664 (+0) | 0.3611 (+0.0000) | inf |
-| screenshot_640_partial_grid2_72x72_1f_yuv444p8.yuv | PASS | 3000 (+0) | 0.5787 (+0.0000) | inf |
+| screenshot_640_partial_grid2_72x72_1f_yuv444p8.yuv | PASS | 2984 (-16) | 0.5756 (-0.0031) | inf |
 | screenshot_640_partial_wide_136x80_1f_yuv444p8.yuv | PASS | 136424 (+0) | 12.5390 (+0.0000) | inf |
-| screenshot_640_partial_tall_72x128_1f_yuv444p8.yuv | PASS | 77792 (+0) | 8.4410 (+0.0000) | inf |
+| screenshot_640_partial_tall_72x128_1f_yuv444p8.yuv | PASS | 77768 (-24) | 8.4384 (-0.0026) | inf |
 
 ### RaceHorses 4:2:0 Full Sweep
 

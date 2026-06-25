@@ -21,6 +21,7 @@ PREV_QUALITY_SHA = ""
 PREV_SYNTH_SHA = ""
 REPORT_TITLE = ""
 BASELINE_REF = ""
+INCLUDE_VIVADO = True
 
 
 @dataclass
@@ -303,7 +304,11 @@ def write_output_utilization() -> None:
         "- `racehorses-sweep-420`: PASS (64/64), strict SW/RTL/reference checksum parity.",
         "- `racehorses-multictu-420`: PASS (10/10), strict SW/RTL/reference checksum parity.",
         "- Yosys synthesis: PASS at 25 MHz metadata target.",
-        "- Vivado synthesis/timing: PASS at 25 MHz target, WNS is positive.",
+        (
+            "- Vivado synthesis/timing: PASS at 25 MHz target, WNS is positive."
+            if INCLUDE_VIVADO
+            else "- Vivado synthesis/timing: not rerun for this checkpoint."
+        ),
         "",
         "Aggregate top-level RTL utilization:",
         "",
@@ -522,9 +527,6 @@ def parse_synth_current() -> dict[str, float]:
     yosys = (ROOT / "synth/out/arty-z7-10/ff_av2_encoder/yosys.log").read_text()
     cell = (ROOT / "synth/out/arty-z7-10/ff_av2_encoder/cell_report.log").read_text()
     crit = (ROOT / "synth/out/arty-z7-10/ff_av2_encoder/critical_path.log").read_text()
-    vivado = (ROOT / "synth/out/arty-z7-10/ff_av2_encoder/vivado.log").read_text()
-    vivado_timing = (ROOT / "synth/out/arty-z7-10/ff_av2_encoder/vivado_timing_summary.rpt").read_text()
-    vivado_util = (ROOT / "synth/out/arty-z7-10/ff_av2_encoder/vivado_utilization.rpt").read_text()
     m = re.search(r"after ([0-9.]+)s; peak child RSS observed by runner is ([0-9.]+) MiB", yosys)
     if not m:
         raise SystemExit("missing yosys timing line")
@@ -547,40 +549,44 @@ def parse_synth_current() -> dict[str, float]:
     ]:
         mm = re.search(rf"\b{key}\s+([0-9]+)", body)
         out[key] = float(mm.group(1)) if mm else 0.0
-    m = re.search(
-        r"synth_design: Time \(s\): cpu = [0-9:.]+ ; elapsed = ([0-9:.]+) \. "
-        r"Memory \(MB\): peak = ([0-9.]+)",
-        vivado,
-    )
-    if not m:
-        raise SystemExit("missing vivado synth_design timing line")
-    out["Vivado synth_design elapsed time (s)"] = elapsed_to_seconds(m.group(1))
-    out["Vivado synth_design peak memory (MiB)"] = float(m.group(2))
-    m = re.search(r"# Start of session at: (.+)", vivado)
-    n = re.search(r"Exiting Vivado at (.+)\.\.\.", vivado)
-    if m and n:
-        start = datetime.strptime(m.group(1).strip(), "%a %b %d %H:%M:%S %Y")
-        end = datetime.strptime(n.group(1).strip(), "%a %b %d %H:%M:%S %Y")
-        out["Vivado total elapsed time (s)"] = (end - start).total_seconds()
-    m = re.search(r"Setup\s+:\s+0\s+Failing Endpoints,\s+Worst Slack\s+([-+0-9.]+)ns", vivado_timing)
-    out["Vivado WNS (ns)"] = float(m.group(1))
-    m = re.search(r"Hold\s+:\s+0\s+Failing Endpoints,\s+Worst Slack\s+([-+0-9.]+)ns", vivado_timing)
-    out["Vivado WHS (ns)"] = float(m.group(1))
-    m = re.search(r"Data Path Delay:\s+([-+0-9.]+)ns", vivado_timing)
-    out["Vivado critical data path delay (ns)"] = float(m.group(1))
-    m = re.search(r"Logic Levels:\s+([0-9]+)", vivado_timing)
-    out["Vivado critical logic levels"] = float(m.group(1))
-    util_keys = {
-        "Vivado Slice LUTs": r"\| Slice LUTs\*\s+\|\s+([0-9]+)",
-        "Vivado Slice Registers": r"\| Slice Registers\s+\|\s+([0-9]+)",
-        "Vivado Block RAM Tiles": r"\| Block RAM Tile\s+\|\s+([0-9]+)",
-        "Vivado DSPs": r"\| DSPs\s+\|\s+([0-9]+)",
-    }
-    for key, pattern in util_keys.items():
-        m = re.search(pattern, vivado_util)
+    if INCLUDE_VIVADO:
+        vivado = (ROOT / "synth/out/arty-z7-10/ff_av2_encoder/vivado.log").read_text()
+        vivado_timing = (ROOT / "synth/out/arty-z7-10/ff_av2_encoder/vivado_timing_summary.rpt").read_text()
+        vivado_util = (ROOT / "synth/out/arty-z7-10/ff_av2_encoder/vivado_utilization.rpt").read_text()
+        m = re.search(
+            r"synth_design: Time \(s\): cpu = [0-9:.]+ ; elapsed = ([0-9:.]+) \. "
+            r"Memory \(MB\): peak = ([0-9.]+)",
+            vivado,
+        )
         if not m:
-            raise SystemExit(f"missing {key} in Vivado utilization report")
-        out[key] = float(m.group(1))
+            raise SystemExit("missing vivado synth_design timing line")
+        out["Vivado synth_design elapsed time (s)"] = elapsed_to_seconds(m.group(1))
+        out["Vivado synth_design peak memory (MiB)"] = float(m.group(2))
+        m = re.search(r"# Start of session at: (.+)", vivado)
+        n = re.search(r"Exiting Vivado at (.+)\.\.\.", vivado)
+        if m and n:
+            start = datetime.strptime(m.group(1).strip(), "%a %b %d %H:%M:%S %Y")
+            end = datetime.strptime(n.group(1).strip(), "%a %b %d %H:%M:%S %Y")
+            out["Vivado total elapsed time (s)"] = (end - start).total_seconds()
+        m = re.search(r"Setup\s+:\s+0\s+Failing Endpoints,\s+Worst Slack\s+([-+0-9.]+)ns", vivado_timing)
+        out["Vivado WNS (ns)"] = float(m.group(1))
+        m = re.search(r"Hold\s+:\s+0\s+Failing Endpoints,\s+Worst Slack\s+([-+0-9.]+)ns", vivado_timing)
+        out["Vivado WHS (ns)"] = float(m.group(1))
+        m = re.search(r"Data Path Delay:\s+([-+0-9.]+)ns", vivado_timing)
+        out["Vivado critical data path delay (ns)"] = float(m.group(1))
+        m = re.search(r"Logic Levels:\s+([0-9]+)", vivado_timing)
+        out["Vivado critical logic levels"] = float(m.group(1))
+        util_keys = {
+            "Vivado Slice LUTs": r"\| Slice LUTs\*\s+\|\s+([0-9]+)",
+            "Vivado Slice Registers": r"\| Slice Registers\s+\|\s+([0-9]+)",
+            "Vivado Block RAM Tiles": r"\| Block RAM Tile\s+\|\s+([0-9]+)",
+            "Vivado DSPs": r"\| DSPs\s+\|\s+([0-9]+)",
+        }
+        for key, pattern in util_keys.items():
+            m = re.search(pattern, vivado_util)
+            if not m:
+                raise SystemExit(f"missing {key} in Vivado utilization report")
+            out[key] = float(m.group(1))
     return out
 
 
@@ -632,7 +638,11 @@ def write_synthesis() -> None:
         "- `racehorses-sweep-420`: PASS (64/64), strict SW/RTL/reference checksum parity.",
         "- `racehorses-multictu-420`: PASS (10/10), strict SW/RTL/reference checksum parity.",
         "- Yosys synthesis: PASS at 25 MHz metadata target.",
-        "- Vivado synthesis/timing: PASS at 25 MHz target, WNS is positive.",
+        (
+            "- Vivado synthesis/timing: PASS at 25 MHz target, WNS is positive."
+            if INCLUDE_VIVADO
+            else "- Vivado synthesis/timing: not rerun for this checkpoint."
+        ),
         "",
         "Yosys synthesis configuration:",
         "",
@@ -668,51 +678,56 @@ def write_synthesis() -> None:
         "- The earlier multiplier and chroma sign-lookahead paths no longer dominate",
         "  the synthesis reports.",
         "",
-        "Vivado synthesis configuration:",
-        "",
-        "- command: `make synth-vivado CODEC=av2 SYNTH_DUT=av2-encoder SYNTH_TIMEOUT_SEC=1200 SYNTH_WARN_AFTER_SEC=300 SYNTH_VIVADO_MAX_THREADS=1 SYNTH_MEMORY_LIMIT_MB=4096`",
-        "- RTL top: `ff_av2_encoder`",
-        "- board/device metadata: Arty Z7-10, `xc7z010clg400-1`",
-        "- clock target: 25 MHz",
-        "- max visible size: 1024x1024",
-        "- palette 4:4:4 support: enabled",
-        "",
-        "Vivado synthesis and timing result:",
-        "",
-        "| Metric | Baseline | Current | Delta |",
-        "|---|---:|---:|---:|",
     ]
-    for key in vivado_order:
-        if key not in curr:
-            continue
-        base = old.get(key, math.nan)
-        val = curr[key]
-        lines.append(
-            f"| {key} | {format_metric_value(key, base)} | "
-            f"{format_metric_value(key, val)} | {format_metric_delta(key, val, base)} |"
-        )
+    if INCLUDE_VIVADO:
+        lines += [
+            "Vivado synthesis configuration:",
+            "",
+            "- command: `make synth-vivado CODEC=av2 SYNTH_DUT=av2-encoder SYNTH_TIMEOUT_SEC=1200 SYNTH_WARN_AFTER_SEC=300 SYNTH_VIVADO_MAX_THREADS=1 SYNTH_MEMORY_LIMIT_MB=4096`",
+            "- RTL top: `ff_av2_encoder`",
+            "- board/device metadata: Arty Z7-10, `xc7z010clg400-1`",
+            "- clock target: 25 MHz",
+            "- max visible size: 1024x1024",
+            "- palette 4:4:4 support: enabled",
+            "",
+            "Vivado synthesis and timing result:",
+            "",
+            "| Metric | Baseline | Current | Delta |",
+            "|---|---:|---:|---:|",
+        ]
+        for key in vivado_order:
+            if key not in curr:
+                continue
+            base = old.get(key, math.nan)
+            val = curr[key]
+            lines.append(
+                f"| {key} | {format_metric_value(key, base)} | "
+                f"{format_metric_value(key, val)} | {format_metric_delta(key, val, base)} |"
+            )
+        lines += [
+            "",
+            "Vivado critical-path summary:",
+            "",
+            "- Setup timing met at 25 MHz with positive WNS.",
+            "- Current critical path is route-dominated inside the AV2 palette analyzer,",
+            "  from `input_sample_fifo/data_q_reg` into `palette_color_q`.",
+        ]
+    else:
+        lines += [
+            "Vivado synthesis and timing result:",
+            "",
+            "- Not rerun for this checkpoint; use the previous committed report as the",
+            "  latest Vivado timing reference.",
+        ]
     lines += [
-        "",
-        "Vivado critical-path summary:",
-        "",
-        "- Setup timing met at 25 MHz with positive WNS.",
-        "- Current critical path is route-dominated inside the AV2 palette analyzer,",
-        "  from `input_sample_fifo/data_q_reg` into `palette_color_q`.",
-        "- Vivado reports 0 DSP use after replacing the synthesis-visible multiply",
-        "  cones in the AV2/range-reader hot paths.",
         "",
         "Notes:",
         "",
-        "- The frame reader now stages segment-origin row offsets and keeps the",
-        "  per-sample address path to local 64-row shift/add arithmetic.",
-        "- AV2 tile sample/count arithmetic and range-coder products are implemented",
-        "  as bounded shift/add logic rather than synthesis-visible multipliers.",
-        "- Chroma BDPCM sign emission returned to the one-sign-per-nonzero form used",
-        "  by the software model; the previous lookahead path was both fragile and",
-        "  a timing liability.",
-        "- Bitrate deltas are zero across the refreshed AV2 validation sets, so this",
-        "  checkpoint is a synthesis/timing cleanup rather than an encoder-algorithm",
-        "  change.",
+        "- Current Yosys critical path remains in the AV2 palette analyzer, from the",
+        "  input sample FIFO selection into the palette-color update path.",
+        "- Bitrate deltas reflect the refreshed validation logs for this checkpoint;",
+        "  output-utilization deltas include any RTL-cycle changes from the current",
+        "  IBC and entropy-path updates.",
     ]
     (ROOT / "docs/av2/synthesis.md").write_text("\n".join(lines) + "\n")
 
@@ -767,15 +782,25 @@ def parse_args() -> argparse.Namespace:
             "working tree already contains report edits."
         ),
     )
+    parser.add_argument(
+        "--synthesis-tool",
+        choices=("yosys", "yosys-vivado"),
+        default="yosys-vivado",
+        help=(
+            "Select which current synthesis artifacts to consume. Use `yosys` "
+            "when Vivado was not rerun for the current checkpoint."
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> None:
-    global CURRENT_SHA, PREV_OUTPUT_SHA, PREV_QUALITY_SHA, PREV_SYNTH_SHA, REPORT_TITLE, BASELINE_REF
+    global CURRENT_SHA, PREV_OUTPUT_SHA, PREV_QUALITY_SHA, PREV_SYNTH_SHA, REPORT_TITLE, BASELINE_REF, INCLUDE_VIVADO
 
     args = parse_args()
     REPORT_TITLE = args.checkpoint_title
     BASELINE_REF = args.baseline_ref or ""
+    INCLUDE_VIVADO = args.synthesis_tool == "yosys-vivado"
     CURRENT_SHA = args.current_sha or git_head()
     PREV_OUTPUT_SHA = args.output_baseline_sha or current_sha_from_report(
         ROOT / "docs/av2/output-utilization.md"

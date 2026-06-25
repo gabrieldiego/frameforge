@@ -6,6 +6,7 @@ pub(crate) const AV2_IBC_HASH_BLOCK_SIZE: usize = 8;
 const AV2_IBC_TILE_SIZE: usize = 64;
 const AV2_IBC_HASH_OFFSET: u32 = 0x811c_9dc5;
 const AV2_IBC_MAX_BVP_SIZE: usize = 4;
+const AV2_IBC_DRL_IDX_ABOVE_8X8: u8 = 2;
 #[cfg(test)]
 const AV2_IBC_DRL_IDX_LEFT_8X8: u8 = 3;
 
@@ -181,6 +182,10 @@ fn visit_local_ibc_block(
     // the defaults are unshifted.
     let left_in_same_tile = x0 % AV2_IBC_TILE_SIZE != 0;
     let above_in_same_tile = y0 % AV2_IBC_TILE_SIZE != 0;
+    let tile_block_row = block_y % (AV2_IBC_TILE_SIZE / AV2_IBC_HASH_BLOCK_SIZE);
+    let tile_block_rows =
+        (AV2_IBC_TILE_SIZE / AV2_IBC_HASH_BLOCK_SIZE).min(blocks_high - (block_y - tile_block_row));
+    let terminal_tile_row = tile_block_row + 1 == tile_block_rows;
     if left_in_same_tile {
         stats.blocks_with_left_in_tile += 1;
     }
@@ -243,11 +248,14 @@ fn visit_local_ibc_block(
         stats.left_hash_matches_blocked_by_fixed_drl_guard += 1;
     }
 
-    // Vertical local IntraBC copies need the full AVM is_mi_coded/pseudo-coded
-    // availability mirror before they are reference-decoder-safe. Keep actual
-    // selection left-copy-only; the above counters stay useful for deciding
-    // when to implement the full BVP/availability model.
-    let above_match = false;
+    // AV2 v1.0.0 av2_is_dv_in_local_range() permits a direct 8x8 above
+    // vector when the source block is in the same 64x64 tile and has already
+    // been coded. Limit this first expansion to the terminal 8x8 row and the
+    // default BVP slot from setup_ref_mv_list(); shifted spatial-BVP slots and
+    // later blocks consuming a vertical IBC neighbor need AVM's exact
+    // is_mi_coded/pseudo-coded map and follow-on context update.
+    let above_match =
+        terminal_tile_row && direct_above_match && above_drl_idx == Some(AV2_IBC_DRL_IDX_ABOVE_8X8);
     // Top-row same-row copies can still be rejected by AVM for the current
     // partial-superblock partition state. Keep left-copy selection below the
     // first 8x8 row until the full is_mi_coded/pseudo-coded map is mirrored.
@@ -433,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn av2_local_ibc_hash_leaves_vertical_copy_for_full_avm_availability() {
+    fn av2_local_ibc_hash_marks_repeated_above_8x8_block() {
         let geometry = Av2VideoGeometry {
             width: 8,
             height: 16,
@@ -452,8 +460,39 @@ mod tests {
 
         let ibc = build_local_ibc_444(&frame, geometry).expect("IBC hash map should build");
         assert_eq!(ibc.candidate_drl_idx(0, 0), None);
+        assert_eq!(ibc.candidate_drl_idx(0, 8), Some(AV2_IBC_DRL_IDX_ABOVE_8X8));
+        assert!(ibc.any_copy());
+    }
+
+    #[test]
+    fn av2_local_ibc_hash_reuses_adjacent_vertical_spatial_bvp() {
+        let geometry = Av2VideoGeometry {
+            width: 8,
+            height: 24,
+        };
+        let plane_len = geometry.width * geometry.height;
+        let mut frame = vec![0; plane_len * 3];
+        for plane in 0..3 {
+            for y in 0..8 {
+                for x in 0..8 {
+                    let value = (plane * 17 + y * 19 + x * 3) as u8;
+                    for block in 0..3 {
+                        frame[plane * plane_len + (y + block * 8) * geometry.width + x] = value;
+                    }
+                }
+            }
+        }
+
+        let ibc = build_local_ibc_444(&frame, geometry).expect("IBC hash map should build");
+        assert_eq!(ibc.candidate_drl_idx(0, 0), None);
         assert_eq!(ibc.candidate_drl_idx(0, 8), None);
-        assert!(!ibc.any_copy());
+        // The middle row is kept as residual-coded context; the terminal row
+        // can use the default above BVP without a following block consuming
+        // vertical IBC neighbor state.
+        assert_eq!(
+            ibc.candidate_drl_idx(0, 16),
+            Some(AV2_IBC_DRL_IDX_ABOVE_8X8)
+        );
     }
 
     #[test]

@@ -68,6 +68,7 @@ module ff_av2_local_hash_matcher_444 #(
   logic bottom_left_in_tile_w;
   logic second_left_in_tile_w;
   logic decide_block_visible_w;
+  logic terminal_tile_row_w;
   logic direct_left_valid_w;
   logic direct_above_valid_w;
   logic bottom_left_valid_w;
@@ -175,10 +176,20 @@ module ff_av2_local_hash_matcher_444 #(
   assign block_complete_w = sample_fire && (block_sample_q == 8'd191);
   assign packet_last_sample_w = block_sample_q + {4'd0, packet_count} - 8'd1;
   assign packet_block_complete_w = packet_fire && (packet_last_sample_w >= 8'd191);
+  assign terminal_tile_row_w = decide_block_id_w[5:3] == last_block_row_q;
+  // AV2 v1.0.0 av2_is_dv_in_local_range() accepts the local above 8x8 BV
+  // when the referenced block is coded inside the same 64x64 tile. Keep this
+  // expansion on the terminal 8x8 row and the default setup_ref_mv_list() BVP
+  // slot until the RTL mirrors AVM's full is_mi_coded/pseudo-coded
+  // availability map for shifted slots and follow-on vertical IBC contexts.
   assign above_match_w =
-    // Keep this MVP exact-match IBC selector left-copy-only until the RTL has
-    // a complete AVM is_mi_coded availability mirror for vertical local BVs.
-    1'b0;
+    enabled_w &&
+    above_in_tile_w &&
+    terminal_tile_row_w &&
+    coded_mask_q[above_block_id_w] &&
+    above_drl_valid_w &&
+    (above_drl_idx_w == 2'd2) &&
+    (hash_table_q[above_block_id_w] == hash_table_q[decide_block_id_w]);
   assign left_match_w =
     enabled_w &&
     above_in_tile_w &&
