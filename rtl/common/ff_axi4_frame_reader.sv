@@ -7,7 +7,11 @@ module ff_axi4_frame_reader #(
   parameter int CTU_SIZE = 64,
   parameter int OUTPUT_SAMPLES = 1,
   // 0: VVC fixed-TU scan order, 1: raster 8x8 block order.
-  parameter bit RASTER_BLOCK_ORDER = 1'b0
+  parameter bit RASTER_BLOCK_ORDER = 1'b0,
+  // Opportunistically overlap the next 4:2:0 read with the current response.
+  // Keep this opt-in until each codec path has been audited for timing-sensitive
+  // packet ordering assumptions.
+  parameter bit ENABLE_420_PREFETCH = 1'b0
 ) (
   input  logic                       clk,
   input  logic                       rst_n,
@@ -223,12 +227,20 @@ module ff_axi4_frame_reader #(
   logic [15:0] advance_plane_visible_width_w;
   logic [15:0] advance_plane_visible_height_w;
   logic [OUTPUT_SAMPLES*SAMPLE_BITS-1:0] advance_packet_cache_data_w;
+  logic [OUTPUT_SAMPLES*SAMPLE_BITS-1:0] advance_packet_rdata_w;
   logic [OUTPUT_SAMPLES*SAMPLE_BITS-1:0] advance_packet_pad_data_w;
   logic arvalid_hold_q;
   logic [AXI_ADDR_BITS-1:0] araddr_hold_q;
+  logic prefetch_enable_w;
+  logic prefetch_pending_q;
+  logic [AXI_ADDR_BITS-1:0] prefetch_addr_q;
+  logic [CACHE_INDEX_BITS-1:0] prefetch_cache_index_q;
   logic sample_fire_w;
   logic current_read_request_w;
   logic advance_read_request_w;
+  logic wait_r_prefetch_request_w;
+  logic prefetch_response_w;
+  logic advance_prefetch_response_hit_w;
   logic ar_request_valid_w;
   logic [AXI_ADDR_BITS-1:0] ar_request_addr_w;
   logic [AXI_ADDR_BITS-1:0] y_segment_offset_q;
@@ -244,14 +256,37 @@ module ff_axi4_frame_reader #(
 
   assign busy = (state_q != ST_IDLE);
   assign sample_fire_w = sample_valid && sample_ready;
+  assign prefetch_enable_w = ENABLE_420_PREFETCH && (chroma_format_idc == 2'd1);
   assign current_read_request_w =
     (state_q == ST_SKIP) && leaf_active_w && in_visible_w && !cache_hit_w;
   assign advance_read_request_w =
     sample_fire_w && !packet_segment_last_w &&
     advance_leaf_active_w && advance_in_visible_w && !advance_cache_hit_w;
+  assign wait_r_prefetch_request_w =
+    prefetch_enable_w &&
+    (state_q == ST_WAIT_R) &&
+    m_axi_rvalid &&
+    m_axi_rready &&
+    !prefetch_pending_q &&
+    !packet_segment_last_w &&
+    advance_leaf_active_w &&
+    advance_in_visible_w &&
+    !advance_cache_hit_w &&
+    (advance_axi_word_addr_w != axi_word_addr_w);
+  assign prefetch_response_w = prefetch_pending_q && m_axi_rvalid && m_axi_rready;
+  assign advance_prefetch_response_hit_w =
+    prefetch_response_w &&
+    (prefetch_addr_q == advance_axi_word_addr_w) &&
+    (prefetch_cache_index_q == advance_cache_index_w);
   assign ar_request_valid_w =
-    !arvalid_hold_q && (advance_read_request_w || current_read_request_w);
-  assign ar_request_addr_w = advance_read_request_w ? advance_axi_word_addr_w : axi_word_addr_w;
+    !arvalid_hold_q &&
+    !(prefetch_pending_q && !prefetch_response_w) &&
+    (wait_r_prefetch_request_w ||
+     advance_read_request_w ||
+     current_read_request_w);
+  assign ar_request_addr_w =
+    wait_r_prefetch_request_w ? advance_axi_word_addr_w :
+    (advance_read_request_w ? advance_axi_word_addr_w : axi_word_addr_w);
   assign m_axi_arvalid = arvalid_hold_q || ar_request_valid_w;
   assign m_axi_araddr = arvalid_hold_q ? araddr_hold_q : ar_request_addr_w;
   assign m_axi_arlen = 8'd0;
@@ -667,12 +702,15 @@ module ff_axi4_frame_reader #(
     (stream_last_on_segment_end || frame_last_segment);
   always_comb begin
     advance_packet_cache_data_w = '0;
+    advance_packet_rdata_w = '0;
     advance_packet_pad_data_w = '0;
     for (int i = 0; i < OUTPUT_SAMPLES; i = i + 1) begin
       if (i < advance_packet_count_w) begin
         advance_packet_cache_data_w[i * SAMPLE_BITS +: SAMPLE_BITS] =
           advance_cache_hit_data_w[
             (advance_axi_byte_offset_w + (i * SAMPLE_BYTES)) * 8 +: SAMPLE_BITS];
+        advance_packet_rdata_w[i * SAMPLE_BITS +: SAMPLE_BITS] =
+          m_axi_rdata[(advance_axi_byte_offset_w + (i * SAMPLE_BYTES)) * 8 +: SAMPLE_BITS];
         advance_packet_pad_data_w[i * SAMPLE_BITS +: SAMPLE_BITS] = advance_pad_sample_w;
       end
     end
@@ -689,6 +727,9 @@ module ff_axi4_frame_reader #(
       sample_q <= 6'd0;
       arvalid_hold_q <= 1'b0;
       araddr_hold_q <= '0;
+      prefetch_pending_q <= 1'b0;
+      prefetch_addr_q <= '0;
+      prefetch_cache_index_q <= '0;
       m_axi_rready <= 1'b0;
       sample_valid <= 1'b0;
       sample_data <= '0;
@@ -719,6 +760,9 @@ module ff_axi4_frame_reader #(
         sample_q <= 6'd0;
         arvalid_hold_q <= 1'b0;
         araddr_hold_q <= '0;
+        prefetch_pending_q <= 1'b0;
+        prefetch_addr_q <= '0;
+        prefetch_cache_index_q <= '0;
         m_axi_rready <= 1'b0;
         sample_valid <= 1'b0;
         sample_count <= 4'd0;
@@ -744,6 +788,17 @@ module ff_axi4_frame_reader #(
         segment_init_bit_q <= 5'd0;
         error <= 1'b0;
       end else begin
+        if (prefetch_response_w) begin
+          cache_valid_q[prefetch_cache_index_q] <= 1'b1;
+          cache_addr_q[prefetch_cache_index_q] <= prefetch_addr_q;
+          cache_data_q[prefetch_cache_index_q] <= m_axi_rdata;
+          prefetch_pending_q <= 1'b0;
+          m_axi_rready <= 1'b0;
+          if (m_axi_rresp != 2'b00 || !m_axi_rlast) begin
+            error <= 1'b1;
+          end
+        end
+
         if (sample_valid && sample_ready) begin
           sample_valid <= 1'b0;
           sample_last <= 1'b0;
@@ -764,7 +819,14 @@ module ff_axi4_frame_reader #(
             // fallback remains for inactive Morton leaves in partial CTUs.
             if (advance_leaf_active_w) begin
               if (advance_in_visible_w) begin
-                if (advance_cache_hit_w) begin
+                if (advance_prefetch_response_hit_w) begin
+                  active_axi_word_q <= m_axi_rdata;
+                  sample_data <= advance_packet_rdata_w;
+                  sample_count <= advance_packet_count_w;
+                  sample_last <= advance_packet_output_last_w;
+                  sample_valid <= 1'b1;
+                  state_q <= ST_VALID;
+                end else if (advance_cache_hit_w) begin
                   active_axi_word_q <= advance_cache_hit_data_w;
                   sample_data <= advance_packet_cache_data_w;
                   sample_count <= advance_packet_count_w;
@@ -861,7 +923,14 @@ module ff_axi4_frame_reader #(
           end
           ST_WAIT_R: begin
             if (m_axi_rvalid && m_axi_rready) begin
-              m_axi_rready <= 1'b0;
+              if (wait_r_prefetch_request_w && m_axi_arready) begin
+                prefetch_pending_q <= 1'b1;
+                prefetch_addr_q <= advance_axi_word_addr_w;
+                prefetch_cache_index_q <= advance_cache_index_w;
+                m_axi_rready <= 1'b1;
+              end else begin
+                m_axi_rready <= 1'b0;
+              end
               cache_valid_q[cache_index_w] <= 1'b1;
               cache_addr_q[cache_index_w] <= axi_word_addr_w;
               cache_data_q[cache_index_w] <= m_axi_rdata;

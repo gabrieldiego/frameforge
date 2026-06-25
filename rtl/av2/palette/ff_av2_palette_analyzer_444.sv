@@ -261,6 +261,7 @@ module ff_av2_palette_analyzer_444 #(
   logic above_mode_dc_or_unavailable_w;
   logic left_mode_dc_or_unavailable_w;
   logic terminal_tile_leaf_w;
+  logic [5:0] next_block_id_w;
   logic chroma_drain_state_w;
   logic chroma_sample_fire_w;
   logic lossy420_mode_w;
@@ -287,6 +288,10 @@ module ff_av2_palette_analyzer_444 #(
   logic [7:0] lossy420_y_sum_clear1_index_w;
   logic [7:0] lossy420_y_sum_clear2_index_w;
   logic [7:0] lossy420_y_sum_clear3_index_w;
+  logic [7:0] lossy420_next_y_sum_clear0_index_w;
+  logic [7:0] lossy420_next_y_sum_clear1_index_w;
+  logic [7:0] lossy420_next_y_sum_clear2_index_w;
+  logic [7:0] lossy420_next_y_sum_clear3_index_w;
   logic [7:0] lossy420_luma_fetch_sum_index_w;
   logic [5:0] lossy420_chroma_fetch_sum_index_w;
   logic sample_store_row_write_y_w;
@@ -375,6 +380,10 @@ module ff_av2_palette_analyzer_444 #(
   assign fixed_mode_ctx0_w = above_mode_dc_or_unavailable_w && left_mode_dc_or_unavailable_w;
   assign terminal_tile_leaf_w =
     (block_id_q[5:3] == last_block_row_q) && (block_id_q[2:0] == last_block_col_q);
+  assign next_block_id_w =
+    (block_id_q[2:0] == last_block_col_q) ?
+      {block_id_q[5:3] + 3'd1, 3'd0} :
+      (block_id_q + 6'd1);
   assign chroma_sample_fire_w =
     !lossy420_mode_w && sample_fire && chroma_drain_state_w && !chroma_complete_q;
   assign packet_luma_fire_w =
@@ -481,6 +490,14 @@ module ff_av2_palette_analyzer_444 #(
   assign lossy420_y_sum_clear1_index_w = {block_id_q[5:3], 1'b0, block_id_q[2:0], 1'b1};
   assign lossy420_y_sum_clear2_index_w = {block_id_q[5:3], 1'b1, block_id_q[2:0], 1'b0};
   assign lossy420_y_sum_clear3_index_w = {block_id_q[5:3], 1'b1, block_id_q[2:0], 1'b1};
+  assign lossy420_next_y_sum_clear0_index_w =
+    {next_block_id_w[5:3], 1'b0, next_block_id_w[2:0], 1'b0};
+  assign lossy420_next_y_sum_clear1_index_w =
+    {next_block_id_w[5:3], 1'b0, next_block_id_w[2:0], 1'b1};
+  assign lossy420_next_y_sum_clear2_index_w =
+    {next_block_id_w[5:3], 1'b1, next_block_id_w[2:0], 1'b0};
+  assign lossy420_next_y_sum_clear3_index_w =
+    {next_block_id_w[5:3], 1'b1, next_block_id_w[2:0], 1'b1};
   assign lossy420_luma_fetch_sum_index_w = {
     luma_fetch_txb_row_mi_q[3:0],
     luma_fetch_txb_col_mi_q[3:0]
@@ -1575,18 +1592,21 @@ module ff_av2_palette_analyzer_444 #(
                     luma_palette_mode <= 1'b0;
                     done <= 1'b1;
                     state_q <= ST_DONE;
-                  end else if (block_id_q[2:0] == last_block_col_q) begin
-                    block_id_q <= {block_id_q[5:3] + 3'd1, 3'd0};
-                    block_sample_q <= 6'd0;
-                    block_chroma_sample_q <= 7'd0;
-                    chroma_complete_q <= 1'b0;
-                    state_q <= ST_BLOCK_INIT;
                   end else begin
-                    block_id_q <= block_id_q + 6'd1;
+                    // 4:2:0 skips palette pad/sort/map. Clear the next
+                    // block's residual sums while advancing out of chroma
+                    // drain so the next leaf starts one cycle earlier.
+                    block_id_q <= next_block_id_w;
                     block_sample_q <= 6'd0;
                     block_chroma_sample_q <= 7'd0;
                     chroma_complete_q <= 1'b0;
-                    state_q <= ST_BLOCK_INIT;
+                    lossy420_y_sum_q[lossy420_next_y_sum_clear0_index_w] <= 12'd0;
+                    lossy420_y_sum_q[lossy420_next_y_sum_clear1_index_w] <= 12'd0;
+                    lossy420_y_sum_q[lossy420_next_y_sum_clear2_index_w] <= 12'd0;
+                    lossy420_y_sum_q[lossy420_next_y_sum_clear3_index_w] <= 12'd0;
+                    lossy420_u_sum_q[next_block_id_w] <= 12'd0;
+                    lossy420_v_sum_q[next_block_id_w] <= 12'd0;
+                    state_q <= ST_READ;
                   end
                 end else begin
                   block_chroma_sample_q <= block_chroma_sample_q + {3'd0, packet_count};

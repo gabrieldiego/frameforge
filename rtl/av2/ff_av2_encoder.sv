@@ -213,6 +213,8 @@ module ff_av2_encoder #(
   logic [6:0] seq_bits_left_q;
   logic [63:0] seq_value_q;
   logic [15:0] seq_bit_pos_q;
+  logic [3:0] seq_byte_remaining_w;
+  logic [2:0] seq_write_step_w;
   logic [63:0] low_q;
   logic [31:0] rng_q;
   logic signed [7:0] cnt_q;
@@ -272,6 +274,7 @@ module ff_av2_encoder #(
   logic [15:0] carry_q;
   logic [15:0] carry_index_q;
   integer context_index_q;
+  integer seq_write_i;
   logic [7:0] y_txb_above_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
   logic [7:0] y_txb_left_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
   logic [7:0] u_txb_above_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
@@ -378,23 +381,20 @@ module ff_av2_encoder #(
   logic [15:0] carry_oct_sum6_w;
   logic [15:0] carry_oct_sum7_w;
   logic [15:0] carry_single_addr_w;
-  logic [15:0] carry_pair_addr_w;
-  logic [15:0] carry_quad_addr_w;
-  logic [15:0] carry_oct_addr_w;
-  logic [15:0] carry_next_pair_addr_w;
-  logic [15:0] carry_next_quad_addr_w;
-  logic [15:0] carry_next_oct_addr_w;
+  logic [15:0] carry_group_addr_w;
+  logic [15:0] carry_next_single_addr_w;
   logic [15:0] carry_index_after_step_w;
   logic [15:0] carry_index_after_next_step_w;
   logic [3:0] carry_step_w;
   logic [3:0] carry_next_step_w;
-  logic carry_pair_w;
-  logic carry_quad_w;
-  logic carry_oct_w;
+  logic [3:0] carry_precarry_limit_w;
+  logic [3:0] carry_payload_limit_w;
+  logic [3:0] carry_next_precarry_limit_w;
+  logic [3:0] carry_next_payload_limit_w;
+  logic [15:0] carry_after_step_w;
+  logic [63:0] carry_group_data_w;
+  logic [15:0] carry_group_strobe_w;
   logic carry_done_after_step_w;
-  logic carry_next_pair_w;
-  logic carry_next_quad_w;
-  logic carry_next_oct_w;
   logic carry_next_done_w;
   logic [12:0] carry_read_after_current_word_addr_w;
   logic [12:0] carry_read_after_next_word_addr_w;
@@ -774,7 +774,8 @@ module ff_av2_encoder #(
     .SAMPLE_BITS(SAMPLE_BITS),
     .CTU_SIZE(CTU_SIZE),
     .OUTPUT_SAMPLES(INPUT_PACKET_SAMPLES),
-    .RASTER_BLOCK_ORDER(1'b1)
+    .RASTER_BLOCK_ORDER(1'b1),
+    .ENABLE_420_PREFETCH(1'b1)
   ) frame_reader (
     .clk(clk),
     .rst_n(rst_n),
@@ -1571,68 +1572,127 @@ module ff_av2_encoder #(
   assign carry_oct_sum6_w = (carry_oct_sum5_w >> 8) + precarry_read_prev6_data_q;
   assign carry_oct_sum7_w = (carry_oct_sum6_w >> 8) + precarry_read_prev7_data_q;
   assign carry_single_addr_w = payload_tile_start_w + carry_index_q;
-  assign carry_pair_addr_w = payload_tile_start_w + carry_index_q - 16'd1;
-  assign carry_quad_addr_w = payload_tile_start_w + carry_index_q - 16'd3;
-  assign carry_oct_addr_w = payload_tile_start_w + carry_index_q - 16'd7;
-  assign carry_next_pair_addr_w = payload_tile_start_w + carry_index_after_step_w - 16'd1;
-  assign carry_next_quad_addr_w = payload_tile_start_w + carry_index_after_step_w - 16'd3;
-  assign carry_next_oct_addr_w = payload_tile_start_w + carry_index_after_step_w - 16'd7;
+  assign carry_next_single_addr_w = payload_tile_start_w + carry_index_after_step_w;
   // AV2 range coder carry propagation is byte-order preserving when processed
-  // from the end of the precarry buffer. Eight/four-byte groups stay aligned
-  // so the read-ahead schedule and payload byte strobes never cross RAM words;
-  // smaller groups handle the tail.
-  assign carry_oct_w =
-    (carry_index_q >= 16'd7) &&
-    (carry_index_q[2:0] == 3'd7) &&
-    (carry_oct_addr_w[2:0] == 3'd0);
-  assign carry_quad_w =
-    !carry_oct_w &&
-    (carry_index_q >= 16'd3) &&
-    (carry_index_q[1:0] == 2'd3) &&
-    (carry_quad_addr_w[1:0] == 2'd0);
-  assign carry_pair_w =
-    !carry_oct_w &&
-    (carry_index_q != 16'd0) &&
-    (carry_index_q[1:0] != 2'd0) &&
-    (carry_pair_addr_w[0] == 1'b0);
-  assign carry_step_w = carry_oct_w ? 4'd8 : (carry_quad_w ? 4'd4 : (carry_pair_w ? 4'd2 : 4'd1));
+  // from the end of the precarry buffer. The group size is the largest run up
+  // to eight bytes that stays inside both the current precarry read word and
+  // the current 16-byte masked payload write word.
+  assign carry_precarry_limit_w =
+    (carry_index_q[2:0] == 3'd7) ? 4'd8 : {1'b0, carry_index_q[2:0]} + 4'd1;
+  assign carry_payload_limit_w =
+    (carry_single_addr_w[3:0] >= 4'd7) ? 4'd8 : ({1'b0, carry_single_addr_w[2:0]} + 4'd1);
+  assign carry_step_w =
+    (carry_precarry_limit_w < carry_payload_limit_w) ?
+      carry_precarry_limit_w : carry_payload_limit_w;
+  assign carry_group_addr_w =
+    payload_tile_start_w + carry_index_q - {12'd0, carry_step_w - 4'd1};
   assign carry_index_after_step_w = carry_index_q - {12'd0, carry_step_w};
-  assign carry_done_after_step_w =
-    (carry_oct_w && carry_index_q == 16'd7) ||
-    (carry_quad_w && carry_index_q == 16'd3) ||
-    (carry_pair_w && carry_index_q == 16'd1) ||
-    (!carry_oct_w && !carry_quad_w && !carry_pair_w && carry_index_q == 16'd0);
-  assign carry_next_oct_w =
-    !carry_done_after_step_w &&
-    (carry_index_after_step_w >= 16'd7) &&
-    (carry_index_after_step_w[2:0] == 3'd7) &&
-    (carry_next_oct_addr_w[2:0] == 3'd0);
-  assign carry_next_quad_w =
-    !carry_done_after_step_w &&
-    !carry_next_oct_w &&
-    (carry_index_after_step_w >= 16'd3) &&
-    (carry_index_after_step_w[1:0] == 2'd3) &&
-    (carry_next_quad_addr_w[1:0] == 2'd0);
-  assign carry_next_pair_w =
-    !carry_done_after_step_w &&
-    !carry_next_oct_w &&
-    (carry_index_after_step_w != 16'd0) &&
-    carry_index_after_step_w[0] &&
-    (carry_next_pair_addr_w[0] == 1'b0);
+  assign carry_done_after_step_w = carry_index_q < {12'd0, carry_step_w};
+  assign carry_next_precarry_limit_w =
+    (carry_index_after_step_w[2:0] == 3'd7) ?
+      4'd8 : ({1'b0, carry_index_after_step_w[2:0]} + 4'd1);
+  assign carry_next_payload_limit_w =
+    (carry_next_single_addr_w[3:0] >= 4'd7) ?
+      4'd8 : ({1'b0, carry_next_single_addr_w[2:0]} + 4'd1);
   assign carry_next_step_w =
-    carry_next_oct_w ? 4'd8 : (carry_next_quad_w ? 4'd4 : (carry_next_pair_w ? 4'd2 : 4'd1));
+    (carry_next_precarry_limit_w < carry_next_payload_limit_w) ?
+      carry_next_precarry_limit_w : carry_next_payload_limit_w;
   assign carry_index_after_next_step_w =
     carry_index_after_step_w - {12'd0, carry_next_step_w};
   assign carry_next_done_w =
-    (carry_next_oct_w && carry_index_after_step_w == 16'd7) ||
-    (carry_next_quad_w && carry_index_after_step_w == 16'd3) ||
-    (carry_next_pair_w && carry_index_after_step_w == 16'd1) ||
-    (!carry_next_oct_w && !carry_next_quad_w && !carry_next_pair_w && carry_index_after_step_w == 16'd0);
+    carry_index_after_step_w < {12'd0, carry_next_step_w};
   assign carry_read_after_current_word_addr_w =
     carry_done_after_step_w ? 13'd0 : carry_index_after_step_w[15:3];
   assign carry_read_after_next_word_addr_w =
     (carry_done_after_step_w || carry_next_done_w) ?
       13'd0 : carry_index_after_next_step_w[15:3];
+  assign carry_after_step_w =
+    (carry_step_w == 4'd8) ? (carry_oct_sum7_w >> 8) :
+    ((carry_step_w == 4'd7) ? (carry_oct_sum6_w >> 8) :
+    ((carry_step_w == 4'd6) ? (carry_oct_sum5_w >> 8) :
+    ((carry_step_w == 4'd5) ? (carry_oct_sum4_w >> 8) :
+    ((carry_step_w == 4'd4) ? (carry_quad_sum3_w >> 8) :
+    ((carry_step_w == 4'd3) ? (carry_quad_sum2_w >> 8) :
+    ((carry_step_w == 4'd2) ? (carry_pair_sum_w >> 8) :
+                               (carry_sum_w >> 8)))))));
+  assign carry_group_strobe_w =
+    ((16'h0001 << carry_step_w) - 16'h0001) << carry_group_addr_w[3:0];
+  always @* begin
+    case (carry_step_w)
+      4'd8: begin
+        carry_group_data_w = {
+          carry_sum_w[7:0],
+          carry_pair_sum_w[7:0],
+          carry_quad_sum2_w[7:0],
+          carry_quad_sum3_w[7:0],
+          carry_oct_sum4_w[7:0],
+          carry_oct_sum5_w[7:0],
+          carry_oct_sum6_w[7:0],
+          carry_oct_sum7_w[7:0]
+        };
+      end
+      4'd7: begin
+        carry_group_data_w = {
+          8'd0,
+          carry_sum_w[7:0],
+          carry_pair_sum_w[7:0],
+          carry_quad_sum2_w[7:0],
+          carry_quad_sum3_w[7:0],
+          carry_oct_sum4_w[7:0],
+          carry_oct_sum5_w[7:0],
+          carry_oct_sum6_w[7:0]
+        };
+      end
+      4'd6: begin
+        carry_group_data_w = {
+          16'd0,
+          carry_sum_w[7:0],
+          carry_pair_sum_w[7:0],
+          carry_quad_sum2_w[7:0],
+          carry_quad_sum3_w[7:0],
+          carry_oct_sum4_w[7:0],
+          carry_oct_sum5_w[7:0]
+        };
+      end
+      4'd5: begin
+        carry_group_data_w = {
+          24'd0,
+          carry_sum_w[7:0],
+          carry_pair_sum_w[7:0],
+          carry_quad_sum2_w[7:0],
+          carry_quad_sum3_w[7:0],
+          carry_oct_sum4_w[7:0]
+        };
+      end
+      4'd4: begin
+        carry_group_data_w = {
+          32'd0,
+          carry_sum_w[7:0],
+          carry_pair_sum_w[7:0],
+          carry_quad_sum2_w[7:0],
+          carry_quad_sum3_w[7:0]
+        };
+      end
+      4'd3: begin
+        carry_group_data_w = {
+          40'd0,
+          carry_sum_w[7:0],
+          carry_pair_sum_w[7:0],
+          carry_quad_sum2_w[7:0]
+        };
+      end
+      4'd2: begin
+        carry_group_data_w = {
+          48'd0,
+          carry_sum_w[7:0],
+          carry_pair_sum_w[7:0]
+        };
+      end
+      default: begin
+        carry_group_data_w = {56'd0, carry_sum_w[7:0]};
+      end
+    endcase
+  end
   assign precarry_read_addr_q = carry_index_q;
   assign precarry_read_data_q =
     (carry_index_q[2:0] == 3'd0) ? precarry_read_word_data_w[15:0] :
@@ -2208,42 +2268,10 @@ module ff_av2_encoder #(
       case (state_q)
         ST_CARRY_WRITE: begin
           payload_write_valid_w = 1'b1;
-          if (carry_oct_w) begin
-            payload_write_addr_w = carry_oct_addr_w;
-            payload_write_strobe_w = 16'h00ff << carry_oct_addr_w[3:0];
-            payload_write_data_w =
-              ({64'd0,
-                carry_sum_w[7:0],
-                carry_pair_sum_w[7:0],
-                carry_quad_sum2_w[7:0],
-                carry_quad_sum3_w[7:0],
-                carry_oct_sum4_w[7:0],
-                carry_oct_sum5_w[7:0],
-                carry_oct_sum6_w[7:0],
-                carry_oct_sum7_w[7:0]} <<
-               ({3'd0, carry_oct_addr_w[3:0]} << 3));
-          end else if (carry_quad_w) begin
-            payload_write_addr_w = carry_quad_addr_w;
-            payload_write_strobe_w = 16'h000f << carry_quad_addr_w[3:0];
-            payload_write_data_w =
-              ({96'd0,
-                carry_sum_w[7:0],
-                carry_pair_sum_w[7:0],
-                carry_quad_sum2_w[7:0],
-                carry_quad_sum3_w[7:0]} <<
-               ({3'd0, carry_quad_addr_w[3:0]} << 3));
-          end else if (carry_pair_w) begin
-            payload_write_addr_w = carry_pair_addr_w;
-            payload_write_strobe_w = 16'h0003 << carry_pair_addr_w[3:0];
-            payload_write_data_w =
-              ({112'd0, carry_sum_w[7:0], carry_pair_sum_w[7:0]} <<
-               ({3'd0, carry_pair_addr_w[3:0]} << 3));
-          end else begin
-            payload_write_addr_w = carry_single_addr_w;
-            payload_write_strobe_w = 16'h0001 << carry_single_addr_w[3:0];
-            payload_write_data_w =
-              ({120'd0, carry_sum_w[7:0]} << ({3'd0, carry_single_addr_w[3:0]} << 3));
-          end
+          payload_write_addr_w = carry_group_addr_w;
+          payload_write_strobe_w = carry_group_strobe_w;
+          payload_write_data_w =
+            ({64'd0, carry_group_data_w} << ({3'd0, carry_group_addr_w[3:0]} << 3));
         end
         ST_PAYLOAD_PREFIX: begin
           if (!tile_is_last_w && payload_prefix_index_q != 2'd3) begin
@@ -2340,6 +2368,14 @@ module ff_av2_encoder #(
       seq_stream_byte_w = seq_mem_q[seq_stream_index_w];
     end
   end
+
+  assign seq_byte_remaining_w =
+    (seq_bit_pos_q[2:0] == 3'd0) ? 4'd4 :
+    ((4'd4 < (4'd8 - {1'b0, seq_bit_pos_q[2:0]})) ?
+      4'd4 : (4'd8 - {1'b0, seq_bit_pos_q[2:0]}));
+  assign seq_write_step_w =
+    (seq_bits_left_q < {3'd0, seq_byte_remaining_w}) ?
+      seq_bits_left_q[2:0] : seq_byte_remaining_w[2:0];
 
   always @* begin
     forced_valid_w = 1'b0;
@@ -2914,14 +2950,20 @@ module ff_av2_encoder #(
             end
           end
           ST_SEQ_WRITE: begin
-            seq_mem_q[seq_bit_pos_q[15:3]][7 - seq_bit_pos_q[2:0]] <= seq_value_q[seq_bits_left_q - 7'd1];
-            seq_bit_pos_q <= seq_bit_pos_q + 16'd1;
-            if (seq_bits_left_q == 7'd1) begin
+            for (seq_write_i = 0; seq_write_i < 4; seq_write_i = seq_write_i + 1) begin
+              if (seq_write_i[2:0] < seq_write_step_w) begin
+                seq_mem_q[seq_bit_pos_q[15:3]]
+                  [7 - (seq_bit_pos_q[2:0] + seq_write_i[2:0])] <=
+                    seq_value_q[seq_bits_left_q - {4'd0, seq_write_i[2:0]} - 7'd1];
+              end
+            end
+            seq_bit_pos_q <= seq_bit_pos_q + {13'd0, seq_write_step_w};
+            if (seq_bits_left_q == {4'd0, seq_write_step_w}) begin
               seq_bits_left_q <= 7'd0;
               seq_op_q <= seq_op_q + 8'd1;
               state_q <= ST_SEQ_LOAD;
             end else begin
-              seq_bits_left_q <= seq_bits_left_q - 7'd1;
+              seq_bits_left_q <= seq_bits_left_q - {4'd0, seq_write_step_w};
             end
           end
           ST_LOAD_BLOCK: begin
@@ -3473,35 +3515,12 @@ module ff_av2_encoder #(
           end
           ST_CARRY_WRITE: begin
             if (carry_done_after_step_w) begin
-              if (carry_oct_w) begin
-                carry_q <= carry_oct_sum7_w >> 8;
-              end else if (carry_quad_w) begin
-                carry_q <= carry_quad_sum3_w >> 8;
-              end else if (carry_pair_w) begin
-                carry_q <= carry_pair_sum_w >> 8;
-              end else begin
-                carry_q <= carry_sum_w >> 8;
-              end
+              carry_q <= carry_after_step_w;
               payload_prefix_index_q <= 2'd0;
               precarry_read_word_addr_q <= 13'd0;
               state_q <= ST_PAYLOAD_PREFIX;
-            end else if (carry_oct_w) begin
-              carry_q <= carry_oct_sum7_w >> 8;
-              carry_index_q <= carry_index_after_step_w;
-              precarry_read_word_addr_q <= carry_read_after_next_word_addr_w;
-              state_q <= ST_CARRY_WRITE;
-            end else if (carry_quad_w) begin
-              carry_q <= carry_quad_sum3_w >> 8;
-              carry_index_q <= carry_index_after_step_w;
-              precarry_read_word_addr_q <= carry_read_after_next_word_addr_w;
-              state_q <= ST_CARRY_WRITE;
-            end else if (carry_pair_w) begin
-              carry_q <= carry_pair_sum_w >> 8;
-              carry_index_q <= carry_index_after_step_w;
-              precarry_read_word_addr_q <= carry_read_after_next_word_addr_w;
-              state_q <= ST_CARRY_WRITE;
             end else begin
-              carry_q <= carry_sum_w >> 8;
+              carry_q <= carry_after_step_w;
               carry_index_q <= carry_index_after_step_w;
               precarry_read_word_addr_q <= carry_read_after_next_word_addr_w;
               state_q <= ST_CARRY_WRITE;
