@@ -77,6 +77,7 @@ module ff_axi4_frame_reader #(
 
   typedef enum logic [2:0] {
     ST_IDLE,
+    ST_INIT_SEGMENT,
     ST_SKIP,
     ST_ADDR,
     ST_WAIT_R,
@@ -107,12 +108,16 @@ module ff_axi4_frame_reader #(
   logic [5:0] component_sample_last_w;
   logic [15:0] local_x_w;
   logic [15:0] local_y_w;
+  logic [15:0] local_plane_x_w;
+  logic [15:0] local_plane_y_w;
   logic [15:0] sample_x_w;
   logic [15:0] sample_y_w;
   logic [15:0] plane_x_w;
   logic [15:0] plane_y_w;
   logic [31:0] plane_stride_w;
+  logic [AXI_ADDR_BITS-1:0] plane_stride_addr_w;
   logic [AXI_ADDR_BITS-1:0] plane_base_w;
+  logic [AXI_ADDR_BITS-1:0] plane_segment_offset_w;
   logic [AXI_ADDR_BITS-1:0] plane_offset_w;
   logic [AXI_ADDR_BITS-1:0] row_offset_w;
   logic [AXI_ADDR_BITS-1:0] col_offset_w;
@@ -180,12 +185,16 @@ module ff_axi4_frame_reader #(
   logic [5:0] advance_component_sample_last_w;
   logic [15:0] advance_local_x_w;
   logic [15:0] advance_local_y_w;
+  logic [15:0] advance_local_plane_x_w;
+  logic [15:0] advance_local_plane_y_w;
   logic [15:0] advance_sample_x_w;
   logic [15:0] advance_sample_y_w;
   logic [15:0] advance_plane_x_w;
   logic [15:0] advance_plane_y_w;
   logic [31:0] advance_plane_stride_w;
+  logic [AXI_ADDR_BITS-1:0] advance_plane_stride_addr_w;
   logic [AXI_ADDR_BITS-1:0] advance_plane_base_w;
+  logic [AXI_ADDR_BITS-1:0] advance_plane_segment_offset_w;
   logic [AXI_ADDR_BITS-1:0] advance_row_offset_w;
   logic [AXI_ADDR_BITS-1:0] advance_col_offset_w;
   logic [AXI_ADDR_BITS-1:0] advance_plane_offset_w;
@@ -222,6 +231,15 @@ module ff_axi4_frame_reader #(
   logic advance_read_request_w;
   logic ar_request_valid_w;
   logic [AXI_ADDR_BITS-1:0] ar_request_addr_w;
+  logic [AXI_ADDR_BITS-1:0] y_segment_offset_q;
+  logic [AXI_ADDR_BITS-1:0] u_segment_offset_q;
+  logic [AXI_ADDR_BITS-1:0] v_segment_offset_q;
+  logic [AXI_ADDR_BITS-1:0] y_stride_shift_q;
+  logic [AXI_ADDR_BITS-1:0] u_stride_shift_q;
+  logic [AXI_ADDR_BITS-1:0] v_stride_shift_q;
+  logic [15:0] y_origin_shift_q;
+  logic [15:0] uv_origin_shift_q;
+  logic [4:0] segment_init_bit_q;
   integer packet_i;
 
   assign busy = (state_q != ST_IDLE);
@@ -285,17 +303,25 @@ module ff_axi4_frame_reader #(
     ((chroma_format_idc == 2'd1) && (component_q != 2'd0)) ?
       {12'd0, sample_q[5:2]} :
       {13'd0, sample_q[5:3]};
+  assign local_plane_x_w =
+    ((chroma_format_idc == 2'd1) && (component_q != 2'd0)) ?
+      (({13'd0, leaf_col_w} << 2) + local_x_w) :
+      (({13'd0, leaf_col_w} << 3) + local_x_w);
+  assign local_plane_y_w =
+    ((chroma_format_idc == 2'd1) && (component_q != 2'd0)) ?
+      (({13'd0, leaf_row_w} << 2) + local_y_w) :
+      (({13'd0, leaf_row_w} << 3) + local_y_w);
   assign sample_x_w =
     segment_origin_x + ({13'd0, leaf_col_w} << 3) + local_x_w;
   assign sample_y_w =
     segment_origin_y + ({13'd0, leaf_row_w} << 3) + local_y_w;
   assign plane_x_w =
     ((chroma_format_idc == 2'd1) && (component_q != 2'd0)) ?
-      ((segment_origin_x >> 1) + ({13'd0, leaf_col_w} << 2) + local_x_w) :
+      ((segment_origin_x >> 1) + local_plane_x_w) :
       sample_x_w;
   assign plane_y_w =
     ((chroma_format_idc == 2'd1) && (component_q != 2'd0)) ?
-      ((segment_origin_y >> 1) + ({13'd0, leaf_row_w} << 2) + local_y_w) :
+      ((segment_origin_y >> 1) + local_plane_y_w) :
       sample_y_w;
   assign plane_base_w =
     (component_q == 2'd0) ? src_y_base :
@@ -305,9 +331,24 @@ module ff_axi4_frame_reader #(
     (component_q == 2'd0) ? src_y_stride :
     (component_q == 2'd1) ? src_u_stride :
     src_v_stride;
-  assign row_offset_w = {32'd0, plane_y_w} * plane_stride_w;
-  assign col_offset_w = {32'd0, plane_x_w} << SAMPLE_BYTE_SHIFT;
-  assign plane_offset_w = src_frame_offset + row_offset_w + col_offset_w;
+  assign plane_stride_addr_w = AXI_ADDR_BITS'(plane_stride_w);
+  assign plane_segment_offset_w =
+    (component_q == 2'd0) ? y_segment_offset_q :
+    (component_q == 2'd1) ? u_segment_offset_q :
+    v_segment_offset_q;
+  // The full segment-origin row product is registered when a segment starts.
+  // The packet path only multiplies the local row inside the 64x64 region,
+  // avoiding the duplicated full-width y*stride DSP cones that were dominating
+  // Vivado timing optimization.
+  assign row_offset_w =
+    (local_plane_y_w[0] ? plane_stride_addr_w : '0) +
+    (local_plane_y_w[1] ? (plane_stride_addr_w << 1) : '0) +
+    (local_plane_y_w[2] ? (plane_stride_addr_w << 2) : '0) +
+    (local_plane_y_w[3] ? (plane_stride_addr_w << 3) : '0) +
+    (local_plane_y_w[4] ? (plane_stride_addr_w << 4) : '0) +
+    (local_plane_y_w[5] ? (plane_stride_addr_w << 5) : '0);
+  assign col_offset_w = AXI_ADDR_BITS'(local_plane_x_w) << SAMPLE_BYTE_SHIFT;
+  assign plane_offset_w = plane_segment_offset_w + row_offset_w + col_offset_w;
   assign sample_addr_w = plane_base_w + plane_offset_w;
   assign axi_byte_offset_w =
     (AXI_BYTES <= 1) ? '0 : sample_addr_w[AXI_BYTE_INDEX_BITS-1:0];
@@ -505,17 +546,25 @@ module ff_axi4_frame_reader #(
     ((chroma_format_idc == 2'd1) && (advance_component_w != 2'd0)) ?
       {12'd0, advance_sample_w[5:2]} :
       {13'd0, advance_sample_w[5:3]};
+  assign advance_local_plane_x_w =
+    ((chroma_format_idc == 2'd1) && (advance_component_w != 2'd0)) ?
+      (({13'd0, advance_leaf_col_w} << 2) + advance_local_x_w) :
+      (({13'd0, advance_leaf_col_w} << 3) + advance_local_x_w);
+  assign advance_local_plane_y_w =
+    ((chroma_format_idc == 2'd1) && (advance_component_w != 2'd0)) ?
+      (({13'd0, advance_leaf_row_w} << 2) + advance_local_y_w) :
+      (({13'd0, advance_leaf_row_w} << 3) + advance_local_y_w);
   assign advance_sample_x_w =
     segment_origin_x + ({13'd0, advance_leaf_col_w} << 3) + advance_local_x_w;
   assign advance_sample_y_w =
     segment_origin_y + ({13'd0, advance_leaf_row_w} << 3) + advance_local_y_w;
   assign advance_plane_x_w =
     ((chroma_format_idc == 2'd1) && (advance_component_w != 2'd0)) ?
-      ((segment_origin_x >> 1) + ({13'd0, advance_leaf_col_w} << 2) + advance_local_x_w) :
+      ((segment_origin_x >> 1) + advance_local_plane_x_w) :
       advance_sample_x_w;
   assign advance_plane_y_w =
     ((chroma_format_idc == 2'd1) && (advance_component_w != 2'd0)) ?
-      ((segment_origin_y >> 1) + ({13'd0, advance_leaf_row_w} << 2) + advance_local_y_w) :
+      ((segment_origin_y >> 1) + advance_local_plane_y_w) :
       advance_sample_y_w;
   assign advance_plane_base_w =
     (advance_component_w == 2'd0) ? src_y_base :
@@ -525,9 +574,21 @@ module ff_axi4_frame_reader #(
     (advance_component_w == 2'd0) ? src_y_stride :
     (advance_component_w == 2'd1) ? src_u_stride :
     src_v_stride;
-  assign advance_row_offset_w = {32'd0, advance_plane_y_w} * advance_plane_stride_w;
-  assign advance_col_offset_w = {32'd0, advance_plane_x_w} << SAMPLE_BYTE_SHIFT;
-  assign advance_plane_offset_w = src_frame_offset + advance_row_offset_w + advance_col_offset_w;
+  assign advance_plane_stride_addr_w = AXI_ADDR_BITS'(advance_plane_stride_w);
+  assign advance_plane_segment_offset_w =
+    (advance_component_w == 2'd0) ? y_segment_offset_q :
+    (advance_component_w == 2'd1) ? u_segment_offset_q :
+    v_segment_offset_q;
+  assign advance_row_offset_w =
+    (advance_local_plane_y_w[0] ? advance_plane_stride_addr_w : '0) +
+    (advance_local_plane_y_w[1] ? (advance_plane_stride_addr_w << 1) : '0) +
+    (advance_local_plane_y_w[2] ? (advance_plane_stride_addr_w << 2) : '0) +
+    (advance_local_plane_y_w[3] ? (advance_plane_stride_addr_w << 3) : '0) +
+    (advance_local_plane_y_w[4] ? (advance_plane_stride_addr_w << 4) : '0) +
+    (advance_local_plane_y_w[5] ? (advance_plane_stride_addr_w << 5) : '0);
+  assign advance_col_offset_w = AXI_ADDR_BITS'(advance_local_plane_x_w) << SAMPLE_BYTE_SHIFT;
+  assign advance_plane_offset_w =
+    advance_plane_segment_offset_w + advance_row_offset_w + advance_col_offset_w;
   assign advance_sample_addr_w = advance_plane_base_w + advance_plane_offset_w;
   assign advance_axi_byte_offset_w =
     (AXI_BYTES <= 1) ? '0 : advance_sample_addr_w[AXI_BYTE_INDEX_BITS-1:0];
@@ -635,12 +696,21 @@ module ff_axi4_frame_reader #(
       sample_last <= 1'b0;
       active_axi_word_q <= '0;
       cache_valid_q <= '0;
+      y_segment_offset_q <= '0;
+      u_segment_offset_q <= '0;
+      v_segment_offset_q <= '0;
+      y_stride_shift_q <= '0;
+      u_stride_shift_q <= '0;
+      v_stride_shift_q <= '0;
+      y_origin_shift_q <= 16'd0;
+      uv_origin_shift_q <= 16'd0;
+      segment_init_bit_q <= 5'd0;
       done <= 1'b0;
       error <= 1'b0;
     end else begin
       done <= 1'b0;
       if (start) begin
-        state_q <= ST_SKIP;
+        state_q <= ST_INIT_SEGMENT;
         scan_q <= 6'd0;
         raster_col_q <= 3'd0;
         raster_row_q <= 3'd0;
@@ -655,6 +725,23 @@ module ff_axi4_frame_reader #(
         sample_last <= 1'b0;
         active_axi_word_q <= '0;
         cache_valid_q <= '0;
+        y_segment_offset_q <=
+          src_frame_offset + (AXI_ADDR_BITS'(segment_origin_x) << SAMPLE_BYTE_SHIFT);
+        u_segment_offset_q <=
+          src_frame_offset +
+          (AXI_ADDR_BITS'((chroma_format_idc == 2'd1) ?
+            (segment_origin_x >> 1) : segment_origin_x) << SAMPLE_BYTE_SHIFT);
+        v_segment_offset_q <=
+          src_frame_offset +
+          (AXI_ADDR_BITS'((chroma_format_idc == 2'd1) ?
+            (segment_origin_x >> 1) : segment_origin_x) << SAMPLE_BYTE_SHIFT);
+        y_stride_shift_q <= AXI_ADDR_BITS'(src_y_stride);
+        u_stride_shift_q <= AXI_ADDR_BITS'(src_u_stride);
+        v_stride_shift_q <= AXI_ADDR_BITS'(src_v_stride);
+        y_origin_shift_q <= segment_origin_y;
+        uv_origin_shift_q <=
+          (chroma_format_idc == 2'd1) ? (segment_origin_y >> 1) : segment_origin_y;
+        segment_init_bit_q <= 5'd0;
         error <= 1'b0;
       end else begin
         if (sample_valid && sample_ready) begin
@@ -711,6 +798,25 @@ module ff_axi4_frame_reader #(
           ST_IDLE: begin
             arvalid_hold_q <= 1'b0;
             m_axi_rready <= 1'b0;
+          end
+          ST_INIT_SEGMENT: begin
+            if (y_origin_shift_q[0]) begin
+              y_segment_offset_q <= y_segment_offset_q + y_stride_shift_q;
+            end
+            if (uv_origin_shift_q[0]) begin
+              u_segment_offset_q <= u_segment_offset_q + u_stride_shift_q;
+              v_segment_offset_q <= v_segment_offset_q + v_stride_shift_q;
+            end
+            y_origin_shift_q <= {1'b0, y_origin_shift_q[15:1]};
+            uv_origin_shift_q <= {1'b0, uv_origin_shift_q[15:1]};
+            y_stride_shift_q <= y_stride_shift_q << 1;
+            u_stride_shift_q <= u_stride_shift_q << 1;
+            v_stride_shift_q <= v_stride_shift_q << 1;
+            if (segment_init_bit_q == 5'd15) begin
+              state_q <= ST_SKIP;
+            end else begin
+              segment_init_bit_q <= segment_init_bit_q + 5'd1;
+            end
           end
           ST_SKIP: begin
             if (leaf_active_w) begin

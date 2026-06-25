@@ -150,10 +150,6 @@ module ff_av2_palette_analyzer_444 #(
   logic [7:0] nearest_delta_w;
   logic [7:0] nearest_color_w;
   logic [7:0] collect_sample_w;
-  logic palette_insert_valid_w;
-  logic [7:0] palette_insert_sample_w;
-  logic [3:0] palette_insert_index_w;
-  logic [7:0] palette_color_insert_w [0:7];
   logic [7:0] map_sample_w;
   logic [7:0] map_abs_delta_w;
   logic [7:0] vertical_predictor_sample_w;
@@ -275,7 +271,6 @@ module ff_av2_palette_analyzer_444 #(
   logic [7:0] packet_palette_color_next_w [0:7];
   logic [3:0] packet_collected_next_count_w;
   logic packet_insert_known_w;
-  logic [3:0] packet_insert_index_w;
   logic [11:0] packet_luma_left_sum_w;
   logic [11:0] packet_luma_right_sum_w;
   logic [11:0] packet_chroma_sum_w;
@@ -315,7 +310,6 @@ module ff_av2_palette_analyzer_444 #(
   integer edge_index_q;
   integer inner_index_q;
   integer delta_index_q;
-  integer insert_index_q;
   integer packet_lane_q;
   integer packet_insert_lane_q;
   integer packet_insert_index_q;
@@ -587,36 +581,25 @@ module ff_av2_palette_analyzer_444 #(
     end
     packet_collected_next_count_w = collected_count_q;
 
+    // AV2 v1.0.0 Section 5.11.39 writes palette colors in sorted order, but
+    // the collection order is not syntax-visible. Keep packet ingress cheap by
+    // appending unique colors here, then use ST_SORT to order the final list
+    // before the palette-color symbols are emitted.
     for (packet_insert_lane_q = 0; packet_insert_lane_q < 8; packet_insert_lane_q = packet_insert_lane_q + 1) begin
       packet_insert_known_w = 1'b0;
-      packet_insert_index_w = packet_collected_next_count_w;
       for (packet_insert_index_q = 0; packet_insert_index_q < 8; packet_insert_index_q = packet_insert_index_q + 1) begin
         if (packet_insert_index_q < packet_collected_next_count_w &&
             packet_palette_color_next_w[packet_insert_index_q] ==
               packet_lane_w[packet_insert_lane_q]) begin
           packet_insert_known_w = 1'b1;
         end
-        if (packet_insert_index_q < packet_collected_next_count_w &&
-            packet_palette_color_next_w[packet_insert_index_q] >
-              packet_lane_w[packet_insert_lane_q] &&
-            packet_insert_index_w == packet_collected_next_count_w) begin
-          packet_insert_index_w = packet_insert_index_q[3:0];
-        end
       end
 
       if (packet_insert_lane_q < packet_count &&
           !packet_insert_known_w &&
           packet_collected_next_count_w < 4'd8) begin
-        for (packet_insert_index_q = 7; packet_insert_index_q >= 0; packet_insert_index_q = packet_insert_index_q - 1) begin
-          if (packet_insert_index_q > packet_insert_index_w &&
-              packet_insert_index_q <= packet_collected_next_count_w) begin
-            packet_palette_color_next_w[packet_insert_index_q] =
-              packet_palette_color_next_w[packet_insert_index_q - 1];
-          end else if (packet_insert_index_q == packet_insert_index_w) begin
-            packet_palette_color_next_w[packet_insert_index_q] =
-              packet_lane_w[packet_insert_lane_q];
-          end
-        end
+        packet_palette_color_next_w[packet_collected_next_count_w] =
+          packet_lane_w[packet_insert_lane_q];
         packet_collected_next_count_w = packet_collected_next_count_w + 4'd1;
       end
     end
@@ -652,8 +635,6 @@ module ff_av2_palette_analyzer_444 #(
     known_sample_w = 1'b0;
     candidate_known_w = 1'b0;
     collect_sample_w = (state_q == ST_READ) ? sample_u8_w : block_luma_sample_q[block_sample_q];
-    palette_insert_sample_w = (state_q == ST_PAD) ? candidate_q : collect_sample_w;
-    palette_insert_index_w = collected_count_q;
     for (color_index_q = 0; color_index_q < 8; color_index_q = color_index_q + 1) begin
       if (color_index_q < collected_count_q && palette_color_q[color_index_q] == collect_sample_w) begin
         known_sample_w = 1'b1;
@@ -661,29 +642,9 @@ module ff_av2_palette_analyzer_444 #(
       if (color_index_q < collected_count_q && palette_color_q[color_index_q] == candidate_q) begin
         candidate_known_w = 1'b1;
       end
-      if (color_index_q < collected_count_q &&
-          palette_color_q[color_index_q] > palette_insert_sample_w &&
-          palette_insert_index_w == collected_count_q) begin
-        palette_insert_index_w = color_index_q[3:0];
-      end
     end
     collect_add_w = !known_sample_w && (collected_count_q < 4'd8);
     collected_next_count_w = collected_count_q + {3'd0, collect_add_w};
-    palette_insert_valid_w =
-      ((state_q == ST_READ) && collect_add_w) ||
-      ((state_q == ST_PAD) && (collected_count_q < target_palette_size_q) && !candidate_known_w);
-    for (insert_index_q = 0; insert_index_q < 8; insert_index_q = insert_index_q + 1) begin
-      palette_color_insert_w[insert_index_q] = palette_color_q[insert_index_q];
-      if (palette_insert_valid_w) begin
-        if (insert_index_q < palette_insert_index_w) begin
-          palette_color_insert_w[insert_index_q] = palette_color_q[insert_index_q];
-        end else if (insert_index_q == palette_insert_index_w) begin
-          palette_color_insert_w[insert_index_q] = palette_insert_sample_w;
-        end else if (insert_index_q <= collected_count_q) begin
-          palette_color_insert_w[insert_index_q] = palette_color_q[insert_index_q - 1];
-        end
-      end
-    end
   end
 
   always @* begin
@@ -1056,7 +1017,7 @@ module ff_av2_palette_analyzer_444 #(
       block_chroma_sample_q <= 7'd0;
       candidate_q <= 8'd0;
       collected_count_q <= 4'd0;
-      target_palette_size_q <= 4'd2;
+      target_palette_size_q <= 4'd0;
       sort_pass_q <= 4'd0;
       sort_index_q <= 3'd0;
       chroma_complete_q <= 1'b0;
@@ -1143,7 +1104,7 @@ module ff_av2_palette_analyzer_444 #(
       block_chroma_sample_q <= 7'd0;
       candidate_q <= 8'd0;
       collected_count_q <= 4'd0;
-      target_palette_size_q <= 4'd2;
+      target_palette_size_q <= 4'd0;
       sort_pass_q <= 4'd0;
       sort_index_q <= 3'd0;
       chroma_complete_q <= 1'b0;
@@ -1440,13 +1401,6 @@ module ff_av2_palette_analyzer_444 #(
               end
               collected_count_q <= packet_collected_next_count_w;
               if (packet_luma_done_w) begin
-                if (packet_collected_next_count_w <= 4'd2) begin
-                  target_palette_size_q <= 4'd2;
-                end else if (packet_collected_next_count_w <= 4'd4) begin
-                  target_palette_size_q <= 4'd4;
-                end else begin
-                  target_palette_size_q <= 4'd8;
-                end
                 block_chroma_sample_q <= 7'd0;
                 chroma_complete_q <= 1'b0;
                 candidate_q <= 8'd0;
@@ -1458,9 +1412,7 @@ module ff_av2_palette_analyzer_444 #(
               black_ok_q <= black_next_w;
               block_luma_sample_q[block_sample_q] <= sample_u8_w;
               if (collect_add_w) begin
-                for (color_index_q = 0; color_index_q < 8; color_index_q = color_index_q + 1) begin
-                  palette_color_q[color_index_q] <= palette_color_insert_w[color_index_q];
-                end
+                palette_color_q[collected_count_q] <= sample_u8_w;
                 collected_count_q <= collected_next_count_w;
               end
               if (sample_last) begin
@@ -1468,13 +1420,6 @@ module ff_av2_palette_analyzer_444 #(
                 done <= 1'b1;
                 state_q <= ST_DONE;
               end else if (block_sample_q == 6'd63) begin
-                if (collected_next_count_w <= 4'd2) begin
-                  target_palette_size_q <= 4'd2;
-                end else if (collected_next_count_w <= 4'd4) begin
-                  target_palette_size_q <= 4'd4;
-                end else begin
-                  target_palette_size_q <= 4'd8;
-                end
                 block_chroma_sample_q <= 7'd0;
                 chroma_complete_q <= 1'b0;
                 candidate_q <= 8'd0;
@@ -1488,7 +1433,7 @@ module ff_av2_palette_analyzer_444 #(
             block_sample_q <= 6'd0;
             candidate_q <= 8'd0;
             collected_count_q <= 4'd0;
-            target_palette_size_q <= 4'd2;
+            target_palette_size_q <= 4'd0;
             sort_pass_q <= 4'd0;
             sort_index_q <= 3'd0;
             current_palette_index_q <= 192'd0;
@@ -1514,18 +1459,28 @@ module ff_av2_palette_analyzer_444 #(
             state_q <= ST_READ;
           end
           ST_PAD: begin
-            if (collected_count_q < target_palette_size_q) begin
+            if (target_palette_size_q == 4'd0) begin
+              // Decide the coded palette size after the final luma sample has
+              // registered. AV2 Section 5.11.39 only observes the padded,
+              // sorted palette, so this avoids a packet-data to target-size
+              // timing path without changing syntax.
+              if (collected_count_q <= 4'd2) begin
+                target_palette_size_q <= 4'd2;
+              end else if (collected_count_q <= 4'd4) begin
+                target_palette_size_q <= 4'd4;
+              end else begin
+                target_palette_size_q <= 4'd8;
+              end
+            end else if (collected_count_q < target_palette_size_q) begin
               if (!candidate_known_w) begin
-                for (color_index_q = 0; color_index_q < 8; color_index_q = color_index_q + 1) begin
-                  palette_color_q[color_index_q] <= palette_color_insert_w[color_index_q];
-                end
+                palette_color_q[collected_count_q] <= candidate_q;
                 collected_count_q <= collected_count_q + 4'd1;
               end
               candidate_q <= candidate_q + 8'd1;
             end else begin
               sort_pass_q <= 4'd0;
               sort_index_q <= 3'd0;
-              state_q <= ST_STORE_COLORS;
+              state_q <= ST_SORT;
             end
           end
           ST_SORT: begin

@@ -28,6 +28,9 @@ module ff_av2_range_coder_step (
   logic [12:0] pp_fh_w;
   logic [20:0] scaled_u_product_w;
   logic [20:0] scaled_v_product_w;
+  logic [31:0] literal_product_lo_w;
+  logic [31:0] literal_product_hi_w;
+  logic [63:0] literal_product_w;
   logic [15:0] scaled_u_w;
   logic [15:0] scaled_v_w;
   logic signed [7:0] ilog_rng_w;
@@ -38,6 +41,8 @@ module ff_av2_range_coder_step (
   logic signed [7:0] norm_s_after_w;
   logic [63:0] norm_mask_w;
   logic [63:0] norm_low_work_w;
+  integer prob_mul_bit_q;
+  integer literal_mul_bit_q;
 
   always @* begin
     // AV2 v1.0.0 entropy coding keeps rng within 16 bits before normalize();
@@ -47,13 +52,41 @@ module ff_av2_range_coder_step (
     rr_w = rng16_w[15:8];
     pp_fl_w = {op_fl[15:7], 4'd0} + {8'd0, op_fl_inc};
     pp_fh_w = {op_fh[15:7], 4'd0} + {8'd0, op_fh_inc};
-    scaled_u_product_w = rr_w * pp_fl_w;
-    scaled_v_product_w = rr_w * pp_fh_w;
+    scaled_u_product_w = 21'd0;
+    scaled_v_product_w = 21'd0;
+    for (prob_mul_bit_q = 0; prob_mul_bit_q < 8; prob_mul_bit_q = prob_mul_bit_q + 1) begin
+      if (rr_w[prob_mul_bit_q]) begin
+        scaled_u_product_w =
+          scaled_u_product_w + ({8'd0, pp_fl_w} << prob_mul_bit_q);
+        scaled_v_product_w =
+          scaled_v_product_w + ({8'd0, pp_fh_w} << prob_mul_bit_q);
+      end
+    end
+    // AV2 v1.0.0 Section 9.4.3.3 aom_write_literal() updates low by
+    // rng * literal_value. The encoder invariant keeps rng normalized to
+    // 16 bits. Keep this as fixed shift/add fabric instead of unregistered
+    // range-coder DSPs; Vivado otherwise spends timing optimization effort on
+    // this combinational entropy step.
+    literal_product_lo_w = 32'd0;
+    literal_product_hi_w = 32'd0;
+    for (literal_mul_bit_q = 0; literal_mul_bit_q < 16; literal_mul_bit_q = literal_mul_bit_q + 1) begin
+      if (op_literal_value[literal_mul_bit_q]) begin
+        literal_product_lo_w =
+          literal_product_lo_w + ({16'd0, rng16_w} << literal_mul_bit_q);
+      end
+      if (op_literal_value[16 + literal_mul_bit_q]) begin
+        literal_product_hi_w =
+          literal_product_hi_w + ({16'd0, rng16_w} << literal_mul_bit_q);
+      end
+    end
+    literal_product_w =
+      {32'd0, literal_product_lo_w} +
+      {16'd0, literal_product_hi_w, 16'd0};
     scaled_u_w = {scaled_u_product_w[19:7], 3'd0};
     scaled_v_w = {scaled_v_product_w[19:7], 3'd0};
 
     if (op_literal) begin
-      raw_low_w = (low << op_literal_bits) + (rng * op_literal_value);
+      raw_low_w = (low << op_literal_bits) + literal_product_w;
       raw_rng_w = rng16_w;
       raw_bypass_bits_w = {3'd0, op_literal_bits};
     end else if (op_fl < 32'd32768) begin

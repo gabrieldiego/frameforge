@@ -144,11 +144,6 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   logic [31:0] sign_pack_value_w;
   logic sign_pack_done_w;
   logic [3:0] sign_pack_next_scan_w;
-  logic sign_pack_stop_w;
-  logic [3:0] sign_pack_candidate_scan_w;
-  logic [3:0] sign_pack_candidate_pos_w;
-  logic [15:0] sign_pack_candidate_level_w;
-  logic sign_pack_candidate_high_w;
   logic sign_pack_current_literal_w;
 
   logic [3:0] table_w;
@@ -168,7 +163,6 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   logic [31:0] cdf_curr_w;
   integer sample_index_w;
   integer scan_index_w;
-  integer sign_pack_index_w;
   integer row_w;
   integer col_w;
   integer mag_w;
@@ -585,48 +579,15 @@ module ff_av2_chroma_bdpcm_symbolizer #(
 
     // AV2 v1.0.0 Section 5.20.7.27 emits one literal sign per nonzero chroma
     // coefficient, immediately followed by high-range bits when present.
-    // Group a few adjacent non-high-range chroma signs into one bypass op. The
-    // luma residual path keeps its one-coefficient sign path because its DC
-    // sign is context-coded and a wide luma sign scan lengthened the entropy
-    // critical path more than it improved output utilization.
+    // AV2 v1.0.0 Section 5.20.7.27 emits one literal sign per nonzero chroma
+    // coefficient. Keep the RTL in that one-sign form for now: a wider
+    // lookahead packer improved utilization slightly, but became the residual
+    // critical path and needed another lower-nonzero search to stay correct.
     sign_pack_current_literal_w = !current_high_range_w && (LUMA_PALETTE_RESIDUAL == 0);
     sign_pack_count_w = 5'd1;
     sign_pack_value_w = {31'd0, current_negative_w};
     sign_pack_done_w = !has_lower_nonzero_w;
     sign_pack_next_scan_w = next_lower_nonzero_scan_w;
-    sign_pack_stop_w = !sign_pack_current_literal_w;
-    sign_pack_candidate_scan_w = 4'd0;
-    sign_pack_candidate_pos_w = 4'd0;
-    sign_pack_candidate_level_w = 16'd0;
-    sign_pack_candidate_high_w = 1'b0;
-    for (sign_pack_index_w = 0; sign_pack_index_w < 16; sign_pack_index_w = sign_pack_index_w + 1) begin
-      if (!sign_pack_stop_w && sign_pack_index_w < scan_q) begin
-        sign_pack_candidate_scan_w = scan_q - 4'd1 - sign_pack_index_w[3:0];
-        if (sign_pack_candidate_scan_w < eob_q) begin
-          sign_pack_candidate_pos_w =
-            TX4X4_SCAN_PACK[(sign_pack_candidate_scan_w * 4) +: 4];
-          sign_pack_candidate_level_w = level_q[sign_pack_candidate_pos_w];
-          sign_pack_candidate_high_w =
-            (sign_pack_candidate_pos_w == 4'd0) ?
-              (sign_pack_candidate_level_w > 16'd4) :
-              (sign_pack_candidate_level_w > 16'd5);
-          if (sign_pack_candidate_level_w != 16'd0) begin
-            if (sign_pack_candidate_high_w || sign_pack_count_w == 5'd4) begin
-              sign_pack_next_scan_w = sign_pack_candidate_scan_w;
-              sign_pack_done_w = 1'b0;
-              sign_pack_stop_w = 1'b1;
-            end else begin
-              sign_pack_value_w =
-                (sign_pack_value_w << 1) |
-                {31'd0, coeff_negative_q[sign_pack_candidate_pos_w]};
-              sign_pack_count_w = sign_pack_count_w + 5'd1;
-              sign_pack_done_w = 1'b1;
-              sign_pack_next_scan_w = 4'd0;
-            end
-          end
-        end
-      end
-    end
   end
 
   always @* begin

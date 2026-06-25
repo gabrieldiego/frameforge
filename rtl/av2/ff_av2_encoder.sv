@@ -300,6 +300,10 @@ module ff_av2_encoder #(
   logic [15:0] tile_rows_w;
   logic [15:0] tile_width_w;
   logic [15:0] tile_height_w;
+  logic [3:0] tile_width_blocks_w;
+  logic [3:0] tile_height_blocks_w;
+  logic [7:0] tile_block_count_w;
+  logic [15:0] tile_count_w;
   logic [31:0] tile_luma_samples_w;
   logic [31:0] tile_samples_w;
   logic tile_input_last_w;
@@ -1532,11 +1536,29 @@ module ff_av2_encoder #(
   assign tile_height_w =
     (tile_row_q == (tile_rows_q - 16'd1)) ?
       (height_q - (tile_row_q << 6)) : 16'd64;
-  assign tile_luma_samples_w = {16'd0, tile_width_q} * {16'd0, tile_height_q};
+  assign tile_width_blocks_w = tile_width_q[6:3];
+  assign tile_height_blocks_w = tile_height_q[6:3];
+  assign tile_block_count_w =
+    (tile_height_blocks_w[0] ? {4'd0, tile_width_blocks_w} : 8'd0) +
+    (tile_height_blocks_w[1] ? ({4'd0, tile_width_blocks_w} << 1) : 8'd0) +
+    (tile_height_blocks_w[2] ? ({4'd0, tile_width_blocks_w} << 2) : 8'd0) +
+    (tile_height_blocks_w[3] ? ({4'd0, tile_width_blocks_w} << 3) : 8'd0);
+  assign tile_count_w =
+    (tile_rows_w[0] ? tile_cols_w : 16'd0) +
+    (tile_rows_w[1] ? (tile_cols_w << 1) : 16'd0) +
+    (tile_rows_w[2] ? (tile_cols_w << 2) : 16'd0) +
+    (tile_rows_w[3] ? (tile_cols_w << 3) : 16'd0) +
+    (tile_rows_w[4] ? (tile_cols_w << 4) : 16'd0) +
+    (tile_rows_w[5] ? (tile_cols_w << 5) : 16'd0) +
+    (tile_rows_w[6] ? (tile_cols_w << 6) : 16'd0) +
+    (tile_rows_w[7] ? (tile_cols_w << 7) : 16'd0) +
+    (tile_rows_w[8] ? (tile_cols_w << 8) : 16'd0) +
+    (tile_rows_w[9] ? (tile_cols_w << 9) : 16'd0);
+  assign tile_luma_samples_w = {18'd0, tile_block_count_w, 6'd0};
   assign tile_samples_w =
     (chroma_format_idc == 2'd1) ?
       (tile_luma_samples_w + (tile_luma_samples_w >> 1)) :
-      (tile_luma_samples_w * 32'd3);
+      (tile_luma_samples_w + (tile_luma_samples_w << 1));
   assign tile_is_last_w = (tile_index_q == (tile_count_q - 16'd1));
   assign multi_tile_w = (tile_count_q != 16'd1);
   assign payload_tile_start_w = payload_len_q + (tile_is_last_w ? 16'd0 : 16'd4);
@@ -2690,7 +2712,7 @@ module ff_av2_encoder #(
           stream_index_q <= 16'd0;
           tile_cols_q <= tile_cols_w;
           tile_rows_q <= tile_rows_w;
-          tile_count_q <= tile_cols_w * tile_rows_w;
+          tile_count_q <= tile_count_w;
           tile_index_q <= 16'd0;
           tile_col_q <= 16'd0;
           tile_row_q <= 16'd0;
