@@ -11,12 +11,12 @@ AV2 reference path used here is decode-only; these validation runs do not
 invoke `avmenc`, `aomenc`, or `vpenc`, and reference-encoder bitrates are
 not tracked in this report.
 
-## 2026-06-25 AV2 Bubble Rate Optimization
+## 2026-06-25 AV2 4:2:0 Bubble Rate Optimization
 
 Baseline and current sources:
 
-- Baseline Git SHA: `6779c2e4b2726adef94cd7921dd62f106e454afb+working-tree`
-- Current validated source Git SHA: `31bb9321589844a4615d8dd87fe96ef6b54f43ed`
+- Baseline Git SHA: `31bb9321589844a4615d8dd87fe96ef6b54f43ed`
+- Current validated source Git SHA: `34e1dca8f313dd433452ca27fb81d858d90e1617`
 - Delta columns compare against the previous documented AV2 quality/bitrate
   checkpoint where the same vector or aggregate was present.
 

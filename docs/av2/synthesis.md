@@ -5,12 +5,12 @@ Older measurements are intentionally left to git history so this page stays
 focused on the current baseline and immediate delta. The shared synthesis flow
 is documented in [../synthesis.md](../synthesis.md).
 
-## 2026-06-25 AV2 Bubble Rate Optimization
+## 2026-06-25 AV2 4:2:0 Bubble Rate Optimization
 
 Baseline and current sources:
 
-- Baseline Git SHA: `6779c2e4b2726adef94cd7921dd62f106e454afb+working-tree`
-- Current validated source Git SHA: `31bb9321589844a4615d8dd87fe96ef6b54f43ed`
+- Baseline Git SHA: `31bb9321589844a4615d8dd87fe96ef6b54f43ed`
+- Current validated source Git SHA: `34e1dca8f313dd433452ca27fb81d858d90e1617`
 
 Validation result:
 
@@ -36,25 +36,25 @@ Yosys synthesis result:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| Main Yosys elapsed time (s) | 494.50 s | 501.70 s | +7.20 s |
-| Runner-observed peak child RSS (MiB) | 1790.58 MiB | 1913.59 MiB | +123.01 MiB |
+| Main Yosys elapsed time (s) | 501.70 s | 518.60 s | +16.90 s |
+| Runner-observed peak child RSS (MiB) | 1913.59 MiB | 1933.59 MiB | +20.00 MiB |
 | Topological path length | 120 | 120 | +0 |
-| Flattened cells | 105492 | 114106 | +8614 |
-| Estimated LCs | 44616 | 53009 | +8393 |
-| CARRY4 | 3660 | 3739 | +79 |
+| Flattened cells | 114106 | 116915 | +2809 |
+| Estimated LCs | 53009 | 55189 | +2180 |
+| CARRY4 | 3739 | 3739 | +0 |
 | DSP48E1 | 1 | 1 | +0 |
-| FDCE | 5119 | 5163 | +44 |
+| FDCE | 5163 | 5163 | +0 |
 | FDPE | 92 | 92 | +0 |
-| FDRE | 22812 | 22907 | +95 |
+| FDRE | 22907 | 22907 | +0 |
 | FDSE | 132 | 132 | +0 |
-| LUT1 | 718 | 853 | +135 |
-| LUT2 | 13482 | 13856 | +374 |
-| LUT3 | 10792 | 11952 | +1160 |
-| LUT4 | 5853 | 6938 | +1085 |
-| LUT5 | 6081 | 10047 | +3966 |
-| LUT6 | 21890 | 24072 | +2182 |
-| MUXF7 | 4862 | 4611 | -251 |
-| MUXF8 | 1294 | 1068 | -226 |
+| LUT1 | 853 | 830 | -23 |
+| LUT2 | 13856 | 14075 | +219 |
+| LUT3 | 11952 | 12301 | +349 |
+| LUT4 | 6938 | 7195 | +257 |
+| LUT5 | 10047 | 10414 | +367 |
+| LUT6 | 24072 | 25279 | +1207 |
+| MUXF7 | 4611 | 4795 | +184 |
+| MUXF8 | 1068 | 1184 | +116 |
 | RAMB36E1 | 30 | 30 | +0 |
 | RAM32M | 10 | 10 | +0 |
 
