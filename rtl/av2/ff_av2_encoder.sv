@@ -539,6 +539,8 @@ module ff_av2_encoder #(
   logic [127:0] luma_fetch_predictor_samples_w;
   logic [11:0] luma_fetch_sample_sum_w;
   logic [11:0] chroma_fetch_sample_sum_w;
+  logic [11:0] lossy420_luma_sample_sum_now_w;
+  logic [11:0] lossy420_chroma_sample_sum_now_w;
   logic [3:0] luma_residual_skip_ctx_w;
   logic [1:0] luma_residual_dc_sign_ctx_w;
   logic [2:0] luma_residual_top_level_w;
@@ -1002,6 +1004,11 @@ module ff_av2_encoder #(
     .luma_fetch_start(luma_fetch_start_w),
     .luma_fetch_txb_row_mi(luma_fetch_req_row_mi_w),
     .luma_fetch_txb_col_mi(luma_fetch_req_col_mi_w),
+    .lossy420_direct_luma_txb_row_mi(txb_row_w[4:0]),
+    .lossy420_direct_luma_txb_col_mi(txb_col_w[4:0]),
+    .lossy420_direct_chroma_txb_row_mi(chroma_fetch_current_storage_row_mi_w),
+    .lossy420_direct_chroma_txb_col_mi(chroma_fetch_current_storage_col_mi_w),
+    .lossy420_direct_chroma_plane_v(phase_q == PHASE_V_COEFF),
     .done(palette_analyzer_done_w),
     .unsupported(palette_analyzer_unsupported_w),
     .black_mode(palette_analyzer_black_w),
@@ -1035,7 +1042,9 @@ module ff_av2_encoder #(
     .luma_fetch_v_txb_samples(luma_fetch_v_txb_samples_w),
     .luma_fetch_predictor_samples(luma_fetch_predictor_samples_w),
     .luma_fetch_sample_sum(luma_fetch_sample_sum_w),
-    .chroma_fetch_sample_sum(chroma_fetch_sample_sum_w)
+    .chroma_fetch_sample_sum(chroma_fetch_sample_sum_w),
+    .lossy420_luma_sample_sum_now(lossy420_luma_sample_sum_now_w),
+    .lossy420_chroma_sample_sum_now(lossy420_chroma_sample_sum_now_w)
   );
 
   ff_av2_luma_palette_symbolizer luma_palette_symbolizer (
@@ -1100,7 +1109,7 @@ module ff_av2_encoder #(
   );
 
   ff_av2_lossy420_dc_estimator lossy420_luma_dc_estimator (
-    .sample_sum(luma_fetch_sample_sum_w),
+    .sample_sum(lossy420_luma_sample_sum_now_w),
     .predictor(lossy420_luma_predictor_w),
     .delta(lossy420_luma_delta_w),
     .recon_sample(lossy420_luma_recon_sample_w),
@@ -1167,7 +1176,7 @@ module ff_av2_encoder #(
   );
 
   ff_av2_lossy420_dc_estimator lossy420_chroma_dc_estimator (
-    .sample_sum(chroma_fetch_sample_sum_w),
+    .sample_sum(lossy420_chroma_sample_sum_now_w),
     .predictor(lossy420_chroma_predictor_w),
     .delta(lossy420_chroma_delta_w),
     .recon_sample(lossy420_chroma_recon_sample_w),
@@ -1502,7 +1511,7 @@ module ff_av2_encoder #(
     residual_mode_w &&
     (phase_q == PHASE_Y_COEFF) &&
     ((state_q == ST_LEAF) ||
-     ((state_q == ST_CHROMA_FETCH) && luma_fetch_done_w));
+     (!lossy_420_mode_q && (state_q == ST_CHROMA_FETCH) && luma_fetch_done_w));
   assign palette_luma_residual_enable_w = luma_residual_enable_w && palette_mode_q;
   assign lossy420_luma_residual_enable_w = luma_residual_enable_w && lossy_420_mode_q;
   assign chroma_bdpcm_advance_w =
@@ -1529,7 +1538,7 @@ module ff_av2_encoder #(
   assign lossy420_chroma_bdpcm_enable_w =
     lossy_420_mode_q &&
     chroma_residual_phase_w &&
-    chroma_bdpcm_fetch_ready_w;
+    (state_q == ST_LEAF);
 
   // AV2 4:4:4 bring-up path: traverse one 64x64 superblock, split visible
   // coding leaves down to 8x8, and generate syntax through the range coder.
@@ -2154,6 +2163,7 @@ module ff_av2_encoder #(
   assign txb_prefetch_luma_start_w =
     !start &&
     !pending_push_valid_q &&
+    !lossy_420_mode_q &&
     (state_q == ST_LEAF) &&
     ((same_phase_has_next_txb_w && (phase_q == PHASE_Y_COEFF)) ||
      ((phase_q == PHASE_INTRA ||
@@ -2166,6 +2176,7 @@ module ff_av2_encoder #(
   assign txb_prefetch_chroma_start_w =
     !start &&
     !pending_push_valid_q &&
+    !lossy_420_mode_q &&
     (state_q == ST_LEAF) &&
     ((same_phase_has_next_txb_w && (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF)) ||
      cross_phase_has_next_txb_w) &&
@@ -3367,7 +3378,7 @@ module ff_av2_encoder #(
                   txb_local_col_q <= 5'd0;
                   last_u_txb_nonzero_q <= 1'b0;
                   if (residual_mode_w && !leaf_luma_palette_w) begin
-                    if (txb_prefetch_done_q) begin
+                    if (lossy_420_mode_q || txb_prefetch_done_q) begin
                       txb_prefetch_started_q <= 1'b0;
                       txb_prefetch_done_q <= 1'b0;
                       state_q <= ST_LEAF;
@@ -3480,7 +3491,8 @@ module ff_av2_encoder #(
                     txb_prefetch_done_q <= 1'b0;
                     last_u_txb_nonzero_q <= 1'b0;
                     if (residual_mode_w) begin
-                      if ((txb_prefetch_done_q && txb_prefetch_chroma_q && !txb_prefetch_plane_v_q) ||
+                      if (lossy_420_mode_q ||
+                          (txb_prefetch_done_q && txb_prefetch_chroma_q && !txb_prefetch_plane_v_q) ||
                           chroma_fetch_req_ready_w) begin
                         txb_prefetch_started_q <= 1'b0;
                         txb_prefetch_done_q <= 1'b0;
@@ -3501,7 +3513,7 @@ module ff_av2_encoder #(
                       txb_local_col_q <= txb_local_col_q + 5'd1;
                     end
                     if (residual_mode_w) begin
-                      if (txb_prefetch_done_q && !txb_prefetch_chroma_q) begin
+                      if (lossy_420_mode_q || (txb_prefetch_done_q && !txb_prefetch_chroma_q)) begin
                         txb_prefetch_started_q <= 1'b0;
                         txb_prefetch_done_q <= 1'b0;
                         state_q <= ST_LEAF;
@@ -3557,7 +3569,8 @@ module ff_av2_encoder #(
                       txb_prefetch_started_q <= 1'b0;
                       txb_prefetch_done_q <= 1'b0;
                       if (residual_mode_w) begin
-                        if ((txb_prefetch_done_q && txb_prefetch_chroma_q && txb_prefetch_plane_v_q) ||
+                        if (lossy_420_mode_q ||
+                            (txb_prefetch_done_q && txb_prefetch_chroma_q && txb_prefetch_plane_v_q) ||
                             chroma_fetch_req_ready_w) begin
                           txb_prefetch_started_q <= 1'b0;
                           txb_prefetch_done_q <= 1'b0;
@@ -3619,7 +3632,9 @@ module ff_av2_encoder #(
                       txb_local_col_q <= txb_local_col_q + 5'd1;
                     end
                     if (residual_mode_w) begin
-                      if ((txb_prefetch_done_q && txb_prefetch_chroma_q) || chroma_fetch_req_ready_w) begin
+                      if (lossy_420_mode_q ||
+                          (txb_prefetch_done_q && txb_prefetch_chroma_q) ||
+                          chroma_fetch_req_ready_w) begin
                         txb_prefetch_started_q <= 1'b0;
                         txb_prefetch_done_q <= 1'b0;
                         state_q <= ST_LEAF;

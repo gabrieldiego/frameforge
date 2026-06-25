@@ -33,6 +33,11 @@ module ff_av2_palette_analyzer_444 #(
   input  logic       luma_fetch_start,
   input  logic [4:0] luma_fetch_txb_row_mi,
   input  logic [4:0] luma_fetch_txb_col_mi,
+  input  logic [4:0] lossy420_direct_luma_txb_row_mi,
+  input  logic [4:0] lossy420_direct_luma_txb_col_mi,
+  input  logic [4:0] lossy420_direct_chroma_txb_row_mi,
+  input  logic [4:0] lossy420_direct_chroma_txb_col_mi,
+  input  logic       lossy420_direct_chroma_plane_v,
   output logic       done,
   output logic       unsupported,
   output logic       black_mode,
@@ -66,7 +71,9 @@ module ff_av2_palette_analyzer_444 #(
   output logic [127:0] luma_fetch_v_txb_samples,
   output logic [127:0] luma_fetch_predictor_samples,
   output logic [11:0]  luma_fetch_sample_sum,
-  output logic [11:0]  chroma_fetch_sample_sum
+  output logic [11:0]  chroma_fetch_sample_sum,
+  output logic [11:0]  lossy420_luma_sample_sum_now,
+  output logic [11:0]  lossy420_chroma_sample_sum_now
 );
 
   localparam logic [3:0] ST_IDLE = 4'd0;
@@ -506,6 +513,18 @@ module ff_av2_palette_analyzer_444 #(
     fetch_txb_row_mi_q[3:1],
     fetch_txb_col_mi_q[3:1]
   };
+  assign lossy420_luma_sample_sum_now =
+    lossy420_y_sum_q[
+      {lossy420_direct_luma_txb_row_mi[3:0], lossy420_direct_luma_txb_col_mi[3:0]}
+    ];
+  assign lossy420_chroma_sample_sum_now =
+    lossy420_direct_chroma_plane_v ?
+      lossy420_v_sum_q[
+        {lossy420_direct_chroma_txb_row_mi[3:1], lossy420_direct_chroma_txb_col_mi[3:1]}
+      ] :
+      lossy420_u_sum_q[
+        {lossy420_direct_chroma_txb_row_mi[3:1], lossy420_direct_chroma_txb_col_mi[3:1]}
+      ];
   assign sample_store_row_write_y_w =
     !lossy420_mode_w && packet_luma_fire_w;
   assign sample_store_row_write_u_w =
