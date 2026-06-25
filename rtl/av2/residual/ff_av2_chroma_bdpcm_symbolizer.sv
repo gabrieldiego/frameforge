@@ -9,6 +9,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   input  logic        enable,
   input  logic        advance,
   input  logic        plane_v,
+  input  logic        bdpcm_horz,
   input  logic [3:0]  skip_ctx,
   input  logic [1:0]  dc_sign_ctx,
   input  logic [127:0] txb_samples,
@@ -57,6 +58,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   localparam logic [4:0] EMIT_HR_Q_ZEROS = 5'd11;
   localparam logic [4:0] EMIT_HR_ONE = 5'd12;
   localparam logic [4:0] EMIT_HR_LOW_BITS = 5'd13;
+  localparam logic [4:0] EMIT_HR_PACK = 5'd14;
 
   localparam logic [63:0] TX4X4_SCAN_PACK = {
     4'd15, 4'd11, 4'd14, 4'd7, 4'd10, 4'd13, 4'd3, 4'd6,
@@ -75,6 +77,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   logic [7:0] entropy_context_q;
   logic txb_nonzero_q;
   logic plane_v_q;
+  logic bdpcm_horz_q;
   logic [3:0] skip_ctx_q;
   logic [1:0] dc_sign_ctx_q;
   logic [7:0] dc_recon_sample_q;
@@ -109,6 +112,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   logic [2:0] eob_offset_bits_pre_w;
   logic [2:0] eob_shift_pre_w;
   logic [7:0] entropy_context_pre_w;
+  logic bdpcm_horz_current_w;
   logic [4:0] coeff_ctx_pre_w [0:15];
   logic [4:0] br_ctx_pre_w [0:15];
 
@@ -128,8 +132,24 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   logic [4:0] hr_length_w;
   logic [4:0] hr_prefix_bits_w;
   logic [31:0] hr_low_mask_w;
+  logic [5:0] hr_pack_bits_w;
+  logic [31:0] hr_pack_value_w;
+  logic hr_pack_valid_w;
+  logic sign_hr_pack_current_w;
+  logic [5:0] sign_hr_pack_bits_w;
+  logic [31:0] sign_hr_pack_value_w;
   logic has_lower_nonzero_w;
   logic [3:0] next_lower_nonzero_scan_w;
+  logic [4:0] sign_pack_count_w;
+  logic [31:0] sign_pack_value_w;
+  logic sign_pack_done_w;
+  logic [3:0] sign_pack_next_scan_w;
+  logic sign_pack_stop_w;
+  logic [3:0] sign_pack_candidate_scan_w;
+  logic [3:0] sign_pack_candidate_pos_w;
+  logic [15:0] sign_pack_candidate_level_w;
+  logic sign_pack_candidate_high_w;
+  logic sign_pack_current_literal_w;
 
   logic [3:0] table_w;
   logic [4:0] table_ctx_w;
@@ -148,6 +168,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   logic [31:0] cdf_curr_w;
   integer sample_index_w;
   integer scan_index_w;
+  integer sign_pack_index_w;
   integer row_w;
   integer col_w;
   integer mag_w;
@@ -160,6 +181,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   assign dc_delta_ext_w = {{6{dc_delta[9]}}, dc_delta};
   assign dc_delta_abs_w = (dc_delta_ext_w < 0) ? -dc_delta_ext_w : dc_delta_ext_w;
   assign current_plane_v_w = plane_v_q;
+  assign bdpcm_horz_current_w = (!active_q && !prepare_context_q) ? bdpcm_horz : bdpcm_horz_q;
 
   always @* begin
     for (sample_index_w = 0; sample_index_w < 16; sample_index_w = sample_index_w + 1) begin
@@ -170,13 +192,36 @@ module ff_av2_chroma_bdpcm_symbolizer #(
           $signed({1'b0, txb_samples[sample_index_w * 8 +: 8]}) -
           $signed({1'b0, predictor_txb_samples[sample_index_w * 8 +: 8]});
       end else if (sample_index_w[1:0] == 2'd0) begin
-        residual_w[sample_index_w] =
-          $signed({1'b0, txb_samples[sample_index_w * 8 +: 8]}) -
-          $signed({1'b0, predictor_samples[sample_index_w[3:2] * 8 +: 8]});
+        if (bdpcm_horz_current_w) begin
+          residual_w[sample_index_w] =
+            $signed({1'b0, txb_samples[sample_index_w * 8 +: 8]}) -
+            $signed({1'b0, predictor_samples[sample_index_w[3:2] * 8 +: 8]});
+        end else if (sample_index_w[3:2] == 2'd0) begin
+          // AV2 v1.0.0 Section 5.20.5.6 read_intra_uv_mode() selects the
+          // DPCM axis. Vertical DPCM predicts the first row from the edge
+          // above the TXB and later rows from the reconstructed row above.
+          residual_w[sample_index_w] =
+            $signed({1'b0, txb_samples[sample_index_w * 8 +: 8]}) -
+            $signed({1'b0, predictor_samples[sample_index_w[1:0] * 8 +: 8]});
+        end else begin
+          residual_w[sample_index_w] =
+            $signed({1'b0, txb_samples[sample_index_w * 8 +: 8]}) -
+            $signed({1'b0, txb_samples[(sample_index_w - 4) * 8 +: 8]});
+        end
       end else begin
-        residual_w[sample_index_w] =
-          $signed({1'b0, txb_samples[sample_index_w * 8 +: 8]}) -
-          $signed({1'b0, txb_samples[(sample_index_w - 1) * 8 +: 8]});
+        if (bdpcm_horz_current_w) begin
+          residual_w[sample_index_w] =
+            $signed({1'b0, txb_samples[sample_index_w * 8 +: 8]}) -
+            $signed({1'b0, txb_samples[(sample_index_w - 1) * 8 +: 8]});
+        end else if (sample_index_w[3:2] == 2'd0) begin
+          residual_w[sample_index_w] =
+            $signed({1'b0, txb_samples[sample_index_w * 8 +: 8]}) -
+            $signed({1'b0, predictor_samples[sample_index_w[1:0] * 8 +: 8]});
+        end else begin
+          residual_w[sample_index_w] =
+            $signed({1'b0, txb_samples[sample_index_w * 8 +: 8]}) -
+            $signed({1'b0, txb_samples[(sample_index_w - 4) * 8 +: 8]});
+        end
       end
     end
 
@@ -500,6 +545,34 @@ module ff_av2_chroma_bdpcm_symbolizer #(
     endcase
     hr_prefix_bits_w = hr_length_w - 5'd1 - {2'd0, hr_k_w};
     hr_low_mask_w = (32'd1 << hr_m_w) - 32'd1;
+    if (hr_q_w >= {12'd0, hr_cmax_w}) begin
+      // AV2 v1.0.0 Section 5.20.7.27 highRange coding emits consecutive
+      // bypass literals: cmax zero bits, an optional exponential prefix, then
+      // the exponential value. The range coder can consume the same literal
+      // sequence in one operation when it fits the 5-bit literal-width port.
+      hr_pack_bits_w =
+        {2'd0, hr_cmax_w} + {1'd0, hr_prefix_bits_w} + {1'd0, hr_length_w};
+      hr_pack_value_w = {16'd0, hr_x_w};
+    end else begin
+      // For q < cmax, the syntax is q zero bits, a stop one, and m low bits.
+      // Leading zero bits do not change the packed literal value.
+      hr_pack_bits_w = {1'd0, hr_q_w[4:0]} + 6'd1 + {3'd0, hr_m_w};
+      hr_pack_value_w =
+        (32'd1 << hr_m_w) | ({16'd0, current_high_value_w} & hr_low_mask_w);
+    end
+    hr_pack_valid_w = (hr_pack_bits_w != 6'd0) && (hr_pack_bits_w <= 6'd31);
+    // AV2 v1.0.0 Section 5.20.7.27 orders a literal coefficient sign before
+    // highRange bypass literals. When the sign is not the context-coded luma DC
+    // sign, combine both literal runs into one range-coder operation.
+    sign_hr_pack_current_w =
+      current_high_range_w &&
+      !((LUMA_PALETTE_RESIDUAL != 0) && (scan_q == 4'd0)) &&
+      hr_pack_valid_w &&
+      (hr_pack_bits_w <= 6'd30);
+    sign_hr_pack_bits_w = hr_pack_bits_w + 6'd1;
+    sign_hr_pack_value_w =
+      ({31'd0, current_negative_w} << hr_pack_bits_w[4:0]) |
+      hr_pack_value_w;
     has_lower_nonzero_w = 1'b0;
     next_lower_nonzero_scan_w = 4'd0;
     for (scan_index_w = 0; scan_index_w < 16; scan_index_w = scan_index_w + 1) begin
@@ -507,6 +580,51 @@ module ff_av2_chroma_bdpcm_symbolizer #(
           level_q[TX4X4_SCAN_PACK[(scan_index_w * 4) +: 4]] != 16'd0) begin
         has_lower_nonzero_w = 1'b1;
         next_lower_nonzero_scan_w = scan_index_w[3:0];
+      end
+    end
+
+    // AV2 v1.0.0 Section 5.20.7.27 emits one literal sign per nonzero chroma
+    // coefficient, immediately followed by high-range bits when present.
+    // Group a few adjacent non-high-range chroma signs into one bypass op. The
+    // luma residual path keeps its one-coefficient sign path because its DC
+    // sign is context-coded and a wide luma sign scan lengthened the entropy
+    // critical path more than it improved output utilization.
+    sign_pack_current_literal_w = !current_high_range_w && (LUMA_PALETTE_RESIDUAL == 0);
+    sign_pack_count_w = 5'd1;
+    sign_pack_value_w = {31'd0, current_negative_w};
+    sign_pack_done_w = !has_lower_nonzero_w;
+    sign_pack_next_scan_w = next_lower_nonzero_scan_w;
+    sign_pack_stop_w = !sign_pack_current_literal_w;
+    sign_pack_candidate_scan_w = 4'd0;
+    sign_pack_candidate_pos_w = 4'd0;
+    sign_pack_candidate_level_w = 16'd0;
+    sign_pack_candidate_high_w = 1'b0;
+    for (sign_pack_index_w = 0; sign_pack_index_w < 16; sign_pack_index_w = sign_pack_index_w + 1) begin
+      if (!sign_pack_stop_w && sign_pack_index_w < scan_q) begin
+        sign_pack_candidate_scan_w = scan_q - 4'd1 - sign_pack_index_w[3:0];
+        if (sign_pack_candidate_scan_w < eob_q) begin
+          sign_pack_candidate_pos_w =
+            TX4X4_SCAN_PACK[(sign_pack_candidate_scan_w * 4) +: 4];
+          sign_pack_candidate_level_w = level_q[sign_pack_candidate_pos_w];
+          sign_pack_candidate_high_w =
+            (sign_pack_candidate_pos_w == 4'd0) ?
+              (sign_pack_candidate_level_w > 16'd4) :
+              (sign_pack_candidate_level_w > 16'd5);
+          if (sign_pack_candidate_level_w != 16'd0) begin
+            if (sign_pack_candidate_high_w || sign_pack_count_w == 5'd4) begin
+              sign_pack_next_scan_w = sign_pack_candidate_scan_w;
+              sign_pack_done_w = 1'b0;
+              sign_pack_stop_w = 1'b1;
+            end else begin
+              sign_pack_value_w =
+                (sign_pack_value_w << 1) |
+                {31'd0, coeff_negative_q[sign_pack_candidate_pos_w]};
+              sign_pack_count_w = sign_pack_count_w + 5'd1;
+              sign_pack_done_w = 1'b1;
+              sign_pack_next_scan_w = 4'd0;
+            end
+          end
+        end
       end
     end
   end
@@ -613,12 +731,23 @@ module ff_av2_chroma_bdpcm_symbolizer #(
               table_ctx_w = {2'd0, dc_sign_ctx_q};
               symbol_w = {3'd0, current_negative_w};
               nsymbs_w = 5'd2;
+            end else if (sign_hr_pack_current_w) begin
+              op_literal = 1'b1;
+              op_literal_value = sign_hr_pack_value_w;
+              op_literal_bits = sign_hr_pack_bits_w[4:0];
+            end else if (sign_pack_current_literal_w) begin
+              op_literal = 1'b1;
+              op_literal_value = sign_pack_value_w;
+              op_literal_bits = sign_pack_count_w;
             end else begin
               op_literal = 1'b1;
               op_literal_value = {31'd0, current_negative_w};
               op_literal_bits = 5'd1;
             end
-            op_done_w = !has_lower_nonzero_w && !current_high_range_w;
+            op_done_w =
+              sign_hr_pack_current_w ? !has_lower_nonzero_w :
+              (sign_pack_current_literal_w ?
+                sign_pack_done_w : (!has_lower_nonzero_w && !current_high_range_w));
           end
         end
         EMIT_HR_CMAX_ZEROS: begin
@@ -658,6 +787,13 @@ module ff_av2_chroma_bdpcm_symbolizer #(
           op_literal = 1'b1;
           op_literal_value = {16'd0, current_high_value_w} & hr_low_mask_w;
           op_literal_bits = {2'd0, hr_m_w};
+          op_done_w = !has_lower_nonzero_w;
+        end
+        EMIT_HR_PACK: begin
+          op_valid = 1'b1;
+          op_literal = 1'b1;
+          op_literal_value = hr_pack_value_w;
+          op_literal_bits = hr_pack_bits_w[4:0];
           op_done_w = !has_lower_nonzero_w;
         end
         default: begin
@@ -975,6 +1111,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
       entropy_context_q <= 8'd0;
       txb_nonzero_q <= 1'b0;
       plane_v_q <= 1'b0;
+      bdpcm_horz_q <= 1'b1;
       skip_ctx_q <= 4'd0;
       dc_sign_ctx_q <= 2'd0;
       dc_recon_sample_q <= 8'd0;
@@ -1006,6 +1143,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
       entropy_context_q <= 8'd0;
       txb_nonzero_q <= 1'b0;
       plane_v_q <= plane_v;
+      bdpcm_horz_q <= bdpcm_horz;
       skip_ctx_q <= skip_ctx;
       dc_sign_ctx_q <= dc_sign_ctx;
       dc_recon_sample_q <= dc_recon_sample;
@@ -1026,6 +1164,7 @@ module ff_av2_chroma_bdpcm_symbolizer #(
       emit_state_q <= EMIT_SKIP;
       scan_q <= 4'd15;
       plane_v_q <= plane_v;
+      bdpcm_horz_q <= bdpcm_horz;
       skip_ctx_q <= skip_ctx;
       dc_sign_ctx_q <= dc_sign_ctx;
       dc_recon_sample_q <= dc_recon_sample;
@@ -1133,8 +1272,23 @@ module ff_av2_chroma_bdpcm_symbolizer #(
               active_q <= 1'b0;
             end
           end else if (op_valid && advance) begin
-            if (current_high_range_w) begin
-              if (hr_q_w >= {12'd0, hr_cmax_w}) begin
+            if (sign_hr_pack_current_w) begin
+              hr_avg_q <= (hr_avg_q + current_high_value_w) >> 1;
+              if (!has_lower_nonzero_w) begin
+                active_q <= 1'b0;
+              end else begin
+                scan_q <= next_lower_nonzero_scan_w;
+              end
+            end else if (sign_pack_current_literal_w) begin
+              if (sign_pack_done_w) begin
+                active_q <= 1'b0;
+              end else begin
+                scan_q <= sign_pack_next_scan_w;
+              end
+            end else if (current_high_range_w) begin
+              if (hr_pack_valid_w) begin
+                emit_state_q <= EMIT_HR_PACK;
+              end else if (hr_q_w >= {12'd0, hr_cmax_w}) begin
                 emit_state_q <= EMIT_HR_CMAX_ZEROS;
               end else if (hr_q_w != 16'd0) begin
                 emit_state_q <= EMIT_HR_Q_ZEROS;
@@ -1184,6 +1338,15 @@ module ff_av2_chroma_bdpcm_symbolizer #(
           end
         end
         EMIT_HR_LOW_BITS: begin
+          hr_avg_q <= (hr_avg_q + current_high_value_w) >> 1;
+          if (!has_lower_nonzero_w) begin
+            active_q <= 1'b0;
+          end else begin
+            scan_q <= next_lower_nonzero_scan_w;
+            emit_state_q <= EMIT_SIGN_SCAN;
+          end
+        end
+        EMIT_HR_PACK: begin
           hr_avg_q <= (hr_avg_q + current_high_value_w) >> 1;
           if (!has_lower_nonzero_w) begin
             active_q <= 1'b0;

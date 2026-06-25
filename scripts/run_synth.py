@@ -32,6 +32,7 @@ DEFAULT_SYNTH_MAX_VISIBLE_HEIGHT = 1024
 DEFAULT_SYNTH_SUPPORT_PALETTE_444 = True
 DEFAULT_VIVADO_SYNTH_DIRECTIVE = "Default"
 DEFAULT_VIVADO_RETIMING = False
+DEFAULT_VIVADO_MAX_THREADS = 2
 XILINX_CELL_REPORT_METRICS = (
     "Cells",
     "Estimated LCs",
@@ -118,6 +119,12 @@ def main() -> int:
         default=default_vivado_retiming(),
         help="enable Vivado synth_design -retiming (0 or 1)",
     )
+    parser.add_argument(
+        "--vivado-max-threads",
+        type=int,
+        default=default_vivado_max_threads(),
+        help="Vivado general.maxThreads setting; use 0 for Vivado's default",
+    )
     parser.add_argument("--post-synth-smoke", action="store_true")
     args = parser.parse_args()
     codec = codec_config_from_args(args)
@@ -149,6 +156,7 @@ def main() -> int:
             codec.rtl_include_dirs,
             args.vivado_directive,
             args.vivado_retiming,
+            args.vivado_max_threads,
         )
 
     rc = run_yosys(
@@ -249,6 +257,19 @@ def default_vivado_retiming() -> bool:
         return parse_bool_int(value)
     except argparse.ArgumentTypeError as err:
         raise SystemExit(f"SYNTH_VIVADO_RETIMING must be 0 or 1, got {value!r}") from err
+
+
+def default_vivado_max_threads() -> int:
+    value = os.environ.get("SYNTH_VIVADO_MAX_THREADS")
+    if value is None or value == "":
+        return DEFAULT_VIVADO_MAX_THREADS
+    try:
+        parsed = int(value)
+    except ValueError as err:
+        raise SystemExit(f"SYNTH_VIVADO_MAX_THREADS must be an integer, got {value!r}") from err
+    if parsed < 0:
+        raise SystemExit(f"SYNTH_VIVADO_MAX_THREADS must be >= 0, got {parsed}")
+    return parsed
 
 
 def resolve_memory_limit_mb(tool: str, explicit_limit: float | None) -> float | None:
@@ -800,6 +821,7 @@ def run_vivado(
     include_dirs: tuple[Path, ...],
     vivado_directive: str,
     vivado_retiming: bool,
+    vivado_max_threads: int,
 ) -> int:
     vivado_cmd = find_vivado_command()
 
@@ -827,12 +849,18 @@ def run_vivado(
             ]
         )
     )
+    thread_setup = (
+        [f"set_param general.maxThreads {vivado_max_threads}"]
+        if vivado_max_threads > 0
+        else []
+    )
     tcl.write_text(
         "\n".join(
             [
                 f"set part {part}",
                 f"set top {top}",
                 f"set out_dir {out_dir}",
+                *thread_setup,
                 "create_project -in_memory -part $part",
                 f"set_property include_dirs [list {include_dirs_tcl}] [current_fileset]",
                 *[f"read_verilog -sv {quote_tcl_path(source)}" for source in sources],
@@ -856,6 +884,10 @@ def run_vivado(
         print(f"Encoder synthesis 4:4:4 palette support: {int(support_palette_444)}")
     print(f"Vivado synth directive: {vivado_directive}")
     print(f"Vivado retiming: {int(vivado_retiming)}")
+    if vivado_max_threads > 0:
+        print(f"Vivado max threads: {vivado_max_threads}")
+    else:
+        print("Vivado max threads: tool default")
     if "XILINXD_LICENSE_FILE" not in os.environ and LOCAL_LICENSE.exists():
         print(f"Using project-local Vivado license: {LOCAL_LICENSE}")
     settings = find_project_vivado_settings()

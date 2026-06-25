@@ -187,11 +187,19 @@ async def axi_write_memory_model(dut, memory, data_bytes=AXI_DATA_BYTES):
             pending_size = 1 << int(dut.m_axi_awsize.value)
         if int(dut.m_axi_wvalid.value) == 1 and int(dut.m_axi_wready.value) == 1:
             assert pending_addr is not None, "AXI write data arrived without an address"
-            data = int(dut.m_axi_wdata.value)
             strobe = int(dut.m_axi_wstrb.value)
+            data_bits = dut.m_axi_wdata.value.binstr
+            data_width = len(data_bits)
             for byte in range(pending_size):
                 if strobe & (1 << byte):
-                    memory[pending_addr + byte] = (data >> (8 * byte)) & 0xFF
+                    lane_lsb = data_width - (8 * (byte + 1))
+                    lane_msb = data_width - (8 * byte)
+                    lane_bits = data_bits[lane_lsb:lane_msb]
+                    if any(bit not in "01" for bit in lane_bits):
+                        raise ValueError(
+                            f"AXI write byte lane {byte} is strobed but unknown: {lane_bits}"
+                        )
+                    memory[pending_addr + byte] = int(lane_bits, 2)
             pending_addr += pending_size
             pending_beats -= 1
             if int(dut.m_axi_wlast.value) == 1:

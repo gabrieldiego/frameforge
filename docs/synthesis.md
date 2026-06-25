@@ -185,6 +185,15 @@ Run vendor synthesis:
 make synth-vivado CODEC=vvc
 ```
 
+Vivado defaults to two internal worker threads in this flow. The cap keeps
+memory pressure predictable on development machines while still allowing
+parallel optimization. Use `SYNTH_VIVADO_MAX_THREADS=0` to leave thread
+selection to Vivado, or set an explicit smaller/larger integer for a given run:
+
+```sh
+make synth-vivado CODEC=av2 SYNTH_VIVADO_MAX_THREADS=1
+```
+
 The generated Vivado TCL creates an in-memory project, reads the configured RTL
 file list, runs `synth_design`, applies a clock constraint to `clk`, and writes
 utilization and timing summary reports under `synth/out/`.

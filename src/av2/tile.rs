@@ -17,6 +17,7 @@ const TX4X4_SCAN: [usize; TX4X4_SAMPLES] = [0, 4, 1, 8, 5, 2, 12, 9, 6, 3, 13, 1
 const AVM_CDF_PROB_TOP: u16 = 32768;
 const LOSSLESS_DC_PREDICTOR: u8 = 128;
 const LOSSLESS_H_PRED_LEFT_EDGE: u8 = 129;
+const LOSSLESS_V_PRED_ABOVE_EDGE: u8 = 127;
 const BLACK_LOSSLESS_DC_LEVEL: u16 = 512;
 const NONZERO_NEGATIVE_DC_ENTROPY_CONTEXT: u8 = 15;
 const NONZERO_POSITIVE_DC_ENTROPY_CONTEXT: u8 = 23;
@@ -916,11 +917,16 @@ enum Av2TileDecisionKind {
     IntrabcFlag(bool),
     IntrabcCopy { drl_idx: u8 },
     IntraLumaMode(Av2LumaIntraMode),
-    IntraChromaDc,
+    IntraChromaMode {
+        use_bdpcm_uv: bool,
+        bdpcm_horz: bool,
+    },
     LumaPaletteModeInfo,
     LumaPaletteColorMap,
     BlackDcResidualCoefficients,
-    LumaPaletteResidualCoefficients,
+    LumaPaletteResidualCoefficients {
+        chroma_bdpcm_horz: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1348,6 +1354,9 @@ impl Av2Black444TilePlan {
             .map(|palette| palette.luma_mode_for_block(x0, y0))
             .unwrap_or(Av2LumaIntraMode::Dc);
         let use_luma_palette = self.luma_palette && luma_mode == Av2LumaIntraMode::Dc;
+        let chroma_bdpcm_horz = palette
+            .map(|palette| palette.chroma_bdpcm_horz_for_block(x0, y0))
+            .unwrap_or(true);
         if self.allow_intrabc {
             self.decisions.push(Av2TileDecision {
                 kind: Av2TileDecisionKind::IntrabcFlag(ibc_drl_idx.is_some()),
@@ -1373,7 +1382,10 @@ impl Av2Black444TilePlan {
             block_size,
         });
         self.decisions.push(Av2TileDecision {
-            kind: Av2TileDecisionKind::IntraChromaDc,
+            kind: Av2TileDecisionKind::IntraChromaMode {
+                use_bdpcm_uv: self.luma_palette,
+                bdpcm_horz: chroma_bdpcm_horz,
+            },
             row: row_mi,
             col: col_mi,
             block_size,
@@ -1394,7 +1406,9 @@ impl Av2Black444TilePlan {
         }
         self.decisions.push(Av2TileDecision {
             kind: if self.luma_palette {
-                Av2TileDecisionKind::LumaPaletteResidualCoefficients
+                Av2TileDecisionKind::LumaPaletteResidualCoefficients {
+                    chroma_bdpcm_horz,
+                }
             } else {
                 Av2TileDecisionKind::BlackDcResidualCoefficients
             },
@@ -1475,8 +1489,11 @@ impl Av2Black444TilePlan {
                         );
                     }
                 }
-                Av2TileDecisionKind::IntraChromaDc => {
-                    write_intra_chroma_mode(writer, *decision, self.luma_palette);
+                Av2TileDecisionKind::IntraChromaMode {
+                    use_bdpcm_uv,
+                    bdpcm_horz,
+                } => {
+                    write_intra_chroma_mode(writer, *decision, use_bdpcm_uv, bdpcm_horz);
                 }
                 Av2TileDecisionKind::LumaPaletteModeInfo => {
                     write_luma_palette_mode_info(
@@ -1514,7 +1531,9 @@ impl Av2Black444TilePlan {
                         false,
                     );
                 }
-                Av2TileDecisionKind::LumaPaletteResidualCoefficients => {
+                Av2TileDecisionKind::LumaPaletteResidualCoefficients {
+                    chroma_bdpcm_horz,
+                } => {
                     write_luma_palette_residual_coefficients(
                         writer,
                         *decision,
@@ -1524,6 +1543,7 @@ impl Av2Black444TilePlan {
                         &mut txb_contexts,
                         self.origin_x,
                         self.origin_y,
+                        chroma_bdpcm_horz,
                     );
                     intrabc_context.update_leaf(
                         decision.row,
@@ -1571,8 +1591,11 @@ impl Av2Black444TilePlan {
                 Av2TileDecisionKind::IntraLumaMode(mode) => {
                     write_intra_luma_mode(writer, *decision, mode);
                 }
-                Av2TileDecisionKind::IntraChromaDc => {
-                    write_intra_chroma_mode(writer, *decision, false);
+                Av2TileDecisionKind::IntraChromaMode {
+                    use_bdpcm_uv: _,
+                    bdpcm_horz: _,
+                } => {
+                    write_intra_chroma_mode(writer, *decision, false, true);
                 }
                 Av2TileDecisionKind::BlackDcResidualCoefficients => {
                     write_lossy_420_residual_coefficients(
@@ -1595,7 +1618,7 @@ impl Av2Black444TilePlan {
                 | Av2TileDecisionKind::IntrabcCopy { .. }
                 | Av2TileDecisionKind::LumaPaletteModeInfo
                 | Av2TileDecisionKind::LumaPaletteColorMap
-                | Av2TileDecisionKind::LumaPaletteResidualCoefficients => {
+                | Av2TileDecisionKind::LumaPaletteResidualCoefficients { .. } => {
                     unreachable!("AV2 4:2:0 residual path disables palette and IntraBC")
                 }
             }
@@ -2066,6 +2089,7 @@ fn write_intra_chroma_mode(
     writer: &mut Av2EntropyWriter,
     _decision: Av2TileDecision,
     use_bdpcm_uv: bool,
+    bdpcm_horz: bool,
 ) {
     let mut dpcm_uv_cdf = DEFAULT_DPCM_CDF;
     // AV2 v1.0.0 Section 5.20.5.6 read_intra_uv_mode() signals chroma DPCM
@@ -2084,7 +2108,7 @@ fn write_intra_chroma_mode(
         let mut dpcm_uv_direction_cdf = DEFAULT_DPCM_CDF;
         writer.write_symbol(
             "tile.intra.dpcm_uv_horz",
-            1,
+            usize::from(bdpcm_horz),
             &mut dpcm_uv_direction_cdf,
             2,
             false,
@@ -2788,6 +2812,7 @@ fn write_luma_palette_residual_coefficients(
     contexts: &mut Av2TxbEntropyContexts,
     tile_origin_x: usize,
     tile_origin_y: usize,
+    chroma_bdpcm_horz: bool,
 ) {
     // AV2 v1.0.0 Sections 5.20.8.4 palette_tokens() and 5.20.7.27 coeffs():
     // palette supplies a luma predictor, not an escape-coded lossless sample
@@ -2832,13 +2857,14 @@ fn write_luma_palette_residual_coefficients(
             let skip_ctx =
                 chroma_txb_skip_base_context(contexts.u_above[abs_col], contexts.u_left[abs_row])
                     + 6;
-            let coefficients = chroma_bdpcm_horz_tx4x4_coefficients(
+            let coefficients = chroma_bdpcm_tx4x4_coefficients(
                 palette,
                 Av2ChromaPlane::U,
                 tile_origin_x + abs_col * TX4X4_SIZE,
                 tile_origin_y + abs_row * TX4X4_SIZE,
                 tile_origin_x,
                 tile_origin_y,
+                chroma_bdpcm_horz,
             );
             let (context, nonzero) =
                 write_chroma_bdpcm_txb(writer, Av2ChromaPlane::U, skip_ctx, &coefficients);
@@ -2857,13 +2883,14 @@ fn write_luma_palette_residual_coefficients(
                 contexts.v_left[abs_row],
                 last_u_txb_nonzero,
             );
-            let coefficients = chroma_bdpcm_horz_tx4x4_coefficients(
+            let coefficients = chroma_bdpcm_tx4x4_coefficients(
                 palette,
                 Av2ChromaPlane::V,
                 tile_origin_x + abs_col * TX4X4_SIZE,
                 tile_origin_y + abs_row * TX4X4_SIZE,
                 tile_origin_x,
                 tile_origin_y,
+                chroma_bdpcm_horz,
             );
             let (context, _) =
                 write_chroma_bdpcm_txb(writer, Av2ChromaPlane::V, skip_ctx, &coefficients);
@@ -2994,33 +3021,50 @@ fn luma_palette_tx4x4_coefficients(
     av2_fwht4x4(&residual)
 }
 
-fn chroma_bdpcm_horz_tx4x4_coefficients(
+fn chroma_bdpcm_tx4x4_coefficients(
     palette: &Av2LumaPalette444,
     plane: Av2ChromaPlane,
     x0: usize,
     y0: usize,
     tile_origin_x: usize,
     tile_origin_y: usize,
+    horz: bool,
 ) -> [i32; TX4X4_SAMPLES] {
     let mut residual = [0i32; TX4X4_SAMPLES];
     for local_y in 0..TX4X4_SIZE {
         let y = y0 + local_y;
-        let row_predictor = i32::from(chroma_h_predictor(
-            palette,
-            plane,
-            x0,
-            y0,
-            local_y,
-            tile_origin_x,
-            tile_origin_y,
-        ));
         for local_x in 0..TX4X4_SIZE {
             let x = x0 + local_x;
             let sample = i32::from(chroma_sample(palette, plane, x, y));
-            let predicted_delta = if local_x == 0 {
-                sample - row_predictor
+            let predicted_delta = if horz {
+                let row_predictor = i32::from(chroma_h_predictor(
+                    palette,
+                    plane,
+                    x0,
+                    y0,
+                    local_y,
+                    tile_origin_x,
+                    tile_origin_y,
+                ));
+                if local_x == 0 {
+                    sample - row_predictor
+                } else {
+                    let previous = i32::from(chroma_sample(palette, plane, x - 1, y));
+                    sample - previous
+                }
+            } else if local_y == 0 {
+                let col_predictor = i32::from(chroma_v_predictor(
+                    palette,
+                    plane,
+                    x0,
+                    y0,
+                    local_x,
+                    tile_origin_x,
+                    tile_origin_y,
+                ));
+                sample - col_predictor
             } else {
-                let previous = i32::from(chroma_sample(palette, plane, x - 1, y));
+                let previous = i32::from(chroma_sample(palette, plane, x, y - 1));
                 sample - previous
             };
             residual[local_y * TX4X4_SIZE + local_x] = predicted_delta;
@@ -3051,6 +3095,29 @@ fn chroma_h_predictor(
         chroma_sample(palette, plane, x0, y0 - 1)
     } else {
         LOSSLESS_H_PRED_LEFT_EDGE
+    }
+}
+
+fn chroma_v_predictor(
+    palette: &Av2LumaPalette444,
+    plane: Av2ChromaPlane,
+    x0: usize,
+    y0: usize,
+    local_x: usize,
+    tile_origin_x: usize,
+    tile_origin_y: usize,
+) -> u8 {
+    // AV2 v1.0.0 Section 7.11 intra prediction, implemented in AVM
+    // reconintra.c: V_PRED uses the above reference row. If the above edge is
+    // unavailable, AVM fills it from left[0] when left is available and from
+    // base-1 at the tile top-left. Independent 64x64 tiles must not borrow
+    // predictors across tile boundaries.
+    if y0 > tile_origin_y {
+        chroma_sample(palette, plane, x0 + local_x, y0 - 1)
+    } else if x0 > tile_origin_x {
+        chroma_sample(palette, plane, x0 - 1, y0)
+    } else {
+        LOSSLESS_V_PRED_ABOVE_EDGE
     }
 }
 

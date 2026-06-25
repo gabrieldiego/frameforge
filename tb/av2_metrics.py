@@ -19,6 +19,8 @@ AV2_STATE_NAMES = {
     14: "payload_prefix",
     15: "output_prep",
     16: "output_valid",
+    17: "output_payload_wait",
+    18: "output_payload_load",
 }
 AV2_STATE_PARTITION = 6
 AV2_STATE_LEAF = 8

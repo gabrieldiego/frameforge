@@ -68,6 +68,27 @@ impl Av2LumaPalette444 {
         self.luma_modes[self.block_index_for_origin(x0, y0)]
     }
 
+    pub(crate) fn chroma_bdpcm_horz_for_block(&self, x0: usize, y0: usize) -> bool {
+        let mut horz_sad = 0usize;
+        let mut vert_sad = 0usize;
+        for plane in [&self.u_plane, &self.v_plane] {
+            for local_y in 0..AV2_LUMA_PALETTE_BLOCK_SIZE {
+                for local_x in 0..AV2_LUMA_PALETTE_BLOCK_SIZE {
+                    let sample = self.chroma_sample(plane, x0 + local_x, y0 + local_y);
+                    if local_x != 0 {
+                        let left = self.chroma_sample(plane, x0 + local_x - 1, y0 + local_y);
+                        horz_sad += sample.abs_diff(left) as usize;
+                    }
+                    if local_y != 0 {
+                        let above = self.chroma_sample(plane, x0 + local_x, y0 + local_y - 1);
+                        vert_sad += sample.abs_diff(above) as usize;
+                    }
+                }
+            }
+        }
+        horz_sad <= vert_sad
+    }
+
     pub(crate) fn index_at(&self, x: usize, y: usize) -> u8 {
         assert!(x < self.width && y < self.height);
         let block = self.block_for_origin(

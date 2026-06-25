@@ -69,6 +69,8 @@ module ff_av2_encoder #(
 );
 
   localparam int AV2_MAX_SEQUENCE_BYTES = 16;
+  localparam int OUTPUT_PACKET_BYTES = 16;
+  localparam int OUTPUT_PACKET_COUNT_BITS = 5;
   typedef enum logic [4:0] {
     ST_IDLE,
     ST_TILE_START,
@@ -86,7 +88,9 @@ module ff_av2_encoder #(
     ST_CARRY_WRITE,
     ST_PAYLOAD_PREFIX,
     ST_OUTPUT_PREP,
-    ST_OUTPUT_VALID
+    ST_OUTPUT_VALID,
+    ST_OUTPUT_PAYLOAD_WAIT,
+    ST_OUTPUT_PAYLOAD_LOAD
   } state_t;
 
   localparam logic [1:0] PARTITION_NONE = 2'd0;
@@ -147,7 +151,8 @@ module ff_av2_encoder #(
   logic [INPUT_PACKET_FIFO_LEVEL_BITS - 1:0] input_fifo_level_w;
   logic       m_axis_valid;
   logic       m_axis_ready;
-  logic [7:0] m_axis_data;
+  logic [AXI_DATA_BITS - 1:0] m_axis_data;
+  logic [OUTPUT_PACKET_COUNT_BITS - 1:0] m_axis_count;
   logic       m_axis_last;
   logic       frame_reader_start_w;
   logic       frame_reader_busy_w;
@@ -160,18 +165,28 @@ module ff_av2_encoder #(
 
   state_t state_q;
   logic start_invalid_w;
-  logic [15:0] precarry_mem_q [0:AV2_MAX_TILE_BYTES - 1];
   logic [7:0] seq_mem_q [0:AV2_MAX_SEQUENCE_BYTES - 1];
   logic [15:0] precarry_read_addr_q;
+  logic [12:0] precarry_read_word_addr_q;
+  logic [127:0] precarry_read_word_data_w;
   logic [15:0] precarry_read_data_q;
+  logic [15:0] precarry_read_prev_data_q;
+  logic [15:0] precarry_read_prev2_data_q;
+  logic [15:0] precarry_read_prev3_data_q;
+  logic [15:0] precarry_read_prev4_data_q;
+  logic [15:0] precarry_read_prev5_data_q;
+  logic [15:0] precarry_read_prev6_data_q;
+  logic [15:0] precarry_read_prev7_data_q;
   logic precarry_write_valid_w;
   logic [15:0] precarry_write_addr_w;
   logic [15:0] precarry_write_data_w;
   logic payload_write_valid_w;
   logic [15:0] payload_write_addr_w;
-  logic [7:0] payload_write_data_w;
-  logic [15:0] payload_read_addr_q;
-  logic [7:0] payload_read_data_w;
+  logic [15:0] payload_write_strobe_w;
+  logic [127:0] payload_write_data_w;
+  logic [11:0] payload_read_word_addr_q;
+  logic [11:0] payload_read_data_word_addr_q;
+  logic [127:0] payload_read_data_w;
   logic pending_push_valid_q;
   logic [15:0] pending_push_word_q;
   logic [15:0] precarry_len_q;
@@ -209,6 +224,7 @@ module ff_av2_encoder #(
   logic palette_mode_q;
   logic lossy_420_mode_q;
   logic [1:0] leaf_luma_mode_q;
+  logic leaf_chroma_bdpcm_horz_q;
   logic [15:0] txb_index_q;
   logic [15:0] txb_width_q;
   logic [15:0] txb_count_q;
@@ -315,17 +331,69 @@ module ff_av2_encoder #(
   logic [7:0] seq_stream_byte_w;
   logic [15:0] closed_leb_index_w;
   logic [15:0] stream_lookup_index_w;
-  logic [15:0] payload_read_ahead_stream_index_w;
-  logic payload_read_ahead_valid_w;
-  logic [15:0] payload_read_ahead_addr_w;
   logic [15:0] payload_tile_start_w;
+  logic [15:0] output_next_stream_index_w;
+  logic [15:0] output_payload_addr_w;
+  logic [15:0] output_payload_remaining_w;
+  logic [15:0] output_next_payload_addr_w;
+  logic [15:0] output_next_payload_remaining_w;
+  logic [11:0] output_next_payload_word_addr_w;
+  logic [15:0] output_after_current_stream_index_w;
+  logic [15:0] output_after_next_stream_index_w;
+  logic [15:0] output_after_current_payload_addr_w;
+  logic [15:0] output_after_next_payload_addr_w;
+  logic [11:0] output_after_current_payload_word_addr_w;
+  logic [11:0] output_after_next_payload_word_addr_w;
+  logic output_after_current_payload_w;
+  logic output_after_next_payload_w;
+  logic [OUTPUT_PACKET_COUNT_BITS - 1:0] output_packet_space_w;
+  logic [OUTPUT_PACKET_COUNT_BITS - 1:0] output_payload_bank_space_w;
+  logic [OUTPUT_PACKET_COUNT_BITS - 1:0] output_payload_word_space_w;
+  logic [OUTPUT_PACKET_COUNT_BITS - 1:0] output_payload_count_w;
+  logic [OUTPUT_PACKET_COUNT_BITS - 1:0] output_next_packet_space_w;
+  logic [OUTPUT_PACKET_COUNT_BITS - 1:0] output_next_payload_bank_space_w;
+  logic [OUTPUT_PACKET_COUNT_BITS - 1:0] output_next_payload_word_space_w;
+  logic [OUTPUT_PACKET_COUNT_BITS - 1:0] output_next_payload_count_w;
+  logic [127:0] output_payload_mask_w;
+  logic [127:0] output_next_payload_mask_w;
+  logic [127:0] output_payload_shifted_data_w;
+  logic [127:0] output_next_payload_shifted_data_w;
+  logic [127:0] output_payload_packet_data_w;
+  logic [127:0] output_next_payload_packet_data_w;
   logic [7:0] output_byte_w;
   logic [7:0] output_lookup_byte_w;
   logic output_lookup_last_w;
-  logic [7:0] output_byte_q;
   logic output_last_q;
   logic output_tile_payload_w;
   logic [15:0] carry_sum_w;
+  logic [15:0] carry_pair_sum_w;
+  logic [15:0] carry_quad_sum2_w;
+  logic [15:0] carry_quad_sum3_w;
+  logic [15:0] carry_oct_sum4_w;
+  logic [15:0] carry_oct_sum5_w;
+  logic [15:0] carry_oct_sum6_w;
+  logic [15:0] carry_oct_sum7_w;
+  logic [15:0] carry_single_addr_w;
+  logic [15:0] carry_pair_addr_w;
+  logic [15:0] carry_quad_addr_w;
+  logic [15:0] carry_oct_addr_w;
+  logic [15:0] carry_next_pair_addr_w;
+  logic [15:0] carry_next_quad_addr_w;
+  logic [15:0] carry_next_oct_addr_w;
+  logic [15:0] carry_index_after_step_w;
+  logic [15:0] carry_index_after_next_step_w;
+  logic [3:0] carry_step_w;
+  logic [3:0] carry_next_step_w;
+  logic carry_pair_w;
+  logic carry_quad_w;
+  logic carry_oct_w;
+  logic carry_done_after_step_w;
+  logic carry_next_pair_w;
+  logic carry_next_quad_w;
+  logic carry_next_oct_w;
+  logic carry_next_done_w;
+  logic [12:0] carry_read_after_current_word_addr_w;
+  logic [12:0] carry_read_after_next_word_addr_w;
   logic leaf_fsc_symbol_w;
   logic [31:0] leaf_fsc_fh_w;
   logic [15:0] txb_width_w;
@@ -417,6 +485,7 @@ module ff_av2_encoder #(
   logic [2:0] palette_top_index_w;
   logic [2:0] palette_top_left_index_w;
   logic palette_luma_residual_zero_w;
+  logic palette_chroma_bdpcm_horz_w;
   logic [1:0] palette_identity_row_flag_w;
   logic palette_op_valid_w;
   logic palette_op_literal_w;
@@ -785,7 +854,7 @@ module ff_av2_encoder #(
     palette_analyzer_sample_ready_w &&
     !palette_analyzer_done_w;
 
-  ff_axi4_bitstream_writer #(
+  ff_axi4_bitstream_packet_writer #(
     .AXI_ADDR_BITS(AXI_ADDR_BITS),
     .AXI_DATA_BITS(AXI_DATA_BITS)
   ) bitstream_writer (
@@ -797,6 +866,7 @@ module ff_av2_encoder #(
     .s_axis_valid(m_axis_valid),
     .s_axis_ready(m_axis_ready),
     .s_axis_data(m_axis_data),
+    .s_axis_count(m_axis_count),
     .s_axis_last(m_axis_last),
     .m_axi_awvalid(m_axi_awvalid),
     .m_axi_awready(m_axi_awready),
@@ -903,6 +973,7 @@ module ff_av2_encoder #(
     .query_start(palette_query_start_w),
     .chroma_fetch_start(chroma_fetch_start_w),
     .chroma_fetch_plane_v(chroma_fetch_req_plane_v_w),
+    .chroma_fetch_horz(leaf_chroma_bdpcm_horz_q),
     .chroma_fetch_predictor_only(chroma_fetch_predictor_only_w),
     .chroma_fetch_txb_row_mi(chroma_fetch_req_row_mi_w),
     .chroma_fetch_txb_col_mi(chroma_fetch_req_col_mi_w),
@@ -923,6 +994,7 @@ module ff_av2_encoder #(
     .query_top_index(palette_top_index_w),
     .query_top_left_index(palette_top_left_index_w),
     .query_luma_residual_zero(palette_luma_residual_zero_w),
+    .query_chroma_bdpcm_horz(palette_chroma_bdpcm_horz_w),
     .palette_first_color(palette_first_color_w),
     .palette_delta_bits_minus5(palette_delta_bits_minus5_w),
     .palette_delta_minus1(palette_delta_minus1_w),
@@ -982,6 +1054,7 @@ module ff_av2_encoder #(
     .enable(palette_luma_residual_enable_w),
     .advance(palette_luma_residual_advance_w),
     .plane_v(1'b0),
+    .bdpcm_horz(1'b1),
     .skip_ctx(luma_residual_skip_ctx_w),
     .dc_sign_ctx(luma_residual_dc_sign_ctx_w),
     .txb_samples(luma_fetch_txb_samples_w),
@@ -1047,6 +1120,7 @@ module ff_av2_encoder #(
     .enable(palette_chroma_bdpcm_enable_w),
     .advance(palette_chroma_bdpcm_advance_w),
     .plane_v(phase_q == PHASE_V_COEFF),
+    .bdpcm_horz(leaf_chroma_bdpcm_horz_q),
     .skip_ctx(chroma_bdpcm_skip_ctx_w),
     .dc_sign_ctx(2'd0),
     .txb_samples(chroma_bdpcm_txb_samples_w),
@@ -1125,6 +1199,7 @@ module ff_av2_encoder #(
     .leaf_fsc_symbol(leaf_fsc_symbol_w),
     .leaf_fsc_fh(leaf_fsc_fh_w),
     .palette_mode(palette_mode_q),
+    .chroma_bdpcm_horz(leaf_chroma_bdpcm_horz_q),
     .residual_mode(residual_mode_w),
     .leaf_luma_palette(leaf_luma_palette_w),
     .palette_op_valid(palette_op_valid_w),
@@ -1193,16 +1268,85 @@ module ff_av2_encoder #(
     ((tile_input_index_q + {28'd0, input_fire_count_w}) >= tile_samples_w);
   assign stream_lookup_index_w =
     (state_q == ST_OUTPUT_VALID && m_axis_valid && m_axis_ready && !output_last_q) ?
-      (stream_index_q + 16'd1) : stream_index_q;
+      output_next_stream_index_w : stream_index_q;
   assign output_lookup_last_w = (stream_lookup_index_w == (total_stream_len_w - 16'd1));
   assign output_lookup_byte_w =
-    output_tile_payload_w ? payload_read_data_w : output_byte_w;
-  assign payload_read_ahead_stream_index_w = stream_lookup_index_w + 16'd2;
-  assign payload_read_ahead_valid_w =
-    (payload_read_ahead_stream_index_w >= tile_payload_start_w) &&
-    (payload_read_ahead_stream_index_w < total_stream_len_w);
-  assign payload_read_ahead_addr_w =
-    payload_read_ahead_stream_index_w - tile_payload_start_w;
+    output_tile_payload_w ?
+      payload_read_data_w[{stream_lookup_index_w[3:0], 3'b000} +: 8] :
+      output_byte_w;
+  assign output_next_stream_index_w = stream_index_q + {11'd0, m_axis_count};
+  assign output_payload_addr_w = stream_index_q - tile_payload_start_w;
+  assign output_payload_remaining_w = total_stream_len_w - stream_index_q;
+  assign output_next_payload_addr_w = output_next_stream_index_w - tile_payload_start_w;
+  assign output_next_payload_remaining_w = total_stream_len_w - output_next_stream_index_w;
+  assign output_next_payload_word_addr_w = output_next_payload_addr_w[15:4];
+  assign output_after_current_stream_index_w =
+    stream_index_q + {11'd0, output_payload_count_w};
+  assign output_after_next_stream_index_w =
+    output_next_stream_index_w + {11'd0, output_next_payload_count_w};
+  assign output_after_current_payload_addr_w =
+    output_after_current_stream_index_w - tile_payload_start_w;
+  assign output_after_next_payload_addr_w =
+    output_after_next_stream_index_w - tile_payload_start_w;
+  assign output_after_current_payload_word_addr_w =
+    output_after_current_payload_addr_w[15:4];
+  assign output_after_next_payload_word_addr_w =
+    output_after_next_payload_addr_w[15:4];
+  assign output_after_current_payload_w =
+    (output_after_current_stream_index_w >= tile_payload_start_w) &&
+    (output_after_current_stream_index_w < total_stream_len_w);
+  assign output_after_next_payload_w =
+    (output_after_next_stream_index_w >= tile_payload_start_w) &&
+    (output_after_next_stream_index_w < total_stream_len_w);
+  assign output_packet_space_w =
+    (stream_index_q[3:0] == 4'd0) ?
+      OUTPUT_PACKET_COUNT_BITS'(16) :
+      (OUTPUT_PACKET_COUNT_BITS'(16) - {1'b0, stream_index_q[3:0]});
+  assign output_payload_bank_space_w =
+    (output_payload_addr_w[3:0] == 4'd0) ?
+      OUTPUT_PACKET_COUNT_BITS'(16) :
+      (OUTPUT_PACKET_COUNT_BITS'(16) - {1'b0, output_payload_addr_w[3:0]});
+  assign output_payload_word_space_w =
+    (output_packet_space_w < output_payload_bank_space_w) ?
+      output_packet_space_w : output_payload_bank_space_w;
+  assign output_payload_count_w =
+    (output_payload_remaining_w > {11'd0, output_payload_word_space_w}) ?
+      output_payload_word_space_w :
+      output_payload_remaining_w[OUTPUT_PACKET_COUNT_BITS - 1:0];
+  assign output_payload_shifted_data_w =
+    payload_read_data_w >> ({3'd0, output_payload_addr_w[3:0]} << 3);
+  assign output_payload_mask_w =
+    (output_payload_count_w == OUTPUT_PACKET_COUNT_BITS'(0)) ?
+      128'd0 :
+      ((output_payload_count_w == OUTPUT_PACKET_COUNT_BITS'(16)) ?
+        {128{1'b1}} :
+        ({128{1'b1}} >> ((OUTPUT_PACKET_COUNT_BITS'(16) - output_payload_count_w) << 3)));
+  assign output_payload_packet_data_w = output_payload_shifted_data_w & output_payload_mask_w;
+  assign output_next_packet_space_w =
+    (output_next_stream_index_w[3:0] == 4'd0) ?
+      OUTPUT_PACKET_COUNT_BITS'(16) :
+      (OUTPUT_PACKET_COUNT_BITS'(16) - {1'b0, output_next_stream_index_w[3:0]});
+  assign output_next_payload_bank_space_w =
+    (output_next_payload_addr_w[3:0] == 4'd0) ?
+      OUTPUT_PACKET_COUNT_BITS'(16) :
+      (OUTPUT_PACKET_COUNT_BITS'(16) - {1'b0, output_next_payload_addr_w[3:0]});
+  assign output_next_payload_word_space_w =
+    (output_next_packet_space_w < output_next_payload_bank_space_w) ?
+      output_next_packet_space_w : output_next_payload_bank_space_w;
+  assign output_next_payload_count_w =
+    (output_next_payload_remaining_w > {11'd0, output_next_payload_word_space_w}) ?
+      output_next_payload_word_space_w :
+      output_next_payload_remaining_w[OUTPUT_PACKET_COUNT_BITS - 1:0];
+  assign output_next_payload_shifted_data_w =
+    payload_read_data_w >> ({3'd0, output_next_payload_addr_w[3:0]} << 3);
+  assign output_next_payload_mask_w =
+    (output_next_payload_count_w == OUTPUT_PACKET_COUNT_BITS'(0)) ?
+      128'd0 :
+      ((output_next_payload_count_w == OUTPUT_PACKET_COUNT_BITS'(16)) ?
+        {128{1'b1}} :
+        ({128{1'b1}} >> ((OUTPUT_PACKET_COUNT_BITS'(16) - output_next_payload_count_w) << 3)));
+  assign output_next_payload_packet_data_w =
+    output_next_payload_shifted_data_w & output_next_payload_mask_w;
   assign palette_query_start_w = (state_q == ST_PALETTE_QUERY);
   assign leaf_luma_palette_w = palette_mode_q && (leaf_luma_mode_q == LUMA_MODE_DC);
   assign residual_mode_w = palette_mode_q || lossy_420_mode_q;
@@ -1397,6 +1541,121 @@ module ff_av2_encoder #(
   assign multi_tile_w = (tile_count_q != 16'd1);
   assign payload_tile_start_w = payload_len_q + (tile_is_last_w ? 16'd0 : 16'd4);
   assign carry_sum_w = carry_q + precarry_read_data_q;
+  assign carry_pair_sum_w = (carry_sum_w >> 8) + precarry_read_prev_data_q;
+  assign carry_quad_sum2_w = (carry_pair_sum_w >> 8) + precarry_read_prev2_data_q;
+  assign carry_quad_sum3_w = (carry_quad_sum2_w >> 8) + precarry_read_prev3_data_q;
+  assign carry_oct_sum4_w = (carry_quad_sum3_w >> 8) + precarry_read_prev4_data_q;
+  assign carry_oct_sum5_w = (carry_oct_sum4_w >> 8) + precarry_read_prev5_data_q;
+  assign carry_oct_sum6_w = (carry_oct_sum5_w >> 8) + precarry_read_prev6_data_q;
+  assign carry_oct_sum7_w = (carry_oct_sum6_w >> 8) + precarry_read_prev7_data_q;
+  assign carry_single_addr_w = payload_tile_start_w + carry_index_q;
+  assign carry_pair_addr_w = payload_tile_start_w + carry_index_q - 16'd1;
+  assign carry_quad_addr_w = payload_tile_start_w + carry_index_q - 16'd3;
+  assign carry_oct_addr_w = payload_tile_start_w + carry_index_q - 16'd7;
+  assign carry_next_pair_addr_w = payload_tile_start_w + carry_index_after_step_w - 16'd1;
+  assign carry_next_quad_addr_w = payload_tile_start_w + carry_index_after_step_w - 16'd3;
+  assign carry_next_oct_addr_w = payload_tile_start_w + carry_index_after_step_w - 16'd7;
+  // AV2 range coder carry propagation is byte-order preserving when processed
+  // from the end of the precarry buffer. Eight/four-byte groups stay aligned
+  // so the read-ahead schedule and payload byte strobes never cross RAM words;
+  // smaller groups handle the tail.
+  assign carry_oct_w =
+    (carry_index_q >= 16'd7) &&
+    (carry_index_q[2:0] == 3'd7) &&
+    (carry_oct_addr_w[2:0] == 3'd0);
+  assign carry_quad_w =
+    !carry_oct_w &&
+    (carry_index_q >= 16'd3) &&
+    (carry_index_q[1:0] == 2'd3) &&
+    (carry_quad_addr_w[1:0] == 2'd0);
+  assign carry_pair_w =
+    !carry_oct_w &&
+    (carry_index_q != 16'd0) &&
+    (carry_index_q[1:0] != 2'd0) &&
+    (carry_pair_addr_w[0] == 1'b0);
+  assign carry_step_w = carry_oct_w ? 4'd8 : (carry_quad_w ? 4'd4 : (carry_pair_w ? 4'd2 : 4'd1));
+  assign carry_index_after_step_w = carry_index_q - {12'd0, carry_step_w};
+  assign carry_done_after_step_w =
+    (carry_oct_w && carry_index_q == 16'd7) ||
+    (carry_quad_w && carry_index_q == 16'd3) ||
+    (carry_pair_w && carry_index_q == 16'd1) ||
+    (!carry_oct_w && !carry_quad_w && !carry_pair_w && carry_index_q == 16'd0);
+  assign carry_next_oct_w =
+    !carry_done_after_step_w &&
+    (carry_index_after_step_w >= 16'd7) &&
+    (carry_index_after_step_w[2:0] == 3'd7) &&
+    (carry_next_oct_addr_w[2:0] == 3'd0);
+  assign carry_next_quad_w =
+    !carry_done_after_step_w &&
+    !carry_next_oct_w &&
+    (carry_index_after_step_w >= 16'd3) &&
+    (carry_index_after_step_w[1:0] == 2'd3) &&
+    (carry_next_quad_addr_w[1:0] == 2'd0);
+  assign carry_next_pair_w =
+    !carry_done_after_step_w &&
+    !carry_next_oct_w &&
+    (carry_index_after_step_w != 16'd0) &&
+    carry_index_after_step_w[0] &&
+    (carry_next_pair_addr_w[0] == 1'b0);
+  assign carry_next_step_w =
+    carry_next_oct_w ? 4'd8 : (carry_next_quad_w ? 4'd4 : (carry_next_pair_w ? 4'd2 : 4'd1));
+  assign carry_index_after_next_step_w =
+    carry_index_after_step_w - {12'd0, carry_next_step_w};
+  assign carry_next_done_w =
+    (carry_next_oct_w && carry_index_after_step_w == 16'd7) ||
+    (carry_next_quad_w && carry_index_after_step_w == 16'd3) ||
+    (carry_next_pair_w && carry_index_after_step_w == 16'd1) ||
+    (!carry_next_oct_w && !carry_next_quad_w && !carry_next_pair_w && carry_index_after_step_w == 16'd0);
+  assign carry_read_after_current_word_addr_w =
+    carry_done_after_step_w ? 13'd0 : carry_index_after_step_w[15:3];
+  assign carry_read_after_next_word_addr_w =
+    (carry_done_after_step_w || carry_next_done_w) ?
+      13'd0 : carry_index_after_next_step_w[15:3];
+  assign precarry_read_addr_q = carry_index_q;
+  assign precarry_read_data_q =
+    (carry_index_q[2:0] == 3'd0) ? precarry_read_word_data_w[15:0] :
+    ((carry_index_q[2:0] == 3'd1) ? precarry_read_word_data_w[31:16] :
+    ((carry_index_q[2:0] == 3'd2) ? precarry_read_word_data_w[47:32] :
+    ((carry_index_q[2:0] == 3'd3) ? precarry_read_word_data_w[63:48] :
+    ((carry_index_q[2:0] == 3'd4) ? precarry_read_word_data_w[79:64] :
+    ((carry_index_q[2:0] == 3'd5) ? precarry_read_word_data_w[95:80] :
+    ((carry_index_q[2:0] == 3'd6) ? precarry_read_word_data_w[111:96] :
+                                    precarry_read_word_data_w[127:112]))))));
+  assign precarry_read_prev_data_q =
+    (carry_index_q[2:0] == 3'd1) ? precarry_read_word_data_w[15:0] :
+    ((carry_index_q[2:0] == 3'd2) ? precarry_read_word_data_w[31:16] :
+    ((carry_index_q[2:0] == 3'd3) ? precarry_read_word_data_w[47:32] :
+    ((carry_index_q[2:0] == 3'd4) ? precarry_read_word_data_w[63:48] :
+    ((carry_index_q[2:0] == 3'd5) ? precarry_read_word_data_w[79:64] :
+    ((carry_index_q[2:0] == 3'd6) ? precarry_read_word_data_w[95:80] :
+    ((carry_index_q[2:0] == 3'd7) ? precarry_read_word_data_w[111:96] : 16'd0))))));
+  assign precarry_read_prev2_data_q =
+    (carry_index_q[2:0] == 3'd2) ? precarry_read_word_data_w[15:0] :
+    ((carry_index_q[2:0] == 3'd3) ? precarry_read_word_data_w[31:16] :
+    ((carry_index_q[2:0] == 3'd4) ? precarry_read_word_data_w[47:32] :
+    ((carry_index_q[2:0] == 3'd5) ? precarry_read_word_data_w[63:48] :
+    ((carry_index_q[2:0] == 3'd6) ? precarry_read_word_data_w[79:64] :
+    ((carry_index_q[2:0] == 3'd7) ? precarry_read_word_data_w[95:80] : 16'd0)))));
+  assign precarry_read_prev3_data_q =
+    (carry_index_q[2:0] == 3'd3) ? precarry_read_word_data_w[15:0] :
+    ((carry_index_q[2:0] == 3'd4) ? precarry_read_word_data_w[31:16] :
+    ((carry_index_q[2:0] == 3'd5) ? precarry_read_word_data_w[47:32] :
+    ((carry_index_q[2:0] == 3'd6) ? precarry_read_word_data_w[63:48] :
+    ((carry_index_q[2:0] == 3'd7) ? precarry_read_word_data_w[79:64] : 16'd0))));
+  assign precarry_read_prev4_data_q =
+    (carry_index_q[2:0] == 3'd4) ? precarry_read_word_data_w[15:0] :
+    ((carry_index_q[2:0] == 3'd5) ? precarry_read_word_data_w[31:16] :
+    ((carry_index_q[2:0] == 3'd6) ? precarry_read_word_data_w[47:32] :
+    ((carry_index_q[2:0] == 3'd7) ? precarry_read_word_data_w[63:48] : 16'd0)));
+  assign precarry_read_prev5_data_q =
+    (carry_index_q[2:0] == 3'd5) ? precarry_read_word_data_w[15:0] :
+    ((carry_index_q[2:0] == 3'd6) ? precarry_read_word_data_w[31:16] :
+    ((carry_index_q[2:0] == 3'd7) ? precarry_read_word_data_w[47:32] : 16'd0));
+  assign precarry_read_prev6_data_q =
+    (carry_index_q[2:0] == 3'd6) ? precarry_read_word_data_w[15:0] :
+    ((carry_index_q[2:0] == 3'd7) ? precarry_read_word_data_w[31:16] : 16'd0);
+  assign precarry_read_prev7_data_q =
+    (carry_index_q[2:0] == 3'd7) ? precarry_read_word_data_w[15:0] : 16'd0;
   assign visible_rows_mi_w = tile_height_q[6:2];
   assign visible_cols_mi_w = tile_width_q[6:2];
   assign ibc_current_block_id_w = {block_row_mi_q[3:1], block_col_mi_q[3:1]};
@@ -1559,6 +1818,7 @@ module ff_av2_encoder #(
   assign u_chroma_cache_hit_w =
     palette_mode_q &&
     (phase_q == PHASE_U_COEFF) &&
+    leaf_chroma_bdpcm_horz_q &&
     chroma_predictor_compute_valid_w;
   assign chroma_fetch_current_cache_hit_w = u_chroma_cache_hit_w || v_chroma_cache_hit_w;
   assign chroma_fetch_cache_index_w =
@@ -1580,6 +1840,7 @@ module ff_av2_encoder #(
   // match ff_av2_palette_analyzer_444's fetch_pred_read_addr_w sequence: the
   // tile top-left constant and left-edge predictors from the previous 4x4 TXB.
   assign chroma_predictor_compute_valid_w =
+    leaf_chroma_bdpcm_horz_q &&
     cached_chroma_samples_valid_q[txb_index_q[1:0]] &&
     (((txb_row_w[4:0] == 5'd0) && (txb_col_w[4:0] == 5'd0)) ||
      txb_col_w[0] ||
@@ -1587,6 +1848,7 @@ module ff_av2_encoder #(
      chroma_external_above_predictor_valid_w ||
      ((txb_col_w[4:0] == 5'd0) && txb_row_w[0]));
   assign chroma_fetch_req_predictor_compute_w =
+    leaf_chroma_bdpcm_horz_q &&
     cached_chroma_samples_valid_q[chroma_fetch_req_index_w] &&
     (((chroma_fetch_req_row_mi_w == 5'd0) && (chroma_fetch_req_col_mi_w == 5'd0)) ||
      chroma_fetch_req_col_mi_w[0] ||
@@ -1792,25 +2054,42 @@ module ff_av2_encoder #(
       chroma_fetch_predictor_samples_w;
   // AV2 v1.0.0 Section 5.20.7.27 coeffs(): for FrameForge's staged chroma
   // BDPCM residual path, a zero TXB is completely determined by the row
-  // predictor and horizontal reconstructed samples. Detect it before the
-  // residual symbolizer so zero chroma TXBs emit only the skip symbol.
+  // or column predictor and already reconstructed samples. Detect it before
+  // the residual symbolizer so zero chroma TXBs emit only the skip symbol.
   assign palette_chroma_bdpcm_known_zero_w =
-    (chroma_bdpcm_txb_samples_w[0 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[0 * 8 +: 8]) &&
-    (chroma_bdpcm_txb_samples_w[1 * 8 +: 8] == chroma_bdpcm_txb_samples_w[0 * 8 +: 8]) &&
-    (chroma_bdpcm_txb_samples_w[2 * 8 +: 8] == chroma_bdpcm_txb_samples_w[1 * 8 +: 8]) &&
-    (chroma_bdpcm_txb_samples_w[3 * 8 +: 8] == chroma_bdpcm_txb_samples_w[2 * 8 +: 8]) &&
-    (chroma_bdpcm_txb_samples_w[4 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[1 * 8 +: 8]) &&
-    (chroma_bdpcm_txb_samples_w[5 * 8 +: 8] == chroma_bdpcm_txb_samples_w[4 * 8 +: 8]) &&
-    (chroma_bdpcm_txb_samples_w[6 * 8 +: 8] == chroma_bdpcm_txb_samples_w[5 * 8 +: 8]) &&
-    (chroma_bdpcm_txb_samples_w[7 * 8 +: 8] == chroma_bdpcm_txb_samples_w[6 * 8 +: 8]) &&
-    (chroma_bdpcm_txb_samples_w[8 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[2 * 8 +: 8]) &&
-    (chroma_bdpcm_txb_samples_w[9 * 8 +: 8] == chroma_bdpcm_txb_samples_w[8 * 8 +: 8]) &&
-    (chroma_bdpcm_txb_samples_w[10 * 8 +: 8] == chroma_bdpcm_txb_samples_w[9 * 8 +: 8]) &&
-    (chroma_bdpcm_txb_samples_w[11 * 8 +: 8] == chroma_bdpcm_txb_samples_w[10 * 8 +: 8]) &&
-    (chroma_bdpcm_txb_samples_w[12 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[3 * 8 +: 8]) &&
-    (chroma_bdpcm_txb_samples_w[13 * 8 +: 8] == chroma_bdpcm_txb_samples_w[12 * 8 +: 8]) &&
-    (chroma_bdpcm_txb_samples_w[14 * 8 +: 8] == chroma_bdpcm_txb_samples_w[13 * 8 +: 8]) &&
-    (chroma_bdpcm_txb_samples_w[15 * 8 +: 8] == chroma_bdpcm_txb_samples_w[14 * 8 +: 8]);
+    leaf_chroma_bdpcm_horz_q ?
+      ((chroma_bdpcm_txb_samples_w[0 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[0 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[1 * 8 +: 8] == chroma_bdpcm_txb_samples_w[0 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[2 * 8 +: 8] == chroma_bdpcm_txb_samples_w[1 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[3 * 8 +: 8] == chroma_bdpcm_txb_samples_w[2 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[4 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[1 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[5 * 8 +: 8] == chroma_bdpcm_txb_samples_w[4 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[6 * 8 +: 8] == chroma_bdpcm_txb_samples_w[5 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[7 * 8 +: 8] == chroma_bdpcm_txb_samples_w[6 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[8 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[2 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[9 * 8 +: 8] == chroma_bdpcm_txb_samples_w[8 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[10 * 8 +: 8] == chroma_bdpcm_txb_samples_w[9 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[11 * 8 +: 8] == chroma_bdpcm_txb_samples_w[10 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[12 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[3 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[13 * 8 +: 8] == chroma_bdpcm_txb_samples_w[12 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[14 * 8 +: 8] == chroma_bdpcm_txb_samples_w[13 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[15 * 8 +: 8] == chroma_bdpcm_txb_samples_w[14 * 8 +: 8])) :
+      ((chroma_bdpcm_txb_samples_w[0 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[0 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[1 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[1 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[2 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[2 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[3 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[3 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[4 * 8 +: 8] == chroma_bdpcm_txb_samples_w[0 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[5 * 8 +: 8] == chroma_bdpcm_txb_samples_w[1 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[6 * 8 +: 8] == chroma_bdpcm_txb_samples_w[2 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[7 * 8 +: 8] == chroma_bdpcm_txb_samples_w[3 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[8 * 8 +: 8] == chroma_bdpcm_txb_samples_w[4 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[9 * 8 +: 8] == chroma_bdpcm_txb_samples_w[5 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[10 * 8 +: 8] == chroma_bdpcm_txb_samples_w[6 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[11 * 8 +: 8] == chroma_bdpcm_txb_samples_w[7 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[12 * 8 +: 8] == chroma_bdpcm_txb_samples_w[8 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[13 * 8 +: 8] == chroma_bdpcm_txb_samples_w[9 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[14 * 8 +: 8] == chroma_bdpcm_txb_samples_w[10 * 8 +: 8]) &&
+       (chroma_bdpcm_txb_samples_w[15 * 8 +: 8] == chroma_bdpcm_txb_samples_w[11 * 8 +: 8]));
   assign luma_residual_top_level_w =
     ((y_txb_above_q[txb_col_w[4:0]] & 8'd7) > 8'd4) ?
       3'd4 : y_txb_above_q[txb_col_w[4:0]][2:0];
@@ -1890,11 +2169,6 @@ module ff_av2_encoder #(
               (finish_e_q >> (finish_c_q[5:0] + 6'd16)) & 16'hffff;
           end
         end
-        ST_CARRY_WRITE: begin
-          precarry_write_valid_w = 1'b1;
-          precarry_write_addr_w = carry_index_q;
-          precarry_write_data_w = {8'd0, carry_sum_w[7:0]};
-        end
         default: begin
           precarry_write_valid_w = 1'b0;
         end
@@ -1905,24 +2179,65 @@ module ff_av2_encoder #(
   always @* begin
     payload_write_valid_w = 1'b0;
     payload_write_addr_w = 16'd0;
-    payload_write_data_w = 8'd0;
+    payload_write_strobe_w = 16'd0;
+    payload_write_data_w = 128'd0;
 
     if (!start) begin
       case (state_q)
         ST_CARRY_WRITE: begin
           payload_write_valid_w = 1'b1;
-          payload_write_addr_w = payload_tile_start_w + carry_index_q;
-          payload_write_data_w = carry_sum_w[7:0];
+          if (carry_oct_w) begin
+            payload_write_addr_w = carry_oct_addr_w;
+            payload_write_strobe_w = 16'h00ff << carry_oct_addr_w[3:0];
+            payload_write_data_w =
+              ({64'd0,
+                carry_sum_w[7:0],
+                carry_pair_sum_w[7:0],
+                carry_quad_sum2_w[7:0],
+                carry_quad_sum3_w[7:0],
+                carry_oct_sum4_w[7:0],
+                carry_oct_sum5_w[7:0],
+                carry_oct_sum6_w[7:0],
+                carry_oct_sum7_w[7:0]} <<
+               ({3'd0, carry_oct_addr_w[3:0]} << 3));
+          end else if (carry_quad_w) begin
+            payload_write_addr_w = carry_quad_addr_w;
+            payload_write_strobe_w = 16'h000f << carry_quad_addr_w[3:0];
+            payload_write_data_w =
+              ({96'd0,
+                carry_sum_w[7:0],
+                carry_pair_sum_w[7:0],
+                carry_quad_sum2_w[7:0],
+                carry_quad_sum3_w[7:0]} <<
+               ({3'd0, carry_quad_addr_w[3:0]} << 3));
+          end else if (carry_pair_w) begin
+            payload_write_addr_w = carry_pair_addr_w;
+            payload_write_strobe_w = 16'h0003 << carry_pair_addr_w[3:0];
+            payload_write_data_w =
+              ({112'd0, carry_sum_w[7:0], carry_pair_sum_w[7:0]} <<
+               ({3'd0, carry_pair_addr_w[3:0]} << 3));
+          end else begin
+            payload_write_addr_w = carry_single_addr_w;
+            payload_write_strobe_w = 16'h0001 << carry_single_addr_w[3:0];
+            payload_write_data_w =
+              ({120'd0, carry_sum_w[7:0]} << ({3'd0, carry_single_addr_w[3:0]} << 3));
+          end
         end
         ST_PAYLOAD_PREFIX: begin
           if (!tile_is_last_w && payload_prefix_index_q != 2'd3) begin
             payload_write_valid_w = 1'b1;
             payload_write_addr_w = payload_len_q + {14'd0, payload_prefix_index_q};
-            payload_write_data_w = payload_prefix_byte_w;
+            payload_write_strobe_w = 16'h0001 << payload_write_addr_w[3:0];
+            payload_write_data_w =
+              ({120'd0, payload_prefix_byte_w} <<
+               ({3'd0, payload_write_addr_w[3:0]} << 3));
           end else if (!tile_is_last_w) begin
             payload_write_valid_w = 1'b1;
             payload_write_addr_w = payload_len_q + 16'd3;
-            payload_write_data_w = payload_prefix_byte_w;
+            payload_write_strobe_w = 16'h0001 << payload_write_addr_w[3:0];
+            payload_write_data_w =
+              ({120'd0, payload_prefix_byte_w} <<
+               ({3'd0, payload_write_addr_w[3:0]} << 3));
           end
         end
         default: begin
@@ -1933,22 +2248,35 @@ module ff_av2_encoder #(
   end
 
   always_ff @(posedge clk) begin
-    precarry_read_data_q <= precarry_mem_q[precarry_read_addr_q];
-    if (precarry_write_valid_w) begin
-      precarry_mem_q[precarry_write_addr_w] <= precarry_write_data_w;
+    if (!rst_n) begin
+      payload_read_data_word_addr_q <= 12'd0;
+    end else begin
+      payload_read_data_word_addr_q <= payload_read_word_addr_q;
     end
   end
 
-  ff_sync_block_ram_1r1w #(
-    .DATA_BITS(8),
+  ff_sync_halfword_write_quad_read_ram_1r1w #(
     .ADDR_BITS(16),
-    .DEPTH(AV2_MAX_TILE_BYTES)
+    .DEPTH_HALFWORDS(AV2_MAX_TILE_BYTES)
+  ) precarry_ram (
+    .clk(clk),
+    .write_valid(precarry_write_valid_w),
+    .write_addr(precarry_write_addr_w),
+    .write_data(precarry_write_data_w),
+    .read_word_addr(precarry_read_word_addr_q),
+    .read_data(precarry_read_word_data_w)
+  );
+
+  ff_sync_byte_write_word_ram_1r1w #(
+    .ADDR_BITS(16),
+    .DEPTH_BYTES(AV2_MAX_TILE_BYTES)
   ) payload_ram (
     .clk(clk),
     .write_valid(payload_write_valid_w),
     .write_addr(payload_write_addr_w),
+    .write_strobe(payload_write_strobe_w),
     .write_data(payload_write_data_w),
-    .read_addr(payload_read_addr_q),
+    .read_word_addr(payload_read_word_addr_q),
     .read_data(payload_read_data_w)
   );
 
@@ -2185,15 +2513,16 @@ module ff_av2_encoder #(
       input_error <= frame_reader_error_w || bitstream_writer_error_w;
       state_q <= ST_IDLE;
       m_axis_valid <= 1'b0;
-      m_axis_data <= 8'd0;
+      m_axis_data <= '0;
+      m_axis_count <= '0;
       m_axis_last <= 1'b0;
       low_q <= 64'd0;
       rng_q <= 32'h8000;
       cnt_q <= -8'sd9;
-      precarry_read_addr_q <= 16'd0;
+      precarry_read_word_addr_q <= 13'd0;
       pending_push_valid_q <= 1'b0;
       pending_push_word_q <= 16'd0;
-      payload_read_addr_q <= 16'd0;
+      payload_read_word_addr_q <= 12'd0;
       precarry_len_q <= 16'd0;
       tile_len_q <= 16'd0;
       payload_len_q <= 16'd0;
@@ -2227,6 +2556,7 @@ module ff_av2_encoder #(
       palette_mode_q <= 1'b0;
       lossy_420_mode_q <= 1'b0;
       leaf_luma_mode_q <= LUMA_MODE_DC;
+      leaf_chroma_bdpcm_horz_q <= 1'b1;
       lossy420_luma_recon_q[0] <= 8'd128;
       lossy420_luma_recon_q[1] <= 8'd128;
       lossy420_luma_recon_q[2] <= 8'd128;
@@ -2275,7 +2605,6 @@ module ff_av2_encoder #(
       finish_s_q <= 8'sd0;
       carry_q <= 16'd0;
       carry_index_q <= 16'd0;
-      output_byte_q <= 8'd0;
       output_last_q <= 1'b0;
       for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
         partition_above_q[context_index_q] <= 8'd0;
@@ -2321,6 +2650,7 @@ module ff_av2_encoder #(
         if (!start_invalid_w && state_q == ST_IDLE) begin
           state_q <= ST_TILE_START;
           m_axis_valid <= 1'b0;
+          m_axis_count <= '0;
           m_axis_last <= 1'b0;
           width_q <= visible_width;
           height_q <= visible_height;
@@ -2352,7 +2682,7 @@ module ff_av2_encoder #(
           low_q <= 64'd0;
           rng_q <= 32'h8000;
           cnt_q <= -8'sd9;
-          precarry_read_addr_q <= 16'd0;
+          precarry_read_word_addr_q <= 13'd0;
           pending_push_valid_q <= 1'b0;
           pending_push_word_q <= 16'd0;
           precarry_len_q <= 16'd0;
@@ -2377,6 +2707,7 @@ module ff_av2_encoder #(
           palette_mode_q <= 1'b0;
           lossy_420_mode_q <= 1'b0;
           leaf_luma_mode_q <= LUMA_MODE_DC;
+          leaf_chroma_bdpcm_horz_q <= 1'b1;
           lossy420_luma_recon_q[0] <= 8'd128;
           lossy420_luma_recon_q[1] <= 8'd128;
           lossy420_luma_recon_q[2] <= 8'd128;
@@ -2420,7 +2751,6 @@ module ff_av2_encoder #(
           partition_q <= PARTITION_NONE;
           partition_emit_step_q <= 1'b0;
           stack_sp_q <= 5'd0;
-          output_byte_q <= 8'd0;
           output_last_q <= 1'b0;
           state_q <= ST_TILE_START;
         end
@@ -2434,6 +2764,7 @@ module ff_av2_encoder #(
         case (state_q)
           ST_IDLE: begin
             m_axis_valid <= 1'b0;
+            m_axis_count <= '0;
             m_axis_last <= 1'b0;
           end
           ST_TILE_START: begin
@@ -2467,7 +2798,7 @@ module ff_av2_encoder #(
                 low_q <= 64'd0;
                 rng_q <= 32'h8000;
                 cnt_q <= -8'sd9;
-                precarry_read_addr_q <= 16'd0;
+                precarry_read_word_addr_q <= 13'd0;
                 pending_push_valid_q <= 1'b0;
                 pending_push_word_q <= 16'd0;
                 precarry_len_q <= 16'd0;
@@ -2478,6 +2809,7 @@ module ff_av2_encoder #(
                 palette_col_q <= 6'd0;
                 palette_identity_row_ctx_q <= 2'd3;
                 leaf_luma_mode_q <= LUMA_MODE_DC;
+                leaf_chroma_bdpcm_horz_q <= 1'b1;
                 lossy420_luma_recon_q[0] <= 8'd128;
                 lossy420_luma_recon_q[1] <= 8'd128;
                 lossy420_luma_recon_q[2] <= 8'd128;
@@ -2666,6 +2998,7 @@ module ff_av2_encoder #(
               palette_col_q <= 6'd0;
               palette_identity_row_ctx_q <= 2'd3;
               leaf_luma_mode_q <= LUMA_MODE_DC;
+              leaf_chroma_bdpcm_horz_q <= 1'b1;
               txb_index_q <= 16'd0;
               txb_local_row_q <= 5'd0;
               txb_local_col_q <= 5'd0;
@@ -2705,6 +3038,7 @@ module ff_av2_encoder #(
           ST_PALETTE_QUERY: begin
             if (palette_query_done_w) begin
               leaf_luma_mode_q <= palette_luma_mode_w;
+              leaf_chroma_bdpcm_horz_q <= palette_chroma_bdpcm_horz_w;
               state_q <= ST_LEAF;
             end else if (!palette_mode_q) begin
               state_q <= ST_LEAF;
@@ -2740,6 +3074,7 @@ module ff_av2_encoder #(
                   phase_q <= PHASE_INTRA;
                   step_q <= 5'd0;
                   leaf_luma_mode_q <= LUMA_MODE_DC;
+                  leaf_chroma_bdpcm_horz_q <= 1'b1;
                   state_q <= palette_mode_q ? ST_PALETTE_QUERY : ST_LEAF;
                 end else if ((step_q == 5'd3 && ibc_drl_idx_w == 2'd0) ||
                              (step_q == 5'd4 && ibc_drl_idx_w == 2'd1) ||
@@ -3099,30 +3434,48 @@ module ff_av2_encoder #(
             end else begin
               carry_q <= 16'd0;
               carry_index_q <= precarry_len_q - 16'd1;
-              precarry_read_addr_q <= precarry_len_q - 16'd1;
+              precarry_read_word_addr_q <= (precarry_len_q - 16'd1) >> 3;
               tile_len_q <= precarry_len_q;
               state_q <= ST_CARRY_READ;
             end
           end
           ST_CARRY_READ: begin
-            if (carry_index_q != 16'd0) begin
-              precarry_read_addr_q <= carry_index_q - 16'd1;
-            end
+            precarry_read_word_addr_q <= carry_read_after_current_word_addr_w;
             state_q <= ST_CARRY_WRITE;
           end
           ST_CARRY_WRITE: begin
-            carry_q <= carry_sum_w >> 8;
-            if (carry_index_q == 0) begin
-              payload_prefix_index_q <= 2'd0;
-              precarry_read_addr_q <= 16'd0;
-              state_q <= ST_PAYLOAD_PREFIX;
-            end else begin
-              carry_index_q <= carry_index_q - 1;
-              if (carry_index_q > 16'd1) begin
-                precarry_read_addr_q <= carry_index_q - 16'd2;
+            if (carry_done_after_step_w) begin
+              if (carry_oct_w) begin
+                carry_q <= carry_oct_sum7_w >> 8;
+              end else if (carry_quad_w) begin
+                carry_q <= carry_quad_sum3_w >> 8;
+              end else if (carry_pair_w) begin
+                carry_q <= carry_pair_sum_w >> 8;
               end else begin
-                precarry_read_addr_q <= 16'd0;
+                carry_q <= carry_sum_w >> 8;
               end
+              payload_prefix_index_q <= 2'd0;
+              precarry_read_word_addr_q <= 13'd0;
+              state_q <= ST_PAYLOAD_PREFIX;
+            end else if (carry_oct_w) begin
+              carry_q <= carry_oct_sum7_w >> 8;
+              carry_index_q <= carry_index_after_step_w;
+              precarry_read_word_addr_q <= carry_read_after_next_word_addr_w;
+              state_q <= ST_CARRY_WRITE;
+            end else if (carry_quad_w) begin
+              carry_q <= carry_quad_sum3_w >> 8;
+              carry_index_q <= carry_index_after_step_w;
+              precarry_read_word_addr_q <= carry_read_after_next_word_addr_w;
+              state_q <= ST_CARRY_WRITE;
+            end else if (carry_pair_w) begin
+              carry_q <= carry_pair_sum_w >> 8;
+              carry_index_q <= carry_index_after_step_w;
+              precarry_read_word_addr_q <= carry_read_after_next_word_addr_w;
+              state_q <= ST_CARRY_WRITE;
+            end else begin
+              carry_q <= carry_sum_w >> 8;
+              carry_index_q <= carry_index_after_step_w;
+              precarry_read_word_addr_q <= carry_read_after_next_word_addr_w;
               state_q <= ST_CARRY_WRITE;
             end
           end
@@ -3157,42 +3510,85 @@ module ff_av2_encoder #(
             end
           end
           ST_OUTPUT_PREP: begin
-            // The final OBU bytes are already staged in register arrays. Drive
-            // the first byte immediately, then keep m_axis_valid asserted in
-            // ST_OUTPUT_VALID while advancing the lookup index on each
-            // accepted byte.
-            payload_read_addr_q <= 16'd0;
-            output_byte_q <= output_lookup_byte_w;
+            // Header bytes are short and stay byte-serial. The staged tile
+            // payload is read through a 16-bank RAM and handed to AXI in
+            // aligned packets once stream_index_q reaches tile_payload_start_w.
+            payload_read_word_addr_q <= 12'd0;
             output_last_q <= output_lookup_last_w;
             m_axis_valid <= 1'b1;
-            m_axis_data <= output_lookup_byte_w;
+            m_axis_data <= {{(AXI_DATA_BITS - 8){1'b0}}, output_lookup_byte_w};
+            m_axis_count <= OUTPUT_PACKET_COUNT_BITS'(1);
             m_axis_last <= output_lookup_last_w;
             state_q <= ST_OUTPUT_VALID;
           end
           ST_OUTPUT_VALID: begin
-            if (!m_axis_valid) begin
-              m_axis_valid <= 1'b1;
-              m_axis_data <= output_byte_q;
-              m_axis_last <= output_last_q;
-            end else if (m_axis_ready) begin
+            if (m_axis_valid && m_axis_ready) begin
               if (output_last_q) begin
                 m_axis_valid <= 1'b0;
+                m_axis_count <= '0;
                 m_axis_last <= 1'b0;
                 state_q <= ST_IDLE;
                 stream_index_q <= 16'd0;
               end else begin
-                stream_index_q <= stream_index_q + 16'd1;
-                if (payload_read_ahead_valid_w) begin
-                  payload_read_addr_q <= payload_read_ahead_addr_w;
+                stream_index_q <= output_next_stream_index_w;
+                if (output_next_stream_index_w >= tile_payload_start_w) begin
+                  if (output_next_payload_word_addr_w == payload_read_data_word_addr_q) begin
+                    output_last_q <=
+                      ((output_next_stream_index_w +
+                        {11'd0, output_next_payload_count_w}) >= total_stream_len_w);
+                    m_axis_valid <= 1'b1;
+                    m_axis_data <= output_next_payload_packet_data_w;
+                    m_axis_count <= output_next_payload_count_w;
+                    m_axis_last <=
+                      ((output_next_stream_index_w +
+                        {11'd0, output_next_payload_count_w}) >= total_stream_len_w);
+                    if (output_after_next_payload_w &&
+                        (output_after_next_payload_word_addr_w != payload_read_data_word_addr_q)) begin
+                      payload_read_word_addr_q <= output_after_next_payload_word_addr_w;
+                    end
+                    state_q <= ST_OUTPUT_VALID;
+                  end else if (output_next_payload_word_addr_w == payload_read_word_addr_q) begin
+                    m_axis_valid <= 1'b0;
+                    m_axis_count <= '0;
+                    m_axis_last <= 1'b0;
+                    state_q <= ST_OUTPUT_PAYLOAD_LOAD;
+                  end else begin
+                    payload_read_word_addr_q <= output_next_payload_word_addr_w;
+                    m_axis_valid <= 1'b0;
+                    m_axis_count <= '0;
+                    m_axis_last <= 1'b0;
+                    state_q <= ST_OUTPUT_PAYLOAD_WAIT;
+                  end
+                end else begin
+                  output_last_q <= output_lookup_last_w;
+                  m_axis_valid <= 1'b1;
+                  m_axis_data <= {{(AXI_DATA_BITS - 8){1'b0}}, output_lookup_byte_w};
+                  m_axis_count <= OUTPUT_PACKET_COUNT_BITS'(1);
+                  m_axis_last <= output_lookup_last_w;
+                  state_q <= ST_OUTPUT_VALID;
                 end
-                output_byte_q <= output_lookup_byte_w;
-                output_last_q <= output_lookup_last_w;
-                m_axis_valid <= 1'b1;
-                m_axis_data <= output_lookup_byte_w;
-                m_axis_last <= output_lookup_last_w;
-                state_q <= ST_OUTPUT_VALID;
               end
             end
+          end
+          ST_OUTPUT_PAYLOAD_WAIT: begin
+            m_axis_valid <= 1'b0;
+            m_axis_count <= '0;
+            m_axis_last <= 1'b0;
+            state_q <= ST_OUTPUT_PAYLOAD_LOAD;
+          end
+          ST_OUTPUT_PAYLOAD_LOAD: begin
+            output_last_q <=
+              ((stream_index_q + {11'd0, output_payload_count_w}) >= total_stream_len_w);
+            m_axis_valid <= 1'b1;
+            m_axis_data <= output_payload_packet_data_w;
+            m_axis_count <= output_payload_count_w;
+            m_axis_last <=
+              ((stream_index_q + {11'd0, output_payload_count_w}) >= total_stream_len_w);
+            if (output_after_current_payload_w &&
+                (output_after_current_payload_word_addr_w != payload_read_data_word_addr_q)) begin
+              payload_read_word_addr_q <= output_after_current_payload_word_addr_w;
+            end
+            state_q <= ST_OUTPUT_VALID;
           end
           default: state_q <= ST_IDLE;
       endcase

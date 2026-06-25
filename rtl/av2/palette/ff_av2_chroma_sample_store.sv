@@ -11,7 +11,10 @@ module ff_av2_chroma_sample_store (
   input  logic [11:0] read_addr,
   output logic [7:0]  read_y_data,
   output logic [7:0]  read_u_data,
-  output logic [7:0]  read_v_data
+  output logic [7:0]  read_v_data,
+  output logic [63:0] read_y_row_data,
+  output logic [63:0] read_u_row_data,
+  output logic [63:0] read_v_row_data
 );
 
   logic [63:0] y_mem_q [0:511];
@@ -44,5 +47,8 @@ module ff_av2_chroma_sample_store (
   assign read_y_data = y_read_word_q[{read_col_q, 3'b000} +: 8];
   assign read_u_data = u_read_word_q[{read_col_q, 3'b000} +: 8];
   assign read_v_data = v_read_word_q[{read_col_q, 3'b000} +: 8];
+  assign read_y_row_data = y_read_word_q;
+  assign read_u_row_data = u_read_word_q;
+  assign read_v_row_data = v_read_word_q;
 
 endmodule

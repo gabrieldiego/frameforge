@@ -29,15 +29,21 @@ module ff_axis_sample_fifo #(
   logic [COUNT_BITS-1:0] count_q;
   logic push_w;
   logic pop_w;
+  logic stored_pop_w;
+  logic stored_push_w;
+  logic bypass_w;
   logic [PTR_BITS-1:0] wr_ptr_next_w;
   logic [PTR_BITS-1:0] rd_ptr_next_w;
 
-  assign m_axis_valid = count_q != '0;
-  assign m_axis_data = data_q[rd_ptr_q];
-  assign m_axis_last = last_q[rd_ptr_q];
+  assign bypass_w = count_q == '0;
+  assign m_axis_valid = (count_q != '0) || s_axis_valid;
+  assign m_axis_data = bypass_w ? s_axis_data : data_q[rd_ptr_q];
+  assign m_axis_last = bypass_w ? s_axis_last : last_q[rd_ptr_q];
   assign s_axis_ready = (count_q < COUNT_BITS'(DEPTH)) || pop_w;
   assign push_w = s_axis_valid && s_axis_ready;
   assign pop_w = m_axis_valid && m_axis_ready;
+  assign stored_pop_w = pop_w && (count_q != '0);
+  assign stored_push_w = push_w && !(bypass_w && pop_w);
   assign wr_ptr_next_w = (wr_ptr_q == PTR_BITS'(DEPTH - 1)) ? '0 : (wr_ptr_q + 1'b1);
   assign rd_ptr_next_w = (rd_ptr_q == PTR_BITS'(DEPTH - 1)) ? '0 : (rd_ptr_q + 1'b1);
   assign level = count_q;
@@ -52,16 +58,16 @@ module ff_axis_sample_fifo #(
       rd_ptr_q <= '0;
       count_q <= '0;
     end else begin
-      if (push_w) begin
+      if (stored_push_w) begin
         data_q[wr_ptr_q] <= s_axis_data;
         last_q[wr_ptr_q] <= s_axis_last;
         wr_ptr_q <= wr_ptr_next_w;
       end
-      if (pop_w) begin
+      if (stored_pop_w) begin
         rd_ptr_q <= rd_ptr_next_w;
       end
 
-      case ({push_w, pop_w})
+      case ({stored_push_w, stored_pop_w})
         2'b10: count_q <= count_q + 1'b1;
         2'b01: count_q <= count_q - 1'b1;
         default: begin

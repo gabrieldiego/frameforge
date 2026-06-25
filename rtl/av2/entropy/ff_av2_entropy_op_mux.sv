@@ -18,6 +18,7 @@ module ff_av2_entropy_op_mux (
   input  logic        leaf_fsc_symbol,
   input  logic [31:0] leaf_fsc_fh,
   input  logic        palette_mode,
+  input  logic        chroma_bdpcm_horz,
   input  logic        residual_mode,
   input  logic        leaf_luma_palette,
   input  logic        palette_op_valid,
@@ -206,8 +207,8 @@ module ff_av2_entropy_op_mux (
           end
           7'd4: begin
             // AV2 v1.0.0 Section 5.20.5.6 read_intra_uv_mode():
-            // palette-coded luma leaves keep chroma lossless through
-            // horizontal BDPCM because AV2 palette syntax is luma-only.
+            // palette-coded luma leaves keep chroma lossless through BDPCM
+            // because AV2 palette syntax is luma-only.
             if (palette_mode) begin
               op_fl = 32'd16384;
               op_fh = 32'd0;
@@ -220,10 +221,18 @@ module ff_av2_entropy_op_mux (
           end
           7'd5: begin
             if (palette_mode) begin
-              op_fl = 32'd16384;
-              op_fh = 32'd0;
-              op_fl_inc = 8;
-              op_fh_inc = 0;
+              // AV2 v1.0.0 Section 5.20.5.6 read_intra_uv_mode():
+              // dpcm_uv_horz selects horizontal DPCM with symbol 1 and
+              // vertical DPCM with symbol 0.
+              if (chroma_bdpcm_horz) begin
+                op_fl = 32'd16384;
+                op_fh = 32'd0;
+                op_fl_inc = 8;
+                op_fh_inc = 0;
+              end else begin
+                op_fh = 32'd16384;
+                op_fh_inc = 8;
+              end
             end else begin
               op_fh = 32'd23405;
               op_fh_inc = 14;

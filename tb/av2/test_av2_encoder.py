@@ -47,6 +47,7 @@ AV2_BLOCK_WAVEFORM_BLOCKS = [
     "entropy_coder",
     "axi_writer",
 ]
+AV2_STATE_NAMES_INV = {name: state for state, name in AV2_STATE_NAMES.items()}
 
 
 def rtl_geometry():
@@ -455,6 +456,10 @@ async def av2_encoder_emits_obu_stream(dut):
     await start_encoder(dut)
 
     observed = []
+    packet_trace_path = os.environ.get("FRAMEFORGE_RTL_AV2_PACKET_TRACE_OUT")
+    packet_trace_records = []
+    carry_trace_path = os.environ.get("FRAMEFORGE_RTL_AV2_CARRY_TRACE_OUT")
+    carry_trace_records = []
     trace_enabled = bool(os.environ.get("FRAMEFORGE_RTL_AV2_TRACE_OUT"))
     trace_records = []
     completed = False
@@ -498,11 +503,15 @@ async def av2_encoder_emits_obu_stream(dut):
     s_axis_ready_h = dut.s_axis_ready
     m_axis_valid_h = dut.m_axis_valid
     m_axis_ready_h = dut.m_axis_ready
+    m_axis_count_h = dut.m_axis_count
     m_axi_rvalid_h = dut.m_axi_rvalid
     m_axi_rready_h = dut.m_axi_rready
     m_axi_wvalid_h = dut.m_axi_wvalid
     m_axi_wready_h = dut.m_axi_wready
     input_fifo_level_h = dut.input_fifo_level_w
+    frame_reader_cache_hit_h = optional_handle("frame_reader.cache_hit_w")
+    frame_reader_current_read_h = optional_handle("frame_reader.current_read_request_w")
+    frame_reader_advance_read_h = optional_handle("frame_reader.advance_read_request_w")
     txb_prefetch_started_h = dut.txb_prefetch_started_q
     txb_prefetch_done_h = dut.txb_prefetch_done_q
     chroma_fetch_current_cache_hit_h = dut.chroma_fetch_current_cache_hit_w
@@ -628,6 +637,12 @@ async def av2_encoder_emits_obu_stream(dut):
         )
         if reader_axis_valid == 1 and reader_axis_ready == 1:
             increment_counter(pipeline_counts, "reader_sample_accept")
+        if optional_hot_int(frame_reader_cache_hit_h) == 1:
+            increment_counter(pipeline_counts, "frame_reader_cache_hit_visible")
+        if optional_hot_int(frame_reader_current_read_h) == 1:
+            increment_counter(pipeline_counts, "frame_reader_current_read_request")
+        if optional_hot_int(frame_reader_advance_read_h) == 1:
+            increment_counter(pipeline_counts, "frame_reader_advance_read_request")
         if reader_axis_valid == 1 and reader_axis_ready == 0:
             increment_counter(pipeline_counts, "reader_backpressure")
         if s_axis_valid == 1 and s_axis_ready == 1:
@@ -980,7 +995,40 @@ async def av2_encoder_emits_obu_stream(dut):
             close_block_waveform()
             raise AssertionError(f"AV2 RTL rejected the input: {details}")
         if m_axis_valid == 1 and m_axis_ready == 1:
-            output_active_cycles += 1
+            output_active_cycles += hot_int(m_axis_count_h)
+            if packet_trace_path:
+                packet_trace_records.append(
+                    {
+                        "cycle": total_cycles,
+                        "state": AV2_STATE_NAMES.get(state, f"unknown_{state}"),
+                        "stream_index": signal_int(dut, "stream_index_q"),
+                        "tile_payload_start": signal_int(dut, "tile_payload_start_w"),
+                        "payload_addr": signal_int(dut, "output_payload_addr_w"),
+                        "payload_read_word_addr": signal_int(
+                            dut, "payload_read_word_addr_q"
+                        ),
+                        "payload_read_data": signal_int(dut, "payload_read_data_w"),
+                        "m_axis_count": hot_int(m_axis_count_h),
+                        "m_axis_data": signal_int(dut, "m_axis_data"),
+                    }
+                )
+        if carry_trace_path and state == AV2_STATE_NAMES_INV.get("carry_write", -1):
+            carry_trace_records.append(
+                {
+                    "cycle": total_cycles,
+                    "tile_index": signal_int(dut, "tile_index_q"),
+                    "payload_len": signal_int(dut, "payload_len_q"),
+                    "payload_tile_start": signal_int(dut, "payload_tile_start_w"),
+                    "carry_index": signal_int(dut, "carry_index_q"),
+                    "carry": signal_int(dut, "carry_q"),
+                    "precarry_read_addr": signal_int(dut, "precarry_read_addr_q"),
+                    "precarry_read_data": signal_int(dut, "precarry_read_data_q"),
+                    "carry_sum": signal_int(dut, "carry_sum_w"),
+                    "payload_write_valid": signal_int(dut, "payload_write_valid_w"),
+                    "payload_write_addr": signal_int(dut, "payload_write_addr_w"),
+                    "payload_write_data": signal_int(dut, "payload_write_data_w"),
+                }
+            )
         if hot_int(done_h) == 1:
             completed = True
             break
@@ -1071,6 +1119,18 @@ async def av2_encoder_emits_obu_stream(dut):
         path = Path(trace_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("".join(json.dumps(record, sort_keys=True) + "\n" for record in trace_records))
+    if packet_trace_path:
+        path = Path(packet_trace_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "".join(json.dumps(record, sort_keys=True) + "\n" for record in packet_trace_records)
+        )
+    if carry_trace_path:
+        path = Path(carry_trace_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "".join(json.dumps(record, sort_keys=True) + "\n" for record in carry_trace_records)
+        )
 
 
 @cocotb.test()

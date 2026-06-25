@@ -26,6 +26,7 @@ module ff_av2_palette_analyzer_444 #(
   input  logic       query_start,
   input  logic       chroma_fetch_start,
   input  logic       chroma_fetch_plane_v,
+  input  logic       chroma_fetch_horz,
   input  logic       chroma_fetch_predictor_only,
   input  logic [4:0] chroma_fetch_txb_row_mi,
   input  logic [4:0] chroma_fetch_txb_col_mi,
@@ -46,6 +47,7 @@ module ff_av2_palette_analyzer_444 #(
   output logic [2:0] query_top_index,
   output logic [2:0] query_top_left_index,
   output logic       query_luma_residual_zero,
+  output logic       query_chroma_bdpcm_horz,
   output logic [7:0] palette_first_color,
   output logic [1:0] palette_delta_bits_minus5,
   output logic [55:0] palette_delta_minus1,
@@ -119,6 +121,13 @@ module ff_av2_palette_analyzer_444 #(
   logic [7:0] current_row_same_above_q;
   logic [7:0] row_same_left_q [0:63];
   logic [7:0] row_same_above_q [0:63];
+  logic block_chroma_bdpcm_horz_q [0:63];
+  logic query_chroma_bdpcm_horz_q;
+  logic [15:0] chroma_h_sad_q;
+  logic [15:0] chroma_v_sad_q;
+  logic [63:0] chroma_prev_row_q;
+  logic [15:0] packet_chroma_h_sad_w;
+  logic [15:0] packet_chroma_v_sad_w;
   logic [2:0] query_palette_index_q [0:63];
   logic [1:0] query_luma_mode_q;
   logic [63:0] query_luma_predictor_edge_q;
@@ -151,6 +160,22 @@ module ff_av2_palette_analyzer_444 #(
   logic [7:0] horizontal_predictor_sample_w;
   logic [7:0] vertical_abs_delta_w;
   logic [7:0] horizontal_abs_delta_w;
+  logic [7:0] map_row_bit_offset_w;
+  logic [7:0] map_sample_lane_w [0:7];
+  logic [7:0] map_nearest_color_w [0:7];
+  logic [7:0] map_palette_abs_delta_w [0:7];
+  logic [7:0] map_vertical_predictor_sample_w [0:7];
+  logic [7:0] map_horizontal_predictor_sample_w [0:7];
+  logic [2:0] map_nearest_index_w [0:7];
+  logic [7:0] map_nearest_delta_w [0:7];
+  logic [7:0] map_vertical_abs_delta_w [0:7];
+  logic [7:0] map_horizontal_abs_delta_w [0:7];
+  logic [11:0] map_palette_sad_sum_w;
+  logic [11:0] map_vertical_sad_sum_w;
+  logic [11:0] map_horizontal_sad_sum_w;
+  logic [23:0] map_row_indices_pack_w;
+  logic map_row_same_left_w;
+  logic map_row_same_above_w;
   logic [7:0] sample_u8_w;
   logic black_sample_ok_w;
   logic black_next_w;
@@ -166,6 +191,7 @@ module ff_av2_palette_analyzer_444 #(
   logic [5:0] block_sample_col_bit_offset_w;
   logic fetch_active_q;
   logic fetch_start_q;
+  logic fetch_horz_q;
   logic query_start_q;
   logic query_active_q;
   logic [5:0] query_load_block_id_q;
@@ -191,6 +217,9 @@ module ff_av2_palette_analyzer_444 #(
   logic [7:0] luma_read_y_w;
   logic [7:0] chroma_read_u_w;
   logic [7:0] chroma_read_v_w;
+  logic [63:0] sample_store_y_row_w;
+  logic [63:0] sample_store_u_row_w;
+  logic [63:0] sample_store_v_row_w;
   logic [11:0] fetch_txb_read_addr_w;
   logic [11:0] fetch_pred_read_addr_w;
   logic [11:0] luma_fetch_read_addr_w;
@@ -206,6 +235,15 @@ module ff_av2_palette_analyzer_444 #(
   logic [5:0] luma_fetch_capture_col_bit_offset_w;
   logic [2:0] luma_fetch_capture_palette_index_w;
   logic [7:0] luma_fetch_predictor_sample_w;
+  logic [31:0] luma_fetch_y_row_slice_w;
+  logic [31:0] luma_fetch_u_row_slice_w;
+  logic [31:0] luma_fetch_v_row_slice_w;
+  logic [31:0] luma_fetch_predictor_row_slice_w;
+  logic [5:0] luma_fetch_row_local_index_w;
+  logic [2:0] luma_fetch_row_col_w;
+  logic [2:0] luma_fetch_row_row_w;
+  logic [2:0] luma_fetch_row_palette_index_w;
+  logic [7:0] luma_fetch_row_predictor_sample_w;
   logic [1:0] selected_luma_mode_w;
   logic [15:0] selected_luma_sad_w;
   logic [63:0] selected_luma_predictor_edge_w;
@@ -281,6 +319,9 @@ module ff_av2_palette_analyzer_444 #(
   integer packet_lane_q;
   integer packet_insert_lane_q;
   integer packet_insert_index_q;
+  integer map_lane_q;
+  integer map_color_index_q;
+  integer luma_fetch_lane_q;
 
   assign sample_u8_w = sample[7:0];
   assign black_sample_ok_w = (sample == {SAMPLE_BITS{1'b0}});
@@ -400,8 +441,7 @@ module ff_av2_palette_analyzer_444 #(
     (fetch_step_q < 5'd16) ? fetch_txb_read_addr_w : fetch_pred_read_addr_w;
   assign luma_fetch_local_index_w =
     luma_fetch_txb_local_base_w +
-    {luma_fetch_step_q[3:2], 3'b000} +
-    {4'd0, luma_fetch_step_q[1:0]};
+    {luma_fetch_step_q[1:0], 3'b000};
   assign luma_fetch_capture_local_index_w =
     luma_fetch_txb_local_base_w +
     {luma_fetch_capture_step_q[3:2], 3'b000} +
@@ -476,7 +516,10 @@ module ff_av2_palette_analyzer_444 #(
     .read_addr(sample_store_read_addr_w),
     .read_y_data(luma_read_y_w),
     .read_u_data(chroma_read_u_w),
-    .read_v_data(chroma_read_v_w)
+    .read_v_data(chroma_read_v_w),
+    .read_y_row_data(sample_store_y_row_w),
+    .read_u_row_data(sample_store_u_row_w),
+    .read_v_row_data(sample_store_v_row_w)
   );
 
   // One 192-bit palette-index word per 8x8 leaf. Query setup already has a
@@ -499,6 +542,8 @@ module ff_av2_palette_analyzer_444 #(
     packet_luma_left_sum_w = 12'd0;
     packet_luma_right_sum_w = 12'd0;
     packet_chroma_sum_w = 12'd0;
+    packet_chroma_h_sad_w = 16'd0;
+    packet_chroma_v_sad_w = 16'd0;
     for (packet_lane_q = 0; packet_lane_q < 8; packet_lane_q = packet_lane_q + 1) begin
       if (packet_lane_q < packet_count) begin
         if (({1'b0, block_sample_q[2:0]} + packet_lane_q[3:0]) < 4'd4) begin
@@ -510,6 +555,28 @@ module ff_av2_palette_analyzer_444 #(
         end
         packet_chroma_sum_w =
           packet_chroma_sum_w + {4'd0, packet_lane_w[packet_lane_q]};
+        if (packet_lane_q != 0) begin
+          if (packet_lane_w[packet_lane_q] >= packet_lane_w[packet_lane_q - 1]) begin
+            packet_chroma_h_sad_w =
+              packet_chroma_h_sad_w +
+              {8'd0, packet_lane_w[packet_lane_q] - packet_lane_w[packet_lane_q - 1]};
+          end else begin
+            packet_chroma_h_sad_w =
+              packet_chroma_h_sad_w +
+              {8'd0, packet_lane_w[packet_lane_q - 1] - packet_lane_w[packet_lane_q]};
+          end
+        end
+        if (block_chroma_local_sample_w[5:3] != 3'd0) begin
+          if (packet_lane_w[packet_lane_q] >= chroma_prev_row_q[packet_lane_q * 8 +: 8]) begin
+            packet_chroma_v_sad_w =
+              packet_chroma_v_sad_w +
+              {8'd0, packet_lane_w[packet_lane_q] - chroma_prev_row_q[packet_lane_q * 8 +: 8]};
+          end else begin
+            packet_chroma_v_sad_w =
+              packet_chroma_v_sad_w +
+              {8'd0, chroma_prev_row_q[packet_lane_q * 8 +: 8] - packet_lane_w[packet_lane_q]};
+          end
+        end
       end
     end
   end
@@ -556,12 +623,23 @@ module ff_av2_palette_analyzer_444 #(
   end
 
   always @* begin
-    if (fetch_txb_col_mi_q != 5'd0) begin
-      fetch_pred_x_w = {fetch_txb_col_mi_q, 2'b00} - 6'd1;
-      fetch_pred_y_w = {fetch_txb_row_mi_q, 2'b00} + {4'd0, fetch_step_q[1:0]};
+    if (fetch_horz_q) begin
+      if (fetch_txb_col_mi_q != 5'd0) begin
+        fetch_pred_x_w = {fetch_txb_col_mi_q, 2'b00} - 6'd1;
+        fetch_pred_y_w = {fetch_txb_row_mi_q, 2'b00} + {4'd0, fetch_step_q[1:0]};
+      end else if (fetch_txb_row_mi_q != 5'd0) begin
+        fetch_pred_x_w = 6'd0;
+        fetch_pred_y_w = fetch_above_pred_y_w;
+      end else begin
+        fetch_pred_x_w = 6'd0;
+        fetch_pred_y_w = 6'd0;
+      end
     end else if (fetch_txb_row_mi_q != 5'd0) begin
-      fetch_pred_x_w = 6'd0;
+      fetch_pred_x_w = {fetch_txb_col_mi_q, 2'b00} + {4'd0, fetch_step_q[1:0]};
       fetch_pred_y_w = fetch_above_pred_y_w;
+    end else if (fetch_txb_col_mi_q != 5'd0) begin
+      fetch_pred_x_w = {fetch_txb_col_mi_q, 2'b00} - 6'd1;
+      fetch_pred_y_w = {fetch_txb_row_mi_q, 2'b00};
     end else begin
       fetch_pred_x_w = 6'd0;
       fetch_pred_y_w = 6'd0;
@@ -661,6 +739,95 @@ module ff_av2_palette_analyzer_444 #(
   end
 
   always @* begin
+    map_row_bit_offset_w = {5'd0, block_sample_q[5:3]} * 8'd24;
+    map_palette_sad_sum_w = 12'd0;
+    map_vertical_sad_sum_w = 12'd0;
+    map_horizontal_sad_sum_w = 12'd0;
+    map_row_indices_pack_w = 24'd0;
+    map_row_same_left_w = 1'b1;
+    map_row_same_above_w = (block_sample_q[5:3] != 3'd0);
+
+    for (map_lane_q = 0; map_lane_q < 8; map_lane_q = map_lane_q + 1) begin
+      map_sample_lane_w[map_lane_q] =
+        block_luma_sample_q[{block_sample_q[5:3], map_lane_q[2:0]}];
+      map_nearest_index_w[map_lane_q] = 3'd0;
+      map_nearest_delta_w[map_lane_q] = 8'hff;
+      map_nearest_color_w[map_lane_q] = 8'd0;
+      map_palette_abs_delta_w[map_lane_q] = 8'd0;
+      map_vertical_predictor_sample_w[map_lane_q] = 8'd0;
+      map_horizontal_predictor_sample_w[map_lane_q] = 8'd0;
+      map_vertical_abs_delta_w[map_lane_q] = 8'd0;
+      map_horizontal_abs_delta_w[map_lane_q] = 8'd0;
+
+      for (map_color_index_q = 0; map_color_index_q < 8; map_color_index_q = map_color_index_q + 1) begin
+        if (map_color_index_q < target_palette_size_q) begin
+          map_nearest_color_w[map_lane_q] = palette_color_q[map_color_index_q];
+          if (map_sample_lane_w[map_lane_q] >= map_nearest_color_w[map_lane_q]) begin
+            map_palette_abs_delta_w[map_lane_q] =
+              map_sample_lane_w[map_lane_q] - map_nearest_color_w[map_lane_q];
+          end else begin
+            map_palette_abs_delta_w[map_lane_q] =
+              map_nearest_color_w[map_lane_q] - map_sample_lane_w[map_lane_q];
+          end
+          if (map_palette_abs_delta_w[map_lane_q] < map_nearest_delta_w[map_lane_q]) begin
+            map_nearest_delta_w[map_lane_q] = map_palette_abs_delta_w[map_lane_q];
+            map_nearest_index_w[map_lane_q] = map_color_index_q[2:0];
+          end
+        end
+      end
+
+      if (block_sample_q[5:3] >= 3'd4) begin
+        map_vertical_predictor_sample_w[map_lane_q] =
+          block_luma_sample_q[6'd24 + map_lane_q[5:0]];
+      end else begin
+        map_vertical_predictor_sample_w[map_lane_q] =
+          above_predictor_edge_q[block_id_q[2:0]][map_lane_q * 8 +: 8];
+      end
+      if (map_sample_lane_w[map_lane_q] >= map_vertical_predictor_sample_w[map_lane_q]) begin
+        map_vertical_abs_delta_w[map_lane_q] =
+          map_sample_lane_w[map_lane_q] - map_vertical_predictor_sample_w[map_lane_q];
+      end else begin
+        map_vertical_abs_delta_w[map_lane_q] =
+          map_vertical_predictor_sample_w[map_lane_q] - map_sample_lane_w[map_lane_q];
+      end
+
+      if (map_lane_q >= 4) begin
+        map_horizontal_predictor_sample_w[map_lane_q] =
+          block_luma_sample_q[{block_sample_q[5:3], 3'b000} + 6'd3];
+      end else begin
+        map_horizontal_predictor_sample_w[map_lane_q] =
+          left_predictor_edge_q[{block_sample_q[5:3], 3'b000} +: 8];
+      end
+      if (map_sample_lane_w[map_lane_q] >= map_horizontal_predictor_sample_w[map_lane_q]) begin
+        map_horizontal_abs_delta_w[map_lane_q] =
+          map_sample_lane_w[map_lane_q] - map_horizontal_predictor_sample_w[map_lane_q];
+      end else begin
+        map_horizontal_abs_delta_w[map_lane_q] =
+          map_horizontal_predictor_sample_w[map_lane_q] - map_sample_lane_w[map_lane_q];
+      end
+
+      map_palette_sad_sum_w =
+        map_palette_sad_sum_w + {4'd0, map_nearest_delta_w[map_lane_q]};
+      map_vertical_sad_sum_w =
+        map_vertical_sad_sum_w + {4'd0, map_vertical_abs_delta_w[map_lane_q]};
+      map_horizontal_sad_sum_w =
+        map_horizontal_sad_sum_w + {4'd0, map_horizontal_abs_delta_w[map_lane_q]};
+      map_row_indices_pack_w[map_lane_q * 3 +: 3] = map_nearest_index_w[map_lane_q];
+
+      if (map_lane_q != 0 &&
+          map_nearest_index_w[map_lane_q] != map_nearest_index_w[map_lane_q - 1]) begin
+        map_row_same_left_w = 1'b0;
+      end
+      if (block_sample_q[5:3] != 3'd0) begin
+        if (map_nearest_index_w[map_lane_q] !=
+            current_palette_index_q[(map_row_bit_offset_w - 8'd24) + (map_lane_q * 3) +: 3]) begin
+          map_row_same_above_w = 1'b0;
+        end
+      end
+    end
+  end
+
+  always @* begin
     query_palette_cache_size_w = 5'd0;
     // AV2 v1.0.0 palette_mode_info() derives its color cache from neighboring
     // MB_MODE_INFO palette sizes. IntraBC leaves return before palette syntax,
@@ -702,6 +869,53 @@ module ff_av2_palette_analyzer_444 #(
         3'd6: luma_fetch_predictor_sample_w = query_palette_colors_q[55:48];
         default: luma_fetch_predictor_sample_w = query_palette_colors_q[63:56];
       endcase
+    end
+  end
+
+  always @* begin
+    luma_fetch_y_row_slice_w = 32'd0;
+    luma_fetch_u_row_slice_w = 32'd0;
+    luma_fetch_v_row_slice_w = 32'd0;
+    luma_fetch_predictor_row_slice_w = 32'd0;
+    for (luma_fetch_lane_q = 0; luma_fetch_lane_q < 4; luma_fetch_lane_q = luma_fetch_lane_q + 1) begin
+      luma_fetch_row_row_w =
+        {luma_fetch_txb_row_mi_q[0], 2'b00} + luma_fetch_capture_step_q[1:0];
+      luma_fetch_row_col_w =
+        {luma_fetch_txb_col_mi_q[0], 2'b00} + luma_fetch_lane_q[2:0];
+      luma_fetch_row_local_index_w = {luma_fetch_row_row_w, luma_fetch_row_col_w};
+      luma_fetch_row_palette_index_w = query_palette_index_q[luma_fetch_row_local_index_w];
+
+      luma_fetch_y_row_slice_w[luma_fetch_lane_q * 8 +: 8] =
+        sample_store_y_row_w[{luma_fetch_row_col_w, 3'b000} +: 8];
+      luma_fetch_u_row_slice_w[luma_fetch_lane_q * 8 +: 8] =
+        sample_store_u_row_w[{luma_fetch_row_col_w, 3'b000} +: 8];
+      luma_fetch_v_row_slice_w[luma_fetch_lane_q * 8 +: 8] =
+        sample_store_v_row_w[{luma_fetch_row_col_w, 3'b000} +: 8];
+
+      if (query_luma_mode_q == LUMA_MODE_V) begin
+        luma_fetch_row_predictor_sample_w =
+          luma_fetch_txb_row_mi_q[0] ?
+            query_luma_predictor_inner_edge_q[{luma_fetch_row_col_w, 3'b000} +: 8] :
+            query_luma_predictor_edge_q[{luma_fetch_row_col_w, 3'b000} +: 8];
+      end else if (query_luma_mode_q == LUMA_MODE_H) begin
+        luma_fetch_row_predictor_sample_w =
+          luma_fetch_txb_col_mi_q[0] ?
+            query_luma_predictor_inner_edge_q[{luma_fetch_row_row_w, 3'b000} +: 8] :
+            query_luma_predictor_edge_q[{luma_fetch_row_row_w, 3'b000} +: 8];
+      end else begin
+        case (luma_fetch_row_palette_index_w)
+          3'd0: luma_fetch_row_predictor_sample_w = query_palette_colors_q[7:0];
+          3'd1: luma_fetch_row_predictor_sample_w = query_palette_colors_q[15:8];
+          3'd2: luma_fetch_row_predictor_sample_w = query_palette_colors_q[23:16];
+          3'd3: luma_fetch_row_predictor_sample_w = query_palette_colors_q[31:24];
+          3'd4: luma_fetch_row_predictor_sample_w = query_palette_colors_q[39:32];
+          3'd5: luma_fetch_row_predictor_sample_w = query_palette_colors_q[47:40];
+          3'd6: luma_fetch_row_predictor_sample_w = query_palette_colors_q[55:48];
+          default: luma_fetch_row_predictor_sample_w = query_palette_colors_q[63:56];
+        endcase
+      end
+      luma_fetch_predictor_row_slice_w[luma_fetch_lane_q * 8 +: 8] =
+        luma_fetch_row_predictor_sample_w;
     end
   end
 
@@ -822,6 +1036,7 @@ module ff_av2_palette_analyzer_444 #(
     query_top_index = query_palette_index_q[query_top_local_index_w];
     query_top_left_index = query_palette_index_q[query_top_left_local_index_w];
     query_luma_residual_zero = query_luma_residual_zero_q;
+    query_chroma_bdpcm_horz = query_chroma_bdpcm_horz_q;
     if (query_row[2:0] != 3'd0 && query_row_same_above_q[query_row[2:0]]) begin
       query_identity_row_flag = 2'd2;
     end else if (query_row_same_left_q[query_row[2:0]]) begin
@@ -889,8 +1104,12 @@ module ff_av2_palette_analyzer_444 #(
       palette_sad_q <= 16'd0;
       vertical_sad_q <= 16'd0;
       horizontal_sad_q <= 16'd0;
+      chroma_h_sad_q <= 16'd0;
+      chroma_v_sad_q <= 16'd0;
+      chroma_prev_row_q <= 64'd0;
       for (pack_index_q = 0; pack_index_q < 64; pack_index_q = pack_index_q + 1) begin
         query_palette_index_q[pack_index_q] <= 3'd0;
+        block_chroma_bdpcm_horz_q[pack_index_q] <= 1'b1;
       end
       query_luma_mode_q <= LUMA_MODE_DC;
       query_luma_predictor_edge_q <= 64'd0;
@@ -903,6 +1122,7 @@ module ff_av2_palette_analyzer_444 #(
       query_palette_delta_minus1_q <= 56'd0;
       query_palette_delta_literal_bits_q <= 35'd0;
       query_luma_residual_zero_q <= 1'b0;
+      query_chroma_bdpcm_horz_q <= 1'b1;
       query_row_same_left_q <= 8'd0;
       query_row_same_above_q <= 8'd0;
       terminal_luma_predictor_edge_q <= 64'd0;
@@ -930,6 +1150,7 @@ module ff_av2_palette_analyzer_444 #(
       black_ok_q <= 1'b1;
       fetch_active_q <= 1'b0;
       fetch_start_q <= 1'b0;
+      fetch_horz_q <= 1'b1;
       query_start_q <= 1'b0;
       query_active_q <= 1'b0;
       luma_fetch_start_q <= 1'b0;
@@ -950,6 +1171,9 @@ module ff_av2_palette_analyzer_444 #(
       palette_sad_q <= 16'd0;
       vertical_sad_q <= 16'd0;
       horizontal_sad_q <= 16'd0;
+      chroma_h_sad_q <= 16'd0;
+      chroma_v_sad_q <= 16'd0;
+      chroma_prev_row_q <= 64'd0;
       query_luma_mode_q <= LUMA_MODE_DC;
       query_luma_predictor_edge_q <= 64'd0;
       query_luma_predictor_inner_edge_q <= 64'd0;
@@ -958,6 +1182,7 @@ module ff_av2_palette_analyzer_444 #(
       query_palette_delta_minus1_q <= 56'd0;
       query_palette_delta_literal_bits_q <= 35'd0;
       query_luma_residual_zero_q <= 1'b0;
+      query_chroma_bdpcm_horz_q <= 1'b1;
       terminal_luma_predictor_edge_q <= 64'd0;
       terminal_luma_predictor_inner_edge_q <= 64'd0;
       for (edge_index_q = 0; edge_index_q < 8; edge_index_q = edge_index_q + 1) begin
@@ -988,6 +1213,17 @@ module ff_av2_palette_analyzer_444 #(
       end
       if (!lossy420_mode_w && packet_chroma_fire_w) begin
         black_ok_q <= black_next_w;
+        chroma_h_sad_q <= chroma_h_sad_q + packet_chroma_h_sad_w;
+        chroma_v_sad_q <= chroma_v_sad_q + packet_chroma_v_sad_w;
+        chroma_prev_row_q <= packet_samples[63:0];
+        if (packet_chroma_done_w) begin
+          // AV2 v1.0.0 read_intra_uv_mode() carries one DPCM direction bit
+          // for the leaf. The analyzer picks the lower local U/V edge SAD so
+          // chroma coefficients stay lossless while avoiding avoidable tokens.
+          block_chroma_bdpcm_horz_q[block_id_q] <=
+            ((chroma_h_sad_q + packet_chroma_h_sad_w) <=
+             (chroma_v_sad_q + packet_chroma_v_sad_w));
+        end
         if (packet_chroma_done_w) begin
           chroma_complete_q <= 1'b1;
         end else begin
@@ -1024,6 +1260,7 @@ module ff_av2_palette_analyzer_444 #(
         query_luma_predictor_edge_q <= terminal_luma_predictor_edge_q;
         query_luma_predictor_inner_edge_q <= terminal_luma_predictor_inner_edge_q;
         query_luma_residual_zero_q <= block_luma_residual_zero_q[query_load_block_id_q];
+        query_chroma_bdpcm_horz_q <= block_chroma_bdpcm_horz_q[query_load_block_id_q];
         query_row_same_left_q <= row_same_left_q[query_load_block_id_q];
         query_row_same_above_q <= row_same_above_q[query_load_block_id_q];
         query_active_q <= 1'b0;
@@ -1049,18 +1286,21 @@ module ff_av2_palette_analyzer_444 #(
         end
       end else if (luma_fetch_active_q) begin
         if (luma_fetch_read_pending_q) begin
-          luma_fetch_txb_samples[luma_fetch_capture_step_q * 8 +: 8] <= luma_read_y_w;
-          luma_fetch_u_txb_samples[luma_fetch_capture_step_q * 8 +: 8] <= chroma_read_u_w;
-          luma_fetch_v_txb_samples[luma_fetch_capture_step_q * 8 +: 8] <= chroma_read_v_w;
-          luma_fetch_predictor_samples[luma_fetch_capture_step_q * 8 +: 8] <=
-            luma_fetch_predictor_sample_w;
-          if (luma_fetch_capture_step_q == 5'd15) begin
+          luma_fetch_txb_samples[luma_fetch_capture_step_q[1:0] * 32 +: 32] <=
+            luma_fetch_y_row_slice_w;
+          luma_fetch_u_txb_samples[luma_fetch_capture_step_q[1:0] * 32 +: 32] <=
+            luma_fetch_u_row_slice_w;
+          luma_fetch_v_txb_samples[luma_fetch_capture_step_q[1:0] * 32 +: 32] <=
+            luma_fetch_v_row_slice_w;
+          luma_fetch_predictor_samples[luma_fetch_capture_step_q[1:0] * 32 +: 32] <=
+            luma_fetch_predictor_row_slice_w;
+          if (luma_fetch_capture_step_q == 5'd3) begin
             luma_fetch_active_q <= 1'b0;
             luma_fetch_read_pending_q <= 1'b0;
             luma_fetch_done <= 1'b1;
           end else begin
             luma_fetch_capture_step_q <= luma_fetch_capture_step_q + 5'd1;
-            if (luma_fetch_capture_step_q < 5'd14) begin
+            if (luma_fetch_capture_step_q < 5'd2) begin
               luma_fetch_step_q <= luma_fetch_capture_step_q + 5'd2;
             end
           end
@@ -1076,6 +1316,7 @@ module ff_av2_palette_analyzer_444 #(
       fetch_start_q <= chroma_fetch_start;
       if (chroma_fetch_start && !fetch_start_q) begin
         fetch_plane_v_q <= chroma_fetch_plane_v;
+        fetch_horz_q <= chroma_fetch_horz;
         fetch_txb_row_mi_q <= chroma_fetch_txb_row_mi;
         fetch_txb_col_mi_q <= chroma_fetch_txb_col_mi;
         fetch_step_q <= chroma_fetch_predictor_only ? 5'd16 : 5'd0;
@@ -1132,9 +1373,15 @@ module ff_av2_palette_analyzer_444 #(
           fetch_read_pending_q <= 1'b1;
         end else if (fetch_step_q < 5'd20) begin
           if (fetch_txb_col_mi_q == 5'd0 && fetch_txb_row_mi_q == 5'd0) begin
-            chroma_fetch_predictor_samples[(fetch_step_q - 5'd16) * 8 +: 8] <= 8'd129;
-            chroma_fetch_u_predictor_samples[(fetch_step_q - 5'd16) * 8 +: 8] <= 8'd129;
-            chroma_fetch_v_predictor_samples[(fetch_step_q - 5'd16) * 8 +: 8] <= 8'd129;
+            // AV2 v1.0.0 Section 7.11 intra prediction, mirrored from AVM
+            // reconintra.c: unavailable H_PRED left edges use base+1, while
+            // unavailable V_PRED above edges use base-1.
+            chroma_fetch_predictor_samples[(fetch_step_q - 5'd16) * 8 +: 8] <=
+              fetch_horz_q ? 8'd129 : 8'd127;
+            chroma_fetch_u_predictor_samples[(fetch_step_q - 5'd16) * 8 +: 8] <=
+              fetch_horz_q ? 8'd129 : 8'd127;
+            chroma_fetch_v_predictor_samples[(fetch_step_q - 5'd16) * 8 +: 8] <=
+              fetch_horz_q ? 8'd129 : 8'd127;
             if (fetch_step_q == 5'd19) begin
               fetch_active_q <= 1'b0;
               chroma_fetch_done <= 1'b1;
@@ -1250,6 +1497,9 @@ module ff_av2_palette_analyzer_444 #(
             palette_sad_q <= 16'd0;
             vertical_sad_q <= 16'd0;
             horizontal_sad_q <= 16'd0;
+            chroma_h_sad_q <= 16'd0;
+            chroma_v_sad_q <= 16'd0;
+            chroma_prev_row_q <= 64'd0;
             for (color_index_q = 0; color_index_q < 8; color_index_q = color_index_q + 1) begin
               palette_color_q[color_index_q] <= 8'd0;
             end
@@ -1301,23 +1551,16 @@ module ff_av2_palette_analyzer_444 #(
             state_q <= ST_MAP;
           end
           ST_MAP: begin
-            current_palette_index_q[block_sample_bit_offset_w +: 3] <= nearest_index_w;
-            palette_sad_q <= palette_sad_q + {8'd0, nearest_delta_w};
-            vertical_sad_q <= vertical_sad_q + {8'd0, vertical_abs_delta_w};
-            horizontal_sad_q <= horizontal_sad_q + {8'd0, horizontal_abs_delta_w};
-            if (block_sample_q[2:0] == 3'd0) begin
-              current_row_same_left_q[block_sample_q[5:3]] <= 1'b1;
-              current_row_same_above_q[block_sample_q[5:3]] <= (block_sample_q[5:3] != 3'd0);
-            end else if (nearest_index_w != current_palette_index_q[block_sample_left_bit_offset_w +: 3]) begin
-              current_row_same_left_q[block_sample_q[5:3]] <= 1'b0;
-            end
-            if (block_sample_q[5:3] != 3'd0 && nearest_index_w != current_palette_index_q[block_sample_top_bit_offset_w +: 3]) begin
-              current_row_same_above_q[block_sample_q[5:3]] <= 1'b0;
-            end
-            if (block_sample_q == 6'd63) begin
+            current_palette_index_q[map_row_bit_offset_w +: 24] <= map_row_indices_pack_w;
+            palette_sad_q <= palette_sad_q + {4'd0, map_palette_sad_sum_w};
+            vertical_sad_q <= vertical_sad_q + {4'd0, map_vertical_sad_sum_w};
+            horizontal_sad_q <= horizontal_sad_q + {4'd0, map_horizontal_sad_sum_w};
+            current_row_same_left_q[block_sample_q[5:3]] <= map_row_same_left_w;
+            current_row_same_above_q[block_sample_q[5:3]] <= map_row_same_above_w;
+            if (block_sample_q[5:3] == 3'd7) begin
               state_q <= ST_NEXT_BLOCK;
             end else begin
-              block_sample_q <= block_sample_q + 6'd1;
+              block_sample_q <= block_sample_q + 6'd8;
             end
           end
           ST_NEXT_BLOCK: begin
