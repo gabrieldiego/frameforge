@@ -915,7 +915,9 @@ enum Av2MvpPartition {
 enum Av2TileDecisionKind {
     Partition(Av2MvpPartition),
     IntrabcFlag(bool),
-    IntrabcCopy { drl_idx: u8 },
+    IntrabcCopy {
+        drl_idx: u8,
+    },
     IntraLumaMode(Av2LumaIntraMode),
     IntraChromaMode {
         use_bdpcm_uv: bool,
@@ -1406,9 +1408,7 @@ impl Av2Black444TilePlan {
         }
         self.decisions.push(Av2TileDecision {
             kind: if self.luma_palette {
-                Av2TileDecisionKind::LumaPaletteResidualCoefficients {
-                    chroma_bdpcm_horz,
-                }
+                Av2TileDecisionKind::LumaPaletteResidualCoefficients { chroma_bdpcm_horz }
             } else {
                 Av2TileDecisionKind::BlackDcResidualCoefficients
             },
@@ -1531,9 +1531,7 @@ impl Av2Black444TilePlan {
                         false,
                     );
                 }
-                Av2TileDecisionKind::LumaPaletteResidualCoefficients {
-                    chroma_bdpcm_horz,
-                } => {
+                Av2TileDecisionKind::LumaPaletteResidualCoefficients { chroma_bdpcm_horz } => {
                     write_luma_palette_residual_coefficients(
                         writer,
                         *decision,

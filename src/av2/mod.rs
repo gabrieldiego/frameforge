@@ -1694,6 +1694,44 @@ mod tests {
     }
 
     #[test]
+    fn av2_mvp_444_can_select_vertical_chroma_bdpcm() {
+        let request = Av2EncodeRequest {
+            params: Av2EncodeParams { frames: 1 },
+            geometry: Av2VideoGeometry {
+                width: 8,
+                height: 8,
+            },
+            format: PixelFormat::Yuv444p8,
+        };
+        let plane_len = request.geometry.width * request.geometry.height;
+        let mut input = vec![0u8; plane_len * 3];
+        for y in 0..8usize {
+            for x in 0..8usize {
+                let index = y * 8 + x;
+                input[plane_len + index] = 48 + (x as u8 * 9);
+                input[2 * plane_len + index] = 112 + (x as u8 * 13);
+            }
+        }
+        let mut source = input.as_slice();
+        let mut output = Vec::new();
+        let mut recon = Vec::new();
+
+        av2_encode_fixed_black_444(&mut source, &mut output, Some(&mut recon), request)
+            .expect("vertical chroma BDPCM should encode");
+
+        assert_eq!(recon, input);
+        let trace = av2_mvp_444_trace_jsonl_for_frame(&input, request)
+            .expect("AV2 trace should be emitted");
+        assert!(
+            trace.lines().any(|line| {
+                line.contains("\"name\":\"tile.intra.dpcm_uv_horz\"")
+                    && line.contains("\"symbol\":0")
+            }),
+            "vertical chroma BDPCM should signal dpcm_uv_horz=0"
+        );
+    }
+
+    #[test]
     fn av2_mvp_444_preserves_over_limit_luma_colors_with_lossless_residual() {
         let request = Av2EncodeRequest {
             params: Av2EncodeParams { frames: 1 },

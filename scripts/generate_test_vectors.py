@@ -367,6 +367,8 @@ def sample_yuv(vector: TestVector, x: int, y: int, frame: int) -> tuple[int, int
         return transform_skip_left_delta_sample(x, y, frame)
     if vector.pattern == "bdpcm_horizontal":
         return bdpcm_horizontal_sample(x, y, frame)
+    if vector.pattern == "bdpcm_vertical":
+        return bdpcm_vertical_sample(x, y, frame)
     if vector.pattern == "av2_luma_palette_bars":
         return av2_luma_palette_bars_sample(x, y, frame)
     if vector.pattern == "palette_escape_prng":
@@ -416,6 +418,19 @@ def bdpcm_horizontal_sample(x: int, y: int, frame: int) -> tuple[int, int, int]:
         (cb_base + carry + row_delta + 2) & 0xFF,
         (cr_base + carry + row_delta + 4) & 0xFF,
     )
+
+
+def bdpcm_vertical_sample(x: int, y: int, frame: int) -> tuple[int, int, int]:
+    tile_x = x // 8
+    tile_y = y // 8
+    local_x = x & 7
+    local_y = y & 7
+    col_delta = [1, 4, 9, 15, 22, 30, 39, 49][local_x]
+    block_bias = (tile_x * 29 + tile_y * 43 + frame * 11) & 0x7F
+    y_sample = 36 + ((block_bias + (0 if local_x < 4 else 61)) & 0x7F)
+    cb_sample = (64 + block_bias + col_delta + (local_y >> 2)) & 0xFF
+    cr_sample = (112 + block_bias + (col_delta * 2) + (local_y >> 2)) & 0xFF
+    return y_sample, cb_sample, cr_sample
 
 
 def av2_luma_palette_bars_sample(x: int, y: int, frame: int) -> tuple[int, int, int]:

@@ -62,7 +62,8 @@ reducing cost rather than proving the plumbing again:
   as a predictor.
 - Lossless luma residual coefficient coding after palette or non-DC luma intra
   prediction.
-- Lossless horizontal chroma BDPCM plus coefficient coding for 4:4:4 chroma.
+- Lossless horizontal/vertical chroma BDPCM plus coefficient coding for 4:4:4
+  chroma, with a local SAD direction chooser.
 - Exact-hash IntraBC path using local 8x8 hashes for AVM-valid left-copy
   candidates inside the current 64x64 tile. Above candidates are instrumented
   but deferred until the full AVM availability/BVP stack is modeled.
@@ -128,8 +129,10 @@ reducing cost rather than proving the plumbing again:
      `screenshot_640_sweep_24x8_1f_yuv444p8.yuv`.
 
 4. Chroma prediction/BDPCM expansion
-   - Add vertical chroma BDPCM beside the current horizontal path.
-   - Add a simple direction chooser using local SAD or a rough bit proxy.
+   - Done: horizontal and vertical chroma BDPCM are both available for 4:4:4
+     chroma, with the encoder choosing the lower local U/V edge SAD direction.
+   - Next: refine the chooser with a rough coded-bit proxy once mode decision
+     becomes its own block.
    - Keep chroma lossless and block-local; any non-BDPCM fallback must still
      round-trip exactly through the reference decoder.
 
@@ -222,7 +225,7 @@ reducing cost rather than proving the plumbing again:
 - [ ] Add the prediction decision block so mode selection becomes its own
   auditable module instead of being spread across palette analysis and tile
   emission.
-- [ ] Add vertical chroma BDPCM and a tiny direction chooser.
+- ✅ Add vertical chroma BDPCM and a tiny direction chooser.
 - ✅ Expand IBC from immediate-left only to a local DRL-aware left-copy
   hash-candidate set, with above candidates counted but not selected yet.
 - [ ] Model the AVM IntraBC BVP stack so non-terminal and wider local IBC

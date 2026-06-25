@@ -41,7 +41,11 @@ Supported procedural patterns are:
 
 - `black`
 - `av2_luma_palette_bars`
+- `bdpcm_horizontal`
+- `bdpcm_vertical`
+- `palette_escape_prng`
 - `screen_blocks`
+- `transform_skip_left_delta`
 - `moving_blocks`
 - `stick_walk`
 

@@ -38,8 +38,9 @@ See the [AV2 roadmap](roadmap.md) for the next planned milestones.
   luma palette syntax in `palette_mode_info()`; AVM `av2_allow_palette()` also
   accepts `PLANE_TYPE_Y` only. FrameForge AV2 therefore must use an allowed
   residual, BDPCM, or IBC-style path for chroma rather than a private chroma
-  palette syntax. The current chroma path uses horizontal BDPCM plus lossless
-  `TX_4X4` coefficient coding.
+  palette syntax. The current chroma path uses horizontal/vertical BDPCM plus
+  lossless `TX_4X4` coefficient coding, with a local U/V edge-SAD chooser for
+  the DPCM direction bit in `read_intra_uv_mode()`.
 - `rtl/av2/ff_av2_encoder.sv` is a synthesizable AV2 top with the same
   top-level handshake shape as the VVC encoder. It consumes a visible 8x8 block
   packet stream over `s_axis_*`: 64 Y samples, then 64 U samples, then 64 V
