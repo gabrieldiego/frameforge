@@ -7,6 +7,7 @@ module ff_av2_dc_delta_txb_symbolizer #(
   input  logic        rst_n,
   input  logic        enable,
   input  logic        advance,
+  input  logic        emit_first_cycle,
   input  logic        plane_v,
   input  logic [3:0]  skip_ctx,
   input  logic [1:0]  dc_sign_ctx,
@@ -55,6 +56,11 @@ module ff_av2_dc_delta_txb_symbolizer #(
   logic [2:0] cul_context_level_w;
   logic [7:0] entropy_context_pre_w;
   logic progress_w;
+  logic start_op_w;
+  logic emit_active_w;
+  logic [3:0] emit_state_w;
+  logic [15:0] emit_level_w;
+  logic emit_coeff_negative_w;
   logic current_plane_v_w;
   logic [3:0] current_skip_ctx_w;
   logic [1:0] current_dc_sign_ctx_w;
@@ -88,9 +94,14 @@ module ff_av2_dc_delta_txb_symbolizer #(
   assign coeff_negative_pre_w = (dc_delta_ext_w < 0);
   assign cul_context_level_w = (level_pre_w > 16'd7) ? 3'd7 : level_pre_w[2:0];
   assign progress_w = active_q && (advance || !op_valid);
-  assign current_plane_v_w = plane_v_q;
-  assign current_skip_ctx_w = skip_ctx_q;
-  assign current_dc_sign_ctx_w = dc_sign_ctx_q;
+  assign start_op_w = enable && !active_q && emit_first_cycle;
+  assign emit_active_w = active_q || start_op_w;
+  assign emit_state_w = active_q ? emit_state_q : EMIT_SKIP;
+  assign emit_level_w = active_q ? level_q : (known_zero_txb ? 16'd0 : 16'd1);
+  assign emit_coeff_negative_w = active_q ? coeff_negative_q : coeff_negative_pre_w;
+  assign current_plane_v_w = active_q ? plane_v_q : plane_v;
+  assign current_skip_ctx_w = active_q ? skip_ctx_q : skip_ctx;
+  assign current_dc_sign_ctx_w = active_q ? dc_sign_ctx_q : dc_sign_ctx;
   assign base_symbol_w = (level_q > 16'd5) ? 4'd4 : (level_q[3:0] - 4'd1);
   assign br_symbol_w = ((level_q - 16'd5) > 16'd3) ? 2'd3 : (level_q[1:0] - 2'd1);
   assign high_range_w = (LUMA_PLANE != 0) ? (level_q > 16'd7) : (level_q > 16'd4);
@@ -101,10 +112,12 @@ module ff_av2_dc_delta_txb_symbolizer #(
   assign hr_exp_value_w = high_value_w - 16'd10;
   assign hr_x_w = hr_exp_value_w + 16'd4;
   assign hr_prefix_bits_w = hr_length_w - 5'd3;
-  assign txb_nonzero = active_q && (level_q != 16'd0);
-  assign entropy_context = entropy_context_q;
-  assign latched_dc_recon_sample = dc_recon_sample_q;
-  assign txb_done = active_q && op_valid && op_done_w;
+  assign txb_nonzero = emit_active_w && (emit_level_w != 16'd0);
+  assign entropy_context =
+    active_q ? entropy_context_q :
+    (known_zero_txb ? 8'd0 : entropy_context_pre_w);
+  assign latched_dc_recon_sample = active_q ? dc_recon_sample_q : dc_recon_sample;
+  assign txb_done = emit_active_w && op_valid && op_done_w;
 
   always @* begin
     entropy_context_pre_w = {5'd0, cul_context_level_w};
@@ -195,11 +208,11 @@ module ff_av2_dc_delta_txb_symbolizer #(
     op_fh_inc = 5'd0;
     op_done_w = 1'b0;
 
-    if (active_q) begin
+    if (emit_active_w) begin
       op_valid = 1'b1;
-      case (emit_state_q)
+      case (emit_state_w)
         EMIT_SKIP: begin
-          if (level_q == 16'd0) begin
+          if (emit_level_w == 16'd0) begin
             op_fl = skip_cdf0_w;
             op_fl_inc = 5'd8;
             op_done_w = 1'b1;
@@ -231,7 +244,7 @@ module ff_av2_dc_delta_txb_symbolizer #(
         end
         EMIT_SIGN: begin
           if (LUMA_PLANE != 0) begin
-            if (coeff_negative_q) begin
+            if (emit_coeff_negative_w) begin
               op_fl = sign_cdf0_w;
               op_fl_inc = 5'd8;
             end else begin
@@ -240,7 +253,7 @@ module ff_av2_dc_delta_txb_symbolizer #(
             end
           end else begin
             op_literal = 1'b1;
-            op_literal_value = {31'd0, coeff_negative_q};
+            op_literal_value = {31'd0, emit_coeff_negative_w};
             op_literal_bits = 5'd1;
           end
           op_done_w = !high_range_w;
@@ -298,28 +311,29 @@ module ff_av2_dc_delta_txb_symbolizer #(
     end else if (!enable) begin
       active_q <= 1'b0;
       emit_state_q <= EMIT_SKIP;
-    end else if (!active_q && known_zero_txb) begin
-      // Register the zero-TXB decision before emitting the skip symbol. This
-      // avoids a long same-cycle path from the DC estimator into the range
-      // coder while preserving the emitted AV2 coeffs() syntax.
-      active_q <= 1'b1;
-      emit_state_q <= EMIT_SKIP;
-      level_q <= 16'd0;
-      coeff_negative_q <= 1'b0;
-      plane_v_q <= plane_v;
-      skip_ctx_q <= skip_ctx;
-      dc_sign_ctx_q <= dc_sign_ctx;
-      entropy_context_q <= 8'd0;
-      dc_recon_sample_q <= dc_recon_sample;
     end else if (!active_q) begin
-      active_q <= 1'b1;
-      emit_state_q <= EMIT_SKIP;
-      level_q <= level_pre_w;
-      coeff_negative_q <= coeff_negative_pre_w;
+      // AV2 v1.0.0 Section 5.20.7.27 coeffs(): the first DC-only TXB symbol
+      // is the skip flag. When the parent leaf state can consume that symbol,
+      // emit it in the launch cycle and register the remaining TXB state after
+      // that consumed skip flag. Outside the leaf state, keep the registered
+      // launch used by the prefetch path so the estimator does not feed an
+      // unused range-coder operation.
+      if (emit_first_cycle && advance && known_zero_txb) begin
+        active_q <= 1'b0;
+        emit_state_q <= EMIT_SKIP;
+      end else if (emit_first_cycle && advance) begin
+        active_q <= 1'b1;
+        emit_state_q <= EMIT_EOB;
+      end else begin
+        active_q <= 1'b1;
+        emit_state_q <= EMIT_SKIP;
+      end
+      level_q <= known_zero_txb ? 16'd0 : level_pre_w;
+      coeff_negative_q <= known_zero_txb ? 1'b0 : coeff_negative_pre_w;
       plane_v_q <= plane_v;
       skip_ctx_q <= skip_ctx;
       dc_sign_ctx_q <= dc_sign_ctx;
-      entropy_context_q <= entropy_context_pre_w;
+      entropy_context_q <= known_zero_txb ? 8'd0 : entropy_context_pre_w;
       dc_recon_sample_q <= dc_recon_sample;
     end else if (progress_w) begin
       case (emit_state_q)

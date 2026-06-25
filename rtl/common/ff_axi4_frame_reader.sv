@@ -874,7 +874,9 @@ module ff_axi4_frame_reader #(
             y_stride_shift_q <= y_stride_shift_q << 1;
             u_stride_shift_q <= u_stride_shift_q << 1;
             v_stride_shift_q <= v_stride_shift_q << 1;
-            if (segment_init_bit_q == 5'd15) begin
+            if (segment_init_bit_q == 5'd15 ||
+                (y_origin_shift_q[15:1] == 15'd0 &&
+                 uv_origin_shift_q[15:1] == 15'd0)) begin
               state_q <= ST_SKIP;
             end else begin
               segment_init_bit_q <= segment_init_bit_q + 5'd1;
