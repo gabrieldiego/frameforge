@@ -1,0 +1,7 @@
+# generator=scripts/generate_test_vectors.py
+# description=Small multi-frame vectors for frame-boundary and stream-final validation.
+name,width,height,frames,format,pattern,fps,source,crop_x,crop_y
+multiframe_black_420,16,16,2,yuv420p8,black,,,,
+multiframe_black_tall_420,8,24,5,yuv420p8,black,,,,
+multiframe_motion_444,16,8,2,yuv444p8,moving_blocks,,,,
+multiframe_motion_wide_444,48,32,2,yuv444p8,moving_blocks,,,,

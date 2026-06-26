@@ -147,6 +147,10 @@ module ff_vvc_encoder #(
   logic       m_axis_ready;
   logic [7:0] m_axis_data;
   logic       m_axis_last;
+  // m_axis_last remains a per-frame boundary for testbench observability.
+  // ff_axi4_bitstream_writer treats s_axis_last as end-of-stream, so only
+  // forward a final-frame marker to keep multi-frame encodes draining.
+  logic       m_axis_stream_last;
   logic       frame_reader_start_w;
   logic       frame_reader_busy_w;
   logic       frame_reader_done_w;
@@ -1329,7 +1333,7 @@ module ff_vvc_encoder #(
     .s_axis_valid(m_axis_valid),
     .s_axis_ready(m_axis_ready),
     .s_axis_data(m_axis_data),
-    .s_axis_last(m_axis_last),
+    .s_axis_last(m_axis_stream_last),
     .m_axi_awvalid(m_axi_awvalid),
     .m_axi_awready(m_axi_awready),
     .m_axi_awaddr(m_axi_awaddr),
@@ -1701,6 +1705,7 @@ module ff_vvc_encoder #(
       m_axis_valid <= 1'b0;
       m_axis_data  <= '0;
       m_axis_last  <= 1'b0;
+      m_axis_stream_last <= 1'b0;
       cabac_start_q <= 1'b0;
       ctu_symbol_start_q <= 1'b0;
       pending_output_q <= 1'b0;
@@ -1778,6 +1783,7 @@ module ff_vvc_encoder #(
       if (m_axis_valid && m_axis_ready) begin
         m_axis_valid <= 1'b0;
         m_axis_last <= 1'b0;
+        m_axis_stream_last <= 1'b0;
       end
       if (frame_reader_error_w || bitstream_writer_error_w) begin
         input_error <= 1'b1;
@@ -1899,6 +1905,7 @@ module ff_vvc_encoder #(
                           (visible_height > MAX_VISIBLE_HEIGHT);
         m_axis_valid   <= 1'b0;
         m_axis_last    <= 1'b0;
+        m_axis_stream_last <= 1'b0;
         palette_input_complete_q <= 1'b0;
         pending_output_q <= 1'b0;
         resume_input_q <= 1'b0;
@@ -2039,6 +2046,7 @@ module ff_vvc_encoder #(
           m_axis_valid <= 1'b0;
           m_axis_data <= 8'd0;
           m_axis_last <= 1'b0;
+          m_axis_stream_last <= 1'b0;
         end
       end else if (input_fire_w) begin
         input_stream_leaf_q <= input_stream_leaf_next_w;
@@ -2140,6 +2148,7 @@ module ff_vvc_encoder #(
         m_axis_valid <= 1'b0;
         m_axis_data <= 8'd0;
         m_axis_last <= 1'b0;
+        m_axis_stream_last <= 1'b0;
       end
       if (ctu_symbol_start_q) begin
         palette_mux_state_q <= PALETTE_MUX_PARTITION;
@@ -2197,6 +2206,7 @@ module ff_vvc_encoder #(
               m_axis_valid <= 1'b1;
               m_axis_data <= generated_header_byte_w;
               m_axis_last <= 1'b0;
+              m_axis_stream_last <= 1'b0;
               if (generated_header_last_w && generated_header_ready_w) begin
                 if (multi_slice_picture_w) begin
                   generated_picture_header_start_q <= 1'b1;
@@ -2209,6 +2219,7 @@ module ff_vvc_encoder #(
             end else if (generated_header_done_w) begin
               m_axis_valid <= 1'b0;
               m_axis_last <= 1'b0;
+              m_axis_stream_last <= 1'b0;
               if (multi_slice_picture_w) begin
                 generated_picture_header_start_q <= 1'b1;
                 generated_out_state_q <= GENERATED_OUT_PICTURE_HEADER;
@@ -2219,6 +2230,7 @@ module ff_vvc_encoder #(
             end else begin
               m_axis_valid <= 1'b0;
               m_axis_last <= 1'b0;
+              m_axis_stream_last <= 1'b0;
             end
           end
           GENERATED_OUT_PICTURE_HEADER: begin
@@ -2226,6 +2238,7 @@ module ff_vvc_encoder #(
               m_axis_valid <= 1'b1;
               m_axis_data <= picture_header_byte_w;
               m_axis_last <= 1'b0;
+              m_axis_stream_last <= 1'b0;
               if (picture_header_last_w && picture_header_ready_w) begin
                 cabac_start_q <= 1'b1;
                 generated_out_state_q <= GENERATED_OUT_CABAC;
@@ -2233,16 +2246,19 @@ module ff_vvc_encoder #(
             end else if (picture_header_done_w) begin
               m_axis_valid <= 1'b0;
               m_axis_last <= 1'b0;
+              m_axis_stream_last <= 1'b0;
               cabac_start_q <= 1'b1;
               generated_out_state_q <= GENERATED_OUT_CABAC;
             end else begin
               m_axis_valid <= 1'b0;
               m_axis_last <= 1'b0;
+              m_axis_stream_last <= 1'b0;
             end
           end
           GENERATED_OUT_SLICE_START: begin
             m_axis_valid <= 1'b0;
             m_axis_last <= 1'b0;
+            m_axis_stream_last <= 1'b0;
             cabac_start_q <= 1'b1;
             generated_out_state_q <= GENERATED_OUT_CABAC;
           end
@@ -2252,6 +2268,10 @@ module ff_vvc_encoder #(
               m_axis_valid <= 1'b1;
               m_axis_data <= slice_stream_data;
               m_axis_last <= slice_stream_last && current_slice_last_w;
+              m_axis_stream_last <=
+                slice_stream_last &&
+                current_slice_last_w &&
+                ((frame_index_q + 64'd1) >= {32'd0, frame_count});
               if (slice_stream_last) begin
                 generated_out_state_q <= GENERATED_OUT_IDLE;
                 frame_clear_q <= 1'b1;
@@ -2281,6 +2301,7 @@ module ff_vvc_encoder #(
             end else begin
               m_axis_valid <= 1'b0;
               m_axis_last <= 1'b0;
+              m_axis_stream_last <= 1'b0;
             end
           end
           default: begin
