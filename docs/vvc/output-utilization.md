@@ -14,7 +14,7 @@ Metric definitions:
   pipeline starvation/backpressure and is not part of the codec bitstream
   contract.
 
-## 2026-06-24 VVC Full Regression Checkpoint
+## 2026-06-25 VVC Multi-Frame Regression Checkpoint
 
 Baseline RTL/source Git SHA:
 
@@ -22,7 +22,7 @@ Baseline RTL/source Git SHA:
 
 Current RTL/source Git SHA:
 
-- `d2cb6801f111a0023d7f982b875faccbf8c17f91`
+- `918788950cb449d4403a0c375493de48ac486d01`
 
 Validation result:
 
@@ -30,6 +30,7 @@ Validation result:
 - `racehorses-multictu-420`: PASS (10/10), strict SW/RTL/VTM checksum parity.
 - `screenshot-sweep-444`: PASS (64/64), strict SW/RTL/VTM checksum parity.
 - `screenshot-multictu-444`: PASS (10/10), strict SW/RTL/VTM checksum parity.
+- `multiframe-smoke`: PASS (4/4), strict SW/RTL/VTM checksum parity.
 
 Delta columns compare against the previous documented VVC output-utilization
 report when the same vector or aggregate set was present.
@@ -38,10 +39,11 @@ Aggregate top-level RTL utilization:
 
 | Set | Cases | RTL bits (delta) | Total cycles (delta) | Active cycles (delta) | Output util (delta) | Bubble rate (delta) | Cycles/bit (delta) | Cycles/pixel (delta) |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `racehorses-sweep-420` | 64 | 113168 (+0) | 269162 (+0) | 14146 (+0) | 0.0526 (+0.000) | 0.947 (+0.000) | 2.378 (-0.002) | 3.245 (-0.005) |
-| `racehorses-multictu-420` | 10 | 92920 (+0) | 281944 (+0) | 11615 (+0) | 0.0412 (+0.000) | 0.959 (+0.000) | 3.034 (+0.004) | 3.07 (+0.000) |
-| `screenshot-sweep-444` | 64 | 377064 (-104) | 193076 (-68341) | 47133 (-13) | 0.244 (+0.064) | 0.756 (-0.064) | 0.512 (-0.181) | 2.328 (-0.822) |
-| `screenshot-multictu-444` | 10 | 286232 (+0) | 159599 (+0) | 35779 (+0) | 0.224 (+0.000) | 0.776 (+0.000) | 0.558 (+0.000) | 1.738 (-0.002) |
+| `racehorses-sweep-420` | 64 | 113168 (+0) | 269058 (-104) | 14146 (+0) | 0.0526 (+0.000) | 0.947 (+0.000) | 2.378 (-0.003) | 3.244 (-0.006) |
+| `racehorses-multictu-420` | 10 | 92920 (+0) | 281959 (+15) | 11615 (+0) | 0.0412 (+0.000) | 0.959 (+0.000) | 3.034 (+0.004) | 3.07 (+0.000) |
+| `screenshot-sweep-444` | 64 | 377064 (-104) | 192968 (-68449) | 47133 (-13) | 0.244 (+0.064) | 0.756 (-0.064) | 0.512 (-0.181) | 2.326 (-0.824) |
+| `screenshot-multictu-444` | 10 | 286232 (+0) | 159519 (-80) | 35779 (+0) | 0.224 (+0.000) | 0.776 (+0.000) | 0.557 (-0.001) | 1.737 (-0.003) |
+| `multiframe-smoke` | 4 | 5184 (new) | 9799 (new) | 648 (new) | 0.0661 (new) | 0.934 (new) | 1.890 (new) | 2.041 (new) |
 
 Mean per-vector internal probes:
 
@@ -51,6 +53,16 @@ Mean per-vector internal probes:
 | `racehorses-multictu-420` | 0.171 | 0.215 | 1 | 0.988 | 0.0445 |
 | `screenshot-sweep-444` | 0.432 | 1 | 0.81 | 0.93 | 0.157 |
 | `screenshot-multictu-444` | 0.456 | 1 | 0.976 | 0.921 | 0.181 |
+| `multiframe-smoke` | 0.366 | 0.71 | 0.662 | 1 | 0 |
+
+### Multi-Frame Smoke
+
+| Vector | Status | RTL bits | Total cycles (delta) | Active cycles | Output util (delta) | Bubble rate (delta) | Cycles/bit (delta) | Cycles/pixel |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| multiframe_black_420_16x16_2f_yuv420p8.yuv | PASS | 784 | 1533 (new) | 98 | 0.0639 (new) | 0.936 (new) | 1.955 (new) | 2.994 |
+| multiframe_black_tall_420_8x24_5f_yuv420p8.yuv | PASS | 1288 | 3140 (new) | 161 | 0.0513 (new) | 0.949 (new) | 2.438 (new) | 3.271 |
+| multiframe_motion_444_16x8_2f_yuv444p8.yuv | PASS | 784 | 784 (new) | 98 | 0.125 (new) | 0.875 (new) | 1.000 (new) | 3.062 |
+| multiframe_motion_wide_444_48x32_2f_yuv444p8.yuv | PASS | 2328 | 4342 (new) | 291 | 0.0670 (new) | 0.933 (new) | 1.865 (new) | 1.413 |
 
 ### RaceHorses 4:2:0 Sweep
 

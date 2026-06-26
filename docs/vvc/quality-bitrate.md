@@ -14,12 +14,12 @@ expected to produce bit-exact software and RTL bitstreams. The reference path
 is decode-only: VTM decodes the FrameForge bitstream and its reconstruction
 must match the software/RTL reconstruction checksum.
 
-## 2026-06-24 VVC Full Regression Checkpoint
+## 2026-06-25 VVC Multi-Frame Regression Checkpoint
 
 Source baseline:
 
 - Baseline Git SHA: `33e4c40f88f0919ed0189adcb65cea1738e5c5e2`
-- Current validated RTL/source Git SHA: `d2cb6801f111a0023d7f982b875faccbf8c17f91`
+- Current validated RTL/source Git SHA: `918788950cb449d4403a0c375493de48ac486d01`
 - Delta columns compare the latest run against the previous documented VVC
   quality/bitrate report where the same vector was present.
 
@@ -50,6 +50,11 @@ make validate-set CODEC=vvc \
   VALIDATION_STOP_ON_FAIL=1 \
   VALIDATION_WITH_SYNTH=0
 
+make validate-set CODEC=vvc \
+  VALIDATION_SET=multiframe-smoke \
+  VALIDATION_STOP_ON_FAIL=1 \
+  VALIDATION_WITH_SYNTH=0
+
 ```
 
 Validation result:
@@ -58,6 +63,7 @@ Validation result:
 - `racehorses-multictu-420`: PASS (10/10), strict SW/RTL/VTM checksum parity.
 - `screenshot-sweep-444`: PASS (64/64), strict SW/RTL/VTM checksum parity.
 - `screenshot-multictu-444`: PASS (10/10), strict SW/RTL/VTM checksum parity.
+- `multiframe-smoke`: PASS (4/4), strict SW/RTL/VTM checksum parity.
 - 4:4:4 vectors are lossless (`inf` PSNR). 4:2:0 vectors use the current
   lossy residual path.
 
@@ -69,6 +75,19 @@ Aggregate quality/bitrate:
 | `racehorses-multictu-420` | 10 | PASS | 92920 (+0) | 1.0118 (+0.0000) | avg 22.35 dB, range 22.11-22.74 dB |
 | `screenshot-sweep-444` | 64 | PASS | 377064 (-104) | 4.5460 (-0.0013) | inf |
 | `screenshot-multictu-444` | 10 | PASS | 286232 (+0) | 3.1166 (+0.0000) | inf |
+| `multiframe-smoke` | 4 | PASS | 5184 (new) | 1.0800 (new) | 4:2:0 avg 49.89 dB; 4:4:4 inf |
+
+### Multi-Frame Smoke
+
+Aggregate SW bits: `5184` (new).
+Aggregate SW bpp: `1.0800` (new).
+
+| Vector | Status | SW bits (delta) | SW bpp (delta) | PSNR |
+|---|---|---:|---:|---:|
+| multiframe_black_420_16x16_2f_yuv420p8.yuv | PASS | 784 (new) | 1.5312 (new) | 49.89 |
+| multiframe_black_tall_420_8x24_5f_yuv420p8.yuv | PASS | 1288 (new) | 1.3417 (new) | 49.89 |
+| multiframe_motion_444_16x8_2f_yuv444p8.yuv | PASS | 784 (new) | 3.0625 (new) | inf |
+| multiframe_motion_wide_444_48x32_2f_yuv444p8.yuv | PASS | 2328 (new) | 0.7578 (new) | inf |
 
 ### RaceHorses 4:2:0 Sweep
 
