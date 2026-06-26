@@ -468,8 +468,8 @@ def validate_av2_fixed_black_path(
     rtl_block_waveform_json = out_dir / f"{stem}_rtl_block_waveform.json"
     if av2_mvp_expected_reconstruction(info, validation_input_path) is None:
         print(
-            "FAIL: AV2 software validation only supports one yuv420p8 or yuv444p8 "
-            "frame with dimensions in 8-pixel steps",
+            "FAIL: AV2 software validation only supports yuv420p8 or yuv444p8 "
+            "streams with dimensions in 8-pixel steps",
             file=sys.stderr,
         )
         return 2
@@ -542,6 +542,7 @@ def validate_av2_fixed_black_path(
         env = os.environ.copy()
         rtl_chroma_idc = rtl_chroma_format_idc(info)
         env["RTL_CHROMA_FORMAT_IDC"] = str(rtl_chroma_idc)
+        env["FRAMEFORGE_RTL_AV2_ENCODER_FRAMES"] = str(info.frames)
         env["FRAMEFORGE_RTL_AV2_ENCODER_INPUT"] = str(validation_input_path)
         env["FRAMEFORGE_RTL_AV2_ENCODER_OUT"] = str(rtl_bitstream)
         env["FRAMEFORGE_RTL_AV2_ENCODER_RECON_OUT"] = str(rtl_internal_recon)
@@ -686,13 +687,11 @@ def validate_av2_fixed_black_path(
 
 
 def av2_mvp_expected_reconstruction(info: InputInfo, input_path: Path) -> bytes | None:
-    if info.frames != 1:
-        return None
     if normalize_format(info.fmt) not in {"yuv420p8", "yuv444p8"}:
         return None
     if not (info.width >= 8 and info.height >= 8 and info.width % 8 == 0 and info.height % 8 == 0):
         return None
-    expected_len = frame_len(info)
+    expected_len = frame_len(info) * info.frames
     data = input_path.read_bytes()
     if len(data) != expected_len:
         return None
@@ -789,7 +788,7 @@ def validate_supported_input(
     if sampling == "422" and info.width % 2:
         raise ValueError("yuv422p formats require even width")
     if info.frames < 1:
-        raise ValueError("VVC validation expects at least one frame")
+        raise ValueError("validation expects at least one frame")
 
     if input_format == "png":
         if normalize_format(info.fmt) != "yuv444p8":
@@ -1021,7 +1020,7 @@ def write_recon_views(
 ) -> None:
     if recon_format in {"codec", "raw"}:
         return
-    if info.fmt != "yuv444p8" or info.frames != 1:
+    if info.fmt != "yuv444p8":
         print(f"SKIP  recon_{recon_format}_views")
         return
 
@@ -1029,20 +1028,27 @@ def write_recon_views(
         require_pillow()
 
     print(f"FrameForge validate: write {recon_format} inspection views")
+    single_frame_info = InputInfo(info.width, info.height, 1, info.fmt)
+    source_frame_len = frame_len(single_frame_info)
     for label, path in paths.items():
         if path is None or not path.exists():
             continue
-        rgb24 = gbr_yuv444p8_to_rgb24(path.read_bytes(), info)
-        if recon_format == "rgb24":
-            out = out_dir / f"{stem}_{label}.rgb"
-            out.write_bytes(rgb24)
-        elif recon_format == "png":
-            out = out_dir / f"{stem}_{label}.png"
-            image = Image.frombytes("RGB", (info.width, info.height), rgb24)
-            image.save(out)
-        else:
-            raise ValueError(f"unsupported reconstruction format {recon_format}")
-        print(f"{sha256(out)}  {label}_{recon_format}={out}")
+        data = path.read_bytes()
+        for frame_idx in range(info.frames):
+            start = frame_idx * source_frame_len
+            end = start + source_frame_len
+            rgb24 = gbr_yuv444p8_to_rgb24(data[start:end], single_frame_info)
+            frame_suffix = "" if info.frames == 1 else f"_f{frame_idx:03d}"
+            if recon_format == "rgb24":
+                out = out_dir / f"{stem}_{label}{frame_suffix}.rgb"
+                out.write_bytes(rgb24)
+            elif recon_format == "png":
+                out = out_dir / f"{stem}_{label}{frame_suffix}.png"
+                image = Image.frombytes("RGB", (info.width, info.height), rgb24)
+                image.save(out)
+            else:
+                raise ValueError(f"unsupported reconstruction format {recon_format}")
+            print(f"{sha256(out)}  {label}_{recon_format}{frame_suffix}={out}")
 
 
 def gbr_yuv444p8_to_rgb24(data: bytes, info: InputInfo) -> bytes:

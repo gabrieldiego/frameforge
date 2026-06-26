@@ -31,7 +31,7 @@ decoder lives in `rtl/common/ff_encoder_axil_regs.sv`.
 | `0x008` | `WIDTH` | R/W | Visible frame width in pixels. |
 | `0x00c` | `HEIGHT` | R/W | Visible frame height in pixels. |
 | `0x010` | `CHROMA_FORMAT_IDC` | R/W | Codec-visible chroma format idc. Current validated values are `1` for 4:2:0 VVC and `3` for 4:4:4 paths. |
-| `0x014` | `FRAME_COUNT` | R/W | Number of frames to encode from the programmed source. AV2 currently supports one frame. |
+| `0x014` | `FRAME_COUNT` | R/W | Number of frames to encode from the programmed source. Multi-frame streams use `SRC_FRAME_STRIDE` to step between planar frame images. |
 | `0x018` | `SRC_Y_BASE` | R/W | Source plane 0 base address. |
 | `0x01c` | `SRC_U_BASE` | R/W | Source plane 1 base address. |
 | `0x020` | `SRC_V_BASE` | R/W | Source plane 2 base address. |

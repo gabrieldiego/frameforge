@@ -38,6 +38,7 @@ def write_av2_cycle_metrics(
     path,
     width,
     height,
+    frames,
     observed_bytes,
     total_cycles,
     output_active_cycles,
@@ -51,7 +52,7 @@ def write_av2_cycle_metrics(
     if not path:
         return
     bitstream_bits = observed_bytes * 8
-    input_pixels = width * height
+    input_pixels = width * height * frames
     output_wait_cycles = max(0, total_cycles - output_active_cycles)
     output_utilization = output_active_cycles / total_cycles if total_cycles else 0.0
     cycles_per_bit = total_cycles / bitstream_bits if bitstream_bits else 0.0
@@ -137,7 +138,7 @@ def write_av2_cycle_metrics(
         "codec": "av2",
         "width": width,
         "height": height,
-        "frames": 1,
+        "frames": frames,
         "bitstream_bytes": observed_bytes,
         "bitstream_bits": bitstream_bits,
         "input_pixels": input_pixels,

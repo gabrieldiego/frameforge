@@ -1,9 +1,9 @@
 use std::env;
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
 
-use frameforge::PixelFormat;
+use frameforge::{Picture, PixelFormat};
 
 #[derive(Debug)]
 enum Command {
@@ -126,19 +126,31 @@ fn run_av2_encode(cli: Av2EncodeCli) -> Result<(), String> {
     let recon_sink = recon_output.as_mut().map(|writer| writer as &mut dyn Write);
     frameforge::av2::av2_encode_fixed_black_444(&mut input, &mut output, recon_sink, request)?;
     if cli.trace.is_some() || cli.stats.is_some() {
-        let frame = fs::read(&cli.input).map_err(|err| {
+        let mut frame = vec![0; Picture::expected_len(cli.width, cli.height, cli.format)];
+        let mut side_input = File::open(&cli.input).map_err(|err| {
             format!(
-                "failed to reread AV2 input '{}' for side outputs: {err}",
+                "failed to reopen AV2 input '{}' for side outputs: {err}",
                 cli.input.display()
             )
         })?;
+        side_input.read_exact(&mut frame).map_err(|err| {
+            format!(
+                "failed to read first AV2 input frame '{}' for side outputs: {err}",
+                cli.input.display()
+            )
+        })?;
+        let side_request = frameforge::av2::Av2EncodeRequest {
+            params: frameforge::av2::Av2EncodeParams { frames: 1 },
+            geometry: request.geometry,
+            format: request.format,
+        };
         if let Some(trace) = cli.trace.as_ref() {
-            let jsonl = frameforge::av2::av2_mvp_444_trace_jsonl_for_frame(&frame, request)?;
+            let jsonl = frameforge::av2::av2_mvp_444_trace_jsonl_for_frame(&frame, side_request)?;
             fs::write(trace, jsonl)
                 .map_err(|err| format!("failed to write AV2 trace '{}': {err}", trace.display()))?;
         }
         if let Some(stats) = cli.stats.as_ref() {
-            let json = frameforge::av2::av2_mvp_444_ibc_stats_json_for_frame(&frame, request)?;
+            let json = frameforge::av2::av2_mvp_444_ibc_stats_json_for_frame(&frame, side_request)?;
             fs::write(stats, json)
                 .map_err(|err| format!("failed to write AV2 stats '{}': {err}", stats.display()))?;
         }

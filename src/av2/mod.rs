@@ -366,7 +366,7 @@ impl Av2Mvp444FrameMode {
 pub fn av2_encode_fixed_black_444(
     input: &mut dyn Read,
     output: &mut dyn Write,
-    recon: Option<&mut dyn Write>,
+    mut recon: Option<&mut dyn Write>,
     request: Av2EncodeRequest,
 ) -> Result<(), String> {
     request.validate()?;
@@ -375,42 +375,52 @@ pub fn av2_encode_fixed_black_444(
         .expect("validate_mvp_request accepts only supported AV2 chroma formats");
 
     let expected_len = Picture::expected_len(geometry.width, geometry.height, request.format);
-    let mut frame = vec![0; expected_len];
-    input
-        .read_exact(&mut frame)
-        .map_err(|err| format!("failed to read AV2 MVP input frame: {err}"))?;
-    if chroma_format == Av2ChromaFormat::Yuv420 {
-        let black = av2_black_reconstruction_for_geometry(geometry, chroma_format);
-        let (bitstream, reconstruction) = if frame == black {
-            (
-                av2_black_bitstream_for_geometry(geometry, chroma_format),
-                black,
+    for frame_index in 0..request.params.frames {
+        let mut frame = vec![0; expected_len];
+        input.read_exact(&mut frame).map_err(|err| {
+            format!(
+                "failed to read AV2 MVP input frame {} of {}: {err}",
+                frame_index + 1,
+                request.params.frames
             )
-        } else {
-            av2_lossy_420_bitstream_and_reconstruction_for_frame(geometry, &frame)
-        };
+        })?;
+        // The MVP stream keeps each input picture independently decodable.
+        // Concatenating one single-picture OBU sequence per frame avoids
+        // hidden single-frame tooling assumptions while inter-frame AV2 syntax
+        // is still being built out.
+        if chroma_format == Av2ChromaFormat::Yuv420 {
+            let black = av2_black_reconstruction_for_geometry(geometry, chroma_format);
+            let (bitstream, reconstruction) = if frame == black {
+                (
+                    av2_black_bitstream_for_geometry(geometry, chroma_format),
+                    black,
+                )
+            } else {
+                av2_lossy_420_bitstream_and_reconstruction_for_frame(geometry, &frame)
+            };
+            output
+                .write_all(&bitstream)
+                .map_err(|err| format!("failed to write AV2 bitstream: {err}"))?;
+            if let Some(recon) = recon.as_deref_mut() {
+                recon
+                    .write_all(&reconstruction)
+                    .map_err(|err| format!("failed to write AV2 reconstruction: {err}"))?;
+            }
+            continue;
+        }
+
+        let frame_mode = Av2Mvp444FrameMode::from_frame(&frame, geometry)?;
+
+        let bitstream = av2_mvp_444_bitstream_for_mode(geometry, &frame_mode);
         output
             .write_all(&bitstream)
             .map_err(|err| format!("failed to write AV2 bitstream: {err}"))?;
-        if let Some(recon) = recon {
+        if let Some(recon) = recon.as_deref_mut() {
+            let reconstruction = frame_mode.reconstruction(geometry);
             recon
                 .write_all(&reconstruction)
                 .map_err(|err| format!("failed to write AV2 reconstruction: {err}"))?;
         }
-        return Ok(());
-    }
-
-    let frame_mode = Av2Mvp444FrameMode::from_frame(&frame, geometry)?;
-
-    let bitstream = av2_mvp_444_bitstream_for_mode(geometry, &frame_mode);
-    output
-        .write_all(&bitstream)
-        .map_err(|err| format!("failed to write AV2 bitstream: {err}"))?;
-    if let Some(recon) = recon {
-        let reconstruction = frame_mode.reconstruction(geometry);
-        recon
-            .write_all(&reconstruction)
-            .map_err(|err| format!("failed to write AV2 reconstruction: {err}"))?;
     }
     Ok(())
 }
@@ -845,9 +855,9 @@ fn validate_mvp_444_request(request: Av2EncodeRequest) -> Result<Av2VideoGeometr
 }
 
 fn validate_mvp_request(request: Av2EncodeRequest) -> Result<Av2VideoGeometry, String> {
-    if request.params.frames != 1 || Av2ChromaFormat::from_pixel_format(request.format).is_none() {
+    if Av2ChromaFormat::from_pixel_format(request.format).is_none() {
         return Err(
-            "AV2 MVP encoder only supports one yuv420p8 or yuv444p8 frame at 8-pixel geometry"
+            "AV2 MVP encoder only supports yuv420p8 or yuv444p8 streams at 8-pixel geometry"
                 .to_string(),
         );
     }
@@ -1479,6 +1489,44 @@ mod tests {
             assert_ne!(output, input);
             assert_eq!(recon, input);
         }
+    }
+
+    #[test]
+    fn av2_mvp_444_encodes_all_requested_frames() {
+        let geometry = Av2VideoGeometry {
+            width: 8,
+            height: 8,
+        };
+        let request = Av2EncodeRequest {
+            params: Av2EncodeParams { frames: 2 },
+            geometry,
+            format: PixelFormat::Yuv444p8,
+        };
+        let frame_len = Picture::expected_len(geometry.width, geometry.height, request.format);
+        let first = vec![0; frame_len];
+        let mut second = vec![0; frame_len];
+        for sample in second.iter_mut().take(geometry.width * geometry.height) {
+            *sample = 73;
+        }
+        let mut input = first.clone();
+        input.extend_from_slice(&second);
+        let mut source = input.as_slice();
+        let mut output = Vec::new();
+        let mut recon = Vec::new();
+
+        av2_encode_fixed_black_444(&mut source, &mut output, Some(&mut recon), request)
+            .expect("AV2 MVP stream encode should process every requested frame");
+
+        let mut expected_output = av2_mvp_444_bitstream_for_mode(
+            geometry,
+            &Av2Mvp444FrameMode::from_frame(&first, geometry).expect("first frame mode"),
+        );
+        expected_output.extend_from_slice(&av2_mvp_444_bitstream_for_mode(
+            geometry,
+            &Av2Mvp444FrameMode::from_frame(&second, geometry).expect("second frame mode"),
+        ));
+        assert_eq!(output, expected_output);
+        assert_eq!(recon, input);
     }
 
     #[test]

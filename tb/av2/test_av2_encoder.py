@@ -61,6 +61,12 @@ def rtl_chroma_format_idc():
     return int(os.environ.get("RTL_CHROMA_FORMAT_IDC", "3"))
 
 
+def rtl_frame_count():
+    frames = int(os.environ.get("FRAMEFORGE_RTL_AV2_ENCODER_FRAMES", "1"))
+    assert frames >= 1, f"AV2 RTL frame count must be positive, got {frames}"
+    return frames
+
+
 def av2_frame_layout():
     width, height = rtl_geometry()
     chroma_format = rtl_chroma_format_idc()
@@ -121,8 +127,8 @@ def handle_int(handle):
         return None
 
 
-def av2_input_frame():
-    expected_len = av2_frame_layout()["length"]
+def av2_input_stream():
+    expected_len = av2_frame_layout()["length"] * rtl_frame_count()
     input_path = os.environ.get("FRAMEFORGE_RTL_AV2_ENCODER_INPUT")
     if input_path:
         data = Path(input_path).read_bytes()
@@ -143,6 +149,16 @@ def av2_palette_reconstruction(data):
     # internal reconstruction is the input frame once the residual path is
     # enabled.
     return data
+
+
+def av2_stream_reconstruction(data):
+    frame_len = av2_frame_layout()["length"]
+    frames = rtl_frame_count()
+    assert len(data) == frame_len * frames
+    return b"".join(
+        av2_palette_reconstruction(data[index * frame_len : (index + 1) * frame_len])
+        for index in range(frames)
+    )
 
 
 def av2_round_div(value, divisor):
@@ -433,7 +449,8 @@ async def start_encoder(dut):
 @cocotb.test()
 async def av2_encoder_emits_obu_stream(dut):
     await reset_dut(dut)
-    input_data = av2_input_frame()
+    input_data = av2_input_stream()
+    frames = rtl_frame_count()
     width, height = rtl_geometry()
     layout = av2_frame_layout()
     axi_memory = planar_memory_image(input_data)
@@ -444,7 +461,7 @@ async def av2_encoder_emits_obu_stream(dut):
         width=width,
         height=height,
         chroma_format=rtl_chroma_format_idc(),
-        frame_count=1,
+        frame_count=frames,
         src_y_base=0,
         src_u_base=layout["src_u_base"],
         src_v_base=layout["src_v_base"],
@@ -1100,11 +1117,12 @@ async def av2_encoder_emits_obu_stream(dut):
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(bytes(observed))
-    recon_path.write_bytes(av2_palette_reconstruction(input_data))
+    recon_path.write_bytes(av2_stream_reconstruction(input_data))
     write_av2_cycle_metrics(
         os.environ.get("FRAMEFORGE_RTL_AV2_METRICS_OUT"),
         width,
         height,
+        frames,
         len(observed),
         total_cycles,
         output_active_cycles,
