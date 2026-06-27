@@ -6,17 +6,17 @@ belongs in [output-utilization.md](output-utilization.md).
 
 `scripts/validate.py` reports the FrameForge software bitstream and, when
 RTL validation is enabled, the RTL bitstream size. Software and RTL
-bitstreams are expected to match exactly for implemented AV2 features. The
-AV2 reference path used here is decode-only; these validation runs do not
-invoke `avmenc`, `aomenc`, or `vpenc`, and reference-encoder bitrates are
-not tracked in this report.
+bitstreams are expected to match exactly for implemented AV2
+features. The reference path used here is decode-only; the external
+reference-decoder decodes the FrameForge bitstream and its
+reconstruction must match the software/RTL reconstruction checksum.
 
-## 2026-06-25 AV2 4:2:0 Bubble Rate Optimization
+## 2026-06-26 AV2 Multi-Frame Report Refresh
 
 Baseline and current sources:
 
-- Baseline Git SHA: `31bb9321589844a4615d8dd87fe96ef6b54f43ed`
-- Current validated source Git SHA: `34e1dca8f313dd433452ca27fb81d858d90e1617`
+- Baseline Git SHA: `34e1dca8f313dd433452ca27fb81d858d90e1617`
+- Current validated source Git SHA: `151e8276f495b56c9af0376fde7fb11105921f7f`
 - Delta columns compare against the previous documented AV2 quality/bitrate
   checkpoint where the same vector or aggregate was present.
 
@@ -26,6 +26,7 @@ Validation result:
 - `screenshot-multictu-444`: PASS (10/10).
 - `racehorses-sweep-420`: PASS (64/64).
 - `racehorses-multictu-420`: PASS (10/10).
+- `multiframe-smoke`: PASS (4/4).
 - All listed vectors matched SW/RTL bitstream checksums and
   SW/RTL/reference-decoder reconstruction checksums.
 - Screenshot 4:4:4 remains lossless (`inf` PSNR). RaceHorses 4:2:0 remains
@@ -39,6 +40,7 @@ Aggregate results:
 | `screenshot-multictu-444` | 10 | PASS | 562104 (+0) | 6.1205 (-0.0000) | inf |
 | `racehorses-sweep-420` | 64 | PASS | 182464 (+0) | 2.1998 (+0.0000) | avg 24.08 dB, range 22.47-33.31 dB |
 | `racehorses-multictu-420` | 10 | PASS | 186256 (+0) | 2.0280 (+0.0000) | avg 22.70 dB, range 22.36-23.03 dB |
+| `multiframe-smoke` | 4 | PASS | 20744 (n/a) | 4.3217 (n/a) | inf |
 
 IBC candidate summary for 4:4:4:
 
@@ -214,3 +216,12 @@ IBC candidate summary for 4:4:4:
 | racehorses_partial_grid2_72x72_1f_yuv420p8.yuv | PASS | 11384 (+0) | 2.1960 (+0.0000) | 22.92 |
 | racehorses_partial_wide_136x80_1f_yuv420p8.yuv | PASS | 22552 (+0) | 2.0728 (+0.0000) | 22.81 |
 | racehorses_partial_tall_72x128_1f_yuv420p8.yuv | PASS | 19104 (+0) | 2.0729 (+0.0000) | 22.40 |
+
+### Multi-Frame Smoke
+
+| Vector | Status | SW bits (delta) | SW bpp (delta) | PSNR |
+|---|---|---:|---:|---:|
+| multiframe_black_420_16x16_2f_yuv420p8.yuv | PASS | 1936 (n/a) | 3.7812 (n/a) | inf |
+| multiframe_black_tall_420_8x24_5f_yuv420p8.yuv | PASS | 3840 (n/a) | 4.0000 (n/a) | inf |
+| multiframe_motion_444_16x8_2f_yuv444p8.yuv | PASS | 1408 (n/a) | 5.5000 (n/a) | inf |
+| multiframe_motion_wide_444_48x32_2f_yuv444p8.yuv | PASS | 13560 (n/a) | 4.4141 (n/a) | inf |

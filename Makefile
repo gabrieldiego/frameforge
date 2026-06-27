@@ -1,4 +1,4 @@
-.PHONY: help check-tools build test fmt lint release-check hardware-regression decoder-setup test-vector-sets test-vectors validate-set validate-smoke validate-random-short validate-sweep-420 validate-sweep-444 validate-motion-short validate-all-short validate-all-sweeps validate validate-decode reference-vvc reference-av2 rtl-test synth-env synth-check synth synth-postsim synth-vivado synth-vivado-remote yosys vivado vivado-prepare vivado-config vivado-auth vivado-install vivado-host-deps clean
+.PHONY: help check-tools build test fmt lint release-check hardware-regression report-regressions report-codec report-av2 report-vvc decoder-setup test-vector-sets test-vectors validate-set validate-smoke validate-random-short validate-sweep-420 validate-sweep-444 validate-motion-short validate-all-short validate-all-sweeps validate validate-decode reference-vvc reference-av2 rtl-test synth-env synth-check synth synth-postsim synth-vivado synth-vivado-remote yosys vivado vivado-prepare vivado-config vivado-auth vivado-install vivado-host-deps clean
 
 SIM ?= icarus
 TOPLEVEL_LANG ?= verilog
@@ -8,11 +8,13 @@ DUT ?= av2-encoder
 SYNTH_DUT ?= av2-encoder
 VALIDATE_SYNTH_DUT ?= av2-encoder
 HARDWARE_REGRESSION_SYNTH_DUT ?= av2-encoder
+REPORT_SYNTH_DUT ?= av2-encoder
 else
 DUT ?= vvc-coding-tree-scheduler
 SYNTH_DUT ?= vvc-cabac-stream-writer
 VALIDATE_SYNTH_DUT ?= vvc-cabac-pipeline
 HARDWARE_REGRESSION_SYNTH_DUT ?= vvc-encoder
+REPORT_SYNTH_DUT ?= vvc-encoder
 endif
 RTL_SAMPLE_BITS ?= 8
 RTL_SOURCE_SAMPLE_BITS ?= $(RTL_SAMPLE_BITS)
@@ -55,6 +57,9 @@ VALIDATION_WITH_SYNTH ?= 0
 VALIDATION_SW_ONLY ?= $(VALIDATE_SW_ONLY)
 HARDWARE_REGRESSION_EXTRA_SET ?=
 HARDWARE_REGRESSION_SYNTH ?= 1
+REPORT_TITLE ?= $(shell date +%F) $(shell echo $(CODEC) | tr '[:lower:]' '[:upper:]') Report Checkpoint
+REPORT_SYNTHESIS_TOOL ?= yosys
+REPORT_BASELINE_REF ?=
 VIVADO_INSTALLER ?=
 VIVADO_LICENSE ?=
 VIVADO_INSTALL_LOG ?= .tools/vivado-install-run.log
@@ -68,6 +73,8 @@ help:
 	@printf '%s\n' '  make lint      - run Rust Clippy lints'
 	@printf '%s\n' '  make release-check - run portable release sanity checks without synthesis'
 	@printf '%s\n' '  make hardware-regression [CODEC=vvc HARDWARE_REGRESSION_EXTRA_SET=<set> HARDWARE_REGRESSION_SYNTH=1|0 HARDWARE_REGRESSION_SYNTH_DUT=vvc-encoder] - regenerate/run public 4:2:0 and 4:4:4 sweeps, optional extra set, then synthesis'
+	@printf '%s\n' '  make report-codec [CODEC=vvc|av2 REPORT_TITLE=<title> REPORT_SYNTHESIS_TOOL=yosys|yosys-vivado] - run report-backed regressions, synthesize, then regenerate codec reports'
+	@printf '%s\n' '  make report-av2 | report-vvc - direct report-codec entry points'
 	@printf '%s\n' '  make decoder-setup [CODEC=vvc|av2] - find or build external VTM or AVM decoder'
 	@printf '%s\n' '  make test-vector-sets [TEST_VECTOR_SET_DIR=verification/test_vector_sets] - list available test vector manifests'
 	@printf '%s\n' '  make test-vectors [TEST_VECTOR_SET=smoke TEST_VECTOR_SET_DIR=verification/test_vector_sets TEST_VECTOR_DIR=verification/generated/test_vectors] - generate deterministic YUV test streams from a manifest'
@@ -132,6 +139,24 @@ endif
 ifeq ($(HARDWARE_REGRESSION_SYNTH),1)
 	$(MAKE) synth SYNTH_DUT="$(HARDWARE_REGRESSION_SYNTH_DUT)"
 endif
+
+report-regressions:
+	$(MAKE) validate-set CODEC="$(CODEC)" VALIDATION_SET=screenshot-sweep-444 VALIDATION_SET_DIR=verification/test_vector_sets/local VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+	$(MAKE) validate-set CODEC="$(CODEC)" VALIDATION_SET=screenshot-multictu-444 VALIDATION_SET_DIR=verification/test_vector_sets/local VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+	$(MAKE) validate-set CODEC="$(CODEC)" VALIDATION_SET=racehorses-sweep-420 VALIDATION_SET_DIR=verification/test_vector_sets/local VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+	$(MAKE) validate-set CODEC="$(CODEC)" VALIDATION_SET=racehorses-multictu-420 VALIDATION_SET_DIR=verification/test_vector_sets/local VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+	$(MAKE) validate-set CODEC="$(CODEC)" VALIDATION_SET=multiframe-smoke VALIDATION_SET_DIR=verification/test_vector_sets VALIDATION_STOP_ON_FAIL=1 VALIDATION_WITH_SYNTH=0
+
+report-codec:
+	$(MAKE) report-regressions CODEC="$(CODEC)"
+	$(MAKE) synth CODEC="$(CODEC)" SYNTH_DUT="$(REPORT_SYNTH_DUT)"
+	python3 scripts/update_codec_reports.py --codec "$(CODEC)" --checkpoint-title "$(REPORT_TITLE)" --synthesis-tool "$(REPORT_SYNTHESIS_TOOL)" $(if $(REPORT_BASELINE_REF),--baseline-ref "$(REPORT_BASELINE_REF)")
+
+report-av2:
+	$(MAKE) report-codec CODEC=av2
+
+report-vvc:
+	$(MAKE) report-codec CODEC=vvc
 
 decoder-setup:
 	python3 scripts/ensure_reference_decoder.py --codec "$(CODEC)"
