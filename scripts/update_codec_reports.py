@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import os
 import re
 import argparse
 import subprocess
@@ -624,6 +625,16 @@ def parse_synth_current() -> dict[str, float]:
         "Main Yosys elapsed time (s)": float(m.group(1)),
         "Runner-observed peak child RSS (MiB)": float(m.group(2)),
     }
+    m = re.search(r"Synthesis timeout: ([0-9.]+) seconds", yosys)
+    out["Yosys timeout (s)"] = (
+        float(m.group(1)) if m else float(os.environ.get("SYNTH_TIMEOUT_SEC", "600"))
+    )
+    m = re.search(r"Synthesis review threshold: ([0-9.]+) seconds", yosys)
+    out["Yosys review threshold (s)"] = (
+        float(m.group(1)) if m else float(os.environ.get("SYNTH_WARN_AFTER_SEC", "300"))
+    )
+    m = re.search(r"(?:Yosys synthesis memory limit|Synthesis memory limit): ([0-9.]+) MiB", yosys)
+    out["Yosys memory limit (MiB)"] = float(m.group(1)) if m else math.nan
     m = re.search(rf"Longest topological path in {re.escape(SYNTH_TOP)} \(length=([0-9]+)\)", crit)
     out["Topological path length"] = float(m.group(1))
     # Use the last hierarchy summary, which is the flattened top entry.
@@ -708,6 +719,9 @@ def vivado_path_notes() -> list[str]:
 def write_synthesis() -> None:
     old = parse_synth_old()
     curr = parse_synth_current()
+    synth_cmd = f"make synth CODEC={CODEC} SYNTH_DUT={SYNTH_DUT}"
+    if curr["Yosys timeout (s)"] != 600:
+        synth_cmd += f" SYNTH_TIMEOUT_SEC={fmt_int(curr['Yosys timeout (s)'])}"
     yosys_order = [
         "Main Yosys elapsed time (s)",
         "Runner-observed peak child RSS (MiB)",
@@ -758,13 +772,17 @@ def write_synthesis() -> None:
         "",
         "Yosys synthesis configuration:",
         "",
-        f"- command: `make synth CODEC={CODEC} SYNTH_DUT={SYNTH_DUT}`",
+        f"- command: `{synth_cmd}`",
         f"- RTL top: `{SYNTH_TOP}`",
         "- board/device metadata: Arty Z7-10, `xc7z010clg400-1`",
         "- clock target metadata: 25 MHz",
         "- max visible size: 1024x1024",
-        "- timeout/review thresholds: 600 seconds hard stop, 300 seconds review",
-        "- memory limit: 3072 MiB",
+        (
+            "- timeout/review thresholds: "
+            f"{fmt_int(curr['Yosys timeout (s)'])} seconds hard stop, "
+            f"{fmt_int(curr['Yosys review threshold (s)'])} seconds review"
+        ),
+        f"- memory limit: {fmt_int(curr['Yosys memory limit (MiB)'])} MiB",
         "- palette 4:4:4 support: enabled",
         "",
         "Yosys synthesis result:",

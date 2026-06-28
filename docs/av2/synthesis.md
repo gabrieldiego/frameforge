@@ -5,12 +5,12 @@ Older measurements are intentionally left to git history so this page stays
 focused on the current baseline and immediate delta. The shared synthesis flow
 is documented in [../synthesis.md](../synthesis.md).
 
-## 2026-06-26 AV2 Multi-Frame Report Refresh
+## AV2 Packet Flow Timing Check
 
 Baseline and current sources:
 
-- Baseline Git SHA: `34e1dca8f313dd433452ca27fb81d858d90e1617`
-- Current validated source Git SHA: `151e8276f495b56c9af0376fde7fb11105921f7f`
+- Baseline Git SHA: `151e8276f495b56c9af0376fde7fb11105921f7f`
+- Current validated source Git SHA: `509b74f7670b9bfff61209f0779c12e256b00f07`
 
 Validation result:
 
@@ -24,12 +24,12 @@ Validation result:
 
 Yosys synthesis configuration:
 
-- command: `make synth CODEC=av2 SYNTH_DUT=av2-encoder`
+- command: `make synth CODEC=av2 SYNTH_DUT=av2-encoder SYNTH_TIMEOUT_SEC=900`
 - RTL top: `ff_av2_encoder`
 - board/device metadata: Arty Z7-10, `xc7z010clg400-1`
 - clock target metadata: 25 MHz
 - max visible size: 1024x1024
-- timeout/review thresholds: 600 seconds hard stop, 300 seconds review
+- timeout/review thresholds: 900 seconds hard stop, 300 seconds review
 - memory limit: 3072 MiB
 - palette 4:4:4 support: enabled
 
@@ -37,25 +37,25 @@ Yosys synthesis result:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| Main Yosys elapsed time (s) | 518.60 s | 569.90 s | +51.30 s |
-| Runner-observed peak child RSS (MiB) | 1933.59 MiB | 1961.34 MiB | +27.75 MiB |
+| Main Yosys elapsed time (s) | 569.90 s | 579.50 s | +9.60 s |
+| Runner-observed peak child RSS (MiB) | 1961.34 MiB | 2074.95 MiB | +113.61 MiB |
 | Topological path length | 120 | 120 | +0 |
-| Flattened cells | 116915 | 117383 | +468 |
-| Estimated LCs | 55189 | 55268 | +79 |
-| CARRY4 | 3739 | 3772 | +33 |
+| Flattened cells | 117383 | 123021 | +5638 |
+| Estimated LCs | 55268 | 55926 | +658 |
+| CARRY4 | 3772 | 3815 | +43 |
 | DSP48E1 | 1 | 1 | +0 |
-| FDCE | 5163 | 5163 | +0 |
+| FDCE | 5163 | 6382 | +1219 |
 | FDPE | 92 | 92 | +0 |
-| FDRE | 22907 | 23019 | +112 |
+| FDRE | 23019 | 23019 | +0 |
 | FDSE | 132 | 132 | +0 |
-| LUT1 | 830 | 863 | +33 |
-| LUT2 | 14075 | 14092 | +17 |
-| LUT3 | 12301 | 12791 | +490 |
-| LUT4 | 7195 | 7139 | -56 |
-| LUT5 | 10414 | 9918 | -496 |
-| LUT6 | 25279 | 25420 | +141 |
-| MUXF7 | 4795 | 4711 | -84 |
-| MUXF8 | 1184 | 1329 | +145 |
+| LUT1 | 863 | 981 | +118 |
+| LUT2 | 14092 | 15006 | +914 |
+| LUT3 | 12791 | 12231 | -560 |
+| LUT4 | 7139 | 7583 | +444 |
+| LUT5 | 9918 | 10142 | +224 |
+| LUT6 | 25420 | 25970 | +550 |
+| MUXF7 | 4711 | 6140 | +1429 |
+| MUXF8 | 1329 | 1434 | +105 |
 | RAMB36E1 | 30 | 30 | +0 |
 | RAM32M | 10 | 10 | +0 |
 
