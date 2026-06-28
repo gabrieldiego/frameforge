@@ -171,21 +171,6 @@ module ff_av2_encoder #(
   logic [11:0] precarry_read_word_addr_q;
   logic [255:0] precarry_read_word_data_w;
   logic [15:0] precarry_read_data_q;
-  logic [15:0] precarry_read_prev_data_q;
-  logic [15:0] precarry_read_prev2_data_q;
-  logic [15:0] precarry_read_prev3_data_q;
-  logic [15:0] precarry_read_prev4_data_q;
-  logic [15:0] precarry_read_prev5_data_q;
-  logic [15:0] precarry_read_prev6_data_q;
-  logic [15:0] precarry_read_prev7_data_q;
-  logic [15:0] precarry_read_prev8_data_q;
-  logic [15:0] precarry_read_prev9_data_q;
-  logic [15:0] precarry_read_prev10_data_q;
-  logic [15:0] precarry_read_prev11_data_q;
-  logic [15:0] precarry_read_prev12_data_q;
-  logic [15:0] precarry_read_prev13_data_q;
-  logic [15:0] precarry_read_prev14_data_q;
-  logic [15:0] precarry_read_prev15_data_q;
   logic precarry_write_valid_w;
   logic [15:0] precarry_write_addr_w;
   logic [15:0] precarry_write_data_w;
@@ -374,38 +359,12 @@ module ff_av2_encoder #(
   logic output_last_q;
   logic output_tile_payload_w;
   logic [15:0] carry_sum_w;
-  logic [15:0] carry_pair_sum_w;
-  logic [15:0] carry_quad_sum2_w;
-  logic [15:0] carry_quad_sum3_w;
-  logic [15:0] carry_oct_sum4_w;
-  logic [15:0] carry_oct_sum5_w;
-  logic [15:0] carry_oct_sum6_w;
-  logic [15:0] carry_oct_sum7_w;
-  logic [15:0] carry_hex_sum8_w;
-  logic [15:0] carry_hex_sum9_w;
-  logic [15:0] carry_hex_sum10_w;
-  logic [15:0] carry_hex_sum11_w;
-  logic [15:0] carry_hex_sum12_w;
-  logic [15:0] carry_hex_sum13_w;
-  logic [15:0] carry_hex_sum14_w;
-  logic [15:0] carry_hex_sum15_w;
-  logic [15:0] carry_single_addr_w;
   logic [15:0] carry_group_addr_w;
-  logic [15:0] carry_next_single_addr_w;
   logic [15:0] carry_index_after_step_w;
-  logic [15:0] carry_index_after_next_step_w;
-  logic [4:0] carry_step_w;
-  logic [4:0] carry_next_step_w;
-  logic [4:0] carry_precarry_limit_w;
-  logic [4:0] carry_payload_limit_w;
-  logic [4:0] carry_next_precarry_limit_w;
-  logic [4:0] carry_next_payload_limit_w;
   logic [15:0] carry_after_step_w;
   logic [127:0] carry_group_data_w;
   logic [15:0] carry_group_strobe_w;
-  logic [16:0] carry_group_strobe_ext_w;
   logic carry_done_after_step_w;
-  logic carry_next_done_w;
   logic [11:0] carry_read_after_current_word_addr_w;
   logic [11:0] carry_read_after_next_word_addr_w;
   logic leaf_fsc_symbol_w;
@@ -932,6 +891,24 @@ module ff_av2_encoder #(
     .output_lookup_last(output_lookup_last_w)
   );
 
+  ff_av2_carry_propagator carry_propagator (
+    .carry(carry_q),
+    .carry_index(carry_index_q),
+    .payload_tile_start(payload_tile_start_w),
+    .precarry_read_word_data(precarry_read_word_data_w),
+    .precarry_read_addr(precarry_read_addr_q),
+    .precarry_read_data(precarry_read_data_q),
+    .carry_sum(carry_sum_w),
+    .carry_group_addr(carry_group_addr_w),
+    .carry_index_after_step(carry_index_after_step_w),
+    .carry_after_step(carry_after_step_w),
+    .carry_group_data(carry_group_data_w),
+    .carry_group_strobe(carry_group_strobe_w),
+    .carry_done_after_step(carry_done_after_step_w),
+    .carry_read_after_current_word_addr(carry_read_after_current_word_addr_w),
+    .carry_read_after_next_word_addr(carry_read_after_next_word_addr_w)
+  );
+
   ff_av2_local_hash_matcher_444 #(
     .SAMPLE_BITS(SAMPLE_BITS)
   ) local_hash_ibc (
@@ -1312,333 +1289,6 @@ module ff_av2_encoder #(
   assign tile_is_last_w = (tile_index_q == (tile_count_q - 16'd1));
   assign multi_tile_w = (tile_count_q != 16'd1);
   assign payload_tile_start_w = payload_len_q + (tile_is_last_w ? 16'd0 : 16'd4);
-  assign carry_sum_w = carry_q + precarry_read_data_q;
-  assign carry_pair_sum_w = (carry_sum_w >> 8) + precarry_read_prev_data_q;
-  assign carry_quad_sum2_w = (carry_pair_sum_w >> 8) + precarry_read_prev2_data_q;
-  assign carry_quad_sum3_w = (carry_quad_sum2_w >> 8) + precarry_read_prev3_data_q;
-  assign carry_oct_sum4_w = (carry_quad_sum3_w >> 8) + precarry_read_prev4_data_q;
-  assign carry_oct_sum5_w = (carry_oct_sum4_w >> 8) + precarry_read_prev5_data_q;
-  assign carry_oct_sum6_w = (carry_oct_sum5_w >> 8) + precarry_read_prev6_data_q;
-  assign carry_oct_sum7_w = (carry_oct_sum6_w >> 8) + precarry_read_prev7_data_q;
-  assign carry_hex_sum8_w = (carry_oct_sum7_w >> 8) + precarry_read_prev8_data_q;
-  assign carry_hex_sum9_w = (carry_hex_sum8_w >> 8) + precarry_read_prev9_data_q;
-  assign carry_hex_sum10_w = (carry_hex_sum9_w >> 8) + precarry_read_prev10_data_q;
-  assign carry_hex_sum11_w = (carry_hex_sum10_w >> 8) + precarry_read_prev11_data_q;
-  assign carry_hex_sum12_w = (carry_hex_sum11_w >> 8) + precarry_read_prev12_data_q;
-  assign carry_hex_sum13_w = (carry_hex_sum12_w >> 8) + precarry_read_prev13_data_q;
-  assign carry_hex_sum14_w = (carry_hex_sum13_w >> 8) + precarry_read_prev14_data_q;
-  assign carry_hex_sum15_w = (carry_hex_sum14_w >> 8) + precarry_read_prev15_data_q;
-  assign carry_single_addr_w = payload_tile_start_w + carry_index_q;
-  assign carry_next_single_addr_w = payload_tile_start_w + carry_index_after_step_w;
-  // AV2 range coder carry propagation is byte-order preserving when processed
-  // from the end of the precarry buffer. The group size is the largest run up
-  // to 16 bytes that stays inside both the current precarry read word and
-  // the current 16-byte masked payload write word.
-  assign carry_precarry_limit_w =
-    (carry_index_q[3:0] == 4'd15) ? 5'd16 : {1'b0, carry_index_q[3:0]} + 5'd1;
-  assign carry_payload_limit_w = {1'b0, carry_single_addr_w[3:0]} + 5'd1;
-  assign carry_step_w =
-    (carry_precarry_limit_w < carry_payload_limit_w) ?
-      carry_precarry_limit_w : carry_payload_limit_w;
-  assign carry_group_addr_w =
-    payload_tile_start_w + carry_index_q - {11'd0, carry_step_w - 5'd1};
-  assign carry_index_after_step_w = carry_index_q - {11'd0, carry_step_w};
-  assign carry_done_after_step_w = carry_index_q < {11'd0, carry_step_w};
-  assign carry_next_precarry_limit_w =
-    (carry_index_after_step_w[3:0] == 4'd15) ?
-      5'd16 : ({1'b0, carry_index_after_step_w[3:0]} + 5'd1);
-  assign carry_next_payload_limit_w = {1'b0, carry_next_single_addr_w[3:0]} + 5'd1;
-  assign carry_next_step_w =
-    (carry_next_precarry_limit_w < carry_next_payload_limit_w) ?
-      carry_next_precarry_limit_w : carry_next_payload_limit_w;
-  assign carry_index_after_next_step_w =
-    carry_index_after_step_w - {11'd0, carry_next_step_w};
-  assign carry_next_done_w =
-    carry_index_after_step_w < {11'd0, carry_next_step_w};
-  assign carry_read_after_current_word_addr_w =
-    carry_done_after_step_w ? 12'd0 : carry_index_after_step_w[15:4];
-  assign carry_read_after_next_word_addr_w =
-    (carry_done_after_step_w || carry_next_done_w) ?
-      12'd0 : carry_index_after_next_step_w[15:4];
-  assign carry_after_step_w =
-    (carry_step_w == 5'd16) ? (carry_hex_sum15_w >> 8) :
-    ((carry_step_w == 5'd15) ? (carry_hex_sum14_w >> 8) :
-    ((carry_step_w == 5'd14) ? (carry_hex_sum13_w >> 8) :
-    ((carry_step_w == 5'd13) ? (carry_hex_sum12_w >> 8) :
-    ((carry_step_w == 5'd12) ? (carry_hex_sum11_w >> 8) :
-    ((carry_step_w == 5'd11) ? (carry_hex_sum10_w >> 8) :
-    ((carry_step_w == 5'd10) ? (carry_hex_sum9_w >> 8) :
-    ((carry_step_w == 5'd9) ? (carry_hex_sum8_w >> 8) :
-    ((carry_step_w == 5'd8) ? (carry_oct_sum7_w >> 8) :
-    ((carry_step_w == 5'd7) ? (carry_oct_sum6_w >> 8) :
-    ((carry_step_w == 5'd6) ? (carry_oct_sum5_w >> 8) :
-    ((carry_step_w == 5'd5) ? (carry_oct_sum4_w >> 8) :
-    ((carry_step_w == 5'd4) ? (carry_quad_sum3_w >> 8) :
-    ((carry_step_w == 5'd3) ? (carry_quad_sum2_w >> 8) :
-    ((carry_step_w == 5'd2) ? (carry_pair_sum_w >> 8) :
-                               (carry_sum_w >> 8)))))))))))))));
-  assign carry_group_strobe_ext_w =
-    ((17'd1 << carry_step_w) - 17'd1) << carry_group_addr_w[3:0];
-  assign carry_group_strobe_w = carry_group_strobe_ext_w[15:0];
-  always @* begin
-    case (carry_step_w)
-      5'd16: begin
-        carry_group_data_w = {
-          carry_sum_w[7:0],
-          carry_pair_sum_w[7:0],
-          carry_quad_sum2_w[7:0],
-          carry_quad_sum3_w[7:0],
-          carry_oct_sum4_w[7:0],
-          carry_oct_sum5_w[7:0],
-          carry_oct_sum6_w[7:0],
-          carry_oct_sum7_w[7:0],
-          carry_hex_sum8_w[7:0],
-          carry_hex_sum9_w[7:0],
-          carry_hex_sum10_w[7:0],
-          carry_hex_sum11_w[7:0],
-          carry_hex_sum12_w[7:0],
-          carry_hex_sum13_w[7:0],
-          carry_hex_sum14_w[7:0],
-          carry_hex_sum15_w[7:0]
-        };
-      end
-      5'd15: begin
-        carry_group_data_w = {
-          8'd0,
-          carry_sum_w[7:0],
-          carry_pair_sum_w[7:0],
-          carry_quad_sum2_w[7:0],
-          carry_quad_sum3_w[7:0],
-          carry_oct_sum4_w[7:0],
-          carry_oct_sum5_w[7:0],
-          carry_oct_sum6_w[7:0],
-          carry_oct_sum7_w[7:0],
-          carry_hex_sum8_w[7:0],
-          carry_hex_sum9_w[7:0],
-          carry_hex_sum10_w[7:0],
-          carry_hex_sum11_w[7:0],
-          carry_hex_sum12_w[7:0],
-          carry_hex_sum13_w[7:0],
-          carry_hex_sum14_w[7:0]
-        };
-      end
-      5'd14: begin
-        carry_group_data_w = {
-          16'd0,
-          carry_sum_w[7:0],
-          carry_pair_sum_w[7:0],
-          carry_quad_sum2_w[7:0],
-          carry_quad_sum3_w[7:0],
-          carry_oct_sum4_w[7:0],
-          carry_oct_sum5_w[7:0],
-          carry_oct_sum6_w[7:0],
-          carry_oct_sum7_w[7:0],
-          carry_hex_sum8_w[7:0],
-          carry_hex_sum9_w[7:0],
-          carry_hex_sum10_w[7:0],
-          carry_hex_sum11_w[7:0],
-          carry_hex_sum12_w[7:0],
-          carry_hex_sum13_w[7:0]
-        };
-      end
-      5'd13: begin
-        carry_group_data_w = {
-          24'd0,
-          carry_sum_w[7:0],
-          carry_pair_sum_w[7:0],
-          carry_quad_sum2_w[7:0],
-          carry_quad_sum3_w[7:0],
-          carry_oct_sum4_w[7:0],
-          carry_oct_sum5_w[7:0],
-          carry_oct_sum6_w[7:0],
-          carry_oct_sum7_w[7:0],
-          carry_hex_sum8_w[7:0],
-          carry_hex_sum9_w[7:0],
-          carry_hex_sum10_w[7:0],
-          carry_hex_sum11_w[7:0],
-          carry_hex_sum12_w[7:0]
-        };
-      end
-      5'd12: begin
-        carry_group_data_w = {
-          32'd0,
-          carry_sum_w[7:0],
-          carry_pair_sum_w[7:0],
-          carry_quad_sum2_w[7:0],
-          carry_quad_sum3_w[7:0],
-          carry_oct_sum4_w[7:0],
-          carry_oct_sum5_w[7:0],
-          carry_oct_sum6_w[7:0],
-          carry_oct_sum7_w[7:0],
-          carry_hex_sum8_w[7:0],
-          carry_hex_sum9_w[7:0],
-          carry_hex_sum10_w[7:0],
-          carry_hex_sum11_w[7:0]
-        };
-      end
-      5'd11: begin
-        carry_group_data_w = {
-          40'd0,
-          carry_sum_w[7:0],
-          carry_pair_sum_w[7:0],
-          carry_quad_sum2_w[7:0],
-          carry_quad_sum3_w[7:0],
-          carry_oct_sum4_w[7:0],
-          carry_oct_sum5_w[7:0],
-          carry_oct_sum6_w[7:0],
-          carry_oct_sum7_w[7:0],
-          carry_hex_sum8_w[7:0],
-          carry_hex_sum9_w[7:0],
-          carry_hex_sum10_w[7:0]
-        };
-      end
-      5'd10: begin
-        carry_group_data_w = {
-          48'd0,
-          carry_sum_w[7:0],
-          carry_pair_sum_w[7:0],
-          carry_quad_sum2_w[7:0],
-          carry_quad_sum3_w[7:0],
-          carry_oct_sum4_w[7:0],
-          carry_oct_sum5_w[7:0],
-          carry_oct_sum6_w[7:0],
-          carry_oct_sum7_w[7:0],
-          carry_hex_sum8_w[7:0],
-          carry_hex_sum9_w[7:0]
-        };
-      end
-      5'd9: begin
-        carry_group_data_w = {
-          56'd0,
-          carry_sum_w[7:0],
-          carry_pair_sum_w[7:0],
-          carry_quad_sum2_w[7:0],
-          carry_quad_sum3_w[7:0],
-          carry_oct_sum4_w[7:0],
-          carry_oct_sum5_w[7:0],
-          carry_oct_sum6_w[7:0],
-          carry_oct_sum7_w[7:0],
-          carry_hex_sum8_w[7:0]
-        };
-      end
-      5'd8: begin
-        carry_group_data_w = {
-          64'd0,
-          carry_sum_w[7:0],
-          carry_pair_sum_w[7:0],
-          carry_quad_sum2_w[7:0],
-          carry_quad_sum3_w[7:0],
-          carry_oct_sum4_w[7:0],
-          carry_oct_sum5_w[7:0],
-          carry_oct_sum6_w[7:0],
-          carry_oct_sum7_w[7:0]
-        };
-      end
-      5'd7: begin
-        carry_group_data_w = {
-          72'd0,
-          carry_sum_w[7:0],
-          carry_pair_sum_w[7:0],
-          carry_quad_sum2_w[7:0],
-          carry_quad_sum3_w[7:0],
-          carry_oct_sum4_w[7:0],
-          carry_oct_sum5_w[7:0],
-          carry_oct_sum6_w[7:0]
-        };
-      end
-      5'd6: begin
-        carry_group_data_w = {
-          80'd0,
-          carry_sum_w[7:0],
-          carry_pair_sum_w[7:0],
-          carry_quad_sum2_w[7:0],
-          carry_quad_sum3_w[7:0],
-          carry_oct_sum4_w[7:0],
-          carry_oct_sum5_w[7:0]
-        };
-      end
-      5'd5: begin
-        carry_group_data_w = {
-          88'd0,
-          carry_sum_w[7:0],
-          carry_pair_sum_w[7:0],
-          carry_quad_sum2_w[7:0],
-          carry_quad_sum3_w[7:0],
-          carry_oct_sum4_w[7:0]
-        };
-      end
-      5'd4: begin
-        carry_group_data_w = {
-          96'd0,
-          carry_sum_w[7:0],
-          carry_pair_sum_w[7:0],
-          carry_quad_sum2_w[7:0],
-          carry_quad_sum3_w[7:0]
-        };
-      end
-      5'd3: begin
-        carry_group_data_w = {
-          104'd0,
-          carry_sum_w[7:0],
-          carry_pair_sum_w[7:0],
-          carry_quad_sum2_w[7:0]
-        };
-      end
-      5'd2: begin
-        carry_group_data_w = {112'd0, carry_sum_w[7:0], carry_pair_sum_w[7:0]};
-      end
-      default: begin
-        carry_group_data_w = {120'd0, carry_sum_w[7:0]};
-      end
-    endcase
-  end
-  assign precarry_read_addr_q = carry_index_q;
-  assign precarry_read_data_q =
-    precarry_read_word_data_w[{carry_index_q[3:0], 4'b0000} +: 16];
-  assign precarry_read_prev_data_q =
-    (carry_index_q[3:0] >= 4'd1) ?
-      precarry_read_word_data_w[{carry_index_q[3:0] - 4'd1, 4'b0000} +: 16] : 16'd0;
-  assign precarry_read_prev2_data_q =
-    (carry_index_q[3:0] >= 4'd2) ?
-      precarry_read_word_data_w[{carry_index_q[3:0] - 4'd2, 4'b0000} +: 16] : 16'd0;
-  assign precarry_read_prev3_data_q =
-    (carry_index_q[3:0] >= 4'd3) ?
-      precarry_read_word_data_w[{carry_index_q[3:0] - 4'd3, 4'b0000} +: 16] : 16'd0;
-  assign precarry_read_prev4_data_q =
-    (carry_index_q[3:0] >= 4'd4) ?
-      precarry_read_word_data_w[{carry_index_q[3:0] - 4'd4, 4'b0000} +: 16] : 16'd0;
-  assign precarry_read_prev5_data_q =
-    (carry_index_q[3:0] >= 4'd5) ?
-      precarry_read_word_data_w[{carry_index_q[3:0] - 4'd5, 4'b0000} +: 16] : 16'd0;
-  assign precarry_read_prev6_data_q =
-    (carry_index_q[3:0] >= 4'd6) ?
-      precarry_read_word_data_w[{carry_index_q[3:0] - 4'd6, 4'b0000} +: 16] : 16'd0;
-  assign precarry_read_prev7_data_q =
-    (carry_index_q[3:0] >= 4'd7) ?
-      precarry_read_word_data_w[{carry_index_q[3:0] - 4'd7, 4'b0000} +: 16] : 16'd0;
-  assign precarry_read_prev8_data_q =
-    (carry_index_q[3:0] >= 4'd8) ?
-      precarry_read_word_data_w[{carry_index_q[3:0] - 4'd8, 4'b0000} +: 16] : 16'd0;
-  assign precarry_read_prev9_data_q =
-    (carry_index_q[3:0] >= 4'd9) ?
-      precarry_read_word_data_w[{carry_index_q[3:0] - 4'd9, 4'b0000} +: 16] : 16'd0;
-  assign precarry_read_prev10_data_q =
-    (carry_index_q[3:0] >= 4'd10) ?
-      precarry_read_word_data_w[{carry_index_q[3:0] - 4'd10, 4'b0000} +: 16] : 16'd0;
-  assign precarry_read_prev11_data_q =
-    (carry_index_q[3:0] >= 4'd11) ?
-      precarry_read_word_data_w[{carry_index_q[3:0] - 4'd11, 4'b0000} +: 16] : 16'd0;
-  assign precarry_read_prev12_data_q =
-    (carry_index_q[3:0] >= 4'd12) ?
-      precarry_read_word_data_w[{carry_index_q[3:0] - 4'd12, 4'b0000} +: 16] : 16'd0;
-  assign precarry_read_prev13_data_q =
-    (carry_index_q[3:0] >= 4'd13) ?
-      precarry_read_word_data_w[{carry_index_q[3:0] - 4'd13, 4'b0000} +: 16] : 16'd0;
-  assign precarry_read_prev14_data_q =
-    (carry_index_q[3:0] >= 4'd14) ?
-      precarry_read_word_data_w[{carry_index_q[3:0] - 4'd14, 4'b0000} +: 16] : 16'd0;
-  assign precarry_read_prev15_data_q =
-    (carry_index_q[3:0] == 4'd15) ? precarry_read_word_data_w[15:0] : 16'd0;
   assign visible_rows_mi_w = tile_height_q[6:2];
   assign visible_cols_mi_w = tile_width_q[6:2];
   assign tile_entropy_start_early_444_w =
