@@ -571,20 +571,20 @@ async def av2_encoder_emits_obu_stream(dut):
     lossy_420_mode_h = dut.lossy_420_mode_q
     luma_residual_enable_h = optional_handle("luma_residual_enable_w")
     chroma_bdpcm_enable_h = optional_handle("chroma_bdpcm_enable_w")
-    palette_luma_residual_active_h = dut.luma_palette_residual_symbolizer.active_q
-    lossy420_luma_residual_active_h = dut.lossy420_luma_residual_symbolizer.active_q
-    palette_luma_residual_emit_state_h = dut.luma_palette_residual_symbolizer.emit_state_q
-    lossy420_luma_residual_emit_state_h = dut.lossy420_luma_residual_symbolizer.emit_state_q
+    palette_luma_residual_active_h = dut.residual_top.luma_palette_residual_symbolizer.active_q
+    lossy420_luma_residual_active_h = dut.residual_top.lossy420_luma_residual_symbolizer.active_q
+    palette_luma_residual_emit_state_h = dut.residual_top.luma_palette_residual_symbolizer.emit_state_q
+    lossy420_luma_residual_emit_state_h = dut.residual_top.lossy420_luma_residual_symbolizer.emit_state_q
     luma_residual_op_valid_h = dut.luma_residual_op_valid_w
-    palette_luma_residual_start_op_h = dut.luma_palette_residual_symbolizer.start_op_w
+    palette_luma_residual_start_op_h = dut.residual_top.luma_palette_residual_symbolizer.start_op_w
     palette_luma_residual_zero_h = dut.palette_luma_residual_known_zero_w
     lossy420_luma_residual_zero_h = dut.lossy420_luma_known_zero_w
-    palette_chroma_bdpcm_active_h = dut.chroma_bdpcm_symbolizer.active_q
-    lossy420_chroma_bdpcm_active_h = dut.lossy420_chroma_bdpcm_symbolizer.active_q
-    palette_chroma_bdpcm_emit_state_h = dut.chroma_bdpcm_symbolizer.emit_state_q
-    lossy420_chroma_bdpcm_emit_state_h = dut.lossy420_chroma_bdpcm_symbolizer.emit_state_q
+    palette_chroma_bdpcm_active_h = dut.residual_top.chroma_bdpcm_symbolizer.active_q
+    lossy420_chroma_bdpcm_active_h = dut.residual_top.lossy420_chroma_bdpcm_symbolizer.active_q
+    palette_chroma_bdpcm_emit_state_h = dut.residual_top.chroma_bdpcm_symbolizer.emit_state_q
+    lossy420_chroma_bdpcm_emit_state_h = dut.residual_top.lossy420_chroma_bdpcm_symbolizer.emit_state_q
     chroma_bdpcm_op_valid_h = dut.chroma_bdpcm_op_valid_w
-    chroma_bdpcm_start_op_h = dut.chroma_bdpcm_symbolizer.start_op_w
+    chroma_bdpcm_start_op_h = dut.residual_top.chroma_bdpcm_symbolizer.start_op_w
     chroma_bdpcm_txb_done_h = dut.chroma_bdpcm_txb_done_w
     chroma_bdpcm_txb_nonzero_h = dut.chroma_bdpcm_txb_nonzero_w
     input_error_h = dut.input_error
@@ -893,32 +893,32 @@ async def av2_encoder_emits_obu_stream(dut):
                 "fh_inc": handle_int(dut.entropy_coder.op_fh_inc_w),
             }
             if phase == AV2_PHASE_Y_COEFF and palette_mode:
-                coeff_pos = handle_int(dut.luma_palette_residual_symbolizer.coeff_pos_w)
+                coeff_pos = handle_int(dut.residual_top.luma_palette_residual_symbolizer.coeff_pos_w)
                 record.update(
                     {
                         "luma_residual_emit_state": handle_int(
-                            dut.luma_palette_residual_symbolizer.emit_state_q
+                            dut.residual_top.luma_palette_residual_symbolizer.emit_state_q
                         ),
                         "luma_residual_scan": handle_int(
-                            dut.luma_palette_residual_symbolizer.scan_q
+                            dut.residual_top.luma_palette_residual_symbolizer.scan_q
                         ),
                         "luma_residual_coeff_pos": coeff_pos,
                         "luma_residual_level": handle_int(
-                            dut.luma_palette_residual_symbolizer.level_q[coeff_pos]
+                            dut.residual_top.luma_palette_residual_symbolizer.level_q[coeff_pos]
                         ),
                         "luma_residual_coeff_ctx": handle_int(
-                            dut.luma_palette_residual_symbolizer.coeff_ctx_q[coeff_pos]
+                            dut.residual_top.luma_palette_residual_symbolizer.coeff_ctx_q[coeff_pos]
                         ),
                         "luma_residual_br_ctx": handle_int(
-                            dut.luma_palette_residual_symbolizer.br_ctx_q[coeff_pos]
+                            dut.residual_top.luma_palette_residual_symbolizer.br_ctx_q[coeff_pos]
                         ),
                     }
                 )
             lossy_420_mode = signal_int(dut, "lossy_420_mode_q") == 1
             if phase == AV2_PHASE_Y_COEFF and lossy_420_mode:
-                luma_symbolizer = dut.lossy420_luma_residual_symbolizer
+                luma_symbolizer = dut.residual_top.lossy420_luma_residual_symbolizer
                 coeff_pos = nested_signal_int(
-                    dut, "lossy420_luma_residual_symbolizer.coeff_pos_w"
+                    dut, "residual_top.lossy420_luma_residual_symbolizer.coeff_pos_w"
                 )
                 if coeff_pos is not None:
                     record.update(
@@ -945,16 +945,16 @@ async def av2_encoder_emits_obu_stream(dut):
                     record.update(
                         {
                             "luma_residual_emit_state": nested_signal_int(
-                                dut, "lossy420_luma_residual_symbolizer.emit_state_q"
+                                dut, "residual_top.lossy420_luma_residual_symbolizer.emit_state_q"
                             ),
                             "luma_residual_level": nested_signal_int(
-                                dut, "lossy420_luma_residual_symbolizer.level_q"
+                                dut, "residual_top.lossy420_luma_residual_symbolizer.level_q"
                             ),
                             "luma_residual_high_value": nested_signal_int(
-                                dut, "lossy420_luma_residual_symbolizer.high_value_w"
+                                dut, "residual_top.lossy420_luma_residual_symbolizer.high_value_w"
                             ),
                             "luma_residual_hr_q": nested_signal_int(
-                                dut, "lossy420_luma_residual_symbolizer.hr_q_w"
+                                dut, "residual_top.lossy420_luma_residual_symbolizer.hr_q_w"
                             ),
                         }
                     )
@@ -976,14 +976,14 @@ async def av2_encoder_emits_obu_stream(dut):
                 )
             if phase in (AV2_PHASE_U_COEFF, AV2_PHASE_V_COEFF) and (palette_mode or lossy_420_mode):
                 chroma_symbolizer = (
-                    dut.lossy420_chroma_bdpcm_symbolizer
+                    dut.residual_top.lossy420_chroma_bdpcm_symbolizer
                     if lossy_420_mode
-                    else dut.chroma_bdpcm_symbolizer
+                    else dut.residual_top.chroma_bdpcm_symbolizer
                 )
                 chroma_path = (
-                    "lossy420_chroma_bdpcm_symbolizer"
+                    "residual_top.lossy420_chroma_bdpcm_symbolizer"
                     if lossy_420_mode
-                    else "chroma_bdpcm_symbolizer"
+                    else "residual_top.chroma_bdpcm_symbolizer"
                 )
                 coeff_pos = nested_signal_int(dut, f"{chroma_path}.coeff_pos_w")
                 if coeff_pos is not None:

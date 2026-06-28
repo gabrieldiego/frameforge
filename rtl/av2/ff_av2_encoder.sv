@@ -569,26 +569,6 @@ module ff_av2_encoder #(
   logic signed [3:0] luma_residual_top_sign_w;
   logic signed [3:0] luma_residual_left_sign_w;
   logic signed [5:0] luma_residual_sign_sum_w;
-  logic palette_luma_residual_op_valid_w;
-  logic palette_luma_residual_op_literal_w;
-  logic [31:0] palette_luma_residual_op_literal_value_w;
-  logic [4:0] palette_luma_residual_op_literal_bits_w;
-  logic [31:0] palette_luma_residual_op_fl_w;
-  logic [31:0] palette_luma_residual_op_fh_w;
-  logic [4:0] palette_luma_residual_op_fl_inc_w;
-  logic [4:0] palette_luma_residual_op_fh_inc_w;
-  logic palette_luma_residual_txb_done_w;
-  logic [7:0] palette_luma_residual_entropy_context_w;
-  logic lossy420_luma_residual_op_valid_w;
-  logic lossy420_luma_residual_op_literal_w;
-  logic [31:0] lossy420_luma_residual_op_literal_value_w;
-  logic [4:0] lossy420_luma_residual_op_literal_bits_w;
-  logic [31:0] lossy420_luma_residual_op_fl_w;
-  logic [31:0] lossy420_luma_residual_op_fh_w;
-  logic [4:0] lossy420_luma_residual_op_fl_inc_w;
-  logic [4:0] lossy420_luma_residual_op_fh_inc_w;
-  logic lossy420_luma_residual_txb_done_w;
-  logic [7:0] lossy420_luma_residual_entropy_context_w;
   logic [7:0] lossy420_luma_residual_recon_sample_w;
   logic luma_residual_op_valid_w;
   logic luma_residual_op_literal_w;
@@ -599,35 +579,9 @@ module ff_av2_encoder #(
   logic [4:0] luma_residual_op_fl_inc_w;
   logic [4:0] luma_residual_op_fh_inc_w;
   logic palette_luma_residual_known_zero_w;
-  logic luma_residual_advance_w;
-  logic palette_luma_residual_advance_w;
-  logic lossy420_luma_residual_advance_w;
   logic luma_residual_txb_done_w;
   logic [7:0] luma_residual_entropy_context_w;
   logic [3:0] chroma_bdpcm_skip_ctx_w;
-  logic palette_chroma_bdpcm_op_valid_w;
-  logic palette_chroma_bdpcm_op_literal_w;
-  logic [31:0] palette_chroma_bdpcm_op_literal_value_w;
-  logic [4:0] palette_chroma_bdpcm_op_literal_bits_w;
-  logic [31:0] palette_chroma_bdpcm_op_fl_w;
-  logic [31:0] palette_chroma_bdpcm_op_fh_w;
-  logic [4:0] palette_chroma_bdpcm_op_fl_inc_w;
-  logic [4:0] palette_chroma_bdpcm_op_fh_inc_w;
-  logic palette_chroma_bdpcm_txb_done_w;
-  logic palette_chroma_bdpcm_txb_nonzero_w;
-  logic palette_chroma_bdpcm_known_zero_w;
-  logic [7:0] palette_chroma_bdpcm_entropy_context_w;
-  logic lossy420_chroma_bdpcm_op_valid_w;
-  logic lossy420_chroma_bdpcm_op_literal_w;
-  logic [31:0] lossy420_chroma_bdpcm_op_literal_value_w;
-  logic [4:0] lossy420_chroma_bdpcm_op_literal_bits_w;
-  logic [31:0] lossy420_chroma_bdpcm_op_fl_w;
-  logic [31:0] lossy420_chroma_bdpcm_op_fh_w;
-  logic [4:0] lossy420_chroma_bdpcm_op_fl_inc_w;
-  logic [4:0] lossy420_chroma_bdpcm_op_fh_inc_w;
-  logic lossy420_chroma_bdpcm_txb_done_w;
-  logic lossy420_chroma_bdpcm_txb_nonzero_w;
-  logic [7:0] lossy420_chroma_bdpcm_entropy_context_w;
   logic [7:0] lossy420_chroma_bdpcm_recon_sample_w;
   logic chroma_bdpcm_op_valid_w;
   logic chroma_bdpcm_op_literal_w;
@@ -637,9 +591,6 @@ module ff_av2_encoder #(
   logic [31:0] chroma_bdpcm_op_fh_w;
   logic [4:0] chroma_bdpcm_op_fl_inc_w;
   logic [4:0] chroma_bdpcm_op_fh_inc_w;
-  logic chroma_bdpcm_advance_w;
-  logic palette_chroma_bdpcm_advance_w;
-  logic lossy420_chroma_bdpcm_advance_w;
   logic chroma_bdpcm_txb_done_w;
   logic chroma_bdpcm_txb_nonzero_w;
   logic [7:0] chroma_bdpcm_entropy_context_w;
@@ -660,7 +611,6 @@ module ff_av2_encoder #(
   logic [7:0] lossy420_luma_left_sample_w;
   logic [7:0] lossy420_luma_top_sample_w;
   logic signed [9:0] lossy420_luma_delta_w;
-  logic [7:0] lossy420_luma_recon_sample_w;
   logic lossy420_luma_known_zero_w;
   logic [7:0] lossy420_u_above_q [0:15];
   logic [7:0] lossy420_v_above_q [0:15];
@@ -680,7 +630,6 @@ module ff_av2_encoder #(
   logic [7:0] lossy420_chroma_left_sample_w;
   logic [7:0] lossy420_chroma_top_sample_w;
   logic signed [9:0] lossy420_chroma_delta_w;
-  logic [7:0] lossy420_chroma_recon_sample_w;
   logic lossy420_chroma_known_zero_w;
   logic [4:0] visible_rows_mi_w;
   logic [4:0] visible_cols_mi_w;
@@ -745,13 +694,7 @@ module ff_av2_encoder #(
   logic [4:0] leaf_visible_txb_w_w;
   logic [4:0] leaf_visible_txb_h_w;
   logic luma_residual_enable_w;
-  logic palette_luma_residual_enable_w;
-  logic lossy420_luma_residual_enable_w;
-  logic palette_chroma_bdpcm_enable_w;
-  logic lossy420_chroma_bdpcm_enable_w;
-  logic chroma_residual_phase_w;
-  logic chroma_bdpcm_fetch_ready_w;
-  logic palette_chroma_bdpcm_cache_ready_w;
+  logic chroma_bdpcm_enable_w;
   logic chroma_subsampled_phase_w;
 
   ff_av2_partition_cdf_lut partition_cdf_lut (
@@ -1103,138 +1046,65 @@ module ff_av2_encoder #(
     .map_token_required(palette_map_token_required_w)
   );
 
-  ff_av2_chroma_bdpcm_symbolizer #(
-    .LUMA_PALETTE_RESIDUAL(1)
-  ) luma_palette_residual_symbolizer (
+  ff_av2_residual_top residual_top (
     .clk(clk),
     .rst_n(rst_n),
-    .enable(palette_luma_residual_enable_w),
-    .advance(palette_luma_residual_advance_w),
-    .plane_v(1'b0),
-    .bdpcm_horz(1'b1),
-    .skip_ctx(luma_residual_skip_ctx_w),
-    .dc_sign_ctx(luma_residual_dc_sign_ctx_w),
-    .txb_samples(luma_fetch_txb_samples_w),
-    .predictor_samples(32'd0),
-    .predictor_txb_samples(luma_fetch_predictor_samples_w),
-    .dc_delta(10'sd0),
-    .dc_recon_sample(8'd0),
-    .known_zero_txb(palette_luma_residual_known_zero_w),
-    .op_valid(palette_luma_residual_op_valid_w),
-    .op_literal(palette_luma_residual_op_literal_w),
-    .op_literal_value(palette_luma_residual_op_literal_value_w),
-    .op_literal_bits(palette_luma_residual_op_literal_bits_w),
-    .op_fl(palette_luma_residual_op_fl_w),
-    .op_fh(palette_luma_residual_op_fh_w),
-    .op_fl_inc(palette_luma_residual_op_fl_inc_w),
-    .op_fh_inc(palette_luma_residual_op_fh_inc_w),
-    .txb_done(palette_luma_residual_txb_done_w),
-    .txb_nonzero(),
-    .entropy_context(palette_luma_residual_entropy_context_w),
-    .latched_dc_recon_sample()
-  );
-
-  ff_av2_lossy420_dc_estimator lossy420_luma_dc_estimator (
-    .sample_sum(lossy420_luma_sample_sum_now_w),
-    .predictor(lossy420_luma_predictor_w),
-    .delta(lossy420_luma_delta_w),
-    .recon_sample(lossy420_luma_recon_sample_w),
-    .zero_delta(lossy420_luma_known_zero_w)
-  );
-
-  ff_av2_dc_delta_txb_symbolizer #(
-    .LUMA_PLANE(1)
-  ) lossy420_luma_residual_symbolizer (
-    .clk(clk),
-    .rst_n(rst_n),
-    .enable(lossy420_luma_residual_enable_w),
-    .advance(lossy420_luma_residual_advance_w),
-    .emit_first_cycle(state_q == ST_LEAF),
-    .plane_v(1'b0),
-    .skip_ctx(luma_residual_skip_ctx_w),
-    .dc_sign_ctx(luma_residual_dc_sign_ctx_w),
-    .dc_delta(lossy420_luma_delta_w),
-    .dc_recon_sample(lossy420_luma_recon_sample_w),
-    .known_zero_txb(lossy420_luma_known_zero_w),
-    .op_valid(lossy420_luma_residual_op_valid_w),
-    .op_literal(lossy420_luma_residual_op_literal_w),
-    .op_literal_value(lossy420_luma_residual_op_literal_value_w),
-    .op_literal_bits(lossy420_luma_residual_op_literal_bits_w),
-    .op_fl(lossy420_luma_residual_op_fl_w),
-    .op_fh(lossy420_luma_residual_op_fh_w),
-    .op_fl_inc(lossy420_luma_residual_op_fl_inc_w),
-    .op_fh_inc(lossy420_luma_residual_op_fh_inc_w),
-    .txb_done(lossy420_luma_residual_txb_done_w),
-    .txb_nonzero(),
-    .entropy_context(lossy420_luma_residual_entropy_context_w),
-    .latched_dc_recon_sample(lossy420_luma_residual_recon_sample_w)
-  );
-
-  ff_av2_chroma_bdpcm_symbolizer #(
-    .LUMA_PALETTE_RESIDUAL(0)
-  ) chroma_bdpcm_symbolizer (
-    .clk(clk),
-    .rst_n(rst_n),
-    .enable(palette_chroma_bdpcm_enable_w),
-    .advance(palette_chroma_bdpcm_advance_w),
-    .plane_v(phase_q == PHASE_V_COEFF),
-    .bdpcm_horz(leaf_chroma_bdpcm_horz_q),
-    .skip_ctx(chroma_bdpcm_skip_ctx_w),
-    .dc_sign_ctx(2'd0),
-    .txb_samples(chroma_bdpcm_txb_samples_w),
-    .predictor_samples(chroma_bdpcm_predictor_samples_w),
-    .predictor_txb_samples(128'd0),
-    .dc_delta(10'sd0),
-    .dc_recon_sample(8'd0),
-    .known_zero_txb(palette_chroma_bdpcm_known_zero_w),
-    .op_valid(palette_chroma_bdpcm_op_valid_w),
-    .op_literal(palette_chroma_bdpcm_op_literal_w),
-    .op_literal_value(palette_chroma_bdpcm_op_literal_value_w),
-    .op_literal_bits(palette_chroma_bdpcm_op_literal_bits_w),
-    .op_fl(palette_chroma_bdpcm_op_fl_w),
-    .op_fh(palette_chroma_bdpcm_op_fh_w),
-    .op_fl_inc(palette_chroma_bdpcm_op_fl_inc_w),
-    .op_fh_inc(palette_chroma_bdpcm_op_fh_inc_w),
-    .txb_done(palette_chroma_bdpcm_txb_done_w),
-    .txb_nonzero(palette_chroma_bdpcm_txb_nonzero_w),
-    .entropy_context(palette_chroma_bdpcm_entropy_context_w),
-    .latched_dc_recon_sample()
-  );
-
-  ff_av2_lossy420_dc_estimator lossy420_chroma_dc_estimator (
-    .sample_sum(lossy420_chroma_sample_sum_now_w),
-    .predictor(lossy420_chroma_predictor_w),
-    .delta(lossy420_chroma_delta_w),
-    .recon_sample(lossy420_chroma_recon_sample_w),
-    .zero_delta(lossy420_chroma_known_zero_w)
-  );
-
-  ff_av2_dc_delta_txb_symbolizer #(
-    .LUMA_PLANE(0)
-  ) lossy420_chroma_bdpcm_symbolizer (
-    .clk(clk),
-    .rst_n(rst_n),
-    .enable(lossy420_chroma_bdpcm_enable_w),
-    .advance(lossy420_chroma_bdpcm_advance_w),
-    .emit_first_cycle(state_q == ST_LEAF),
-    .plane_v(phase_q == PHASE_V_COEFF),
-    .skip_ctx(chroma_bdpcm_skip_ctx_w),
-    .dc_sign_ctx(2'd0),
-    .dc_delta(lossy420_chroma_delta_w),
-    .dc_recon_sample(lossy420_chroma_recon_sample_w),
-    .known_zero_txb(lossy420_chroma_known_zero_w),
-    .op_valid(lossy420_chroma_bdpcm_op_valid_w),
-    .op_literal(lossy420_chroma_bdpcm_op_literal_w),
-    .op_literal_value(lossy420_chroma_bdpcm_op_literal_value_w),
-    .op_literal_bits(lossy420_chroma_bdpcm_op_literal_bits_w),
-    .op_fl(lossy420_chroma_bdpcm_op_fl_w),
-    .op_fh(lossy420_chroma_bdpcm_op_fh_w),
-    .op_fl_inc(lossy420_chroma_bdpcm_op_fl_inc_w),
-    .op_fh_inc(lossy420_chroma_bdpcm_op_fh_inc_w),
-    .txb_done(lossy420_chroma_bdpcm_txb_done_w),
-    .txb_nonzero(lossy420_chroma_bdpcm_txb_nonzero_w),
-    .entropy_context(lossy420_chroma_bdpcm_entropy_context_w),
-    .latched_dc_recon_sample(lossy420_chroma_bdpcm_recon_sample_w)
+    .start(start),
+    .pending_push_valid(pending_push_valid_q),
+    .state_leaf(state_q == ST_LEAF),
+    .state_chroma_fetch(state_q == ST_CHROMA_FETCH),
+    .phase_y_coeff(phase_q == PHASE_Y_COEFF),
+    .phase_u_coeff(phase_q == PHASE_U_COEFF),
+    .phase_v_coeff(phase_q == PHASE_V_COEFF),
+    .palette_mode(palette_mode_q),
+    .lossy_420_mode(lossy_420_mode_q),
+    .leaf_chroma_bdpcm_horz(leaf_chroma_bdpcm_horz_q),
+    .palette_luma_residual_zero(palette_luma_residual_zero_w),
+    .luma_fetch_done(luma_fetch_done_w),
+    .chroma_fetch_done(chroma_fetch_done_w),
+    .chroma_fetch_current_cache_hit(chroma_fetch_current_cache_hit_w),
+    .luma_residual_skip_ctx(luma_residual_skip_ctx_w),
+    .luma_residual_dc_sign_ctx(luma_residual_dc_sign_ctx_w),
+    .chroma_bdpcm_skip_ctx(chroma_bdpcm_skip_ctx_w),
+    .luma_fetch_txb_samples(luma_fetch_txb_samples_w),
+    .luma_fetch_predictor_samples(luma_fetch_predictor_samples_w),
+    .lossy420_luma_sample_sum(lossy420_luma_sample_sum_now_w),
+    .lossy420_luma_predictor(lossy420_luma_predictor_w),
+    .chroma_bdpcm_txb_samples(chroma_bdpcm_txb_samples_w),
+    .chroma_bdpcm_predictor_samples(chroma_bdpcm_predictor_samples_w),
+    .lossy420_chroma_sample_sum(lossy420_chroma_sample_sum_now_w),
+    .lossy420_chroma_predictor(lossy420_chroma_predictor_w),
+    .residual_mode(residual_mode_w),
+    .luma_residual_enable(luma_residual_enable_w),
+    .chroma_bdpcm_enable(chroma_bdpcm_enable_w),
+    .luma_residual_op_valid(luma_residual_op_valid_w),
+    .luma_residual_op_literal(luma_residual_op_literal_w),
+    .luma_residual_op_literal_value(luma_residual_op_literal_value_w),
+    .luma_residual_op_literal_bits(luma_residual_op_literal_bits_w),
+    .luma_residual_op_fl(luma_residual_op_fl_w),
+    .luma_residual_op_fh(luma_residual_op_fh_w),
+    .luma_residual_op_fl_inc(luma_residual_op_fl_inc_w),
+    .luma_residual_op_fh_inc(luma_residual_op_fh_inc_w),
+    .luma_residual_txb_done(luma_residual_txb_done_w),
+    .luma_residual_entropy_context(luma_residual_entropy_context_w),
+    .lossy420_luma_residual_recon_sample(lossy420_luma_residual_recon_sample_w),
+    .lossy420_luma_delta(lossy420_luma_delta_w),
+    .lossy420_luma_known_zero(lossy420_luma_known_zero_w),
+    .palette_luma_residual_known_zero(palette_luma_residual_known_zero_w),
+    .chroma_bdpcm_op_valid(chroma_bdpcm_op_valid_w),
+    .chroma_bdpcm_op_literal(chroma_bdpcm_op_literal_w),
+    .chroma_bdpcm_op_literal_value(chroma_bdpcm_op_literal_value_w),
+    .chroma_bdpcm_op_literal_bits(chroma_bdpcm_op_literal_bits_w),
+    .chroma_bdpcm_op_fl(chroma_bdpcm_op_fl_w),
+    .chroma_bdpcm_op_fh(chroma_bdpcm_op_fh_w),
+    .chroma_bdpcm_op_fl_inc(chroma_bdpcm_op_fl_inc_w),
+    .chroma_bdpcm_op_fh_inc(chroma_bdpcm_op_fh_inc_w),
+    .chroma_bdpcm_txb_done(chroma_bdpcm_txb_done_w),
+    .chroma_bdpcm_txb_nonzero(chroma_bdpcm_txb_nonzero_w),
+    .chroma_bdpcm_entropy_context(chroma_bdpcm_entropy_context_w),
+    .lossy420_chroma_bdpcm_recon_sample(lossy420_chroma_bdpcm_recon_sample_w),
+    .lossy420_chroma_delta(lossy420_chroma_delta_w),
+    .lossy420_chroma_known_zero(lossy420_chroma_known_zero_w)
   );
 
   ff_av2_entropy_coder entropy_coder (
@@ -1415,7 +1285,6 @@ module ff_av2_encoder #(
     ((output_next_stream_index_w + {11'd0, output_next_payload_count_w}) >= total_stream_len_w);
   assign palette_query_start_w = (state_q == ST_PALETTE_QUERY);
   assign leaf_luma_palette_w = palette_mode_q && (leaf_luma_mode_q == LUMA_MODE_DC);
-  assign residual_mode_w = palette_mode_q || lossy_420_mode_q;
   assign lossy420_luma_left_row_index_w = block_row_mi_q[3:0];
   assign lossy420_luma_external_left_valid_w =
     lossy420_luma_left_valid_q[lossy420_luma_left_row_index_w] &&
@@ -1476,70 +1345,6 @@ module ff_av2_encoder #(
     lossy420_chroma_have_left_w ? lossy420_chroma_left_sample_w :
     lossy420_chroma_have_top_w ? lossy420_chroma_top_sample_w :
       8'd128;
-  assign luma_residual_op_valid_w =
-    lossy_420_mode_q ? lossy420_luma_residual_op_valid_w : palette_luma_residual_op_valid_w;
-  assign luma_residual_op_literal_w =
-    lossy_420_mode_q ? lossy420_luma_residual_op_literal_w : palette_luma_residual_op_literal_w;
-  assign luma_residual_op_literal_value_w =
-    lossy_420_mode_q ? lossy420_luma_residual_op_literal_value_w : palette_luma_residual_op_literal_value_w;
-  assign luma_residual_op_literal_bits_w =
-    lossy_420_mode_q ? lossy420_luma_residual_op_literal_bits_w : palette_luma_residual_op_literal_bits_w;
-  assign luma_residual_op_fl_w =
-    lossy_420_mode_q ? lossy420_luma_residual_op_fl_w : palette_luma_residual_op_fl_w;
-  assign luma_residual_op_fh_w =
-    lossy_420_mode_q ? lossy420_luma_residual_op_fh_w : palette_luma_residual_op_fh_w;
-  assign luma_residual_op_fl_inc_w =
-    lossy_420_mode_q ? lossy420_luma_residual_op_fl_inc_w : palette_luma_residual_op_fl_inc_w;
-  assign luma_residual_op_fh_inc_w =
-    lossy_420_mode_q ? lossy420_luma_residual_op_fh_inc_w : palette_luma_residual_op_fh_inc_w;
-  assign luma_residual_txb_done_w =
-    lossy_420_mode_q ? lossy420_luma_residual_txb_done_w : palette_luma_residual_txb_done_w;
-  assign luma_residual_entropy_context_w =
-    lossy_420_mode_q ? lossy420_luma_residual_entropy_context_w : palette_luma_residual_entropy_context_w;
-  assign chroma_bdpcm_op_valid_w =
-    lossy_420_mode_q ? lossy420_chroma_bdpcm_op_valid_w : palette_chroma_bdpcm_op_valid_w;
-  assign chroma_bdpcm_op_literal_w =
-    lossy_420_mode_q ? lossy420_chroma_bdpcm_op_literal_w : palette_chroma_bdpcm_op_literal_w;
-  assign chroma_bdpcm_op_literal_value_w =
-    lossy_420_mode_q ? lossy420_chroma_bdpcm_op_literal_value_w : palette_chroma_bdpcm_op_literal_value_w;
-  assign chroma_bdpcm_op_literal_bits_w =
-    lossy_420_mode_q ? lossy420_chroma_bdpcm_op_literal_bits_w : palette_chroma_bdpcm_op_literal_bits_w;
-  assign chroma_bdpcm_op_fl_w =
-    lossy_420_mode_q ? lossy420_chroma_bdpcm_op_fl_w : palette_chroma_bdpcm_op_fl_w;
-  assign chroma_bdpcm_op_fh_w =
-    lossy_420_mode_q ? lossy420_chroma_bdpcm_op_fh_w : palette_chroma_bdpcm_op_fh_w;
-  assign chroma_bdpcm_op_fl_inc_w =
-    lossy_420_mode_q ? lossy420_chroma_bdpcm_op_fl_inc_w : palette_chroma_bdpcm_op_fl_inc_w;
-  assign chroma_bdpcm_op_fh_inc_w =
-    lossy_420_mode_q ? lossy420_chroma_bdpcm_op_fh_inc_w : palette_chroma_bdpcm_op_fh_inc_w;
-  assign chroma_bdpcm_txb_done_w =
-    lossy_420_mode_q ? lossy420_chroma_bdpcm_txb_done_w : palette_chroma_bdpcm_txb_done_w;
-  assign chroma_bdpcm_txb_nonzero_w =
-    lossy_420_mode_q ? lossy420_chroma_bdpcm_txb_nonzero_w : palette_chroma_bdpcm_txb_nonzero_w;
-  assign chroma_bdpcm_entropy_context_w =
-    lossy_420_mode_q ? lossy420_chroma_bdpcm_entropy_context_w : palette_chroma_bdpcm_entropy_context_w;
-  // AV2 v1.0.0 Section 5.20.7.27 coeffs(): the palette path can skip a
-  // TX_4X4 when every luma sample equals its predictor. The analyzer's
-  // block-level zero flag catches all-zero 8x8 leaves; this narrower check
-  // also lets mixed 8x8 leaves take the symbolizer's zero-TXB fast path.
-  assign palette_luma_residual_known_zero_w =
-    palette_luma_residual_zero_w ||
-    ((luma_fetch_txb_samples_w[0 * 8 +: 8] == luma_fetch_predictor_samples_w[0 * 8 +: 8]) &&
-     (luma_fetch_txb_samples_w[1 * 8 +: 8] == luma_fetch_predictor_samples_w[1 * 8 +: 8]) &&
-     (luma_fetch_txb_samples_w[2 * 8 +: 8] == luma_fetch_predictor_samples_w[2 * 8 +: 8]) &&
-     (luma_fetch_txb_samples_w[3 * 8 +: 8] == luma_fetch_predictor_samples_w[3 * 8 +: 8]) &&
-     (luma_fetch_txb_samples_w[4 * 8 +: 8] == luma_fetch_predictor_samples_w[4 * 8 +: 8]) &&
-     (luma_fetch_txb_samples_w[5 * 8 +: 8] == luma_fetch_predictor_samples_w[5 * 8 +: 8]) &&
-     (luma_fetch_txb_samples_w[6 * 8 +: 8] == luma_fetch_predictor_samples_w[6 * 8 +: 8]) &&
-     (luma_fetch_txb_samples_w[7 * 8 +: 8] == luma_fetch_predictor_samples_w[7 * 8 +: 8]) &&
-     (luma_fetch_txb_samples_w[8 * 8 +: 8] == luma_fetch_predictor_samples_w[8 * 8 +: 8]) &&
-     (luma_fetch_txb_samples_w[9 * 8 +: 8] == luma_fetch_predictor_samples_w[9 * 8 +: 8]) &&
-     (luma_fetch_txb_samples_w[10 * 8 +: 8] == luma_fetch_predictor_samples_w[10 * 8 +: 8]) &&
-     (luma_fetch_txb_samples_w[11 * 8 +: 8] == luma_fetch_predictor_samples_w[11 * 8 +: 8]) &&
-     (luma_fetch_txb_samples_w[12 * 8 +: 8] == luma_fetch_predictor_samples_w[12 * 8 +: 8]) &&
-     (luma_fetch_txb_samples_w[13 * 8 +: 8] == luma_fetch_predictor_samples_w[13 * 8 +: 8]) &&
-     (luma_fetch_txb_samples_w[14 * 8 +: 8] == luma_fetch_predictor_samples_w[14 * 8 +: 8]) &&
-     (luma_fetch_txb_samples_w[15 * 8 +: 8] == luma_fetch_predictor_samples_w[15 * 8 +: 8]));
   assign chroma_fetch_start_w =
     ((state_q == ST_CHROMA_FETCH) &&
      !txb_prefetch_started_q &&
@@ -1553,48 +1358,6 @@ module ff_av2_encoder #(
      (phase_q == PHASE_Y_COEFF)) ||
     txb_prefetch_luma_start_w ||
     (txb_prefetch_started_q && !txb_prefetch_done_q && !txb_prefetch_chroma_q);
-  assign luma_residual_advance_w =
-    !start &&
-    !pending_push_valid_q &&
-    (state_q == ST_LEAF) &&
-    residual_mode_w &&
-    (phase_q == PHASE_Y_COEFF) &&
-    luma_residual_op_valid_w;
-  assign palette_luma_residual_advance_w = luma_residual_advance_w && palette_mode_q;
-  assign lossy420_luma_residual_advance_w = luma_residual_advance_w && lossy_420_mode_q;
-  assign luma_residual_enable_w =
-    residual_mode_w &&
-    (phase_q == PHASE_Y_COEFF) &&
-    ((state_q == ST_LEAF) ||
-     (!lossy_420_mode_q && (state_q == ST_CHROMA_FETCH) && luma_fetch_done_w));
-  assign palette_luma_residual_enable_w = luma_residual_enable_w && palette_mode_q;
-  assign lossy420_luma_residual_enable_w = luma_residual_enable_w && lossy_420_mode_q;
-  assign chroma_bdpcm_advance_w =
-    !start &&
-    !pending_push_valid_q &&
-    (state_q == ST_LEAF) &&
-    residual_mode_w &&
-    (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF) &&
-    chroma_bdpcm_op_valid_w;
-  assign palette_chroma_bdpcm_advance_w = chroma_bdpcm_advance_w && palette_mode_q;
-  assign lossy420_chroma_bdpcm_advance_w = chroma_bdpcm_advance_w && lossy_420_mode_q;
-  assign chroma_residual_phase_w =
-    residual_mode_w &&
-    (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF);
-  assign chroma_bdpcm_fetch_ready_w =
-    ((state_q == ST_LEAF) ||
-     ((state_q == ST_CHROMA_FETCH) && chroma_fetch_done_w));
-  assign palette_chroma_bdpcm_cache_ready_w =
-    (state_q == ST_CHROMA_FETCH) && chroma_fetch_current_cache_hit_w;
-  assign palette_chroma_bdpcm_enable_w =
-    palette_mode_q &&
-    chroma_residual_phase_w &&
-    (chroma_bdpcm_fetch_ready_w || palette_chroma_bdpcm_cache_ready_w);
-  assign lossy420_chroma_bdpcm_enable_w =
-    lossy_420_mode_q &&
-    chroma_residual_phase_w &&
-    (state_q == ST_LEAF);
-
   // AV2 4:4:4 bring-up path: traverse one 64x64 superblock, split visible
   // coding leaves down to 8x8, and generate syntax through the range coder.
   // Any TX_4X4 loops below are AV2 transform blocks, not public input blocks.
@@ -2374,44 +2137,6 @@ module ff_av2_encoder #(
     chroma_predictor_compute_valid_w ?
       chroma_cached_predictor_samples_w :
       chroma_fetch_predictor_samples_w;
-  // AV2 v1.0.0 Section 5.20.7.27 coeffs(): for FrameForge's staged chroma
-  // BDPCM residual path, a zero TXB is completely determined by the row
-  // or column predictor and already reconstructed samples. Detect it before
-  // the residual symbolizer so zero chroma TXBs emit only the skip symbol.
-  assign palette_chroma_bdpcm_known_zero_w =
-    leaf_chroma_bdpcm_horz_q ?
-      ((chroma_bdpcm_txb_samples_w[0 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[0 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[1 * 8 +: 8] == chroma_bdpcm_txb_samples_w[0 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[2 * 8 +: 8] == chroma_bdpcm_txb_samples_w[1 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[3 * 8 +: 8] == chroma_bdpcm_txb_samples_w[2 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[4 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[1 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[5 * 8 +: 8] == chroma_bdpcm_txb_samples_w[4 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[6 * 8 +: 8] == chroma_bdpcm_txb_samples_w[5 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[7 * 8 +: 8] == chroma_bdpcm_txb_samples_w[6 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[8 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[2 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[9 * 8 +: 8] == chroma_bdpcm_txb_samples_w[8 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[10 * 8 +: 8] == chroma_bdpcm_txb_samples_w[9 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[11 * 8 +: 8] == chroma_bdpcm_txb_samples_w[10 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[12 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[3 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[13 * 8 +: 8] == chroma_bdpcm_txb_samples_w[12 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[14 * 8 +: 8] == chroma_bdpcm_txb_samples_w[13 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[15 * 8 +: 8] == chroma_bdpcm_txb_samples_w[14 * 8 +: 8])) :
-      ((chroma_bdpcm_txb_samples_w[0 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[0 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[1 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[1 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[2 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[2 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[3 * 8 +: 8] == chroma_bdpcm_predictor_samples_w[3 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[4 * 8 +: 8] == chroma_bdpcm_txb_samples_w[0 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[5 * 8 +: 8] == chroma_bdpcm_txb_samples_w[1 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[6 * 8 +: 8] == chroma_bdpcm_txb_samples_w[2 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[7 * 8 +: 8] == chroma_bdpcm_txb_samples_w[3 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[8 * 8 +: 8] == chroma_bdpcm_txb_samples_w[4 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[9 * 8 +: 8] == chroma_bdpcm_txb_samples_w[5 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[10 * 8 +: 8] == chroma_bdpcm_txb_samples_w[6 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[11 * 8 +: 8] == chroma_bdpcm_txb_samples_w[7 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[12 * 8 +: 8] == chroma_bdpcm_txb_samples_w[8 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[13 * 8 +: 8] == chroma_bdpcm_txb_samples_w[9 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[14 * 8 +: 8] == chroma_bdpcm_txb_samples_w[10 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples_w[15 * 8 +: 8] == chroma_bdpcm_txb_samples_w[11 * 8 +: 8]));
   assign luma_residual_top_level_w =
     ((y_txb_above_q[txb_col_w[4:0]] & 8'd7) > 8'd4) ?
       3'd4 : y_txb_above_q[txb_col_w[4:0]][2:0];
