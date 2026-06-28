@@ -41,6 +41,7 @@ from encoder_axi import (
 AV2_BLOCK_WAVEFORM_BLOCKS = [
     "axi_reader",
     "input_fifo",
+    "palette_analyzer",
     "av2_core",
     "luma_residual",
     "chroma_residual",
@@ -48,6 +49,35 @@ AV2_BLOCK_WAVEFORM_BLOCKS = [
     "axi_writer",
 ]
 AV2_STATE_NAMES_INV = {name: state for state, name in AV2_STATE_NAMES.items()}
+AV2_ANALYZER_STATE_NAMES = {
+    0: "idle",
+    1: "read",
+    2: "block_init",
+    4: "pad",
+    5: "sort",
+    6: "store_colors",
+    7: "map",
+    8: "next_block",
+    9: "drain_chroma",
+    10: "done",
+}
+AV2_RESIDUAL_EMIT_STATE_NAMES = {
+    0: "skip",
+    1: "eob",
+    2: "eob_extra_bit",
+    3: "eob_extra_literal",
+    4: "base_scan",
+    5: "br",
+    6: "dc_base",
+    7: "sign_scan",
+    8: "hr_cmax_zeros",
+    9: "hr_exp_prefix",
+    10: "hr_exp_value",
+    11: "hr_q_zeros",
+    12: "hr_one",
+    13: "hr_low_bits",
+    14: "hr_pack",
+}
 
 
 def rtl_geometry():
@@ -343,6 +373,8 @@ def av2_rtl_trace_name(
             "tile.intrabc.drl_idx",
         ][step] if 0 <= step <= 5 else "tile.unknown"
     if phase == AV2_PHASE_INTRA:
+        if step == 1 and leaf_luma_mode in (1, 2):
+            return "tile.intra.dpcm_mode_y"
         if step == 2:
             if leaf_luma_mode == 1:
                 return "tile.intra.y_mode_idx_v"
@@ -516,8 +548,10 @@ async def av2_encoder_emits_obu_stream(dut):
     pending_push_valid_h = dut.pending_push_valid_q
     reader_axis_valid_h = dut.reader_axis_valid
     reader_axis_ready_h = dut.reader_axis_ready
-    s_axis_valid_h = dut.s_axis_valid
-    s_axis_ready_h = dut.s_axis_ready
+    packet_axis_valid_h = dut.packet_axis_valid
+    packet_axis_ready_h = dut.packet_axis_ready
+    analyzer_state_h = dut.palette_analyzer.state_q
+    analyzer_done_h = dut.palette_analyzer.done
     m_axis_valid_h = dut.m_axis_valid
     m_axis_ready_h = dut.m_axis_ready
     m_axis_count_h = dut.m_axis_count
@@ -538,12 +572,16 @@ async def av2_encoder_emits_obu_stream(dut):
     chroma_bdpcm_enable_h = optional_handle("chroma_bdpcm_enable_w")
     palette_luma_residual_active_h = dut.luma_palette_residual_symbolizer.active_q
     lossy420_luma_residual_active_h = dut.lossy420_luma_residual_symbolizer.active_q
+    palette_luma_residual_emit_state_h = dut.luma_palette_residual_symbolizer.emit_state_q
+    lossy420_luma_residual_emit_state_h = dut.lossy420_luma_residual_symbolizer.emit_state_q
     luma_residual_op_valid_h = dut.luma_residual_op_valid_w
     palette_luma_residual_start_op_h = dut.luma_palette_residual_symbolizer.start_op_w
     palette_luma_residual_zero_h = dut.palette_luma_residual_zero_w
     lossy420_luma_residual_zero_h = dut.lossy420_luma_known_zero_w
     palette_chroma_bdpcm_active_h = dut.chroma_bdpcm_symbolizer.active_q
     lossy420_chroma_bdpcm_active_h = dut.lossy420_chroma_bdpcm_symbolizer.active_q
+    palette_chroma_bdpcm_emit_state_h = dut.chroma_bdpcm_symbolizer.emit_state_q
+    lossy420_chroma_bdpcm_emit_state_h = dut.lossy420_chroma_bdpcm_symbolizer.emit_state_q
     chroma_bdpcm_op_valid_h = dut.chroma_bdpcm_op_valid_w
     chroma_bdpcm_start_op_h = dut.chroma_bdpcm_symbolizer.start_op_w
     chroma_bdpcm_txb_done_h = dut.chroma_bdpcm_txb_done_w
@@ -572,6 +610,16 @@ async def av2_encoder_emits_obu_stream(dut):
             return 0
         return hot_int(palette_luma_residual_start_op_h)
 
+    def luma_residual_emit_state_value():
+        if hot_int(lossy_420_mode_h) == 1:
+            return hot_int(lossy420_luma_residual_emit_state_h)
+        return hot_int(palette_luma_residual_emit_state_h)
+
+    def chroma_residual_emit_state_value():
+        if hot_int(lossy_420_mode_h) == 1:
+            return hot_int(lossy420_chroma_bdpcm_emit_state_h)
+        return hot_int(palette_chroma_bdpcm_emit_state_h)
+
     def luma_residual_zero_value():
         if hot_int(lossy_420_mode_h) == 1:
             return hot_int(lossy420_luma_residual_zero_h)
@@ -596,8 +644,13 @@ async def av2_encoder_emits_obu_stream(dut):
             entropy_op_cycles += 1
         reader_axis_valid = hot_int(reader_axis_valid_h)
         reader_axis_ready = hot_int(reader_axis_ready_h)
-        s_axis_valid = hot_int(s_axis_valid_h)
-        s_axis_ready = hot_int(s_axis_ready_h)
+        packet_axis_valid = hot_int(packet_axis_valid_h)
+        packet_axis_ready = hot_int(packet_axis_ready_h)
+        analyzer_state = hot_int(analyzer_state_h)
+        increment_counter(
+            pipeline_counts,
+            f"palette_analyzer_state_{AV2_ANALYZER_STATE_NAMES.get(analyzer_state, f'unknown_{analyzer_state}')}",
+        )
         m_axis_valid = hot_int(m_axis_valid_h)
         m_axis_ready = hot_int(m_axis_ready_h)
         m_axi_rvalid = hot_int(m_axi_rvalid_h)
@@ -617,12 +670,18 @@ async def av2_encoder_emits_obu_stream(dut):
                 "input_fifo": block_state(
                     reader_axis_valid,
                     reader_axis_ready,
-                    s_axis_valid,
-                    s_axis_ready,
+                    packet_axis_valid,
+                    packet_axis_ready,
+                ),
+                "palette_analyzer": block_state(
+                    packet_axis_valid,
+                    packet_axis_ready,
+                    hot_int(analyzer_done_h),
+                    1,
                 ),
                 "av2_core": block_state(
-                    s_axis_valid,
-                    s_axis_ready,
+                    packet_axis_valid,
+                    packet_axis_ready,
                     op_valid,
                     0 if pending_push else 1,
                 ),
@@ -662,10 +721,10 @@ async def av2_encoder_emits_obu_stream(dut):
             increment_counter(pipeline_counts, "frame_reader_advance_read_request")
         if reader_axis_valid == 1 and reader_axis_ready == 0:
             increment_counter(pipeline_counts, "reader_backpressure")
-        if s_axis_valid == 1 and s_axis_ready == 1:
+        if packet_axis_valid == 1 and packet_axis_ready == 1:
             input_sample_cycles += 1
             increment_counter(pipeline_counts, "core_sample_accept")
-        if s_axis_valid == 1 and s_axis_ready == 0:
+        if packet_axis_valid == 1 and packet_axis_ready == 0:
             increment_counter(pipeline_counts, "input_backpressure")
         if input_fifo_level != 0:
             increment_counter(pipeline_counts, "input_fifo_nonempty")
@@ -720,12 +779,28 @@ async def av2_encoder_emits_obu_stream(dut):
         chroma_bdpcm_active = chroma_residual_active_value()
         if luma_residual_active == 1:
             increment_counter(pipeline_counts, "luma_residual_active")
+            luma_emit_state = luma_residual_emit_state_value()
+            increment_counter(
+                pipeline_counts,
+                "luma_residual_emit_state_"
+                + AV2_RESIDUAL_EMIT_STATE_NAMES.get(
+                    luma_emit_state, f"unknown_{luma_emit_state}"
+                ),
+            )
             if hot_int(luma_residual_op_valid_h) == 1:
                 increment_counter(pipeline_counts, "luma_residual_op_valid")
             else:
                 increment_counter(pipeline_counts, "luma_residual_op_gap")
         if chroma_bdpcm_active == 1:
             increment_counter(pipeline_counts, "chroma_bdpcm_active")
+            chroma_emit_state = chroma_residual_emit_state_value()
+            increment_counter(
+                pipeline_counts,
+                "chroma_bdpcm_emit_state_"
+                + AV2_RESIDUAL_EMIT_STATE_NAMES.get(
+                    chroma_emit_state, f"unknown_{chroma_emit_state}"
+                ),
+            )
             if hot_int(chroma_bdpcm_op_valid_h) == 1:
                 increment_counter(pipeline_counts, "chroma_bdpcm_op_valid")
             else:
@@ -959,6 +1034,24 @@ async def av2_encoder_emits_obu_stream(dut):
                     {
                         "chroma_fetch_txb_samples": signal_int(dut, "chroma_fetch_txb_samples_w"),
                         "chroma_bdpcm_txb_samples": signal_int(dut, "chroma_bdpcm_txb_samples_w"),
+                        "luma_fetch_u_txb_samples": nested_signal_int(
+                            dut, "palette_analyzer.luma_fetch_u_txb_samples"
+                        ),
+                        "luma_fetch_v_txb_samples": nested_signal_int(
+                            dut, "palette_analyzer.luma_fetch_v_txb_samples"
+                        ),
+                        "sample_store_u_row": nested_signal_int(
+                            dut, "palette_analyzer.sample_store_u_row_w"
+                        ),
+                        "sample_store_v_row": nested_signal_int(
+                            dut, "palette_analyzer.sample_store_v_row_w"
+                        ),
+                        "analyzer_luma_fetch_step": nested_signal_int(
+                            dut, "palette_analyzer.luma_fetch_step_q"
+                        ),
+                        "analyzer_luma_fetch_capture_step": nested_signal_int(
+                            dut, "palette_analyzer.luma_fetch_capture_step_q"
+                        ),
                         "chroma_fetch_start": signal_int(dut, "chroma_fetch_start_w"),
                         "chroma_fetch_done": signal_int(dut, "chroma_fetch_done_w"),
                         "chroma_fetch_req_cross_phase": signal_int(
@@ -993,6 +1086,79 @@ async def av2_encoder_emits_obu_stream(dut):
                     }
                 )
             trace_records.append(record)
+        if trace_enabled and signal_int(dut, "luma_fetch_completed_w") == 1:
+            trace_records.append(
+                {
+                    "phase": "rtl_fetch",
+                    "source": "rtl",
+                    "kind": "luma_fetch_completed",
+                    "cycle": total_cycles,
+                    "tile_index": signal_int(dut, "tile_index_q"),
+                    "block_row_mi": signal_int(dut, "block_row_mi_q"),
+                    "block_col_mi": signal_int(dut, "block_col_mi_q"),
+                    "txb_index": signal_int(dut, "txb_index_q"),
+                    "txb_local_row": signal_int(dut, "txb_local_row_q"),
+                    "txb_local_col": signal_int(dut, "txb_local_col_q"),
+                    "luma_fetch_cache_index": signal_int(dut, "luma_fetch_cache_index_w"),
+                    "luma_fetch_txb_samples": signal_int(dut, "luma_fetch_txb_samples_w"),
+                    "luma_fetch_u_txb_samples": nested_signal_int(
+                        dut, "palette_analyzer.luma_fetch_u_txb_samples"
+                    ),
+                    "luma_fetch_v_txb_samples": nested_signal_int(
+                        dut, "palette_analyzer.luma_fetch_v_txb_samples"
+                    ),
+                }
+            )
+        if trace_enabled and signal_int(dut, "chroma_fetch_completed_u_w") == 1:
+            trace_records.append(
+                {
+                    "phase": "rtl_fetch",
+                    "source": "rtl",
+                    "kind": "chroma_fetch_completed_u",
+                    "cycle": total_cycles,
+                    "tile_index": signal_int(dut, "tile_index_q"),
+                    "block_row_mi": signal_int(dut, "block_row_mi_q"),
+                    "block_col_mi": signal_int(dut, "block_col_mi_q"),
+                    "txb_index": signal_int(dut, "txb_index_q"),
+                    "txb_local_row": signal_int(dut, "txb_local_row_q"),
+                    "txb_local_col": signal_int(dut, "txb_local_col_q"),
+                    "chroma_fetch_cache_index": signal_int(dut, "chroma_fetch_cache_index_w"),
+                    "chroma_fetch_txb_samples": signal_int(dut, "chroma_fetch_txb_samples_w"),
+                    "chroma_fetch_v_txb_samples": nested_signal_int(
+                        dut, "palette_analyzer.chroma_fetch_v_txb_samples"
+                    ),
+                    "chroma_fetch_v_predictor_samples": nested_signal_int(
+                        dut, "palette_analyzer.chroma_fetch_v_predictor_samples"
+                    ),
+                }
+            )
+        if (
+            trace_enabled
+            and nested_signal_int(dut, "palette_analyzer.packet_chroma_done_w") == 1
+        ):
+            chroma_h = nested_signal_int(dut, "palette_analyzer.chroma_h_sad_q")
+            chroma_v = nested_signal_int(dut, "palette_analyzer.chroma_v_sad_q")
+            packet_h = nested_signal_int(dut, "palette_analyzer.packet_chroma_h_sad_w")
+            packet_v = nested_signal_int(dut, "palette_analyzer.packet_chroma_v_sad_w")
+            block_id = nested_signal_int(dut, "palette_analyzer.block_id_q")
+            h_score = None if chroma_h is None or packet_h is None else chroma_h + packet_h
+            v_score = None if chroma_v is None or packet_v is None else chroma_v + packet_v
+            trace_records.append(
+                {
+                    "phase": "palette_analyzer",
+                    "source": "rtl",
+                    "kind": "chroma_bdpcm_direction",
+                    "cycle": total_cycles,
+                    "block_id": block_id,
+                    "block_row_mi": signal_int(dut, "block_row_mi_q"),
+                    "block_col_mi": signal_int(dut, "block_col_mi_q"),
+                    "analyzer_block_row": None if block_id is None else block_id >> 3,
+                    "analyzer_block_col": None if block_id is None else block_id & 7,
+                    "h_score": h_score,
+                    "v_score": v_score,
+                    "choose_horz": None if h_score is None or v_score is None else h_score <= v_score,
+                }
+            )
         if hot_int(input_error_h) == 1:
             details = {
                 "state": signal_int(dut, "state_q"),

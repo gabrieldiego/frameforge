@@ -102,7 +102,6 @@ module ff_av2_palette_analyzer_444 #(
   logic [3:0] collected_next_count_w;
   logic [3:0] target_palette_size_q;
   logic [3:0] sort_pass_q;
-  logic [2:0] sort_index_q;
   logic chroma_complete_q;
   logic black_ok_q;
   logic palette_supported_q;
@@ -133,6 +132,18 @@ module ff_av2_palette_analyzer_444 #(
   logic [15:0] chroma_h_sad_q;
   logic [15:0] chroma_v_sad_q;
   logic [63:0] chroma_prev_row_q;
+  logic [63:0] chroma_left_u_edge_q;
+  logic [63:0] chroma_left_v_edge_q;
+  logic [63:0] chroma_above_u_edge_q [0:7];
+  logic [63:0] chroma_above_v_edge_q [0:7];
+  logic [63:0] chroma_current_u_right_edge_q;
+  logic [63:0] chroma_current_v_right_edge_q;
+  logic [7:0] chroma_bottom_h_u_predictor_q;
+  logic [7:0] chroma_bottom_h_v_predictor_q;
+  logic [63:0] packet_chroma_left_edge_w;
+  logic [63:0] packet_chroma_above_edge_w;
+  logic [63:0] packet_chroma_right_edge_w;
+  logic [63:0] packet_chroma_next_right_edge_w;
   logic [15:0] packet_chroma_h_sad_w;
   logic [15:0] packet_chroma_v_sad_w;
   logic [2:0] query_palette_index_q [0:63];
@@ -289,6 +300,11 @@ module ff_av2_palette_analyzer_444 #(
   logic packet_chroma_plane_v_w;
   logic packet_luma_input_error_w;
   logic packet_chroma_input_error_w;
+  logic packet_chroma_u_plane_done_w;
+  logic [2:0] packet_chroma_row_w;
+  logic [5:0] packet_chroma_row_bit_offset_w;
+  logic [7:0] packet_chroma_h_predictor_w [0:7];
+  logic [7:0] packet_chroma_v_predictor_w [0:7];
   logic [7:0] lossy420_y_sum_left_index_w;
   logic [7:0] lossy420_y_sum_right_index_w;
   logic [7:0] lossy420_y_sum_clear0_index_w;
@@ -474,8 +490,12 @@ module ff_av2_palette_analyzer_444 #(
     packet_luma_fire_w && (packet_luma_last_sample_w >= 6'd63);
   assign packet_chroma_done_w =
     packet_chroma_fire_w && (packet_chroma_last_sample_w >= block_chroma_sample_last_w);
+  assign packet_chroma_u_plane_done_w =
+    packet_chroma_fire_w && !packet_chroma_plane_v_w && (packet_chroma_last_sample_w >= 7'd63);
   assign packet_chroma_plane_v_w =
     block_chroma_sample_q >= block_chroma_plane_samples_w;
+  assign packet_chroma_row_w = block_chroma_local_sample_w[5:3];
+  assign packet_chroma_row_bit_offset_w = {packet_chroma_row_w, 3'b000};
   assign packet_luma_input_error_w =
     packet_luma_fire_w && packet_last;
   assign packet_chroma_input_error_w =
@@ -569,6 +589,16 @@ module ff_av2_palette_analyzer_444 #(
   );
 
   always @* begin
+    packet_chroma_left_edge_w =
+      packet_chroma_plane_v_w ? chroma_left_v_edge_q : chroma_left_u_edge_q;
+    packet_chroma_above_edge_w =
+      packet_chroma_plane_v_w ?
+        chroma_above_v_edge_q[block_id_q[2:0]] :
+        chroma_above_u_edge_q[block_id_q[2:0]];
+    packet_chroma_right_edge_w =
+      packet_chroma_plane_v_w ? chroma_current_v_right_edge_q : chroma_current_u_right_edge_q;
+    packet_chroma_next_right_edge_w = packet_chroma_right_edge_w;
+    packet_chroma_next_right_edge_w[packet_chroma_row_bit_offset_w +: 8] = packet_lane_w[7];
     packet_luma_left_sum_w = 12'd0;
     packet_luma_right_sum_w = 12'd0;
     packet_chroma_sum_w = 12'd0;
@@ -585,28 +615,68 @@ module ff_av2_palette_analyzer_444 #(
         end
         packet_chroma_sum_w =
           packet_chroma_sum_w + {4'd0, packet_lane_w[packet_lane_q]};
-        if (packet_lane_q != 0) begin
-          if (packet_lane_w[packet_lane_q] >= packet_lane_w[packet_lane_q - 1]) begin
-            packet_chroma_h_sad_w =
-              packet_chroma_h_sad_w +
-              {8'd0, packet_lane_w[packet_lane_q] - packet_lane_w[packet_lane_q - 1]};
-          end else begin
-            packet_chroma_h_sad_w =
-              packet_chroma_h_sad_w +
-              {8'd0, packet_lane_w[packet_lane_q - 1] - packet_lane_w[packet_lane_q]};
-          end
+        // AV2 v1.0.0 Section 7.11 intra prediction plus Section 5.20.7
+        // residual coding: score the same boundary predictors that the 4x4
+        // chroma BDPCM coefficient path will use. This is still only a cheap
+        // SAD estimate, but it avoids choosing an axis from internal edges
+        // while ignoring the first row/column of each TXB.
+        if (packet_lane_q[1:0] != 2'd0) begin
+          packet_chroma_h_predictor_w[packet_lane_q] = packet_lane_w[packet_lane_q - 1];
+        end else if (packet_lane_q[2] || (block_id_q[2:0] != 3'd0)) begin
+          packet_chroma_h_predictor_w[packet_lane_q] =
+            packet_lane_q[2] ?
+              packet_lane_w[3] :
+              packet_chroma_left_edge_w[packet_chroma_row_bit_offset_w +: 8];
+        end else if (packet_chroma_row_w[2] || (block_id_q[5:3] != 3'd0)) begin
+          packet_chroma_h_predictor_w[packet_lane_q] =
+            packet_chroma_row_w[2] ?
+              ((packet_chroma_row_w[1:0] == 2'd0) ?
+                chroma_prev_row_q[7:0] :
+                (packet_chroma_plane_v_w ?
+                  chroma_bottom_h_v_predictor_q :
+                  chroma_bottom_h_u_predictor_q)) :
+              packet_chroma_above_edge_w[7:0];
+        end else begin
+          packet_chroma_h_predictor_w[packet_lane_q] = 8'd129;
         end
-        if (block_chroma_local_sample_w[5:3] != 3'd0) begin
-          if (packet_lane_w[packet_lane_q] >= chroma_prev_row_q[packet_lane_q * 8 +: 8]) begin
-            packet_chroma_v_sad_w =
-              packet_chroma_v_sad_w +
-              {8'd0, packet_lane_w[packet_lane_q] - chroma_prev_row_q[packet_lane_q * 8 +: 8]};
-          end else begin
-            packet_chroma_v_sad_w =
-              packet_chroma_v_sad_w +
-              {8'd0, chroma_prev_row_q[packet_lane_q * 8 +: 8] - packet_lane_w[packet_lane_q]};
-          end
+
+        if (packet_chroma_row_w[1:0] != 2'd0) begin
+          packet_chroma_v_predictor_w[packet_lane_q] = chroma_prev_row_q[packet_lane_q * 8 +: 8];
+        end else if (packet_chroma_row_w[2] || (block_id_q[5:3] != 3'd0)) begin
+          packet_chroma_v_predictor_w[packet_lane_q] =
+            packet_chroma_row_w[2] ?
+              chroma_prev_row_q[packet_lane_q * 8 +: 8] :
+              packet_chroma_above_edge_w[packet_lane_q * 8 +: 8];
+        end else if (packet_lane_q[2] || (block_id_q[2:0] != 3'd0)) begin
+          packet_chroma_v_predictor_w[packet_lane_q] =
+            packet_lane_q[2] ?
+              packet_lane_w[3] :
+              packet_chroma_left_edge_w[7:0];
+        end else begin
+          packet_chroma_v_predictor_w[packet_lane_q] = 8'd127;
         end
+
+        if (packet_lane_w[packet_lane_q] >= packet_chroma_h_predictor_w[packet_lane_q]) begin
+          packet_chroma_h_sad_w =
+            packet_chroma_h_sad_w +
+            {8'd0, packet_lane_w[packet_lane_q] - packet_chroma_h_predictor_w[packet_lane_q]};
+        end else begin
+          packet_chroma_h_sad_w =
+            packet_chroma_h_sad_w +
+            {8'd0, packet_chroma_h_predictor_w[packet_lane_q] - packet_lane_w[packet_lane_q]};
+        end
+        if (packet_lane_w[packet_lane_q] >= packet_chroma_v_predictor_w[packet_lane_q]) begin
+          packet_chroma_v_sad_w =
+            packet_chroma_v_sad_w +
+            {8'd0, packet_lane_w[packet_lane_q] - packet_chroma_v_predictor_w[packet_lane_q]};
+        end else begin
+          packet_chroma_v_sad_w =
+            packet_chroma_v_sad_w +
+            {8'd0, packet_chroma_v_predictor_w[packet_lane_q] - packet_lane_w[packet_lane_q]};
+        end
+      end else begin
+        packet_chroma_h_predictor_w[packet_lane_q] = 8'd0;
+        packet_chroma_v_predictor_w[packet_lane_q] = 8'd0;
       end
     end
   end
@@ -1055,7 +1125,6 @@ module ff_av2_palette_analyzer_444 #(
       collected_count_q <= 4'd0;
       target_palette_size_q <= 4'd0;
       sort_pass_q <= 4'd0;
-      sort_index_q <= 3'd0;
       chroma_complete_q <= 1'b0;
       black_ok_q <= 1'b0;
       palette_supported_q <= 1'b0;
@@ -1104,6 +1173,12 @@ module ff_av2_palette_analyzer_444 #(
       chroma_h_sad_q <= 16'd0;
       chroma_v_sad_q <= 16'd0;
       chroma_prev_row_q <= 64'd0;
+      chroma_left_u_edge_q <= 64'd0;
+      chroma_left_v_edge_q <= 64'd0;
+      chroma_current_u_right_edge_q <= 64'd0;
+      chroma_current_v_right_edge_q <= 64'd0;
+      chroma_bottom_h_u_predictor_q <= 8'd0;
+      chroma_bottom_h_v_predictor_q <= 8'd0;
       for (pack_index_q = 0; pack_index_q < 64; pack_index_q = pack_index_q + 1) begin
         query_palette_index_q[pack_index_q] <= 3'd0;
         block_chroma_bdpcm_horz_q[pack_index_q] <= 1'b1;
@@ -1126,6 +1201,8 @@ module ff_av2_palette_analyzer_444 #(
       terminal_luma_predictor_inner_edge_q <= 64'd0;
       for (edge_index_q = 0; edge_index_q < 8; edge_index_q = edge_index_q + 1) begin
         above_predictor_edge_q[edge_index_q] <= 64'd0;
+        chroma_above_u_edge_q[edge_index_q] <= 64'd0;
+        chroma_above_v_edge_q[edge_index_q] <= 64'd0;
       end
       done <= 1'b0;
       unsupported <= 1'b0;
@@ -1142,7 +1219,6 @@ module ff_av2_palette_analyzer_444 #(
       collected_count_q <= 4'd0;
       target_palette_size_q <= 4'd0;
       sort_pass_q <= 4'd0;
-      sort_index_q <= 3'd0;
       chroma_complete_q <= 1'b0;
       black_ok_q <= 1'b1;
       fetch_active_q <= 1'b0;
@@ -1171,6 +1247,12 @@ module ff_av2_palette_analyzer_444 #(
       chroma_h_sad_q <= 16'd0;
       chroma_v_sad_q <= 16'd0;
       chroma_prev_row_q <= 64'd0;
+      chroma_left_u_edge_q <= 64'd0;
+      chroma_left_v_edge_q <= 64'd0;
+      chroma_current_u_right_edge_q <= 64'd0;
+      chroma_current_v_right_edge_q <= 64'd0;
+      chroma_bottom_h_u_predictor_q <= 8'd0;
+      chroma_bottom_h_v_predictor_q <= 8'd0;
       query_luma_mode_q <= LUMA_MODE_DC;
       query_luma_predictor_edge_q <= 64'd0;
       query_luma_predictor_inner_edge_q <= 64'd0;
@@ -1184,6 +1266,8 @@ module ff_av2_palette_analyzer_444 #(
       terminal_luma_predictor_inner_edge_q <= 64'd0;
       for (edge_index_q = 0; edge_index_q < 8; edge_index_q = edge_index_q + 1) begin
         above_predictor_edge_q[edge_index_q] <= 64'd0;
+        chroma_above_u_edge_q[edge_index_q] <= 64'd0;
+        chroma_above_v_edge_q[edge_index_q] <= 64'd0;
       end
       palette_supported_q <=
         (SUPPORT_PALETTE_444 != 0) &&
@@ -1213,10 +1297,30 @@ module ff_av2_palette_analyzer_444 #(
         chroma_h_sad_q <= chroma_h_sad_q + packet_chroma_h_sad_w;
         chroma_v_sad_q <= chroma_v_sad_q + packet_chroma_v_sad_w;
         chroma_prev_row_q <= packet_samples[63:0];
+        if (packet_chroma_plane_v_w) begin
+          chroma_current_v_right_edge_q <= packet_chroma_next_right_edge_w;
+          if (packet_chroma_row_w == 3'd3) begin
+            chroma_bottom_h_v_predictor_q <= packet_lane_w[0];
+          end
+          if (packet_chroma_done_w) begin
+            chroma_left_v_edge_q <= packet_chroma_next_right_edge_w;
+            chroma_above_v_edge_q[block_id_q[2:0]] <= packet_samples[63:0];
+          end
+        end else begin
+          chroma_current_u_right_edge_q <= packet_chroma_next_right_edge_w;
+          if (packet_chroma_row_w == 3'd3) begin
+            chroma_bottom_h_u_predictor_q <= packet_lane_w[0];
+          end
+          if (packet_chroma_u_plane_done_w) begin
+            chroma_left_u_edge_q <= packet_chroma_next_right_edge_w;
+            chroma_above_u_edge_q[block_id_q[2:0]] <= packet_samples[63:0];
+          end
+        end
         if (packet_chroma_done_w) begin
           // AV2 v1.0.0 read_intra_uv_mode() carries one DPCM direction bit
-          // for the leaf. The analyzer picks the lower local U/V edge SAD so
-          // chroma coefficients stay lossless while avoiding avoidable tokens.
+          // for the leaf. The analyzer picks the lower boundary-aware U/V
+          // residual SAD so chroma coefficients stay lossless while avoiding
+          // avoidable tokens.
           block_chroma_bdpcm_horz_q[block_id_q] <=
             ((chroma_h_sad_q + packet_chroma_h_sad_w) <=
              (chroma_v_sad_q + packet_chroma_v_sad_w));
@@ -1471,7 +1575,6 @@ module ff_av2_palette_analyzer_444 #(
             collected_count_q <= 4'd0;
             target_palette_size_q <= 4'd0;
             sort_pass_q <= 4'd0;
-            sort_index_q <= 3'd0;
             current_palette_index_q <= 192'd0;
             current_row_same_left_q <= 8'd0;
             current_row_same_above_q <= 8'd0;
@@ -1481,6 +1584,10 @@ module ff_av2_palette_analyzer_444 #(
             chroma_h_sad_q <= 16'd0;
             chroma_v_sad_q <= 16'd0;
             chroma_prev_row_q <= 64'd0;
+            chroma_current_u_right_edge_q <= 64'd0;
+            chroma_current_v_right_edge_q <= 64'd0;
+            chroma_bottom_h_u_predictor_q <= 8'd0;
+            chroma_bottom_h_v_predictor_q <= 8'd0;
             for (color_index_q = 0; color_index_q < 8; color_index_q = color_index_q + 1) begin
               palette_color_q[color_index_q] <= 8'd0;
             end
@@ -1506,8 +1613,8 @@ module ff_av2_palette_analyzer_444 #(
                 target_palette_size_q <= 4'd4;
               end else begin
                 target_palette_size_q <= 4'd8;
-              end
-            end else if (collected_count_q < target_palette_size_q) begin
+            end
+          end else if (collected_count_q < target_palette_size_q) begin
               if (!candidate_known_w) begin
                 palette_color_q[collected_count_q] <= candidate_q;
                 collected_count_q <= collected_count_q + 4'd1;
@@ -1515,24 +1622,150 @@ module ff_av2_palette_analyzer_444 #(
               candidate_q <= candidate_q + 8'd1;
             end else begin
               sort_pass_q <= 4'd0;
-              sort_index_q <= 3'd0;
               state_q <= ST_SORT;
             end
           end
           ST_SORT: begin
-            if (sort_pass_q < target_palette_size_q) begin
-              if ({1'b0, sort_index_q} + 4'd1 < target_palette_size_q - sort_pass_q) begin
-                if (palette_color_q[sort_index_q] > palette_color_q[sort_index_q + 3'd1]) begin
-                  palette_color_q[sort_index_q] <= palette_color_q[sort_index_q + 3'd1];
-                  palette_color_q[sort_index_q + 3'd1] <= palette_color_q[sort_index_q];
-                end
-                sort_index_q <= sort_index_q + 3'd1;
-              end else begin
-                sort_index_q <= 3'd0;
-                sort_pass_q <= sort_pass_q + 4'd1;
+            // AV2 v1.0.0 Section 5.11.39 writes palette colors sorted in
+            // increasing order. Use a six-layer 8-input sorting network
+            // instead of the old one-compare-per-cycle bubble pass; each layer
+            // uses independent compare-swaps, and inactive palette lanes are
+            // skipped for 2- and 4-color palettes.
+            if (target_palette_size_q <= 4'd2) begin
+              if (palette_color_q[0] > palette_color_q[1]) begin
+                palette_color_q[0] <= palette_color_q[1];
+                palette_color_q[1] <= palette_color_q[0];
               end
-            end else begin
               state_q <= ST_STORE_COLORS;
+            end else if (target_palette_size_q <= 4'd4) begin
+              case (sort_pass_q)
+                4'd0: begin
+                  if (palette_color_q[0] > palette_color_q[2]) begin
+                    palette_color_q[0] <= palette_color_q[2];
+                    palette_color_q[2] <= palette_color_q[0];
+                  end
+                  if (palette_color_q[1] > palette_color_q[3]) begin
+                    palette_color_q[1] <= palette_color_q[3];
+                    palette_color_q[3] <= palette_color_q[1];
+                  end
+                  sort_pass_q <= 4'd1;
+                end
+                4'd1: begin
+                  if (palette_color_q[0] > palette_color_q[1]) begin
+                    palette_color_q[0] <= palette_color_q[1];
+                    palette_color_q[1] <= palette_color_q[0];
+                  end
+                  if (palette_color_q[2] > palette_color_q[3]) begin
+                    palette_color_q[2] <= palette_color_q[3];
+                    palette_color_q[3] <= palette_color_q[2];
+                  end
+                  sort_pass_q <= 4'd2;
+                end
+                default: begin
+                  if (palette_color_q[1] > palette_color_q[2]) begin
+                    palette_color_q[1] <= palette_color_q[2];
+                    palette_color_q[2] <= palette_color_q[1];
+                  end
+                  state_q <= ST_STORE_COLORS;
+                end
+              endcase
+            end else begin
+              case (sort_pass_q)
+                4'd0: begin
+                  if (palette_color_q[0] > palette_color_q[2]) begin
+                    palette_color_q[0] <= palette_color_q[2];
+                    palette_color_q[2] <= palette_color_q[0];
+                  end
+                  if (palette_color_q[1] > palette_color_q[3]) begin
+                    palette_color_q[1] <= palette_color_q[3];
+                    palette_color_q[3] <= palette_color_q[1];
+                  end
+                  if (palette_color_q[4] > palette_color_q[6]) begin
+                    palette_color_q[4] <= palette_color_q[6];
+                    palette_color_q[6] <= palette_color_q[4];
+                  end
+                  if (palette_color_q[5] > palette_color_q[7]) begin
+                    palette_color_q[5] <= palette_color_q[7];
+                    palette_color_q[7] <= palette_color_q[5];
+                  end
+                  sort_pass_q <= 4'd1;
+                end
+                4'd1: begin
+                  if (palette_color_q[0] > palette_color_q[4]) begin
+                    palette_color_q[0] <= palette_color_q[4];
+                    palette_color_q[4] <= palette_color_q[0];
+                  end
+                  if (palette_color_q[1] > palette_color_q[5]) begin
+                    palette_color_q[1] <= palette_color_q[5];
+                    palette_color_q[5] <= palette_color_q[1];
+                  end
+                  if (palette_color_q[2] > palette_color_q[6]) begin
+                    palette_color_q[2] <= palette_color_q[6];
+                    palette_color_q[6] <= palette_color_q[2];
+                  end
+                  if (palette_color_q[3] > palette_color_q[7]) begin
+                    palette_color_q[3] <= palette_color_q[7];
+                    palette_color_q[7] <= palette_color_q[3];
+                  end
+                  sort_pass_q <= 4'd2;
+                end
+                4'd2: begin
+                  if (palette_color_q[0] > palette_color_q[1]) begin
+                    palette_color_q[0] <= palette_color_q[1];
+                    palette_color_q[1] <= palette_color_q[0];
+                  end
+                  if (palette_color_q[2] > palette_color_q[3]) begin
+                    palette_color_q[2] <= palette_color_q[3];
+                    palette_color_q[3] <= palette_color_q[2];
+                  end
+                  if (palette_color_q[4] > palette_color_q[5]) begin
+                    palette_color_q[4] <= palette_color_q[5];
+                    palette_color_q[5] <= palette_color_q[4];
+                  end
+                  if (palette_color_q[6] > palette_color_q[7]) begin
+                    palette_color_q[6] <= palette_color_q[7];
+                    palette_color_q[7] <= palette_color_q[6];
+                  end
+                  sort_pass_q <= 4'd3;
+                end
+                4'd3: begin
+                  if (palette_color_q[2] > palette_color_q[4]) begin
+                    palette_color_q[2] <= palette_color_q[4];
+                    palette_color_q[4] <= palette_color_q[2];
+                  end
+                  if (palette_color_q[3] > palette_color_q[5]) begin
+                    palette_color_q[3] <= palette_color_q[5];
+                    palette_color_q[5] <= palette_color_q[3];
+                  end
+                  sort_pass_q <= 4'd4;
+                end
+                4'd4: begin
+                  if (palette_color_q[1] > palette_color_q[4]) begin
+                    palette_color_q[1] <= palette_color_q[4];
+                    palette_color_q[4] <= palette_color_q[1];
+                  end
+                  if (palette_color_q[3] > palette_color_q[6]) begin
+                    palette_color_q[3] <= palette_color_q[6];
+                    palette_color_q[6] <= palette_color_q[3];
+                  end
+                  sort_pass_q <= 4'd5;
+                end
+                default: begin
+                  if (palette_color_q[1] > palette_color_q[2]) begin
+                    palette_color_q[1] <= palette_color_q[2];
+                    palette_color_q[2] <= palette_color_q[1];
+                  end
+                  if (palette_color_q[3] > palette_color_q[4]) begin
+                    palette_color_q[3] <= palette_color_q[4];
+                    palette_color_q[4] <= palette_color_q[3];
+                  end
+                  if (palette_color_q[5] > palette_color_q[6]) begin
+                    palette_color_q[5] <= palette_color_q[6];
+                    palette_color_q[6] <= palette_color_q[5];
+                  end
+                  state_q <= ST_STORE_COLORS;
+                end
+              endcase
             end
           end
           ST_STORE_COLORS: begin

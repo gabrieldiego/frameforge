@@ -9,8 +9,8 @@ module ff_axi4_frame_reader #(
   // 0: VVC fixed-TU scan order, 1: raster 8x8 block order.
   parameter bit RASTER_BLOCK_ORDER = 1'b0,
   // Opportunistically overlap the next 4:2:0 read with the current response.
-  // Keep this opt-in until each codec path has been audited for timing-sensitive
-  // packet ordering assumptions.
+  // Keep this limited to the audited 4:2:0 path until the AXI read engine grows
+  // a real outstanding-request queue for 4:4:4 row/block prefetches.
   parameter bit ENABLE_420_PREFETCH = 1'b0
 ) (
   input  logic                       clk,
@@ -282,8 +282,8 @@ module ff_axi4_frame_reader #(
     !arvalid_hold_q &&
     !(prefetch_pending_q && !prefetch_response_w) &&
     (wait_r_prefetch_request_w ||
-     advance_read_request_w ||
-     current_read_request_w);
+      advance_read_request_w ||
+      current_read_request_w);
   assign ar_request_addr_w =
     wait_r_prefetch_request_w ? advance_axi_word_addr_w :
     (advance_read_request_w ? advance_axi_word_addr_w : axi_word_addr_w);

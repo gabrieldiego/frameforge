@@ -140,6 +140,13 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   logic [31:0] sign_hr_pack_value_w;
   logic has_lower_nonzero_w;
   logic [3:0] next_lower_nonzero_scan_w;
+  logic has_lower_after_next_w;
+  logic [3:0] lower_after_next_scan_w;
+  logic [3:0] next_lower_coeff_pos_w;
+  logic [15:0] next_lower_level_w;
+  logic next_lower_negative_w;
+  logic next_lower_high_range_w;
+  logic sign_pack_pair_w;
   logic [4:0] sign_pack_count_w;
   logic [31:0] sign_pack_value_w;
   logic sign_pack_done_w;
@@ -577,17 +584,46 @@ module ff_av2_chroma_bdpcm_symbolizer #(
       end
     end
 
-    // AV2 v1.0.0 Section 5.20.7.27 emits one literal sign per nonzero chroma
-    // coefficient, immediately followed by high-range bits when present.
-    // AV2 v1.0.0 Section 5.20.7.27 emits one literal sign per nonzero chroma
-    // coefficient. Keep the RTL in that one-sign form for now: a wider
-    // lookahead packer improved utilization slightly, but became the residual
-    // critical path and needed another lower-nonzero search to stay correct.
+    has_lower_after_next_w = 1'b0;
+    lower_after_next_scan_w = 4'd0;
+    for (scan_index_w = 0; scan_index_w < 16; scan_index_w = scan_index_w + 1) begin
+      if (has_lower_nonzero_w &&
+          scan_index_w < next_lower_nonzero_scan_w &&
+          scan_index_w < eob_q &&
+          level_q[TX4X4_SCAN_PACK[(scan_index_w * 4) +: 4]] != 16'd0) begin
+        has_lower_after_next_w = 1'b1;
+        lower_after_next_scan_w = scan_index_w[3:0];
+      end
+    end
+    next_lower_coeff_pos_w = TX4X4_SCAN_PACK[(next_lower_nonzero_scan_w * 4) +: 4];
+    next_lower_level_w = level_q[next_lower_coeff_pos_w];
+    next_lower_negative_w = coeff_negative_q[next_lower_coeff_pos_w];
+    next_lower_high_range_w =
+      (next_lower_coeff_pos_w == 4'd0) ?
+        (next_lower_level_w > 16'd4) :
+        (next_lower_level_w > 16'd5);
+
+    // AV2 v1.0.0 Section 5.20.7.27 emits a literal sign per nonzero chroma
+    // coefficient and immediately follows high-range coefficients with their
+    // highRange() literal payload. Pack only adjacent low-range chroma signs;
+    // luma residual keeps the single-sign path to avoid changing its DC/AC
+    // boundary behavior or lengthening the luma critical path.
     sign_pack_current_literal_w = !current_high_range_w && (LUMA_PALETTE_RESIDUAL == 0);
-    sign_pack_count_w = 5'd1;
-    sign_pack_value_w = {31'd0, current_negative_w};
-    sign_pack_done_w = !has_lower_nonzero_w;
-    sign_pack_next_scan_w = next_lower_nonzero_scan_w;
+    sign_pack_pair_w =
+      sign_pack_current_literal_w &&
+      has_lower_nonzero_w &&
+      !next_lower_high_range_w;
+    if (sign_pack_pair_w) begin
+      sign_pack_count_w = 5'd2;
+      sign_pack_value_w = {30'd0, current_negative_w, next_lower_negative_w};
+      sign_pack_done_w = !has_lower_after_next_w;
+      sign_pack_next_scan_w = lower_after_next_scan_w;
+    end else begin
+      sign_pack_count_w = 5'd1;
+      sign_pack_value_w = {31'd0, current_negative_w};
+      sign_pack_done_w = !has_lower_nonzero_w;
+      sign_pack_next_scan_w = next_lower_nonzero_scan_w;
+    end
   end
 
   always @* begin

@@ -69,24 +69,14 @@ impl Av2LumaPalette444 {
     }
 
     pub(crate) fn chroma_bdpcm_horz_for_block(&self, x0: usize, y0: usize) -> bool {
-        let mut horz_sad = 0usize;
-        let mut vert_sad = 0usize;
+        let mut horz_score = 0usize;
+        let mut vert_score = 0usize;
         for plane in [&self.u_plane, &self.v_plane] {
-            for local_y in 0..AV2_LUMA_PALETTE_BLOCK_SIZE {
-                for local_x in 0..AV2_LUMA_PALETTE_BLOCK_SIZE {
-                    let sample = self.chroma_sample(plane, x0 + local_x, y0 + local_y);
-                    if local_x != 0 {
-                        let left = self.chroma_sample(plane, x0 + local_x - 1, y0 + local_y);
-                        horz_sad += sample.abs_diff(left) as usize;
-                    }
-                    if local_y != 0 {
-                        let above = self.chroma_sample(plane, x0 + local_x, y0 + local_y - 1);
-                        vert_sad += sample.abs_diff(above) as usize;
-                    }
-                }
-            }
+            let (plane_horz, plane_vert) = self.chroma_bdpcm_direction_scores(plane, x0, y0);
+            horz_score += plane_horz;
+            vert_score += plane_vert;
         }
-        horz_sad <= vert_sad
+        horz_score <= vert_score
     }
 
     pub(crate) fn index_at(&self, x: usize, y: usize) -> u8 {
@@ -128,6 +118,49 @@ impl Av2LumaPalette444 {
     fn chroma_sample(&self, plane: &[u8], x: usize, y: usize) -> u8 {
         assert!(x < self.width && y < self.height);
         plane[y * self.width + x]
+    }
+
+    fn chroma_bdpcm_direction_scores(&self, plane: &[u8], x0: usize, y0: usize) -> (usize, usize) {
+        let tile_x0 = (x0 / AV2_LUMA_INTRA_TILE_SIZE) * AV2_LUMA_INTRA_TILE_SIZE;
+        let tile_y0 = (y0 / AV2_LUMA_INTRA_TILE_SIZE) * AV2_LUMA_INTRA_TILE_SIZE;
+        let mut horz_score = 0usize;
+        let mut vert_score = 0usize;
+
+        for txb_y in (0..AV2_LUMA_PALETTE_BLOCK_SIZE).step_by(4) {
+            for txb_x in (0..AV2_LUMA_PALETTE_BLOCK_SIZE).step_by(4) {
+                let txb_x0 = x0 + txb_x;
+                let txb_y0 = y0 + txb_y;
+                for local_y in 0..4 {
+                    for local_x in 0..4 {
+                        let x = txb_x0 + local_x;
+                        let y = txb_y0 + local_y;
+                        let sample = self.chroma_sample(plane, x, y);
+                        let horz_pred = if local_x != 0 {
+                            self.chroma_sample(plane, x - 1, y)
+                        } else if txb_x0 != tile_x0 {
+                            self.chroma_sample(plane, txb_x0 - 1, y)
+                        } else if txb_y0 != tile_y0 {
+                            self.chroma_sample(plane, txb_x0, txb_y0 - 1)
+                        } else {
+                            129
+                        };
+                        let vert_pred = if local_y != 0 {
+                            self.chroma_sample(plane, x, y - 1)
+                        } else if txb_y0 != tile_y0 {
+                            self.chroma_sample(plane, x, txb_y0 - 1)
+                        } else if txb_x0 != tile_x0 {
+                            self.chroma_sample(plane, txb_x0 - 1, txb_y0)
+                        } else {
+                            127
+                        };
+                        horz_score += usize::from(sample.abs_diff(horz_pred));
+                        vert_score += usize::from(sample.abs_diff(vert_pred));
+                    }
+                }
+            }
+        }
+
+        (horz_score, vert_score)
     }
 
     fn block_for_origin(&self, x0: usize, y0: usize) -> &Av2LumaPaletteBlock444 {

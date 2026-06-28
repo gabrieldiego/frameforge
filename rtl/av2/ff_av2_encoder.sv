@@ -145,7 +145,6 @@ module ff_av2_encoder #(
   logic       reader_axis_last;
   logic       packet_axis_valid;
   logic       packet_axis_ready;
-  logic       unpacker_packet_axis_ready;
   logic [INPUT_FIFO_BITS - 1:0] packet_axis_data;
   logic       packet_axis_last;
   logic [3:0] packet_axis_count_w;
@@ -862,24 +861,6 @@ module ff_av2_encoder #(
     .level(input_fifo_level_w)
   );
 
-  ff_axis_sample_packet_unpacker #(
-    .SAMPLE_BITS(SAMPLE_BITS),
-    .MAX_SAMPLES(INPUT_PACKET_SAMPLES)
-  ) input_packet_unpacker (
-    .clk(clk),
-    .rst_n(rst_n),
-    .clear(frame_reader_start_w),
-    .s_axis_valid(1'b0),
-    .s_axis_ready(unpacker_packet_axis_ready),
-    .s_axis_data(packet_axis_data[INPUT_PACKET_BITS - 1:0]),
-    .s_axis_count(packet_axis_data[INPUT_FIFO_BITS - 1:INPUT_PACKET_BITS]),
-    .s_axis_last(packet_axis_last),
-    .m_axis_valid(s_axis_valid),
-    .m_axis_ready(s_axis_ready),
-    .m_axis_data(s_axis_data),
-    .m_axis_last(s_axis_last)
-  );
-
   assign packet_axis_count_w = packet_axis_data[INPUT_FIFO_BITS - 1:INPUT_PACKET_BITS];
   assign packet_axis_ready =
     (state_q == ST_INPUT_READ) &&
@@ -1313,16 +1294,14 @@ module ff_av2_encoder #(
     (visible_height[2:0] != 3'd0);
   assign palette_analyzer_start_w = (state_q == ST_TILE_START);
   assign input_sample_fire_w =
-    (state_q == ST_INPUT_READ) &&
-    s_axis_valid &&
-    s_axis_ready;
+    1'b0;
   assign input_packet_fire_w =
     (state_q == ST_INPUT_READ) &&
     packet_axis_valid &&
     packet_axis_ready;
-  assign input_fire_w = input_sample_fire_w || input_packet_fire_w;
-  assign input_fire_count_w = input_packet_fire_w ? packet_axis_count_w : 4'd1;
-  assign input_axis_last_w = input_packet_fire_w ? packet_axis_last : s_axis_last;
+  assign input_fire_w = input_packet_fire_w;
+  assign input_fire_count_w = packet_axis_count_w;
+  assign input_axis_last_w = packet_axis_last;
   assign tile_input_last_w =
     input_fire_w &&
     ((tile_input_index_q + {28'd0, input_fire_count_w}) >= tile_samples_w);
@@ -1586,11 +1565,10 @@ module ff_av2_encoder #(
   assign bitstream_writer_start_w = start && !busy;
   assign done = bitstream_writer_frame_done_w;
   assign axi_error = frame_reader_error_w || bitstream_writer_error_w;
-  assign s_axis_ready =
-    (state_q == ST_INPUT_READ) &&
-    (chroma_format_idc != 2'd1) &&
-    palette_analyzer_sample_ready_w &&
-    !palette_analyzer_done_w;
+  assign s_axis_valid = 1'b0;
+  assign s_axis_data = '0;
+  assign s_axis_last = 1'b0;
+  assign s_axis_ready = 1'b0;
   assign tile_luma_samples_w = {18'd0, tile_block_count_w, 6'd0};
   assign tile_samples_w =
     (chroma_format_idc == 2'd1) ?
