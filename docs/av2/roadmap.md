@@ -203,7 +203,7 @@ reducing cost rather than proving the plumbing again:
    - Prioritize FF reductions while preserving lossless behavior.
 
 3. Compile-time and synthesis quality
-   - Keep default Yosys cap at 600s/300s review unless objective function degrades.
+   - Keep default Yosys cap at 900s/600s review unless objective function degrades.
    - Gate larger syntax expansions behind verified feature flags.
 
 ### Phase 4 — Extension Work (after lossless baseline is stable)

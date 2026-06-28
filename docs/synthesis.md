@@ -68,7 +68,7 @@ Defaults:
 - board: `synth/boards/arty-z7-10.env`
 - top: derived from the selected `SYNTH_DUT`
 - clock metadata: `25 MHz`
-- timeout: 600 seconds, with a 300 second review warning
+- timeout: 900 seconds, with a 600 second review warning
 - Yosys memory cap: 3072 MiB
 - VVC default DUT: `vvc-cabac-stream-writer`
 - AV2 default DUT: `av2-encoder`
@@ -82,8 +82,8 @@ make synth \
   SYNTH_DUT=vvc-encoder \
   SYNTH_BOARD=synth/boards/arty-z7-20.env \
   SYNTH_CLOCK_MHZ=25 \
-  SYNTH_TIMEOUT_SEC=600 \
-  SYNTH_WARN_AFTER_SEC=300 \
+  SYNTH_TIMEOUT_SEC=900 \
+  SYNTH_WARN_AFTER_SEC=600 \
   SYNTH_MEMORY_LIMIT_MB=3072
 ```
 
