@@ -19,6 +19,7 @@ module ff_av2_local_hash_matcher_444 #(
   output logic       any_copy,
   output logic [63:0] copy_mask,
   output logic [63:0] above_copy_mask,
+  output logic [63:0] ready_mask,
   output logic [127:0] drl_idx_table
 );
 
@@ -36,13 +37,16 @@ module ff_av2_local_hash_matcher_444 #(
   logic [7:0] block_sample_q;
   logic [31:0] current_hash_q;
   logic [31:0] hash_table_q [0:63];
+  logic [63:0] hash_ready_mask_q;
   logic [63:0] coded_mask_q;
+  logic read_done_q;
 
   logic [31:0] hash_after_xor_w;
   logic [31:0] hash_after_mix0_w;
   logic [31:0] hash_after_mix1_w;
   logic [31:0] hash_after_sample_w;
   logic [31:0] hash_after_packet_w;
+  logic [31:0] decision_hash_w;
   logic [5:0] decide_block_id_w;
   logic [5:0] above_block_id_w;
   logic [5:0] left_block_id_w;
@@ -83,6 +87,8 @@ module ff_av2_local_hash_matcher_444 #(
   logic second_left_vec_above_w;
   logic above_drl_valid_w;
   logic left_drl_valid_w;
+  logic default_above_bvp_supported_w;
+  logic default_left_bvp_supported_w;
   logic block_complete_w;
   logic above_match_w;
   logic left_match_w;
@@ -136,18 +142,10 @@ module ff_av2_local_hash_matcher_444 #(
     left_in_tile_w && coded_mask_q[left_block_id_w] && copy_mask[left_block_id_w];
   assign direct_above_valid_w =
     above_in_tile_w && coded_mask_q[above_block_id_w] && copy_mask[above_block_id_w];
-  assign bottom_left_valid_w =
-    bottom_left_in_tile_w && coded_mask_q[bottom_left_block_id_w] &&
-    copy_mask[bottom_left_block_id_w];
-  assign top_right_valid_w =
-    top_right_in_tile_w && coded_mask_q[top_right_block_id_w] &&
-    copy_mask[top_right_block_id_w];
-  assign top_left_valid_w =
-    top_left_in_tile_w && coded_mask_q[top_left_block_id_w] &&
-    copy_mask[top_left_block_id_w];
-  assign second_left_valid_w =
-    second_left_in_tile_w && coded_mask_q[second_left_block_id_w] &&
-    copy_mask[second_left_block_id_w];
+  assign bottom_left_valid_w = 1'b0;
+  assign top_right_valid_w = 1'b0;
+  assign top_left_valid_w = 1'b0;
+  assign second_left_valid_w = 1'b0;
   assign direct_left_vec_above_w = above_copy_mask[left_block_id_w];
   assign direct_above_vec_above_w = above_copy_mask[above_block_id_w];
   assign bottom_left_vec_above_w = above_copy_mask[bottom_left_block_id_w];
@@ -177,26 +175,35 @@ module ff_av2_local_hash_matcher_444 #(
   assign packet_last_sample_w = block_sample_q + {4'd0, packet_count} - 8'd1;
   assign packet_block_complete_w = packet_fire && (packet_last_sample_w >= 8'd191);
   assign terminal_tile_row_w = decide_block_id_w[5:3] == last_block_row_q;
+  assign default_above_bvp_supported_w =
+    1'b0;
+  assign default_left_bvp_supported_w =
+    1'b0;
   // AV2 v1.0.0 av2_is_dv_in_local_range() accepts the local above 8x8 BV
-  // when the referenced block is coded inside the same 64x64 tile. Keep this
-  // expansion on the terminal 8x8 row and the default setup_ref_mv_list() BVP
-  // slot until the RTL mirrors AVM's full is_mi_coded/pseudo-coded
-  // availability map for shifted slots and follow-on vertical IBC contexts.
+  // only when the selected DRL index mirrors AVM's decoded-BV and
+  // pseudo-coded availability state. The hash-only MVP records matches for
+  // instrumentation but keeps copy selection disabled so REF reconstruction
+  // stays bit-exact.
+  // TODO(av2 ibc): add decoded-BV tracking, then re-enable direct above/left
+  // copy selection with REF round-trip coverage.
   assign above_match_w =
     enabled_w &&
     above_in_tile_w &&
+    default_above_bvp_supported_w &&
     terminal_tile_row_w &&
     coded_mask_q[above_block_id_w] &&
     above_drl_valid_w &&
     (above_drl_idx_w == 2'd2) &&
-    (hash_table_q[above_block_id_w] == hash_table_q[decide_block_id_w]);
+    (hash_table_q[above_block_id_w] == decision_hash_w);
   assign left_match_w =
     enabled_w &&
     above_in_tile_w &&
     left_in_tile_w &&
+    default_left_bvp_supported_w &&
     coded_mask_q[left_block_id_w] &&
+    !copy_mask[left_block_id_w] &&
     left_drl_valid_w &&
-    (hash_table_q[left_block_id_w] == hash_table_q[decide_block_id_w]);
+    (hash_table_q[left_block_id_w] == decision_hash_w);
   assign copy_match_w = above_match_w || left_match_w;
   assign candidate_above_w =
     above_match_w && (!left_match_w || (above_drl_idx_w <= left_drl_idx_w));
@@ -280,6 +287,7 @@ module ff_av2_local_hash_matcher_444 #(
     decide_index_q[2],
     decide_index_q[0]
   };
+  assign decision_hash_w = hash_table_q[decide_block_id_w];
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -290,11 +298,14 @@ module ff_av2_local_hash_matcher_444 #(
       decide_index_q <= 6'd0;
       block_sample_q <= 8'd0;
       current_hash_q <= HASH_OFFSET;
+      hash_ready_mask_q <= 64'd0;
       coded_mask_q <= 64'd0;
+      read_done_q <= 1'b0;
       done <= 1'b0;
       any_copy <= 1'b0;
       copy_mask <= 64'd0;
       above_copy_mask <= 64'd0;
+      ready_mask <= 64'd0;
       drl_idx_table <= 128'd0;
     end else if (start) begin
       state_q <= ST_READ;
@@ -304,31 +315,33 @@ module ff_av2_local_hash_matcher_444 #(
       decide_index_q <= 6'd0;
       block_sample_q <= 8'd0;
       current_hash_q <= HASH_OFFSET;
+      hash_ready_mask_q <= 64'd0;
       coded_mask_q <= 64'd0;
+      read_done_q <= 1'b0;
       done <= 1'b0;
       any_copy <= 1'b0;
       copy_mask <= 64'd0;
       above_copy_mask <= 64'd0;
+      ready_mask <= 64'd0;
       drl_idx_table <= 128'd0;
     end else begin
       case (state_q)
         ST_READ: begin
           if (packet_fire) begin
             if (packet_block_complete_w) begin
-              // AV2 v1.0.0 IntraBC syntax carries a block vector. This stage
-              // stores 32-bit hashes for the whole 64x64 tile. A second pass
-              // below walks the fixed 8x8 partition-tree order to mirror the
-              // decoder BVP availability before selecting any DRL index.
+              // AV2 v1.0.0 IntraBC syntax carries a block vector. Store the
+              // 32-bit hash as soon as the input stream completes the block.
+              // The coding-order decision walk below consumes this ready bit
+              // without waiting for the whole tile to be read.
               hash_table_q[block_id_q] <= hash_after_packet_w;
+              hash_ready_mask_q[block_id_q] <= 1'b1;
               current_hash_q <= HASH_OFFSET;
               block_sample_q <= 8'd0;
               if (packet_last) begin
-                decide_index_q <= 6'd0;
-                state_q <= ST_DECIDE;
+                read_done_q <= 1'b1;
               end else if (block_id_q[5:3] == last_block_row_q &&
                            block_id_q[2:0] == last_block_col_q) begin
-                decide_index_q <= 6'd0;
-                state_q <= ST_DECIDE;
+                read_done_q <= 1'b1;
               end else if (block_id_q[2:0] == last_block_col_q) begin
                 block_id_q <= {block_id_q[5:3] + 3'd1, 3'd0};
               end else begin
@@ -340,20 +353,19 @@ module ff_av2_local_hash_matcher_444 #(
             end
           end else if (sample_fire) begin
             if (block_complete_w) begin
-              // AV2 v1.0.0 IntraBC syntax carries a block vector. This stage
-              // stores 32-bit hashes for the whole 64x64 tile. A second pass
-              // below walks the fixed 8x8 partition-tree order to mirror the
-              // decoder BVP availability before selecting any DRL index.
+              // AV2 v1.0.0 IntraBC syntax carries a block vector. Store the
+              // 32-bit hash as soon as the input stream completes the block.
+              // The coding-order decision walk below consumes this ready bit
+              // without waiting for the whole tile to be read.
               hash_table_q[block_id_q] <= hash_after_sample_w;
+              hash_ready_mask_q[block_id_q] <= 1'b1;
               current_hash_q <= HASH_OFFSET;
               block_sample_q <= 8'd0;
               if (sample_last) begin
-                decide_index_q <= 6'd0;
-                state_q <= ST_DECIDE;
+                read_done_q <= 1'b1;
               end else if (block_id_q[5:3] == last_block_row_q &&
                            block_id_q[2:0] == last_block_col_q) begin
-                decide_index_q <= 6'd0;
-                state_q <= ST_DECIDE;
+                read_done_q <= 1'b1;
               end else if (block_id_q[2:0] == last_block_col_q) begin
                 block_id_q <= {block_id_q[5:3] + 3'd1, 3'd0};
               end else begin
@@ -364,22 +376,32 @@ module ff_av2_local_hash_matcher_444 #(
               block_sample_q <= block_sample_q + 8'd1;
             end
           end
-        end
-        ST_DECIDE: begin
-          if (decide_block_visible_w) begin
-            coded_mask_q[decide_block_id_w] <= 1'b1;
-            copy_mask[decide_block_id_w] <= copy_match_w;
-            above_copy_mask[decide_block_id_w] <= candidate_above_w && copy_match_w;
-            drl_idx_table[decide_drl_bit_index_w +: 2] <=
-              copy_match_w ? candidate_drl_idx_w : 2'd0;
-            any_copy <= any_copy | copy_match_w;
-          end
-          if (decide_index_q == 6'd63) begin
+          if (!ready_mask[decide_block_id_w]) begin
+            if (!decide_block_visible_w || hash_ready_mask_q[decide_block_id_w]) begin
+              ready_mask[decide_block_id_w] <= 1'b1;
+              if (decide_block_visible_w) begin
+                coded_mask_q[decide_block_id_w] <= 1'b1;
+                copy_mask[decide_block_id_w] <= copy_match_w;
+                above_copy_mask[decide_block_id_w] <= candidate_above_w && copy_match_w;
+                drl_idx_table[decide_drl_bit_index_w +: 2] <=
+                  copy_match_w ? candidate_drl_idx_w : 2'd0;
+                any_copy <= any_copy | copy_match_w;
+              end
+              if (decide_index_q == 6'd63) begin
+                done <= read_done_q;
+                state_q <= read_done_q ? ST_DONE : ST_READ;
+              end else begin
+                decide_index_q <= decide_index_q + 6'd1;
+              end
+            end
+          end else if (decide_index_q == 6'd63 && read_done_q) begin
             done <= 1'b1;
             state_q <= ST_DONE;
-          end else begin
-            decide_index_q <= decide_index_q + 6'd1;
           end
+        end
+        ST_DECIDE: begin
+          done <= 1'b1;
+          state_q <= ST_DONE;
         end
         ST_DONE: begin
         end

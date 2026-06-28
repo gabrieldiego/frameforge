@@ -28,9 +28,9 @@ SYNTH_BOARD ?= synth/boards/arty-z7-10.env
 SYNTH_FILELIST ?=
 SYNTH_TOP ?=
 SYNTH_CLOCK_MHZ ?= 25
-SYNTH_TIMEOUT_SEC ?= 600
+SYNTH_TIMEOUT_SEC ?= 900
 SYNTH_MEMORY_LIMIT_MB ?= 3072
-SYNTH_WARN_AFTER_SEC ?= 300
+SYNTH_WARN_AFTER_SEC ?= 600
 SYNTH_YOSYS_QUIET ?= 1
 SYNTH_MAX_VISIBLE_WIDTH ?= 1024
 SYNTH_MAX_VISIBLE_HEIGHT ?= 1024
@@ -90,7 +90,7 @@ help:
 	@printf '%s\n' '  make reference-av2 BITSTREAM=out.av2 INPUT=in.yuv WIDTH=<w> HEIGHT=<h> FORMAT=yuv420p8|yuv444p8 [RECON=out.yuv FRAMES=<n>] - create AV2 reference output using AVM'
 	@printf '%s\n' '  make synth-env - install/detect optional local synthesis tools under .tools/'
 	@printf '%s\n' '  make synth-check - detect Yosys/Icarus/Vivado synthesis tools'
-	@printf '%s\n' '  make synth [yosys|vivado] [CODEC=vvc|av2 SYNTH_DUT=<dut> SYNTH_BOARD=synth/boards/arty-z7-10.env SYNTH_TOP=<override> SYNTH_FILELIST=<override> SYNTH_CLOCK_MHZ=25 SYNTH_TIMEOUT_SEC=600 SYNTH_WARN_AFTER_SEC=300 SYNTH_YOSYS_QUIET=1 SYNTH_MEMORY_LIMIT_MB=3072|0 SYNTH_MAX_VISIBLE_WIDTH=1024 SYNTH_MAX_VISIBLE_HEIGHT=1024 SYNTH_SUPPORT_PALETTE_444=0|1 SYNTH_VIVADO_DIRECTIVE=Default SYNTH_VIVADO_RETIMING=0|1 SYNTH_VIVADO_MAX_THREADS=2|0] - run selected synthesis estimate plus critical-path report'
+	@printf '%s\n' '  make synth [yosys|vivado] [CODEC=vvc|av2 SYNTH_DUT=<dut> SYNTH_BOARD=synth/boards/arty-z7-10.env SYNTH_TOP=<override> SYNTH_FILELIST=<override> SYNTH_CLOCK_MHZ=25 SYNTH_TIMEOUT_SEC=900 SYNTH_WARN_AFTER_SEC=600 SYNTH_YOSYS_QUIET=1 SYNTH_MEMORY_LIMIT_MB=3072|0 SYNTH_MAX_VISIBLE_WIDTH=1024 SYNTH_MAX_VISIBLE_HEIGHT=1024 SYNTH_SUPPORT_PALETTE_444=0|1 SYNTH_VIVADO_DIRECTIVE=Default SYNTH_VIVADO_RETIMING=0|1 SYNTH_VIVADO_MAX_THREADS=2|0] - run selected synthesis estimate plus critical-path report'
 	@printf '%s\n' '  make synth-postsim - run Yosys synthesis and a post-synthesis smoke sim when supported'
 	@printf '%s\n' '  make synth-vivado - run optional Vivado synthesis/timing if Vivado is installed'
 	@printf '%s\n' '  make synth-vivado-remote [VIVADO_REMOTE=user@host VIVADO_REMOTE_ROOT=/path/to/frameforge VIVADO_REMOTE_SSH="ssh -F /dev/null"] - run Vivado synthesis/timing over SSH'

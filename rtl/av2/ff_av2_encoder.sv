@@ -80,6 +80,7 @@ module ff_av2_encoder #(
     ST_SEQ_WRITE,
     ST_LOAD_BLOCK,
     ST_PARTITION,
+    ST_LEAF_WAIT,
     ST_PALETTE_QUERY,
     ST_LEAF,
     ST_FINISH_INIT,
@@ -219,6 +220,7 @@ module ff_av2_encoder #(
   logic [15:0] tile_width_q;
   logic [15:0] tile_height_q;
   logic [31:0] tile_input_index_q;
+  logic tile_input_active_q;
   logic frame_palette_mode_q;
   logic [7:0] seq_op_q;
   logic [6:0] seq_bits_left_q;
@@ -328,6 +330,7 @@ module ff_av2_encoder #(
   logic ibc_any_copy_w;
   logic [63:0] ibc_copy_mask_w;
   logic [63:0] ibc_above_copy_mask_w;
+  logic [63:0] ibc_ready_mask_w;
   logic [127:0] ibc_drl_idx_table_w;
   logic [5:0] ibc_current_block_id_w;
   logic [6:0] ibc_drl_idx_bit_index_w;
@@ -493,11 +496,22 @@ module ff_av2_encoder #(
   logic input_fire_w;
   logic [3:0] input_fire_count_w;
   logic input_axis_last_w;
+  logic input_fire_error_w;
   logic palette_analyzer_sample_ready_w;
   logic palette_analyzer_done_w;
   logic palette_analyzer_unsupported_w;
   logic palette_analyzer_black_w;
+  logic palette_analyzer_nonblack_seen_w;
   logic palette_analyzer_luma_mode_w;
+  logic [63:0] palette_analyzer_block_ready_mask_w;
+  logic tile_entropy_start_early_444_w;
+  logic tile_entropy_start_early_420_w;
+  logic tile_entropy_start_ready_w;
+  logic tile_entropy_palette_mode_w;
+  logic tile_entropy_lossy420_mode_w;
+  logic tile_entropy_ibc_mode_w;
+  logic [5:0] current_leaf_block_id_w;
+  logic current_leaf_ready_w;
   logic palette_query_start_w;
   logic palette_query_done_w;
   logic [3:0] palette_size_w;
@@ -584,6 +598,7 @@ module ff_av2_encoder #(
   logic [31:0] luma_residual_op_fh_w;
   logic [4:0] luma_residual_op_fl_inc_w;
   logic [4:0] luma_residual_op_fh_inc_w;
+  logic palette_luma_residual_known_zero_w;
   logic luma_residual_advance_w;
   logic palette_luma_residual_advance_w;
   logic lossy420_luma_residual_advance_w;
@@ -863,7 +878,7 @@ module ff_av2_encoder #(
 
   assign packet_axis_count_w = packet_axis_data[INPUT_FIFO_BITS - 1:INPUT_PACKET_BITS];
   assign packet_axis_ready =
-    (state_q == ST_INPUT_READ) &&
+    tile_input_active_q &&
     palette_analyzer_sample_ready_w &&
     !palette_analyzer_done_w;
 
@@ -976,6 +991,7 @@ module ff_av2_encoder #(
     .any_copy(ibc_any_copy_w),
     .copy_mask(ibc_copy_mask_w),
     .above_copy_mask(ibc_above_copy_mask_w),
+    .ready_mask(ibc_ready_mask_w),
     .drl_idx_table(ibc_drl_idx_table_w)
   );
 
@@ -1020,7 +1036,9 @@ module ff_av2_encoder #(
     .done(palette_analyzer_done_w),
     .unsupported(palette_analyzer_unsupported_w),
     .black_mode(palette_analyzer_black_w),
+    .nonblack_seen(palette_analyzer_nonblack_seen_w),
     .luma_palette_mode(palette_analyzer_luma_mode_w),
+    .block_ready_mask(palette_analyzer_block_ready_mask_w),
     .query_done(palette_query_done_w),
     .palette_size(palette_size_w),
     .palette_cache_size(palette_cache_size_w),
@@ -1101,7 +1119,7 @@ module ff_av2_encoder #(
     .predictor_txb_samples(luma_fetch_predictor_samples_w),
     .dc_delta(10'sd0),
     .dc_recon_sample(8'd0),
-    .known_zero_txb(palette_luma_residual_zero_w),
+    .known_zero_txb(palette_luma_residual_known_zero_w),
     .op_valid(palette_luma_residual_op_valid_w),
     .op_literal(palette_luma_residual_op_literal_w),
     .op_literal_value(palette_luma_residual_op_literal_value_w),
@@ -1296,7 +1314,6 @@ module ff_av2_encoder #(
   assign input_sample_fire_w =
     1'b0;
   assign input_packet_fire_w =
-    (state_q == ST_INPUT_READ) &&
     packet_axis_valid &&
     packet_axis_ready;
   assign input_fire_w = input_packet_fire_w;
@@ -1305,6 +1322,9 @@ module ff_av2_encoder #(
   assign tile_input_last_w =
     input_fire_w &&
     ((tile_input_index_q + {28'd0, input_fire_count_w}) >= tile_samples_w);
+  assign input_fire_error_w =
+    input_fire_w &&
+    (input_axis_last_w != (tile_is_last_w && tile_input_last_w));
   assign stream_lookup_index_w =
     (state_q == ST_OUTPUT_VALID && m_axis_valid && m_axis_ready && !output_last_q) ?
       output_next_stream_index_w : stream_index_q;
@@ -1498,6 +1518,28 @@ module ff_av2_encoder #(
     lossy_420_mode_q ? lossy420_chroma_bdpcm_txb_nonzero_w : palette_chroma_bdpcm_txb_nonzero_w;
   assign chroma_bdpcm_entropy_context_w =
     lossy_420_mode_q ? lossy420_chroma_bdpcm_entropy_context_w : palette_chroma_bdpcm_entropy_context_w;
+  // AV2 v1.0.0 Section 5.20.7.27 coeffs(): the palette path can skip a
+  // TX_4X4 when every luma sample equals its predictor. The analyzer's
+  // block-level zero flag catches all-zero 8x8 leaves; this narrower check
+  // also lets mixed 8x8 leaves take the symbolizer's zero-TXB fast path.
+  assign palette_luma_residual_known_zero_w =
+    palette_luma_residual_zero_w ||
+    ((luma_fetch_txb_samples_w[0 * 8 +: 8] == luma_fetch_predictor_samples_w[0 * 8 +: 8]) &&
+     (luma_fetch_txb_samples_w[1 * 8 +: 8] == luma_fetch_predictor_samples_w[1 * 8 +: 8]) &&
+     (luma_fetch_txb_samples_w[2 * 8 +: 8] == luma_fetch_predictor_samples_w[2 * 8 +: 8]) &&
+     (luma_fetch_txb_samples_w[3 * 8 +: 8] == luma_fetch_predictor_samples_w[3 * 8 +: 8]) &&
+     (luma_fetch_txb_samples_w[4 * 8 +: 8] == luma_fetch_predictor_samples_w[4 * 8 +: 8]) &&
+     (luma_fetch_txb_samples_w[5 * 8 +: 8] == luma_fetch_predictor_samples_w[5 * 8 +: 8]) &&
+     (luma_fetch_txb_samples_w[6 * 8 +: 8] == luma_fetch_predictor_samples_w[6 * 8 +: 8]) &&
+     (luma_fetch_txb_samples_w[7 * 8 +: 8] == luma_fetch_predictor_samples_w[7 * 8 +: 8]) &&
+     (luma_fetch_txb_samples_w[8 * 8 +: 8] == luma_fetch_predictor_samples_w[8 * 8 +: 8]) &&
+     (luma_fetch_txb_samples_w[9 * 8 +: 8] == luma_fetch_predictor_samples_w[9 * 8 +: 8]) &&
+     (luma_fetch_txb_samples_w[10 * 8 +: 8] == luma_fetch_predictor_samples_w[10 * 8 +: 8]) &&
+     (luma_fetch_txb_samples_w[11 * 8 +: 8] == luma_fetch_predictor_samples_w[11 * 8 +: 8]) &&
+     (luma_fetch_txb_samples_w[12 * 8 +: 8] == luma_fetch_predictor_samples_w[12 * 8 +: 8]) &&
+     (luma_fetch_txb_samples_w[13 * 8 +: 8] == luma_fetch_predictor_samples_w[13 * 8 +: 8]) &&
+     (luma_fetch_txb_samples_w[14 * 8 +: 8] == luma_fetch_predictor_samples_w[14 * 8 +: 8]) &&
+     (luma_fetch_txb_samples_w[15 * 8 +: 8] == luma_fetch_predictor_samples_w[15 * 8 +: 8]));
   assign chroma_fetch_start_w =
     ((state_q == ST_CHROMA_FETCH) &&
      !txb_prefetch_started_q &&
@@ -1906,7 +1948,37 @@ module ff_av2_encoder #(
     (carry_index_q[3:0] == 4'd15) ? precarry_read_word_data_w[15:0] : 16'd0;
   assign visible_rows_mi_w = tile_height_q[6:2];
   assign visible_cols_mi_w = tile_width_q[6:2];
+  assign tile_entropy_start_early_444_w =
+    (chroma_format_idc == 2'd3) &&
+    (SUPPORT_PALETTE_444 != 0) &&
+    palette_analyzer_nonblack_seen_w &&
+    palette_analyzer_block_ready_mask_w[0];
+  assign tile_entropy_start_early_420_w =
+    (chroma_format_idc == 2'd1) &&
+    palette_analyzer_nonblack_seen_w &&
+    palette_analyzer_block_ready_mask_w[0];
+  assign tile_entropy_start_ready_w =
+    palette_analyzer_done_w ||
+    tile_entropy_start_early_444_w ||
+    tile_entropy_start_early_420_w;
+  assign tile_entropy_palette_mode_w =
+    tile_entropy_start_early_444_w ? 1'b1 :
+      (tile_entropy_start_early_420_w ? 1'b0 : palette_analyzer_luma_mode_w);
+  assign tile_entropy_lossy420_mode_w =
+    tile_entropy_start_early_444_w ? 1'b0 :
+      (tile_entropy_start_early_420_w ? 1'b1 :
+        ((chroma_format_idc == 2'd1) && !palette_analyzer_black_w));
+  assign tile_entropy_ibc_mode_w =
+    tile_entropy_start_early_444_w ? 1'b1 :
+      (tile_entropy_start_early_420_w ? 1'b0 : palette_analyzer_luma_mode_w);
   assign ibc_current_block_id_w = {block_row_mi_q[3:1], block_col_mi_q[3:1]};
+  assign current_leaf_block_id_w = ibc_current_block_id_w;
+  assign current_leaf_ready_w =
+    (palette_analyzer_block_ready_mask_w[current_leaf_block_id_w] ||
+     palette_analyzer_done_w) &&
+    (!frame_ibc_mode_q ||
+     ibc_ready_mask_w[current_leaf_block_id_w] ||
+     ibc_done_w);
   assign ibc_drl_idx_bit_index_w = {ibc_current_block_id_w, 1'b0};
   assign ibc_use_copy_w =
     frame_ibc_mode_q &&
@@ -2739,6 +2811,7 @@ module ff_av2_encoder #(
       tile_width_q <= 16'd64;
       tile_height_q <= 16'd64;
       tile_input_index_q <= 32'd0;
+      tile_input_active_q <= 1'b0;
       frame_palette_mode_q <= 1'b0;
       frame_ibc_mode_q <= 1'b0;
       seq_op_q <= 8'd0;
@@ -2897,6 +2970,7 @@ module ff_av2_encoder #(
           tile_width_q <= (tile_cols_w == 16'd1) ? visible_width : 16'd64;
           tile_height_q <= (tile_rows_w == 16'd1) ? visible_height : 16'd64;
           tile_input_index_q <= 32'd0;
+          tile_input_active_q <= 1'b0;
           frame_palette_mode_q <= 1'b0;
           frame_ibc_mode_q <= 1'b0;
           phase_q <= PHASE_INTRA;
@@ -2954,14 +3028,28 @@ module ff_av2_encoder #(
           output_last_q <= 1'b0;
           state_q <= ST_TILE_START;
         end
-      end else if (pending_push_valid_q) begin
-        precarry_len_q <= precarry_len_q + 16'd1;
-        pending_push_valid_q <= 1'b0;
-        if (txb_prefetch_started_q && txb_prefetch_fetch_done_w) begin
-          txb_prefetch_done_q <= 1'b1;
-        end
       end else begin
-        case (state_q)
+        // AV2 overlap path: pixel ingress is a sideband update. It must not
+        // steal cycles from entropy normalization or symbol emission once the
+        // tile starts encoding from block-ready analyzer descriptors.
+        if (input_fire_w) begin
+          tile_input_index_q <= tile_input_index_q + {28'd0, input_fire_count_w};
+        end
+        if (palette_analyzer_done_w) begin
+          tile_input_active_q <= 1'b0;
+        end
+        if (input_fire_error_w) begin
+          input_error <= 1'b1;
+          tile_input_active_q <= 1'b0;
+          state_q <= ST_IDLE;
+        end else if (pending_push_valid_q) begin
+          precarry_len_q <= precarry_len_q + 16'd1;
+          pending_push_valid_q <= 1'b0;
+          if (txb_prefetch_started_q && txb_prefetch_fetch_done_w) begin
+            txb_prefetch_done_q <= 1'b1;
+          end
+        end else begin
+          case (state_q)
           ST_IDLE: begin
             m_axis_valid <= 1'b0;
             m_axis_count <= '0;
@@ -2969,32 +3057,27 @@ module ff_av2_encoder #(
           end
           ST_TILE_START: begin
             tile_input_index_q <= 32'd0;
+            tile_input_active_q <= 1'b1;
             state_q <= ST_INPUT_READ;
           end
           ST_INPUT_READ: begin
-            if (input_fire_w) begin
-              tile_input_index_q <= tile_input_index_q + {28'd0, input_fire_count_w};
-              if (input_axis_last_w != (tile_is_last_w && tile_input_last_w)) begin
-                input_error <= 1'b1;
-                state_q <= ST_IDLE;
-              end
-            end
             if (palette_analyzer_done_w) begin
+              tile_input_active_q <= 1'b0;
+            end
+            if (tile_entropy_start_ready_w) begin
               if (palette_analyzer_unsupported_w) begin
                 input_error <= 1'b1;
                 state_q <= ST_IDLE;
               end else begin
-                palette_mode_q <= palette_analyzer_luma_mode_w;
-                lossy_420_mode_q <=
-                  (chroma_format_idc == 2'd1) && !palette_analyzer_black_w;
-                frame_palette_mode_q <= frame_palette_mode_q | palette_analyzer_luma_mode_w;
+                palette_mode_q <= tile_entropy_palette_mode_w;
+                lossy_420_mode_q <= tile_entropy_lossy420_mode_w;
+                frame_palette_mode_q <= frame_palette_mode_q | tile_entropy_palette_mode_w;
                 // AV2 v1.0.0 read_intrabc_params()/read_intra_frame_mode_info():
                 // allow_intrabc is a frame-header decision, while the MVP RTL
-                // analyzes one 64x64 tile at a time before outputting the final
-                // OBU. Enable the syntax whenever the 4:4:4 palette path is
-                // active, then use the hash matcher only to choose whether each
-                // leaf writes use_intrabc=1.
-                frame_ibc_mode_q <= frame_ibc_mode_q | palette_analyzer_luma_mode_w;
+                // enables the syntax as soon as nonblack 4:4:4 palette content
+                // is observed. Each leaf still independently writes use_intrabc
+                // from the streaming hash matcher.
+                frame_ibc_mode_q <= frame_ibc_mode_q | tile_entropy_ibc_mode_w;
                 low_q <= 64'd0;
                 rng_q <= 32'h8000;
                 cnt_q <= -8'sd9;
@@ -3003,7 +3086,7 @@ module ff_av2_encoder #(
                 pending_push_word_q <= 16'd0;
                 precarry_len_q <= 16'd0;
                 tile_len_q <= 16'd0;
-                phase_q <= frame_ibc_mode_q ? PHASE_INTRABC : PHASE_INTRA;
+                phase_q <= tile_entropy_ibc_mode_w ? PHASE_INTRABC : PHASE_INTRA;
                 step_q <= 5'd0;
                 palette_row_q <= 6'd0;
                 palette_col_q <= 6'd0;
@@ -3170,8 +3253,12 @@ module ff_av2_encoder #(
                 lossy420_luma_recon_q[1] <= 8'd128;
                 lossy420_luma_recon_q[2] <= 8'd128;
                 lossy420_luma_recon_q[3] <= 8'd128;
-                state_q <= frame_ibc_mode_q ? ST_LEAF :
-                           (palette_mode_q ? ST_PALETTE_QUERY : ST_LEAF);
+                if (current_leaf_ready_w) begin
+                  state_q <= frame_ibc_mode_q ? ST_LEAF :
+                             (palette_mode_q ? ST_PALETTE_QUERY : ST_LEAF);
+                end else begin
+                  state_q <= ST_LEAF_WAIT;
+                end
               end else if (partition_q == PARTITION_HORZ) begin
                 stack_row_mi_q[stack_sp_q] <= block_row_mi_q + block_half_h_mi_w;
                 stack_col_mi_q[stack_sp_q] <= block_col_mi_q;
@@ -3221,8 +3308,12 @@ module ff_av2_encoder #(
               lossy420_luma_recon_q[1] <= 8'd128;
               lossy420_luma_recon_q[2] <= 8'd128;
               lossy420_luma_recon_q[3] <= 8'd128;
-              state_q <= frame_ibc_mode_q ? ST_LEAF :
-                         (palette_mode_q ? ST_PALETTE_QUERY : ST_LEAF);
+              if (current_leaf_ready_w) begin
+                state_q <= frame_ibc_mode_q ? ST_LEAF :
+                           (palette_mode_q ? ST_PALETTE_QUERY : ST_LEAF);
+              end else begin
+                state_q <= ST_LEAF_WAIT;
+              end
             end else if (partition_q == PARTITION_HORZ) begin
               stack_row_mi_q[stack_sp_q] <= block_row_mi_q + block_half_h_mi_w;
               stack_col_mi_q[stack_sp_q] <= block_col_mi_q;
@@ -3239,6 +3330,12 @@ module ff_av2_encoder #(
               stack_sp_q <= stack_sp_q + 5'd1;
               block_w_mi_q <= block_half_w_mi_w;
               state_q <= ST_LOAD_BLOCK;
+            end
+          end
+          ST_LEAF_WAIT: begin
+            if (current_leaf_ready_w) begin
+              state_q <= frame_ibc_mode_q ? ST_LEAF :
+                         (palette_mode_q ? ST_PALETTE_QUERY : ST_LEAF);
             end
           end
           ST_PALETTE_QUERY: begin
@@ -3748,6 +3845,7 @@ module ff_av2_encoder #(
                   tile_width_q <= (tile_cols_q == 16'd1) ? width_q : 16'd64;
                   tile_height_q <= (tile_rows_q == 16'd1) ? height_q : 16'd64;
                   tile_input_index_q <= 32'd0;
+                  tile_input_active_q <= 1'b0;
                   frame_palette_mode_q <= 1'b0;
                   frame_ibc_mode_q <= 1'b0;
                   phase_q <= PHASE_INTRA;
@@ -3883,9 +3981,10 @@ module ff_av2_encoder #(
             state_q <= ST_OUTPUT_VALID;
           end
           default: state_q <= ST_IDLE;
-      endcase
+          endcase
+        end
+      end
     end
-  end
   end
 
   wire _unused_inputs_w = &{

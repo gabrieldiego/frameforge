@@ -142,11 +142,31 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   logic [3:0] next_lower_nonzero_scan_w;
   logic has_lower_after_next_w;
   logic [3:0] lower_after_next_scan_w;
+  logic has_lower_after_second_w;
+  logic [3:0] lower_after_second_scan_w;
+  logic has_lower_after_third_w;
+  logic [3:0] lower_after_third_scan_w;
   logic [3:0] next_lower_coeff_pos_w;
+  logic [3:0] second_lower_coeff_pos_w;
+  logic [3:0] third_lower_coeff_pos_w;
   logic [15:0] next_lower_level_w;
+  logic [15:0] second_lower_level_w;
+  logic [15:0] third_lower_level_w;
   logic next_lower_negative_w;
+  logic second_lower_negative_w;
+  logic third_lower_negative_w;
   logic next_lower_high_range_w;
+  logic second_lower_high_range_w;
+  logic third_lower_high_range_w;
+  logic next_lower_literal_sign_w;
+  logic second_lower_literal_sign_w;
+  logic third_lower_literal_sign_w;
+  logic next_lower_base_lf_w;
+  logic second_lower_base_lf_w;
+  logic third_lower_base_lf_w;
   logic sign_pack_pair_w;
+  logic sign_pack_triplet_w;
+  logic sign_pack_quad_w;
   logic [4:0] sign_pack_count_w;
   logic [31:0] sign_pack_value_w;
   logic sign_pack_done_w;
@@ -595,25 +615,122 @@ module ff_av2_chroma_bdpcm_symbolizer #(
         lower_after_next_scan_w = scan_index_w[3:0];
       end
     end
+    has_lower_after_second_w = 1'b0;
+    lower_after_second_scan_w = 4'd0;
+    for (scan_index_w = 0; scan_index_w < 16; scan_index_w = scan_index_w + 1) begin
+      if (has_lower_after_next_w &&
+          scan_index_w < lower_after_next_scan_w &&
+          scan_index_w < eob_q &&
+          level_q[TX4X4_SCAN_PACK[(scan_index_w * 4) +: 4]] != 16'd0) begin
+        has_lower_after_second_w = 1'b1;
+        lower_after_second_scan_w = scan_index_w[3:0];
+      end
+    end
+    has_lower_after_third_w = 1'b0;
+    lower_after_third_scan_w = 4'd0;
+    for (scan_index_w = 0; scan_index_w < 16; scan_index_w = scan_index_w + 1) begin
+      if (has_lower_after_second_w &&
+          scan_index_w < lower_after_second_scan_w &&
+          scan_index_w < eob_q &&
+          level_q[TX4X4_SCAN_PACK[(scan_index_w * 4) +: 4]] != 16'd0) begin
+        has_lower_after_third_w = 1'b1;
+        lower_after_third_scan_w = scan_index_w[3:0];
+      end
+    end
     next_lower_coeff_pos_w = TX4X4_SCAN_PACK[(next_lower_nonzero_scan_w * 4) +: 4];
+    second_lower_coeff_pos_w = TX4X4_SCAN_PACK[(lower_after_next_scan_w * 4) +: 4];
+    third_lower_coeff_pos_w = TX4X4_SCAN_PACK[(lower_after_second_scan_w * 4) +: 4];
     next_lower_level_w = level_q[next_lower_coeff_pos_w];
+    second_lower_level_w = level_q[second_lower_coeff_pos_w];
+    third_lower_level_w = level_q[third_lower_coeff_pos_w];
     next_lower_negative_w = coeff_negative_q[next_lower_coeff_pos_w];
-    next_lower_high_range_w =
-      (next_lower_coeff_pos_w == 4'd0) ?
-        (next_lower_level_w > 16'd4) :
-        (next_lower_level_w > 16'd5);
+    second_lower_negative_w = coeff_negative_q[second_lower_coeff_pos_w];
+    third_lower_negative_w = coeff_negative_q[third_lower_coeff_pos_w];
+    next_lower_base_lf_w =
+      (LUMA_PALETTE_RESIDUAL != 0) ?
+        (((next_lower_coeff_pos_w >> 2) + (next_lower_coeff_pos_w & 4'd3)) < 4) :
+        (next_lower_coeff_pos_w == 4'd0);
+    second_lower_base_lf_w =
+      (LUMA_PALETTE_RESIDUAL != 0) ?
+        (((second_lower_coeff_pos_w >> 2) + (second_lower_coeff_pos_w & 4'd3)) < 4) :
+        (second_lower_coeff_pos_w == 4'd0);
+    third_lower_base_lf_w =
+      (LUMA_PALETTE_RESIDUAL != 0) ?
+        (((third_lower_coeff_pos_w >> 2) + (third_lower_coeff_pos_w & 4'd3)) < 4) :
+        (third_lower_coeff_pos_w == 4'd0);
+    if (LUMA_PALETTE_RESIDUAL != 0) begin
+      next_lower_high_range_w =
+        next_lower_base_lf_w ? (next_lower_level_w > 16'd7) : (next_lower_level_w > 16'd5);
+      second_lower_high_range_w =
+        second_lower_base_lf_w ? (second_lower_level_w > 16'd7) : (second_lower_level_w > 16'd5);
+      third_lower_high_range_w =
+        third_lower_base_lf_w ? (third_lower_level_w > 16'd7) : (third_lower_level_w > 16'd5);
+    end else begin
+      next_lower_high_range_w =
+        (next_lower_coeff_pos_w == 4'd0) ?
+          (next_lower_level_w > 16'd4) :
+          (next_lower_level_w > 16'd5);
+      second_lower_high_range_w =
+        (second_lower_coeff_pos_w == 4'd0) ?
+          (second_lower_level_w > 16'd4) :
+          (second_lower_level_w > 16'd5);
+      third_lower_high_range_w =
+        (third_lower_coeff_pos_w == 4'd0) ?
+          (third_lower_level_w > 16'd4) :
+          (third_lower_level_w > 16'd5);
+    end
+    next_lower_literal_sign_w =
+      (LUMA_PALETTE_RESIDUAL == 0) || (next_lower_nonzero_scan_w != 4'd0);
+    second_lower_literal_sign_w =
+      (LUMA_PALETTE_RESIDUAL == 0) || (lower_after_next_scan_w != 4'd0);
+    third_lower_literal_sign_w =
+      (LUMA_PALETTE_RESIDUAL == 0) || (lower_after_second_scan_w != 4'd0);
 
-    // AV2 v1.0.0 Section 5.20.7.27 emits a literal sign per nonzero chroma
-    // coefficient and immediately follows high-range coefficients with their
-    // highRange() literal payload. Pack only adjacent low-range chroma signs;
-    // luma residual keeps the single-sign path to avoid changing its DC/AC
-    // boundary behavior or lengthening the luma critical path.
-    sign_pack_current_literal_w = !current_high_range_w && (LUMA_PALETTE_RESIDUAL == 0);
+    // AV2 v1.0.0 Section 5.20.7.27 emits literal signs for chroma and luma AC
+    // coefficients, while luma DC uses dc_sign. Pack adjacent low-range literal
+    // signs into one bypass operation without crossing into luma DC or over a
+    // coefficient that still needs its highRange() payload.
+    sign_pack_current_literal_w =
+      !current_high_range_w &&
+      !((LUMA_PALETTE_RESIDUAL != 0) && (scan_q == 4'd0));
     sign_pack_pair_w =
       sign_pack_current_literal_w &&
       has_lower_nonzero_w &&
+      next_lower_literal_sign_w &&
       !next_lower_high_range_w;
-    if (sign_pack_pair_w) begin
+    sign_pack_triplet_w =
+      sign_pack_pair_w &&
+      (LUMA_PALETTE_RESIDUAL == 0) &&
+      has_lower_after_next_w &&
+      second_lower_literal_sign_w &&
+      !second_lower_high_range_w;
+    sign_pack_quad_w =
+      sign_pack_triplet_w &&
+      has_lower_after_second_w &&
+      third_lower_literal_sign_w &&
+      !third_lower_high_range_w;
+    if (sign_pack_quad_w) begin
+      sign_pack_count_w = 5'd4;
+      sign_pack_value_w = {
+        28'd0,
+        current_negative_w,
+        next_lower_negative_w,
+        second_lower_negative_w,
+        third_lower_negative_w
+      };
+      sign_pack_done_w = !has_lower_after_third_w;
+      sign_pack_next_scan_w = lower_after_third_scan_w;
+    end else if (sign_pack_triplet_w) begin
+      sign_pack_count_w = 5'd3;
+      sign_pack_value_w = {
+        29'd0,
+        current_negative_w,
+        next_lower_negative_w,
+        second_lower_negative_w
+      };
+      sign_pack_done_w = !has_lower_after_second_w;
+      sign_pack_next_scan_w = lower_after_second_scan_w;
+    end else if (sign_pack_pair_w) begin
       sign_pack_count_w = 5'd2;
       sign_pack_value_w = {30'd0, current_negative_w, next_lower_negative_w};
       sign_pack_done_w = !has_lower_after_next_w;

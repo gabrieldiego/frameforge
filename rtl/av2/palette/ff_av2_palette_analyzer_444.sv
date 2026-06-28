@@ -41,7 +41,9 @@ module ff_av2_palette_analyzer_444 #(
   output logic       done,
   output logic       unsupported,
   output logic       black_mode,
+  output logic       nonblack_seen,
   output logic       luma_palette_mode,
+  output logic [63:0] block_ready_mask,
   output logic       query_done,
   output logic [3:0] palette_size,
   output logic [4:0] palette_cache_size,
@@ -79,6 +81,7 @@ module ff_av2_palette_analyzer_444 #(
   localparam logic [3:0] ST_IDLE = 4'd0;
   localparam logic [3:0] ST_READ = 4'd1;
   localparam logic [3:0] ST_BLOCK_INIT = 4'd2;
+  localparam logic [3:0] ST_COLLECT_PACKET = 4'd3;
   localparam logic [3:0] ST_PAD = 4'd4;
   localparam logic [3:0] ST_SORT = 4'd5;
   localparam logic [3:0] ST_STORE_COLORS = 4'd6;
@@ -131,6 +134,9 @@ module ff_av2_palette_analyzer_444 #(
   logic query_chroma_bdpcm_horz_q;
   logic [15:0] chroma_h_sad_q;
   logic [15:0] chroma_v_sad_q;
+  logic [16:0] chroma_h_sad_total_w;
+  logic [16:0] chroma_v_sad_total_w;
+  logic [16:0] chroma_v_sad_biased_w;
   logic [63:0] chroma_prev_row_q;
   logic [63:0] chroma_left_u_edge_q;
   logic [63:0] chroma_left_v_edge_q;
@@ -287,6 +293,10 @@ module ff_av2_palette_analyzer_444 #(
   logic packet_chroma_fire_w;
   logic packet_black_ok_w;
   logic [7:0] packet_lane_w [0:7];
+  logic [8*SAMPLE_BITS - 1:0] pending_packet_samples_q;
+  logic [3:0] pending_packet_count_q;
+  logic pending_packet_valid_q;
+  logic [7:0] packet_collect_lane_w [0:7];
   logic [7:0] packet_palette_color_next_w [0:7];
   logic [3:0] packet_collected_next_count_w;
   logic packet_insert_known_w;
@@ -361,6 +371,9 @@ module ff_av2_palette_analyzer_444 #(
   assign black_next_w =
     black_ok_q &&
     ((packet_luma_fire_w || packet_chroma_fire_w) ? packet_black_ok_w : black_sample_ok_w);
+  assign chroma_h_sad_total_w = {1'b0, chroma_h_sad_q} + {1'b0, packet_chroma_h_sad_w};
+  assign chroma_v_sad_total_w = {1'b0, chroma_v_sad_q} + {1'b0, packet_chroma_v_sad_w};
+  assign chroma_v_sad_biased_w = chroma_v_sad_total_w + 17'd256;
   assign chroma_drain_state_w =
     (state_q == ST_PAD) ||
     (state_q == ST_SORT) ||
@@ -683,29 +696,32 @@ module ff_av2_palette_analyzer_444 #(
 
   always @* begin
     for (packet_insert_index_q = 0; packet_insert_index_q < 8; packet_insert_index_q = packet_insert_index_q + 1) begin
+      packet_collect_lane_w[packet_insert_index_q] =
+        pending_packet_samples_q[packet_insert_index_q * SAMPLE_BITS +: 8];
       packet_palette_color_next_w[packet_insert_index_q] = palette_color_q[packet_insert_index_q];
     end
     packet_collected_next_count_w = collected_count_q;
 
     // AV2 v1.0.0 Section 5.11.39 writes palette colors in sorted order, but
-    // the collection order is not syntax-visible. Keep packet ingress cheap by
-    // appending unique colors here, then use ST_SORT to order the final list
-    // before the palette-color symbols are emitted.
+    // collection order is not syntax-visible. Collect from a registered packet
+    // so the input FIFO, packet unpacker, and palette insertion network are
+    // separated by a flop boundary.
     for (packet_insert_lane_q = 0; packet_insert_lane_q < 8; packet_insert_lane_q = packet_insert_lane_q + 1) begin
       packet_insert_known_w = 1'b0;
       for (packet_insert_index_q = 0; packet_insert_index_q < 8; packet_insert_index_q = packet_insert_index_q + 1) begin
         if (packet_insert_index_q < packet_collected_next_count_w &&
             packet_palette_color_next_w[packet_insert_index_q] ==
-              packet_lane_w[packet_insert_lane_q]) begin
+              packet_collect_lane_w[packet_insert_lane_q]) begin
           packet_insert_known_w = 1'b1;
         end
       end
 
-      if (packet_insert_lane_q < packet_count &&
+      if (pending_packet_valid_q &&
+          packet_insert_lane_q < pending_packet_count_q &&
           !packet_insert_known_w &&
           packet_collected_next_count_w < 4'd8) begin
         packet_palette_color_next_w[packet_collected_next_count_w] =
-          packet_lane_w[packet_insert_lane_q];
+          packet_collect_lane_w[packet_insert_lane_q];
         packet_collected_next_count_w = packet_collected_next_count_w + 4'd1;
       end
     end
@@ -1121,12 +1137,17 @@ module ff_av2_palette_analyzer_444 #(
       block_id_q <= 6'd0;
       block_sample_q <= 6'd0;
       block_chroma_sample_q <= 7'd0;
+      pending_packet_samples_q <= {(8*SAMPLE_BITS){1'b0}};
+      pending_packet_count_q <= 4'd0;
+      pending_packet_valid_q <= 1'b0;
       candidate_q <= 8'd0;
       collected_count_q <= 4'd0;
       target_palette_size_q <= 4'd0;
       sort_pass_q <= 4'd0;
       chroma_complete_q <= 1'b0;
       black_ok_q <= 1'b0;
+      nonblack_seen <= 1'b0;
+      block_ready_mask <= 64'd0;
       palette_supported_q <= 1'b0;
       fetch_active_q <= 1'b0;
       fetch_start_q <= 1'b0;
@@ -1215,12 +1236,17 @@ module ff_av2_palette_analyzer_444 #(
       block_id_q <= 6'd0;
       block_sample_q <= 6'd0;
       block_chroma_sample_q <= 7'd0;
+      pending_packet_samples_q <= {(8*SAMPLE_BITS){1'b0}};
+      pending_packet_count_q <= 4'd0;
+      pending_packet_valid_q <= 1'b0;
       candidate_q <= 8'd0;
       collected_count_q <= 4'd0;
       target_palette_size_q <= 4'd0;
       sort_pass_q <= 4'd0;
       chroma_complete_q <= 1'b0;
       black_ok_q <= 1'b1;
+      nonblack_seen <= 1'b0;
+      block_ready_mask <= 64'd0;
       fetch_active_q <= 1'b0;
       fetch_start_q <= 1'b0;
       fetch_horz_q <= 1'b1;
@@ -1319,11 +1345,11 @@ module ff_av2_palette_analyzer_444 #(
         if (packet_chroma_done_w) begin
           // AV2 v1.0.0 read_intra_uv_mode() carries one DPCM direction bit
           // for the leaf. The analyzer picks the lower boundary-aware U/V
-          // residual SAD so chroma coefficients stay lossless while avoiding
-          // avoidable tokens.
+          // residual SAD with a small horizontal bias matching the Rust model.
+          // This keeps the decision hardware cheap while improving aggregate
+          // screen-content bitrate over an unbiased predictor-SAD tie break.
           block_chroma_bdpcm_horz_q[block_id_q] <=
-            ((chroma_h_sad_q + packet_chroma_h_sad_w) <=
-             (chroma_v_sad_q + packet_chroma_v_sad_w));
+            (chroma_h_sad_total_w <= chroma_v_sad_biased_w);
         end
         if (packet_chroma_done_w) begin
           chroma_complete_q <= 1'b1;
@@ -1516,6 +1542,9 @@ module ff_av2_palette_analyzer_444 #(
             if (lossy420_mode_w) begin
               if (packet_luma_fire_w) begin
                 black_ok_q <= black_next_w;
+                if (!black_next_w) begin
+                  nonblack_seen <= 1'b1;
+                end
                 lossy420_y_sum_q[lossy420_y_sum_left_index_w] <=
                   lossy420_y_sum_q[lossy420_y_sum_left_index_w] + packet_luma_left_sum_w;
                 lossy420_y_sum_q[lossy420_y_sum_right_index_w] <=
@@ -1530,26 +1559,47 @@ module ff_av2_palette_analyzer_444 #(
               end
             end else if (packet_luma_fire_w) begin
               black_ok_q <= black_next_w;
+              if (!black_next_w) begin
+                nonblack_seen <= 1'b1;
+              end
+              if (pending_packet_valid_q) begin
+                for (color_index_q = 0; color_index_q < 8; color_index_q = color_index_q + 1) begin
+                  palette_color_q[color_index_q] <= packet_palette_color_next_w[color_index_q];
+                end
+                collected_count_q <= packet_collected_next_count_w;
+              end
               for (packet_lane_q = 0; packet_lane_q < 8; packet_lane_q = packet_lane_q + 1) begin
                 if (packet_lane_q < packet_count) begin
                   block_luma_sample_q[block_sample_q + packet_lane_q[5:0]] <=
                     packet_lane_w[packet_lane_q];
                 end
               end
+              // AV2 v1.0.0 Section 5.11.39 emits the final palette colors
+              // after sorting. The ingress order is not syntax-visible, so
+              // color discovery for the previous registered packet runs while
+              // the next packet is accepted. This keeps the long unique-insert
+              // network off the input packet path without halving ingress
+              // throughput.
+              pending_packet_samples_q <= packet_samples;
+              pending_packet_count_q <= packet_count;
+              pending_packet_valid_q <= 1'b1;
+              if (packet_luma_done_w) begin
+                state_q <= ST_COLLECT_PACKET;
+              end else begin
+                block_sample_q <= block_sample_q + {2'd0, packet_count};
+              end
+            end else if (pending_packet_valid_q) begin
               for (color_index_q = 0; color_index_q < 8; color_index_q = color_index_q + 1) begin
                 palette_color_q[color_index_q] <= packet_palette_color_next_w[color_index_q];
               end
               collected_count_q <= packet_collected_next_count_w;
-              if (packet_luma_done_w) begin
-                block_chroma_sample_q <= 7'd0;
-                chroma_complete_q <= 1'b0;
-                candidate_q <= 8'd0;
-                state_q <= ST_PAD;
-              end else begin
-                block_sample_q <= block_sample_q + {2'd0, packet_count};
-              end
+              pending_packet_valid_q <= 1'b0;
+              pending_packet_count_q <= 4'd0;
             end else if (sample_fire) begin
               black_ok_q <= black_next_w;
+              if (!black_next_w) begin
+                nonblack_seen <= 1'b1;
+              end
               block_luma_sample_q[block_sample_q] <= sample_u8_w;
               if (collect_add_w) begin
                 palette_color_q[collected_count_q] <= sample_u8_w;
@@ -1568,6 +1618,18 @@ module ff_av2_palette_analyzer_444 #(
                 block_sample_q <= block_sample_q + 6'd1;
               end
             end
+          end
+          ST_COLLECT_PACKET: begin
+            for (color_index_q = 0; color_index_q < 8; color_index_q = color_index_q + 1) begin
+              palette_color_q[color_index_q] <= packet_palette_color_next_w[color_index_q];
+            end
+            collected_count_q <= packet_collected_next_count_w;
+            pending_packet_valid_q <= 1'b0;
+            pending_packet_count_q <= 4'd0;
+            block_chroma_sample_q <= 7'd0;
+            chroma_complete_q <= 1'b0;
+            candidate_q <= 8'd0;
+            state_q <= ST_PAD;
           end
           ST_BLOCK_INIT: begin
             block_sample_q <= 6'd0;
@@ -1804,6 +1866,7 @@ module ff_av2_palette_analyzer_444 #(
             end
             if (chroma_complete_q || chroma_sample_done_w ||
                 (!lossy420_mode_w && packet_chroma_done_w)) begin
+              block_ready_mask[block_id_q] <= 1'b1;
               if (terminal_tile_leaf_w) begin
                 black_mode <= packet_chroma_done_w ? black_next_w : final_black_w;
                 luma_palette_mode <=
@@ -1831,6 +1894,9 @@ module ff_av2_palette_analyzer_444 #(
             if (lossy420_mode_w) begin
               if (packet_chroma_fire_w) begin
                 black_ok_q <= black_next_w;
+                if (!black_next_w) begin
+                  nonblack_seen <= 1'b1;
+                end
                 if (packet_chroma_plane_v_w) begin
                   lossy420_v_sum_q[block_id_q] <=
                     lossy420_v_sum_q[block_id_q] + packet_chroma_sum_w;
@@ -1839,6 +1905,7 @@ module ff_av2_palette_analyzer_444 #(
                     lossy420_u_sum_q[block_id_q] + packet_chroma_sum_w;
                 end
                 if (packet_chroma_done_w) begin
+                  block_ready_mask[block_id_q] <= 1'b1;
                   if (terminal_tile_leaf_w) begin
                     black_mode <= black_next_w;
                     luma_palette_mode <= 1'b0;
@@ -1866,6 +1933,7 @@ module ff_av2_palette_analyzer_444 #(
               end
             end else if (chroma_complete_q || chroma_sample_done_w ||
                          (!lossy420_mode_w && packet_chroma_done_w)) begin
+              block_ready_mask[block_id_q] <= 1'b1;
               if (terminal_tile_leaf_w) begin
                 black_mode <= packet_chroma_done_w ? black_next_w : final_black_w;
                 luma_palette_mode <=

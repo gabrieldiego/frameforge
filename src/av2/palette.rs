@@ -6,6 +6,7 @@ pub(crate) const AV2_LUMA_PALETTE_MAX_COLORS: usize = 8;
 pub(crate) const AV2_LUMA_PALETTE_BLOCK_SIZE: usize = 8;
 const AV2_LUMA_INTRA_TILE_SIZE: usize = 64;
 const AV2_LUMA_INTRA_MODE_SWITCH_SAD_MARGIN: usize = 64;
+const AV2_CHROMA_BDPCM_HORZ_SAD_BIAS: usize = 256;
 const AV2_LUMA_PALETTE_BLOCK_SAMPLES: usize =
     AV2_LUMA_PALETTE_BLOCK_SIZE * AV2_LUMA_PALETTE_BLOCK_SIZE;
 
@@ -76,7 +77,12 @@ impl Av2LumaPalette444 {
             horz_score += plane_horz;
             vert_score += plane_vert;
         }
-        horz_score <= vert_score
+        // AV2 v1.0.0 read_intra_uv_mode() signals one DPCM direction bit.
+        // This hardware-oriented heuristic scores the legal H/V predictors
+        // and applies a small horizontal bias measured to reduce aggregate
+        // screen-content bitrate on the maintained screenshot multi-CTU set
+        // without adding a coefficient-cost search to the RTL analyzer.
+        horz_score <= vert_score + AV2_CHROMA_BDPCM_HORZ_SAD_BIAS
     }
 
     pub(crate) fn index_at(&self, x: usize, y: usize) -> u8 {

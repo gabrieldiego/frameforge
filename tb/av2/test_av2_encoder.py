@@ -53,6 +53,7 @@ AV2_ANALYZER_STATE_NAMES = {
     0: "idle",
     1: "read",
     2: "block_init",
+    3: "collect_packet",
     4: "pad",
     5: "sort",
     6: "store_colors",
@@ -576,7 +577,7 @@ async def av2_encoder_emits_obu_stream(dut):
     lossy420_luma_residual_emit_state_h = dut.lossy420_luma_residual_symbolizer.emit_state_q
     luma_residual_op_valid_h = dut.luma_residual_op_valid_w
     palette_luma_residual_start_op_h = dut.luma_palette_residual_symbolizer.start_op_w
-    palette_luma_residual_zero_h = dut.palette_luma_residual_zero_w
+    palette_luma_residual_zero_h = dut.palette_luma_residual_known_zero_w
     lossy420_luma_residual_zero_h = dut.lossy420_luma_known_zero_w
     palette_chroma_bdpcm_active_h = dut.chroma_bdpcm_symbolizer.active_q
     lossy420_chroma_bdpcm_active_h = dut.lossy420_chroma_bdpcm_symbolizer.active_q

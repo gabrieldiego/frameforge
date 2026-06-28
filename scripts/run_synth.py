@@ -23,8 +23,8 @@ LOCAL_XILINX_ROOT = Path(".tools/Xilinx")
 LOCAL_VIVADO_COMPAT_LIB = Path(".tools/vivado-compat/lib")
 # Direct script fallback. These match the Makefile defaults so direct
 # invocations keep the same routine synthesis guardrails.
-DEFAULT_SYNTH_TIMEOUT_SEC = 600.0
-DEFAULT_SYNTH_WARN_AFTER_SEC = 300.0
+DEFAULT_SYNTH_TIMEOUT_SEC = 900.0
+DEFAULT_SYNTH_WARN_AFTER_SEC = 600.0
 DEFAULT_YOSYS_MEMORY_LIMIT_MB = 3072.0
 DEFAULT_YOSYS_QUIET = True
 DEFAULT_SYNTH_MAX_VISIBLE_WIDTH = 1024

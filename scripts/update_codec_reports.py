@@ -627,11 +627,11 @@ def parse_synth_current() -> dict[str, float]:
     }
     m = re.search(r"Synthesis timeout: ([0-9.]+) seconds", yosys)
     out["Yosys timeout (s)"] = (
-        float(m.group(1)) if m else float(os.environ.get("SYNTH_TIMEOUT_SEC", "600"))
+        float(m.group(1)) if m else float(os.environ.get("SYNTH_TIMEOUT_SEC", "900"))
     )
     m = re.search(r"Synthesis review threshold: ([0-9.]+) seconds", yosys)
     out["Yosys review threshold (s)"] = (
-        float(m.group(1)) if m else float(os.environ.get("SYNTH_WARN_AFTER_SEC", "300"))
+        float(m.group(1)) if m else float(os.environ.get("SYNTH_WARN_AFTER_SEC", "600"))
     )
     m = re.search(r"(?:Yosys synthesis memory limit|Synthesis memory limit): ([0-9.]+) MiB", yosys)
     out["Yosys memory limit (MiB)"] = float(m.group(1)) if m else math.nan
@@ -720,8 +720,10 @@ def write_synthesis() -> None:
     old = parse_synth_old()
     curr = parse_synth_current()
     synth_cmd = f"make synth CODEC={CODEC} SYNTH_DUT={SYNTH_DUT}"
-    if curr["Yosys timeout (s)"] != 600:
+    if curr["Yosys timeout (s)"] != 900:
         synth_cmd += f" SYNTH_TIMEOUT_SEC={fmt_int(curr['Yosys timeout (s)'])}"
+    if curr["Yosys review threshold (s)"] != 600:
+        synth_cmd += f" SYNTH_WARN_AFTER_SEC={fmt_int(curr['Yosys review threshold (s)'])}"
     yosys_order = [
         "Main Yosys elapsed time (s)",
         "Runner-observed peak child RSS (MiB)",
@@ -809,7 +811,7 @@ def write_synthesis() -> None:
         lines += [
             "Vivado synthesis configuration:",
             "",
-            f"- command: `make synth-vivado CODEC={CODEC} SYNTH_DUT={SYNTH_DUT} SYNTH_TIMEOUT_SEC=1200 SYNTH_WARN_AFTER_SEC=300 SYNTH_VIVADO_MAX_THREADS=1 SYNTH_MEMORY_LIMIT_MB=4096`",
+            f"- command: `make synth-vivado CODEC={CODEC} SYNTH_DUT={SYNTH_DUT} SYNTH_TIMEOUT_SEC=1800 SYNTH_WARN_AFTER_SEC=600 SYNTH_VIVADO_MAX_THREADS=1 SYNTH_MEMORY_LIMIT_MB=4096`",
             f"- RTL top: `{SYNTH_TOP}`",
             "- board/device metadata: Arty Z7-10, `xc7z010clg400-1`",
             "- clock target: 25 MHz",

@@ -7,8 +7,6 @@ const AV2_IBC_TILE_SIZE: usize = 64;
 const AV2_IBC_HASH_OFFSET: u32 = 0x811c_9dc5;
 const AV2_IBC_MAX_BVP_SIZE: usize = 4;
 const AV2_IBC_DRL_IDX_ABOVE_8X8: u8 = 2;
-#[cfg(test)]
-const AV2_IBC_DRL_IDX_LEFT_8X8: u8 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Av2LocalIbcVector {
@@ -186,6 +184,8 @@ fn visit_local_ibc_block(
     let tile_block_rows =
         (AV2_IBC_TILE_SIZE / AV2_IBC_HASH_BLOCK_SIZE).min(blocks_high - (block_y - tile_block_row));
     let terminal_tile_row = tile_block_row + 1 == tile_block_rows;
+    let default_above_bvp_supported = false;
+    let default_left_bvp_supported = false;
     if left_in_same_tile {
         stats.blocks_with_left_in_tile += 1;
     }
@@ -223,8 +223,11 @@ fn visit_local_ibc_block(
         && above_index.is_some_and(|index| coded_blocks[index] && blocks[index].hash == hash);
     let raw_left_match = left_in_same_tile
         && left_index.is_some_and(|index| coded_blocks[index] && blocks[index].hash == hash);
+    let left_reference_residual_coded =
+        left_index.is_some_and(|index| blocks[index].copy_vector.is_none());
     let direct_above_match = raw_above_match && above_drl_idx.is_some();
-    let direct_left_match = raw_left_match && left_drl_idx.is_some();
+    let direct_left_match =
+        raw_left_match && left_reference_residual_coded && left_drl_idx.is_some();
     if raw_above_match {
         stats.raw_above_hash_matches += 1;
     }
@@ -248,18 +251,22 @@ fn visit_local_ibc_block(
         stats.left_hash_matches_blocked_by_fixed_drl_guard += 1;
     }
 
-    // AV2 v1.0.0 av2_is_dv_in_local_range() permits a direct 8x8 above
-    // vector when the source block is in the same 64x64 tile and has already
-    // been coded. Limit this first expansion to the terminal 8x8 row and the
-    // default BVP slot from setup_ref_mv_list(); shifted spatial-BVP slots and
-    // later blocks consuming a vertical IBC neighbor need AVM's exact
-    // is_mi_coded/pseudo-coded map and follow-on context update.
-    let above_match =
-        terminal_tile_row && direct_above_match && above_drl_idx == Some(AV2_IBC_DRL_IDX_ABOVE_8X8);
+    // AV2 v1.0.0 av2_is_dv_in_local_range()/setup_ref_mv_list(): a selected
+    // IntraBC DRL index is only correct when the encoder mirrors AVM's
+    // decoded-BV and pseudo-coded availability state. The hash-only MVP still
+    // records raw matches for bitrate experiments, but keeps copy selection
+    // disabled so REF reconstruction remains bit-exact.
+    // TODO(av2 ibc): add decoded-BV tracking beside the hash table, then
+    // re-enable direct above/left copy selection with REF round-trip tests.
+    let above_match = default_above_bvp_supported
+        && terminal_tile_row
+        && direct_above_match
+        && above_drl_idx == Some(AV2_IBC_DRL_IDX_ABOVE_8X8);
     // Top-row same-row copies can still be rejected by AVM for the current
     // partial-superblock partition state. Keep left-copy selection below the
     // first 8x8 row until the full is_mi_coded/pseudo-coded map is mirrored.
-    let left_match = direct_left_match && above_in_same_tile;
+    // See the decoded-BV TODO above before re-enabling left-copy selection.
+    let left_match = default_left_bvp_supported && direct_left_match && above_in_same_tile;
     let candidate = match (above_match, left_match) {
         (true, true) => {
             let above_idx = above_drl_idx.expect("above match has a DRL index");
@@ -326,23 +333,11 @@ fn build_bvp_stack_8x8(
     block_y: usize,
 ) -> Vec<Av2LocalIbcVector> {
     let mut stack = Vec::with_capacity(AV2_IBC_MAX_BVP_SIZE);
-    // AVM setup_ref_mv_list() scans adjacent SMVP candidates before appending
-    // default BVs: left-bottom, row_smvp[0], left-top, row_smvp[1],
-    // bottom-left, row_smvp[2], row_smvp[3], and the second-left column. For
-    // FrameForge's fixed 8x8 shared-tree leaves, these offsets collapse to the
-    // 8x8 hash cells below. Mirroring this order keeps intrabc_drl_idx aligned
-    // when nearby IBC blocks shift the default {0,-8}/{-8,0} entries.
-    for (row_mi_offset, col_mi_offset) in [
-        (1, -1),
-        (-1, 1),
-        (0, -1),
-        (-1, 0),
-        (2, -1),
-        (-1, 2),
-        (-1, -1),
-        (1, -3),
-        (0, -3),
-    ] {
+    // AV2 v1.0.0 setup_ref_mv_list() can scan several spatial IntraBC BVP
+    // positions before appending default BVs. FrameForge's streaming hash path
+    // intentionally keeps only direct left/above 8x8 candidates so the RTL can
+    // decide a copy as soon as the current block hash is complete.
+    for (row_mi_offset, col_mi_offset) in [(0, -1), (-1, 0)] {
         if let Some(index) = neighbor_index_for_mi_offset(
             blocks_wide,
             blocks_high,
@@ -436,8 +431,11 @@ mod tests {
         let ibc = build_local_ibc_444(&frame, geometry).expect("IBC hash map should build");
         assert_eq!(ibc.candidate_drl_idx(0, 0), None);
         assert_eq!(ibc.candidate_drl_idx(8, 0), None);
-        assert_eq!(ibc.candidate_drl_idx(8, 8), Some(AV2_IBC_DRL_IDX_LEFT_8X8));
-        assert!(ibc.any_copy());
+        // Partial-width left copies need decoded-BV tracking before the
+        // hash-only path can guarantee the reference decoder copies the
+        // immediate-left block.
+        assert_eq!(ibc.candidate_drl_idx(8, 8), None);
+        assert!(!ibc.any_copy());
     }
 
     #[test]
@@ -460,8 +458,9 @@ mod tests {
 
         let ibc = build_local_ibc_444(&frame, geometry).expect("IBC hash map should build");
         assert_eq!(ibc.candidate_drl_idx(0, 0), None);
-        assert_eq!(ibc.candidate_drl_idx(0, 8), Some(AV2_IBC_DRL_IDX_ABOVE_8X8));
-        assert!(ibc.any_copy());
+        assert_eq!(ibc.candidate_drl_idx(0, 8), None);
+        assert_eq!(ibc.stats.raw_above_hash_matches, 1);
+        assert!(!ibc.any_copy());
     }
 
     #[test]
@@ -486,13 +485,8 @@ mod tests {
         let ibc = build_local_ibc_444(&frame, geometry).expect("IBC hash map should build");
         assert_eq!(ibc.candidate_drl_idx(0, 0), None);
         assert_eq!(ibc.candidate_drl_idx(0, 8), None);
-        // The middle row is kept as residual-coded context; the terminal row
-        // can use the default above BVP without a following block consuming
-        // vertical IBC neighbor state.
-        assert_eq!(
-            ibc.candidate_drl_idx(0, 16),
-            Some(AV2_IBC_DRL_IDX_ABOVE_8X8)
-        );
+        assert_eq!(ibc.candidate_drl_idx(0, 16), None);
+        assert_eq!(ibc.stats.raw_above_hash_matches, 2);
     }
 
     #[test]
@@ -521,8 +515,8 @@ mod tests {
         let ibc = build_local_ibc_444(&frame, geometry).expect("IBC hash map should build");
         assert_eq!(ibc.candidate_drl_idx(0, 0), None);
         assert_eq!(ibc.candidate_drl_idx(8, 0), None);
-        assert_eq!(ibc.candidate_drl_idx(8, 8), Some(AV2_IBC_DRL_IDX_LEFT_8X8));
-        assert_eq!(ibc.candidate_drl_idx(16, 8), Some(0));
+        assert_eq!(ibc.candidate_drl_idx(8, 8), None);
+        assert_eq!(ibc.candidate_drl_idx(16, 8), None);
     }
 
     #[test]
@@ -557,9 +551,9 @@ mod tests {
         }
 
         let ibc = build_local_ibc_444(&frame, geometry).expect("IBC hash map should build");
-        assert_eq!(ibc.candidate_drl_idx(8, 8), Some(AV2_IBC_DRL_IDX_LEFT_8X8));
-        assert_eq!(ibc.candidate_drl_idx(16, 16), Some(0));
-        assert_eq!(ibc.stats.left_hash_matches_blocked_by_copied_candidate, 0);
+        assert_eq!(ibc.candidate_drl_idx(8, 8), None);
+        assert_eq!(ibc.candidate_drl_idx(16, 16), None);
+        assert_eq!(ibc.stats.raw_left_hash_matches, 2);
     }
 
     #[test]
@@ -585,7 +579,7 @@ mod tests {
         }
 
         let ibc = build_local_ibc_444(&frame, geometry).expect("IBC hash map should build");
-        assert_eq!(ibc.candidate_drl_idx(8, 56), Some(AV2_IBC_DRL_IDX_LEFT_8X8));
-        assert!(ibc.any_copy());
+        assert_eq!(ibc.candidate_drl_idx(8, 56), None);
+        assert!(!ibc.any_copy());
     }
 }

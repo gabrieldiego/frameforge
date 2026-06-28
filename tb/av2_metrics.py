@@ -9,22 +9,23 @@ AV2_STATE_NAMES = {
     4: "seq_write",
     5: "load_block",
     6: "partition",
-    7: "palette_query",
-    8: "leaf",
-    9: "finish_init",
-    10: "finish_push",
-    11: "chroma_fetch",
-    12: "carry_read",
-    13: "carry_write",
-    14: "payload_prefix",
-    15: "output_prep",
-    16: "output_valid",
-    17: "output_payload_wait",
-    18: "output_payload_load",
+    7: "leaf_wait",
+    8: "palette_query",
+    9: "leaf",
+    10: "finish_init",
+    11: "finish_push",
+    12: "chroma_fetch",
+    13: "carry_read",
+    14: "carry_write",
+    15: "payload_prefix",
+    16: "output_prep",
+    17: "output_valid",
+    18: "output_payload_wait",
+    19: "output_payload_load",
 }
 AV2_STATE_PARTITION = 6
-AV2_STATE_LEAF = 8
-AV2_STATE_CHROMA_FETCH = 11
+AV2_STATE_LEAF = 9
+AV2_STATE_CHROMA_FETCH = 12
 AV2_PHASE_INTRA = 0
 AV2_PHASE_PALETTE_HEADER = 1
 AV2_PHASE_PALETTE_MAP = 2
