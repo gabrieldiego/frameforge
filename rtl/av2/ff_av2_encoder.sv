@@ -355,31 +355,14 @@ module ff_av2_encoder #(
   logic [15:0] payload_tile_start_w;
   logic [15:0] output_next_stream_index_w;
   logic [15:0] output_payload_addr_w;
-  logic [15:0] output_payload_remaining_w;
-  logic [15:0] output_next_payload_addr_w;
-  logic [15:0] output_next_payload_remaining_w;
   logic [11:0] output_next_payload_word_addr_w;
-  logic [15:0] output_after_current_stream_index_w;
-  logic [15:0] output_after_next_stream_index_w;
-  logic [15:0] output_after_current_payload_addr_w;
-  logic [15:0] output_after_next_payload_addr_w;
   logic [11:0] output_after_current_payload_word_addr_w;
   logic [11:0] output_after_next_payload_word_addr_w;
   logic [3:0] output_next_byte_phase_w;
   logic output_after_current_payload_w;
   logic output_after_next_payload_w;
-  logic [OUTPUT_PACKET_COUNT_BITS - 1:0] output_packet_space_w;
-  logic [OUTPUT_PACKET_COUNT_BITS - 1:0] output_payload_bank_space_w;
-  logic [OUTPUT_PACKET_COUNT_BITS - 1:0] output_payload_word_space_w;
   logic [OUTPUT_PACKET_COUNT_BITS - 1:0] output_payload_count_w;
-  logic [OUTPUT_PACKET_COUNT_BITS - 1:0] output_next_packet_space_w;
-  logic [OUTPUT_PACKET_COUNT_BITS - 1:0] output_next_payload_bank_space_w;
-  logic [OUTPUT_PACKET_COUNT_BITS - 1:0] output_next_payload_word_space_w;
   logic [OUTPUT_PACKET_COUNT_BITS - 1:0] output_next_payload_count_w;
-  logic [127:0] output_payload_mask_w;
-  logic [127:0] output_next_payload_mask_w;
-  logic [127:0] output_payload_shifted_data_w;
-  logic [127:0] output_next_payload_shifted_data_w;
   logic [127:0] output_payload_packet_data_w;
   logic [127:0] output_next_payload_packet_data_w;
   logic output_current_packet_last_w;
@@ -915,6 +898,40 @@ module ff_av2_encoder #(
     .output_byte(output_byte_w)
   );
 
+  ff_av2_output_packetizer #(
+    .OUTPUT_PACKET_COUNT_BITS(OUTPUT_PACKET_COUNT_BITS)
+  ) output_packetizer (
+    .state_output_valid(state_q == ST_OUTPUT_VALID),
+    .axis_valid(m_axis_valid),
+    .axis_ready(m_axis_ready),
+    .output_last(output_last_q),
+    .stream_index(stream_index_q),
+    .axis_count(m_axis_count),
+    .output_byte_phase(output_byte_phase_q),
+    .tile_payload_start(tile_payload_start_w),
+    .total_stream_len(total_stream_len_w),
+    .output_tile_payload(output_tile_payload_w),
+    .output_byte(output_byte_w),
+    .payload_read_data(payload_read_data_w),
+    .stream_lookup_index(stream_lookup_index_w),
+    .output_next_stream_index(output_next_stream_index_w),
+    .output_payload_addr(output_payload_addr_w),
+    .output_next_payload_word_addr(output_next_payload_word_addr_w),
+    .output_after_current_payload_word_addr(output_after_current_payload_word_addr_w),
+    .output_after_next_payload_word_addr(output_after_next_payload_word_addr_w),
+    .output_next_byte_phase(output_next_byte_phase_w),
+    .output_after_current_payload(output_after_current_payload_w),
+    .output_after_next_payload(output_after_next_payload_w),
+    .output_payload_count(output_payload_count_w),
+    .output_next_payload_count(output_next_payload_count_w),
+    .output_payload_packet_data(output_payload_packet_data_w),
+    .output_next_payload_packet_data(output_next_payload_packet_data_w),
+    .output_current_packet_last(output_current_packet_last_w),
+    .output_next_packet_last(output_next_packet_last_w),
+    .output_lookup_byte(output_lookup_byte_w),
+    .output_lookup_last(output_lookup_last_w)
+  );
+
   ff_av2_local_hash_matcher_444 #(
     .SAMPLE_BITS(SAMPLE_BITS)
   ) local_hash_ibc (
@@ -1195,94 +1212,7 @@ module ff_av2_encoder #(
   assign input_fire_error_w =
     input_fire_w &&
     (input_axis_last_w != (tile_is_last_w && tile_input_last_w));
-  assign stream_lookup_index_w =
-    (state_q == ST_OUTPUT_VALID && m_axis_valid && m_axis_ready && !output_last_q) ?
-      output_next_stream_index_w : stream_index_q;
-  assign output_lookup_last_w = (stream_lookup_index_w == (total_stream_len_w - 16'd1));
   assign frame_is_last_w = ((frame_index_q + 32'd1) >= frame_count);
-  assign output_lookup_byte_w =
-    output_tile_payload_w ?
-      payload_read_data_w[{stream_lookup_index_w[3:0], 3'b000} +: 8] :
-      output_byte_w;
-  assign output_next_stream_index_w = stream_index_q + {11'd0, m_axis_count};
-  assign output_payload_addr_w = stream_index_q - tile_payload_start_w;
-  assign output_payload_remaining_w = total_stream_len_w - stream_index_q;
-  assign output_next_payload_addr_w = output_next_stream_index_w - tile_payload_start_w;
-  assign output_next_payload_remaining_w = total_stream_len_w - output_next_stream_index_w;
-  assign output_next_payload_word_addr_w = output_next_payload_addr_w[15:4];
-  assign output_after_current_stream_index_w =
-    stream_index_q + {11'd0, output_payload_count_w};
-  assign output_after_next_stream_index_w =
-    output_next_stream_index_w + {11'd0, output_next_payload_count_w};
-  assign output_after_current_payload_addr_w =
-    output_after_current_stream_index_w - tile_payload_start_w;
-  assign output_after_next_payload_addr_w =
-    output_after_next_stream_index_w - tile_payload_start_w;
-  assign output_after_current_payload_word_addr_w =
-    output_after_current_payload_addr_w[15:4];
-  assign output_after_next_payload_word_addr_w =
-    output_after_next_payload_addr_w[15:4];
-  assign output_next_byte_phase_w =
-    output_byte_phase_q + m_axis_count[3:0];
-  assign output_after_current_payload_w =
-    (output_after_current_stream_index_w >= tile_payload_start_w) &&
-    (output_after_current_stream_index_w < total_stream_len_w);
-  assign output_after_next_payload_w =
-    (output_after_next_stream_index_w >= tile_payload_start_w) &&
-    (output_after_next_stream_index_w < total_stream_len_w);
-  assign output_packet_space_w =
-    (output_byte_phase_q == 4'd0) ?
-      OUTPUT_PACKET_COUNT_BITS'(16) :
-      (OUTPUT_PACKET_COUNT_BITS'(16) - {1'b0, output_byte_phase_q});
-  assign output_payload_bank_space_w =
-    (output_payload_addr_w[3:0] == 4'd0) ?
-      OUTPUT_PACKET_COUNT_BITS'(16) :
-      (OUTPUT_PACKET_COUNT_BITS'(16) - {1'b0, output_payload_addr_w[3:0]});
-  assign output_payload_word_space_w =
-    (output_packet_space_w < output_payload_bank_space_w) ?
-      output_packet_space_w : output_payload_bank_space_w;
-  assign output_payload_count_w =
-    (output_payload_remaining_w > {11'd0, output_payload_word_space_w}) ?
-      output_payload_word_space_w :
-      output_payload_remaining_w[OUTPUT_PACKET_COUNT_BITS - 1:0];
-  assign output_payload_shifted_data_w =
-    payload_read_data_w >> ({3'd0, output_payload_addr_w[3:0]} << 3);
-  assign output_payload_mask_w =
-    (output_payload_count_w == OUTPUT_PACKET_COUNT_BITS'(0)) ?
-      128'd0 :
-      ((output_payload_count_w == OUTPUT_PACKET_COUNT_BITS'(16)) ?
-        {128{1'b1}} :
-        ({128{1'b1}} >> ((OUTPUT_PACKET_COUNT_BITS'(16) - output_payload_count_w) << 3)));
-  assign output_payload_packet_data_w = output_payload_shifted_data_w & output_payload_mask_w;
-  assign output_current_packet_last_w =
-    ((stream_index_q + {11'd0, output_payload_count_w}) >= total_stream_len_w);
-  assign output_next_packet_space_w =
-    (output_next_byte_phase_w == 4'd0) ?
-      OUTPUT_PACKET_COUNT_BITS'(16) :
-      (OUTPUT_PACKET_COUNT_BITS'(16) - {1'b0, output_next_byte_phase_w});
-  assign output_next_payload_bank_space_w =
-    (output_next_payload_addr_w[3:0] == 4'd0) ?
-      OUTPUT_PACKET_COUNT_BITS'(16) :
-      (OUTPUT_PACKET_COUNT_BITS'(16) - {1'b0, output_next_payload_addr_w[3:0]});
-  assign output_next_payload_word_space_w =
-    (output_next_packet_space_w < output_next_payload_bank_space_w) ?
-      output_next_packet_space_w : output_next_payload_bank_space_w;
-  assign output_next_payload_count_w =
-    (output_next_payload_remaining_w > {11'd0, output_next_payload_word_space_w}) ?
-      output_next_payload_word_space_w :
-      output_next_payload_remaining_w[OUTPUT_PACKET_COUNT_BITS - 1:0];
-  assign output_next_payload_shifted_data_w =
-    payload_read_data_w >> ({3'd0, output_next_payload_addr_w[3:0]} << 3);
-  assign output_next_payload_mask_w =
-    (output_next_payload_count_w == OUTPUT_PACKET_COUNT_BITS'(0)) ?
-      128'd0 :
-      ((output_next_payload_count_w == OUTPUT_PACKET_COUNT_BITS'(16)) ?
-        {128{1'b1}} :
-        ({128{1'b1}} >> ((OUTPUT_PACKET_COUNT_BITS'(16) - output_next_payload_count_w) << 3)));
-  assign output_next_payload_packet_data_w =
-    output_next_payload_shifted_data_w & output_next_payload_mask_w;
-  assign output_next_packet_last_w =
-    ((output_next_stream_index_w + {11'd0, output_next_payload_count_w}) >= total_stream_len_w);
   assign palette_query_start_w = (state_q == ST_PALETTE_QUERY);
   assign leaf_luma_palette_w = palette_mode_q && (leaf_luma_mode_q == LUMA_MODE_DC);
   assign lossy420_luma_left_row_index_w = block_row_mi_q[3:0];
