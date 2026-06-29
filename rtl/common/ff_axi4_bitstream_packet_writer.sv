@@ -80,6 +80,8 @@ module ff_axi4_bitstream_packet_writer #(
   logic [31:0] write_offset_q;
   logic [AXI_DATA_BITS-1:0] next_word_w;
   logic [AXI_BYTES-1:0] next_strobe_w;
+  logic [AXI_BYTE_COUNT_BITS-1:0] s_axis_count_safe_w;
+  logic s_axis_count_valid_w;
   logic [AXI_BYTE_COUNT_BITS:0] packet_count_sum_w;
   logic [31:0] packet_byte_advance_w;
   logic capacity_ok_w;
@@ -101,7 +103,10 @@ module ff_axi4_bitstream_packet_writer #(
   logic [AXI_DATA_BITS-1:0] packet_data_masked_w;
   logic [AXI_DATA_BITS-1:0] packet_data_shifted_w;
   logic [7:0] packet_shift_bits_w;
+  logic invalid_axis_count_w;
   integer packet_i;
+  integer axis_count_i;
+  integer clear_i;
 
   assign busy =
     run_q ||
@@ -115,14 +120,25 @@ module ff_axi4_bitstream_packet_writer #(
   assign m_axi_wdata = fifo_data_q[fifo_rd_ptr_q];
   assign m_axi_wstrb = fifo_strobe_q[fifo_rd_ptr_q];
   assign m_axi_wlast = (tx_remaining_q == BURST_COUNT_BITS'(1));
+  always @* begin
+    s_axis_count_safe_w = '0;
+    s_axis_count_valid_w = 1'b0;
+    for (axis_count_i = 0; axis_count_i <= AXI_BYTES; axis_count_i = axis_count_i + 1) begin
+      if (s_axis_count == axis_count_i[AXI_BYTE_COUNT_BITS-1:0]) begin
+        s_axis_count_safe_w = axis_count_i[AXI_BYTE_COUNT_BITS-1:0];
+        s_axis_count_valid_w = 1'b1;
+      end
+    end
+  end
+
   assign packet_byte_advance_w =
-    {{(32-AXI_BYTE_COUNT_BITS){1'b0}}, s_axis_count};
+    {{(32-AXI_BYTE_COUNT_BITS){1'b0}}, s_axis_count_safe_w};
   assign capacity_ok_w =
     (dst_capacity == 32'd0) ||
     ((bytes_written + packet_byte_advance_w) <= dst_capacity);
   assign fifo_has_room_w = (fifo_count_q < FIFO_WORDS_VALUE) || dequeue_word_w;
   assign packet_count_sum_w =
-    {1'b0, byte_count_q} + {1'b0, s_axis_count};
+    {1'b0, byte_count_q} + {1'b0, s_axis_count_safe_w};
   assign flush_input_w =
     s_axis_valid &&
     ((packet_count_sum_w >= AXI_BYTES_VALUE) || s_axis_last);
@@ -131,7 +147,13 @@ module ff_axi4_bitstream_packet_writer #(
     !final_seen_q &&
     capacity_ok_w &&
     (!flush_input_w || fifo_has_room_w);
-  assign take_word_w = s_axis_valid && s_axis_ready && (s_axis_count != '0);
+  assign take_word_w =
+    s_axis_valid &&
+    s_axis_ready &&
+    s_axis_count_valid_w &&
+    (s_axis_count_safe_w != '0);
+  assign invalid_axis_count_w =
+    s_axis_valid && s_axis_count_valid_w === 1'b0;
   assign enqueue_word_w =
     take_word_w &&
     ((packet_count_sum_w >= AXI_BYTES_VALUE) || s_axis_last);
@@ -159,14 +181,14 @@ module ff_axi4_bitstream_packet_writer #(
   assign tx_byte_advance_w =
     {{(32-BURST_COUNT_BITS-AXI_BYTE_SHIFT){1'b0}}, tx_count_q, {AXI_BYTE_SHIFT{1'b0}}};
   assign packet_strobe_unshifted_w =
-    (s_axis_count == '0) ?
+    (s_axis_count_safe_w == '0) ?
       {AXI_BYTES{1'b0}} :
-      ((AXI_BYTES'(1) << s_axis_count) - AXI_BYTES'(1));
+      ((AXI_BYTES'(1) << s_axis_count_safe_w) - AXI_BYTES'(1));
   assign packet_strobe_shifted_w = packet_strobe_unshifted_w << byte_count_q;
   assign packet_shift_bits_w = {3'd0, byte_count_q} << 3;
   assign packet_data_shifted_w = packet_data_masked_w << packet_shift_bits_w;
 
-  always_comb begin
+  always @* begin
     packet_data_masked_w = '0;
     for (packet_i = 0; packet_i < AXI_BYTES; packet_i = packet_i + 1) begin
       if (packet_strobe_unshifted_w[packet_i]) begin
@@ -199,6 +221,10 @@ module ff_axi4_bitstream_packet_writer #(
       m_axi_awvalid <= 1'b0;
       m_axi_wvalid <= 1'b0;
       m_axi_bready <= 1'b0;
+      for (clear_i = 0; clear_i < FIFO_WORDS; clear_i = clear_i + 1) begin
+        fifo_data_q[clear_i] <= '0;
+        fifo_strobe_q[clear_i] <= '0;
+      end
     end else begin
       frame_done <= 1'b0;
       if (start) begin
@@ -220,7 +246,14 @@ module ff_axi4_bitstream_packet_writer #(
         m_axi_awvalid <= 1'b0;
         m_axi_wvalid <= 1'b0;
         m_axi_bready <= 1'b0;
+        for (clear_i = 0; clear_i < FIFO_WORDS; clear_i = clear_i + 1) begin
+          fifo_data_q[clear_i] <= '0;
+          fifo_strobe_q[clear_i] <= '0;
+        end
       end else begin
+        if (run_q && invalid_axis_count_w) begin
+          error <= 1'b1;
+        end
         if (take_word_w) begin
           bytes_written <= bytes_written + packet_byte_advance_w;
           if (enqueue_word_w) begin

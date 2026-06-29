@@ -16,7 +16,6 @@ module ff_av2_local_hash_matcher_444 #(
   input  logic [3:0] packet_count,
   input  logic       packet_last,
   output logic       done,
-  output logic       any_copy,
   output logic [63:0] copy_mask,
   output logic [63:0] above_copy_mask,
   output logic [63:0] ready_mask,
@@ -302,7 +301,6 @@ module ff_av2_local_hash_matcher_444 #(
       coded_mask_q <= 64'd0;
       read_done_q <= 1'b0;
       done <= 1'b0;
-      any_copy <= 1'b0;
       copy_mask <= 64'd0;
       above_copy_mask <= 64'd0;
       ready_mask <= 64'd0;
@@ -319,7 +317,6 @@ module ff_av2_local_hash_matcher_444 #(
       coded_mask_q <= 64'd0;
       read_done_q <= 1'b0;
       done <= 1'b0;
-      any_copy <= 1'b0;
       copy_mask <= 64'd0;
       above_copy_mask <= 64'd0;
       ready_mask <= 64'd0;
@@ -385,7 +382,6 @@ module ff_av2_local_hash_matcher_444 #(
                 above_copy_mask[decide_block_id_w] <= candidate_above_w && copy_match_w;
                 drl_idx_table[decide_drl_bit_index_w +: 2] <=
                   copy_match_w ? candidate_drl_idx_w : 2'd0;
-                any_copy <= any_copy | copy_match_w;
               end
               if (decide_index_q == 6'd63) begin
                 done <= read_done_q;

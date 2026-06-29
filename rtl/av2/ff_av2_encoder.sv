@@ -95,9 +95,9 @@ module ff_av2_encoder #(
     ST_OUTPUT_PAYLOAD_LOAD
   } state_t;
 
-  localparam logic [1:0] PARTITION_NONE = 2'd0;
-  localparam logic [1:0] PARTITION_HORZ = 2'd1;
-  localparam logic [1:0] PARTITION_VERT = 2'd2;
+  localparam int AV2_STACK_DEPTH = 16;
+  localparam int AV2_PARTITION_CONTEXT_DIM = 16;
+
   localparam logic [2:0] PHASE_INTRA = 3'd0;
   localparam logic [2:0] PHASE_PALETTE_HEADER = 3'd1;
   localparam logic [2:0] PHASE_PALETTE_MAP = 3'd2;
@@ -105,11 +105,6 @@ module ff_av2_encoder #(
   localparam logic [2:0] PHASE_U_COEFF = 3'd4;
   localparam logic [2:0] PHASE_V_COEFF = 3'd5;
   localparam logic [2:0] PHASE_INTRABC = 3'd6;
-  localparam logic [1:0] LUMA_MODE_DC = 2'd0;
-  localparam logic [1:0] LUMA_MODE_V = 2'd1;
-  localparam logic [1:0] LUMA_MODE_H = 2'd2;
-  localparam int AV2_STACK_DEPTH = 16;
-  localparam int AV2_PARTITION_CONTEXT_DIM = 16;
 
   logic       start;
   logic [15:0] visible_width;
@@ -165,6 +160,17 @@ module ff_av2_encoder #(
   logic       bitstream_writer_error_w;
 
   state_t state_q;
+  logic state_idle_w;
+  logic state_tile_start_w;
+  logic state_input_read_w;
+  logic state_partition_w;
+  logic state_palette_query_w;
+  logic state_leaf_w;
+  logic state_chroma_fetch_w;
+  logic state_finish_push_w;
+  logic state_carry_write_w;
+  logic state_payload_prefix_w;
+  logic state_output_valid_w;
   logic start_invalid_w;
   logic [7:0] seq_mem_q [0:AV2_MAX_SEQUENCE_BYTES - 1];
   logic [15:0] precarry_read_addr_q;
@@ -218,6 +224,14 @@ module ff_av2_encoder #(
   logic signed [7:0] cnt_q;
   logic [2:0] phase_q;
   logic [6:0] step_q;
+  logic phase_intra_w;
+  logic phase_palette_header_w;
+  logic phase_palette_map_w;
+  logic phase_y_coeff_w;
+  logic phase_u_coeff_w;
+  logic phase_v_coeff_w;
+  logic phase_intrabc_w;
+  
   logic [5:0] palette_row_q;
   logic [5:0] palette_col_q;
   logic [1:0] palette_identity_row_ctx_q;
@@ -269,8 +283,6 @@ module ff_av2_encoder #(
   logic signed [7:0] finish_s_q;
   logic [15:0] carry_q;
   logic [15:0] carry_index_q;
-  integer context_index_q;
-  integer seq_write_i;
   logic last_u_txb_nonzero_q;
   logic txb_context_clear_w;
   logic txb_context_clear_leaf_w;
@@ -314,7 +326,6 @@ module ff_av2_encoder #(
   logic multi_tile_w;
   logic frame_ibc_mode_q;
   logic ibc_done_w;
-  logic ibc_any_copy_w;
   logic [63:0] ibc_copy_mask_w;
   logic [63:0] ibc_above_copy_mask_w;
   logic [63:0] ibc_ready_mask_w;
@@ -590,62 +601,93 @@ module ff_av2_encoder #(
   logic chroma_bdpcm_enable_w;
   logic chroma_subsampled_phase_w;
 
-  assign partition_context_clear_w =
-    ((state_q == ST_INPUT_READ) &&
-     tile_entropy_start_ready_w &&
-     !palette_analyzer_unsupported_w);
-  assign partition_context_update_w =
-    (state_q == ST_PARTITION) &&
-    (partition_q == PARTITION_NONE) &&
-    (!op_valid_w || !(partition_emit_do_split_w && partition_need_rect_w));
-  assign txb_context_clear_w =
-    ((state_q == ST_IDLE) && start && !start_invalid_w) ||
-    (state_q == ST_INPUT_READ && tile_entropy_start_ready_w && !palette_analyzer_unsupported_w) ||
-    ((state_q == ST_OUTPUT_VALID) && m_axis_valid && m_axis_ready &&
-     output_last_q && !frame_is_last_w);
-  assign txb_context_clear_leaf_w =
-    state_q == ST_LEAF &&
-    op_valid_w &&
-    (phase_q == PHASE_INTRABC) &&
-    ((step_q == 5'd3 && ibc_drl_idx_w == 2'd0) ||
-     (step_q == 5'd4 && ibc_drl_idx_w == 2'd1) ||
-     (step_q == 5'd5));
-  assign txb_context_set_luma_w =
-    (state_q == ST_LEAF) &&
-    (phase_q == PHASE_Y_COEFF) &&
-    residual_mode_w &&
-    luma_residual_txb_done_w;
-  assign txb_context_set_u_w =
-    (state_q == ST_LEAF) &&
-    (phase_q == PHASE_U_COEFF) &&
-    residual_mode_w &&
-    chroma_bdpcm_txb_done_w;
-  assign txb_context_set_v_w =
-    (state_q == ST_LEAF) &&
-    (phase_q == PHASE_V_COEFF) &&
-    residual_mode_w &&
-    chroma_bdpcm_txb_done_w;
-  assign txb_context_luma_update_w = luma_residual_entropy_context_w;
-  assign txb_context_u_update_w = chroma_bdpcm_entropy_context_w;
-  assign txb_context_v_update_w = chroma_bdpcm_entropy_context_w;
-  assign ibc_context_clear_w =
-    ((state_q == ST_INPUT_READ) &&
-     tile_entropy_start_ready_w &&
-     !palette_analyzer_unsupported_w);
-  assign ibc_context_set_leaf_w =
-    (state_q == ST_LEAF) &&
-    op_valid_w &&
-    (phase_q == PHASE_INTRABC) &&
-    (((step_q == 5'd3) && (ibc_drl_idx_w == 2'd0)) ||
-     ((step_q == 5'd4) && (ibc_drl_idx_w == 2'd1)) ||
-     (step_q == 5'd5));
-  assign ibc_context_clear_leaf_w =
-    (state_q == ST_LEAF) &&
-    op_valid_w &&
-    (phase_q == PHASE_V_COEFF) &&
-    (((residual_mode_w && chroma_bdpcm_txb_done_w) ||
-      (!residual_mode_w && (step_q == 7'd7)))) &&
-    (txb_index_q == (txb_count_q - 16'd1));
+  ff_av2_state_phase_decode #(
+    .ST_IDLE(ST_IDLE),
+    .ST_TILE_START(ST_TILE_START),
+    .ST_INPUT_READ(ST_INPUT_READ),
+    .ST_PARTITION(ST_PARTITION),
+    .ST_PALETTE_QUERY(ST_PALETTE_QUERY),
+    .ST_LEAF(ST_LEAF),
+    .ST_CHROMA_FETCH(ST_CHROMA_FETCH),
+    .ST_FINISH_PUSH(ST_FINISH_PUSH),
+    .ST_CARRY_WRITE(ST_CARRY_WRITE),
+    .ST_PAYLOAD_PREFIX(ST_PAYLOAD_PREFIX),
+    .ST_OUTPUT_VALID(ST_OUTPUT_VALID),
+    .PHASE_INTRA(PHASE_INTRA),
+    .PHASE_PALETTE_HEADER(PHASE_PALETTE_HEADER),
+    .PHASE_PALETTE_MAP(PHASE_PALETTE_MAP),
+    .PHASE_Y_COEFF(PHASE_Y_COEFF),
+    .PHASE_U_COEFF(PHASE_U_COEFF),
+    .PHASE_V_COEFF(PHASE_V_COEFF),
+    .PHASE_INTRABC(PHASE_INTRABC)
+  ) state_phase_decode (
+    .state_q(state_q),
+    .phase_q(phase_q),
+    .state_idle_w(state_idle_w),
+    .state_tile_start_w(state_tile_start_w),
+    .state_input_read_w(state_input_read_w),
+    .state_partition_w(state_partition_w),
+    .state_palette_query_w(state_palette_query_w),
+    .state_leaf_w(state_leaf_w),
+    .state_chroma_fetch_w(state_chroma_fetch_w),
+    .state_finish_push_w(state_finish_push_w),
+    .state_carry_write_w(state_carry_write_w),
+    .state_payload_prefix_w(state_payload_prefix_w),
+    .state_output_valid_w(state_output_valid_w),
+    .phase_intra_w(phase_intra_w),
+    .phase_palette_header_w(phase_palette_header_w),
+    .phase_palette_map_w(phase_palette_map_w),
+    .phase_y_coeff_w(phase_y_coeff_w),
+    .phase_u_coeff_w(phase_u_coeff_w),
+    .phase_v_coeff_w(phase_v_coeff_w),
+    .phase_intrabc_w(phase_intrabc_w)
+  );
+
+  ff_av2_encoder_context_controls context_controls (
+    .state_input_read_w(state_input_read_w),
+    .state_partition_w(state_partition_w),
+    .state_leaf_w(state_leaf_w),
+    .state_output_valid_w(state_output_valid_w),
+    .state_idle_w(state_idle_w),
+    .start(start),
+    .start_invalid_w(start_invalid_w),
+    .tile_entropy_start_ready_w(tile_entropy_start_ready_w),
+    .palette_analyzer_unsupported_w(palette_analyzer_unsupported_w),
+    .op_valid_w(op_valid_w),
+    .partition_q(partition_q),
+    .phase_intrabc_w(phase_intrabc_w),
+    .phase_y_coeff_w(phase_y_coeff_w),
+    .phase_u_coeff_w(phase_u_coeff_w),
+    .phase_v_coeff_w(phase_v_coeff_w),
+    .partition_emit_do_split_w(partition_emit_do_split_w),
+    .partition_need_rect_w(partition_need_rect_w),
+    .m_axis_valid(m_axis_valid),
+    .m_axis_ready(m_axis_ready),
+    .output_last_q(output_last_q),
+    .frame_is_last_w(frame_is_last_w),
+    .step_q(step_q[4:0]),
+    .ibc_drl_idx_w(ibc_drl_idx_w),
+    .residual_mode_w(residual_mode_w),
+    .luma_residual_txb_done_w(luma_residual_txb_done_w),
+    .chroma_bdpcm_txb_done_w(chroma_bdpcm_txb_done_w),
+    .txb_count_q(txb_count_q),
+    .txb_index_q(txb_index_q),
+    .luma_residual_entropy_context_w(luma_residual_entropy_context_w),
+    .chroma_bdpcm_entropy_context_w(chroma_bdpcm_entropy_context_w),
+    .partition_context_clear_w(partition_context_clear_w),
+    .partition_context_update_w(partition_context_update_w),
+    .txb_context_clear_w(txb_context_clear_w),
+    .txb_context_clear_leaf_w(txb_context_clear_leaf_w),
+    .txb_context_set_luma_w(txb_context_set_luma_w),
+    .txb_context_set_u_w(txb_context_set_u_w),
+    .txb_context_set_v_w(txb_context_set_v_w),
+    .txb_context_luma_update_w(txb_context_luma_update_w),
+    .txb_context_u_update_w(txb_context_u_update_w),
+    .txb_context_v_update_w(txb_context_v_update_w),
+    .ibc_context_clear_w(ibc_context_clear_w),
+    .ibc_context_set_leaf_w(ibc_context_set_leaf_w),
+    .ibc_context_clear_leaf_w(ibc_context_clear_leaf_w)
+  );
 
   ff_av2_context_banks #(
     .CONTEXT_DIM(AV2_PARTITION_CONTEXT_DIM)
@@ -941,7 +983,7 @@ module ff_av2_encoder #(
   ff_av2_output_packetizer #(
     .OUTPUT_PACKET_COUNT_BITS(OUTPUT_PACKET_COUNT_BITS)
   ) output_packetizer (
-    .state_output_valid(state_q == ST_OUTPUT_VALID),
+    .state_output_valid(state_output_valid_w),
     .axis_valid(m_axis_valid),
     .axis_ready(m_axis_ready),
     .output_last(output_last_q),
@@ -992,11 +1034,11 @@ module ff_av2_encoder #(
 
   ff_av2_payload_write_mux payload_write_mux (
     .start(start),
-    .state_partition(state_q == ST_PARTITION),
-    .state_leaf(state_q == ST_LEAF),
-    .state_finish_push(state_q == ST_FINISH_PUSH),
-    .state_carry_write(state_q == ST_CARRY_WRITE),
-    .state_payload_prefix(state_q == ST_PAYLOAD_PREFIX),
+    .state_partition(state_partition_w),
+    .state_leaf(state_leaf_w),
+    .state_finish_push(state_finish_push_w),
+    .state_carry_write(state_carry_write_w),
+    .state_payload_prefix(state_payload_prefix_w),
     .pending_push_valid(pending_push_valid_q),
     .precarry_len(precarry_len_q),
     .pending_push_word(pending_push_word_q),
@@ -1038,7 +1080,6 @@ module ff_av2_encoder #(
     .packet_count(packet_axis_count_w),
     .packet_last(tile_input_last_w),
     .done(ibc_done_w),
-    .any_copy(ibc_any_copy_w),
     .copy_mask(ibc_copy_mask_w),
     .above_copy_mask(ibc_above_copy_mask_w),
     .ready_mask(ibc_ready_mask_w),
@@ -1083,7 +1124,7 @@ module ff_av2_encoder #(
     .lossy420_direct_luma_txb_col_mi(txb_col_w[4:0]),
     .lossy420_direct_chroma_txb_row_mi(chroma_fetch_current_storage_row_mi_w),
     .lossy420_direct_chroma_txb_col_mi(chroma_fetch_current_storage_col_mi_w),
-    .lossy420_direct_chroma_plane_v(phase_q == PHASE_V_COEFF),
+    .lossy420_direct_chroma_plane_v(phase_v_coeff_w),
     .done(palette_analyzer_done_w),
     .unsupported(palette_analyzer_unsupported_w),
     .black_mode(palette_analyzer_black_w),
@@ -1155,7 +1196,7 @@ module ff_av2_encoder #(
   );
 
   ff_av2_residual_contexts residual_contexts (
-    .phase_v_coeff(phase_q == PHASE_V_COEFF),
+    .phase_v_coeff(phase_v_coeff_w),
     .chroma_format_idc(chroma_format_idc),
     .luma_above_context(txb_context_luma_above_w),
     .luma_left_context(txb_context_luma_left_w),
@@ -1180,11 +1221,11 @@ module ff_av2_encoder #(
     .rst_n(rst_n),
     .start(start),
     .pending_push_valid(pending_push_valid_q),
-    .state_leaf(state_q == ST_LEAF),
-    .state_chroma_fetch(state_q == ST_CHROMA_FETCH),
-    .phase_y_coeff(phase_q == PHASE_Y_COEFF),
-    .phase_u_coeff(phase_q == PHASE_U_COEFF),
-    .phase_v_coeff(phase_q == PHASE_V_COEFF),
+    .state_leaf(state_leaf_w),
+    .state_chroma_fetch(state_chroma_fetch_w),
+    .phase_y_coeff(phase_y_coeff_w),
+    .phase_u_coeff(phase_u_coeff_w),
+    .phase_v_coeff(phase_v_coeff_w),
     .palette_mode(palette_mode_q),
     .lossy_420_mode(lossy_420_mode_q),
     .leaf_chroma_bdpcm_horz(leaf_chroma_bdpcm_horz_q),
@@ -1237,8 +1278,8 @@ module ff_av2_encoder #(
   );
 
   ff_av2_entropy_coder entropy_coder (
-    .partition_active(state_q == ST_PARTITION),
-    .leaf_active(state_q == ST_LEAF),
+    .partition_active(state_partition_w),
+    .leaf_active(state_leaf_w),
     .low(low_q),
     .rng(rng_q),
     .cnt(cnt_q),
@@ -1306,9 +1347,9 @@ module ff_av2_encoder #(
     .SUPPORT_PALETTE_444(SUPPORT_PALETTE_444)
   ) frontend_control (
     .start(start),
-    .state_idle(state_q == ST_IDLE),
-    .state_tile_start(state_q == ST_TILE_START),
-    .state_palette_query(state_q == ST_PALETTE_QUERY),
+    .state_idle(state_idle_w),
+    .state_tile_start(state_tile_start_w),
+    .state_palette_query(state_palette_query_w),
     .chroma_format_idc(chroma_format_idc),
     .frame_count(frame_count),
     .visible_width(visible_width),
@@ -1366,14 +1407,14 @@ module ff_av2_encoder #(
   ff_av2_txb_scheduler txb_scheduler (
     .start(start),
     .pending_push_valid(pending_push_valid_q),
-    .state_leaf(state_q == ST_LEAF),
-    .state_chroma_fetch(state_q == ST_CHROMA_FETCH),
-    .phase_intra(phase_q == PHASE_INTRA),
-    .phase_palette_header(phase_q == PHASE_PALETTE_HEADER),
-    .phase_palette_map(phase_q == PHASE_PALETTE_MAP),
-    .phase_y_coeff(phase_q == PHASE_Y_COEFF),
-    .phase_u_coeff(phase_q == PHASE_U_COEFF),
-    .phase_v_coeff(phase_q == PHASE_V_COEFF),
+    .state_leaf(state_leaf_w),
+    .state_chroma_fetch(state_chroma_fetch_w),
+    .phase_intra(phase_intra_w),
+    .phase_palette_header(phase_palette_header_w),
+    .phase_palette_map(phase_palette_map_w),
+    .phase_y_coeff(phase_y_coeff_w),
+    .phase_u_coeff(phase_u_coeff_w),
+    .phase_v_coeff(phase_v_coeff_w),
     .chroma_format_idc(chroma_format_idc),
     .palette_mode(palette_mode_q),
     .leaf_chroma_bdpcm_horz(leaf_chroma_bdpcm_horz_q),
@@ -1460,7 +1501,7 @@ module ff_av2_encoder #(
   );
 
   ff_av2_lossy420_predictors lossy420_predictors (
-    .phase_v_coeff(phase_q == PHASE_V_COEFF),
+    .phase_v_coeff(phase_v_coeff_w),
     .block_row_mi(block_row_mi_q),
     .block_col_mi(block_col_mi_q),
     .txb_row(txb_row_w),
@@ -1499,33 +1540,41 @@ module ff_av2_encoder #(
   // 64 U samples, then 64 V samples. This mirrors the VVC 4:4:4 8x8-leaf
   // packing at the interface while allowing the AV2 superblock walker to keep
   // its own partition/leaf order internally.
-  assign s_axis_valid = 1'b0;
-  assign s_axis_data = '0;
-  assign s_axis_last = 1'b0;
-  assign s_axis_ready = 1'b0;
-  assign ibc_current_block_id_w = {block_row_mi_q[3:1], block_col_mi_q[3:1]};
-  assign current_leaf_block_id_w = ibc_current_block_id_w;
-  assign current_leaf_ready_w =
-    (palette_analyzer_block_ready_mask_w[current_leaf_block_id_w] ||
-     palette_analyzer_done_w) &&
-    (!frame_ibc_mode_q ||
-     ibc_ready_mask_w[current_leaf_block_id_w] ||
-     ibc_done_w);
-  assign ibc_drl_idx_bit_index_w = {ibc_current_block_id_w, 1'b0};
-  assign ibc_use_copy_w =
-    frame_ibc_mode_q &&
-    (block_w_mi_q == 5'd2) &&
-    (block_h_mi_q == 5'd2) &&
-    ibc_copy_mask_w[ibc_current_block_id_w];
-  assign ibc_drl_idx_w = ibc_drl_idx_table_w[ibc_drl_idx_bit_index_w +: 2];
-  assign intrabc_ctx_w =
-    {1'd0, ibc_above_ctx_w} + {1'd0, ibc_left_ctx_w};
-  assign intrabc_skip_ctx_w =
-    {1'd0, skip_above_ctx_w} + {1'd0, skip_left_ctx_w};
+  ff_av2_encoder_ibc_controls #(
+    .SAMPLE_BITS(SAMPLE_BITS)
+  ) ibc_controls (
+    .block_row_mi_q(block_row_mi_q),
+    .block_col_mi_q(block_col_mi_q),
+    .palette_analyzer_block_ready_mask_w(palette_analyzer_block_ready_mask_w),
+    .palette_analyzer_done_w(palette_analyzer_done_w),
+    .frame_ibc_mode_q(frame_ibc_mode_q),
+    .ibc_ready_mask_w(ibc_ready_mask_w),
+    .ibc_done_w(ibc_done_w),
+    .block_w_mi_q(block_w_mi_q),
+    .block_h_mi_q(block_h_mi_q),
+    .ibc_copy_mask_w(ibc_copy_mask_w),
+    .ibc_drl_idx_table_w(ibc_drl_idx_table_w),
+    .ibc_above_ctx_w(ibc_above_ctx_w),
+    .ibc_left_ctx_w(ibc_left_ctx_w),
+    .skip_above_ctx_w(skip_above_ctx_w),
+    .skip_left_ctx_w(skip_left_ctx_w),
+    .s_axis_valid(s_axis_valid),
+    .s_axis_data(s_axis_data),
+    .s_axis_last(s_axis_last),
+    .s_axis_ready(s_axis_ready),
+    .ibc_current_block_id_w(ibc_current_block_id_w),
+    .current_leaf_block_id_w(current_leaf_block_id_w),
+    .current_leaf_ready_w(current_leaf_ready_w),
+    .ibc_drl_idx_bit_index_w(ibc_drl_idx_bit_index_w),
+    .ibc_use_copy_w(ibc_use_copy_w),
+    .ibc_drl_idx_w(ibc_drl_idx_w),
+    .intrabc_ctx_w(intrabc_ctx_w),
+    .intrabc_skip_ctx_w(intrabc_skip_ctx_w)
+  );
   ff_av2_chroma_predictor_cache chroma_predictor_cache (
     .lossy_420_mode(lossy_420_mode_q),
-    .phase_u_coeff(phase_q == PHASE_U_COEFF),
-    .phase_v_coeff(phase_q == PHASE_V_COEFF),
+    .phase_u_coeff(phase_u_coeff_w),
+    .phase_v_coeff(phase_v_coeff_w),
     .txb_row(txb_row_w),
     .txb_col(txb_col_w),
     .txb_index(txb_index_q),
@@ -1566,13 +1615,12 @@ module ff_av2_encoder #(
     .chroma_bdpcm_txb_samples(chroma_bdpcm_txb_samples_w),
     .chroma_bdpcm_predictor_samples(chroma_bdpcm_predictor_samples_w)
   );
-  always_ff @(posedge clk) begin
-    if (!rst_n) begin
-      payload_read_data_word_addr_q <= 12'd0;
-    end else begin
-      payload_read_data_word_addr_q <= payload_read_word_addr_q;
-    end
-  end
+  ff_av2_encoder_payload_word_delay payload_word_delay (
+    .clk(clk),
+    .rst_n(rst_n),
+    .payload_read_word_addr_q(payload_read_word_addr_q),
+    .payload_read_data_word_addr_q(payload_read_data_word_addr_q)
+  );
 
   ff_sync_halfword_write_quad_read_ram_1r1w #(
     .ADDR_BITS(16),
@@ -1600,28 +1648,248 @@ module ff_av2_encoder #(
     .read_data(payload_read_data_w)
   );
 
-  always @* begin
-    seq_stream_byte_w = 8'd0;
-    if ((stream_lookup_index_w >= 16'd4) && (stream_lookup_index_w < seq_end_index_w)) begin
-      seq_stream_byte_w = seq_mem_q[seq_stream_index_w];
-    end
-  end
+  ff_av2_encoder_seq_stream seq_stream (
+    .stream_lookup_index_w(stream_lookup_index_w),
+    .seq_end_index_w(seq_end_index_w),
+    .seq_stream_index_w(seq_stream_index_w),
+    .seq_mem_q(seq_mem_q),
+    .seq_bits_left_q(seq_bits_left_q),
+    .seq_bit_pos_q(seq_bit_pos_q),
+    .seq_stream_byte_w(seq_stream_byte_w),
+    .seq_byte_remaining_w(seq_byte_remaining_w),
+    .seq_write_step_w(seq_write_step_w)
+  );
 
-  assign seq_byte_remaining_w =
-    (seq_bit_pos_q[2:0] == 3'd0) ? 4'd8 :
-      (4'd8 - {1'b0, seq_bit_pos_q[2:0]});
-  assign seq_write_step_w =
-    (seq_bits_left_q < {3'd0, seq_byte_remaining_w}) ?
-      {1'b0, seq_bits_left_q[2:0]} : seq_byte_remaining_w;
-
-  `include "ff_av2_encoder_control.svh"
-
-  wire _unused_inputs_w = &{
-    1'b0,
-    CTU_SIZE[0],
-    SOURCE_SAMPLE_BITS[0],
-    ibc_any_copy_w,
-    ibc_done_w
-  };
+  ff_av2_encoder_control_fsm control_fsm (
+    .clk(clk),
+    .rst_n(rst_n),
+    .state_q(state_q),
+    .above_col0_row_mi_q(above_col0_row_mi_q),
+    .above_col0_u_q(above_col0_u_q),
+    .above_col0_v_q(above_col0_v_q),
+    .above_col0_valid_q(above_col0_valid_q),
+    .bitstream_writer_error_w(bitstream_writer_error_w),
+    .block_col_mi_q(block_col_mi_q),
+    .block_h_mi_q(block_h_mi_q),
+    .block_half_h_mi_w(block_half_h_mi_w),
+    .block_half_w_mi_w(block_half_w_mi_w),
+    .block_row_mi_q(block_row_mi_q),
+    .block_visible_w(block_visible_w),
+    .block_w_mi_q(block_w_mi_q),
+    .cached_chroma_samples_valid_q(cached_chroma_samples_valid_q),
+    .cached_u_txb_samples_q(cached_u_txb_samples_q),
+    .cached_v_predictor_samples_q(cached_v_predictor_samples_q),
+    .cached_v_txb_samples_q(cached_v_txb_samples_q),
+    .cached_v_valid_q(cached_v_valid_q),
+    .carry_after_step_w(carry_after_step_w),
+    .carry_done_after_step_w(carry_done_after_step_w),
+    .carry_index_after_step_w(carry_index_after_step_w),
+    .carry_index_q(carry_index_q),
+    .carry_q(carry_q),
+    .carry_read_after_current_word_addr_w(carry_read_after_current_word_addr_w),
+    .carry_read_after_next_word_addr_w(carry_read_after_next_word_addr_w),
+    .chosen_partition_w(chosen_partition_w),
+    .chroma_bdpcm_txb_done_w(chroma_bdpcm_txb_done_w),
+    .chroma_bdpcm_txb_nonzero_w(chroma_bdpcm_txb_nonzero_w),
+    .chroma_fetch_cache_index_w(chroma_fetch_cache_index_w),
+    .chroma_fetch_completed_u_w(chroma_fetch_completed_u_w),
+    .chroma_fetch_current_cache_hit_w(chroma_fetch_current_cache_hit_w),
+    .chroma_fetch_done_w(chroma_fetch_done_w),
+    .chroma_fetch_req_plane_v_w(chroma_fetch_req_plane_v_w),
+    .chroma_fetch_req_ready_w(chroma_fetch_req_ready_w),
+    .chroma_fetch_v_predictor_samples_w(chroma_fetch_v_predictor_samples_w),
+    .chroma_fetch_v_txb_samples_w(chroma_fetch_v_txb_samples_w),
+    .chroma_txb_count_w(chroma_txb_count_w),
+    .chroma_txb_width_w(chroma_txb_width_w),
+    .cnt_q(cnt_q),
+    .current_leaf_ready_w(current_leaf_ready_w),
+    .current_u_col0_above_edge_w(current_u_col0_above_edge_w),
+    .current_u_right_edge_bottom_w(current_u_right_edge_bottom_w),
+    .current_u_right_edge_top_w(current_u_right_edge_top_w),
+    .current_v_col0_above_edge_w(current_v_col0_above_edge_w),
+    .current_v_right_edge_bottom_w(current_v_right_edge_bottom_w),
+    .current_v_right_edge_top_w(current_v_right_edge_top_w),
+    .finish_c_q(finish_c_q),
+    .finish_e_q(finish_e_q),
+    .finish_s_q(finish_s_q),
+    .frame_ibc_mode_q(frame_ibc_mode_q),
+    .frame_index_q(frame_index_q),
+    .frame_is_last_w(frame_is_last_w),
+    .frame_palette_mode_q(frame_palette_mode_q),
+    .frame_reader_error_w(frame_reader_error_w),
+    .height_bits_q(height_bits_q),
+    .height_bits_w(height_bits_w),
+    .height_q(height_q),
+    .ibc_drl_idx_w(ibc_drl_idx_w),
+    .ibc_use_copy_w(ibc_use_copy_w),
+    .input_error(input_error),
+    .input_fire_count_w(input_fire_count_w),
+    .input_fire_error_w(input_fire_error_w),
+    .input_fire_w(input_fire_w),
+    .input_frame_offset_q(input_frame_offset_q),
+    .last_u_txb_nonzero_q(last_u_txb_nonzero_q),
+    .leaf_chroma_bdpcm_horz_q(leaf_chroma_bdpcm_horz_q),
+    .leaf_fsc_symbol_w(leaf_fsc_symbol_w),
+    .leaf_luma_mode_q(leaf_luma_mode_q),
+    .leaf_luma_palette_w(leaf_luma_palette_w),
+    .left_edge_col_mi_q(left_edge_col_mi_q),
+    .left_edge_row_mi_q(left_edge_row_mi_q),
+    .left_edge_u_bottom_q(left_edge_u_bottom_q),
+    .left_edge_u_top_q(left_edge_u_top_q),
+    .left_edge_v_bottom_q(left_edge_v_bottom_q),
+    .left_edge_v_top_q(left_edge_v_top_q),
+    .left_edge_valid_q(left_edge_valid_q),
+    .lossy420_chroma_bdpcm_recon_sample_w(lossy420_chroma_bdpcm_recon_sample_w),
+    .lossy420_chroma_left_row_index_w(lossy420_chroma_left_row_index_w),
+    .lossy420_luma_above_q(lossy420_luma_above_q),
+    .lossy420_luma_above_valid_q(lossy420_luma_above_valid_q),
+    .lossy420_luma_left_bottom_q(lossy420_luma_left_bottom_q),
+    .lossy420_luma_left_col_mi_q(lossy420_luma_left_col_mi_q),
+    .lossy420_luma_left_row_index_w(lossy420_luma_left_row_index_w),
+    .lossy420_luma_left_top_q(lossy420_luma_left_top_q),
+    .lossy420_luma_left_valid_q(lossy420_luma_left_valid_q),
+    .lossy420_luma_recon_q(lossy420_luma_recon_q),
+    .lossy420_luma_residual_recon_sample_w(lossy420_luma_residual_recon_sample_w),
+    .lossy420_u_above_q(lossy420_u_above_q),
+    .lossy420_u_above_valid_q(lossy420_u_above_valid_q),
+    .lossy420_u_left_col_mi_q(lossy420_u_left_col_mi_q),
+    .lossy420_u_left_q(lossy420_u_left_q),
+    .lossy420_u_left_valid_q(lossy420_u_left_valid_q),
+    .lossy420_v_above_q(lossy420_v_above_q),
+    .lossy420_v_above_valid_q(lossy420_v_above_valid_q),
+    .lossy420_v_left_col_mi_q(lossy420_v_left_col_mi_q),
+    .lossy420_v_left_q(lossy420_v_left_q),
+    .lossy420_v_left_valid_q(lossy420_v_left_valid_q),
+    .lossy_420_mode_q(lossy_420_mode_q),
+    .low_q(low_q),
+    .luma_fetch_cache_index_w(luma_fetch_cache_index_w),
+    .luma_fetch_completed_w(luma_fetch_completed_w),
+    .luma_fetch_done_w(luma_fetch_done_w),
+    .luma_fetch_u_txb_samples_w(luma_fetch_u_txb_samples_w),
+    .luma_fetch_v_txb_samples_w(luma_fetch_v_txb_samples_w),
+    .luma_residual_txb_done_w(luma_residual_txb_done_w),
+    .m_axis_count(m_axis_count),
+    .m_axis_data(m_axis_data),
+    .m_axis_last(m_axis_last),
+    .m_axis_ready(m_axis_ready),
+    .m_axis_valid(m_axis_valid),
+    .norm_cnt_w(norm_cnt_w),
+    .norm_low_w(norm_low_w),
+    .norm_push1_w(norm_push1_w),
+    .norm_push_count_w(norm_push_count_w),
+    .norm_rng_w(norm_rng_w),
+    .op_last_w(op_last_w),
+    .op_valid_w(op_valid_w),
+    .output_after_current_payload_w(output_after_current_payload_w),
+    .output_after_current_payload_word_addr_w(output_after_current_payload_word_addr_w),
+    .output_after_next_payload_w(output_after_next_payload_w),
+    .output_after_next_payload_word_addr_w(output_after_next_payload_word_addr_w),
+    .output_byte_phase_q(output_byte_phase_q),
+    .output_current_packet_last_w(output_current_packet_last_w),
+    .output_last_q(output_last_q),
+    .output_lookup_byte_w(output_lookup_byte_w),
+    .output_lookup_last_w(output_lookup_last_w),
+    .output_next_byte_phase_w(output_next_byte_phase_w),
+    .output_next_packet_last_w(output_next_packet_last_w),
+    .output_next_payload_count_w(output_next_payload_count_w),
+    .output_next_payload_packet_data_w(output_next_payload_packet_data_w),
+    .output_next_payload_word_addr_w(output_next_payload_word_addr_w),
+    .output_next_stream_index_w(output_next_stream_index_w),
+    .output_payload_count_w(output_payload_count_w),
+    .output_payload_packet_data_w(output_payload_packet_data_w),
+    .palette_analyzer_done_w(palette_analyzer_done_w),
+    .palette_analyzer_unsupported_w(palette_analyzer_unsupported_w),
+    .palette_chroma_bdpcm_horz_w(palette_chroma_bdpcm_horz_w),
+    .palette_col_q(palette_col_q),
+    .palette_header_last_step_w(palette_header_last_step_w),
+    .palette_identity_row_ctx_q(palette_identity_row_ctx_q),
+    .palette_identity_row_flag_w(palette_identity_row_flag_w),
+    .palette_luma_mode_w(palette_luma_mode_w),
+    .palette_map_token_required_w(palette_map_token_required_w),
+    .palette_mode_q(palette_mode_q),
+    .palette_query_done_w(palette_query_done_w),
+    .palette_row_q(palette_row_q),
+    .partition_emit_do_split_w(partition_emit_do_split_w),
+    .partition_emit_step_q(partition_emit_step_q),
+    .partition_need_rect_w(partition_need_rect_w),
+    .partition_q(partition_q),
+    .payload_len_q(payload_len_q),
+    .payload_prefix_index_q(payload_prefix_index_q),
+    .payload_read_data_word_addr_q(payload_read_data_word_addr_q),
+    .payload_read_word_addr_q(payload_read_word_addr_q),
+    .pending_push_valid_q(pending_push_valid_q),
+    .pending_push_word_q(pending_push_word_q),
+    .phase_q(phase_q),
+    .precarry_len_q(precarry_len_q),
+    .precarry_read_word_addr_q(precarry_read_word_addr_q),
+    .residual_mode_w(residual_mode_w),
+    .rng_q(rng_q),
+    .seq_bit_pos_q(seq_bit_pos_q),
+    .seq_bits_left_q(seq_bits_left_q),
+    .seq_len_q(seq_len_q),
+    .seq_load_bits_w(seq_load_bits_w),
+    .seq_load_value_w(seq_load_value_w),
+    .seq_mem_q(seq_mem_q),
+    .seq_op_q(seq_op_q),
+    .seq_value_q(seq_value_q),
+    .seq_write_step_w(seq_write_step_w),
+    .src_frame_stride(src_frame_stride),
+    .stack_col_mi_q(stack_col_mi_q),
+    .stack_h_mi_q(stack_h_mi_q),
+    .stack_row_mi_q(stack_row_mi_q),
+    .stack_sp_q(stack_sp_q),
+    .stack_w_mi_q(stack_w_mi_q),
+    .start(start),
+    .start_invalid_w(start_invalid_w),
+    .step_q(step_q),
+    .stream_index_q(stream_index_q),
+    .tile_col_q(tile_col_q),
+    .tile_cols_q(tile_cols_q),
+    .tile_cols_w(tile_cols_w),
+    .tile_count_q(tile_count_q),
+    .tile_count_w(tile_count_w),
+    .tile_entropy_ibc_mode_w(tile_entropy_ibc_mode_w),
+    .tile_entropy_lossy420_mode_w(tile_entropy_lossy420_mode_w),
+    .tile_entropy_palette_mode_w(tile_entropy_palette_mode_w),
+    .tile_entropy_start_ready_w(tile_entropy_start_ready_w),
+    .tile_height_q(tile_height_q),
+    .tile_index_q(tile_index_q),
+    .tile_input_active_q(tile_input_active_q),
+    .tile_input_index_q(tile_input_index_q),
+    .tile_is_last_w(tile_is_last_w),
+    .tile_len_q(tile_len_q),
+    .tile_payload_start_w(tile_payload_start_w),
+    .tile_row_q(tile_row_q),
+    .tile_rows_q(tile_rows_q),
+    .tile_rows_w(tile_rows_w),
+    .tile_width_q(tile_width_q),
+    .txb_col_w(txb_col_w),
+    .txb_count_q(txb_count_q),
+    .txb_count_w(txb_count_w),
+    .txb_index_q(txb_index_q),
+    .txb_local_col_q(txb_local_col_q),
+    .txb_local_row_q(txb_local_row_q),
+    .txb_prefetch_chroma_q(txb_prefetch_chroma_q),
+    .txb_prefetch_chroma_start_w(txb_prefetch_chroma_start_w),
+    .txb_prefetch_cross_phase_w(txb_prefetch_cross_phase_w),
+    .txb_prefetch_done_q(txb_prefetch_done_q),
+    .txb_prefetch_fetch_done_w(txb_prefetch_fetch_done_w),
+    .txb_prefetch_first_luma_w(txb_prefetch_first_luma_w),
+    .txb_prefetch_index_q(txb_prefetch_index_q),
+    .txb_prefetch_luma_start_w(txb_prefetch_luma_start_w),
+    .txb_prefetch_plane_v_q(txb_prefetch_plane_v_q),
+    .txb_prefetch_started_q(txb_prefetch_started_q),
+    .txb_width_q(txb_width_q),
+    .txb_width_w(txb_width_w),
+    .visible_cols_mi_q(visible_cols_mi_q),
+    .visible_cols_mi_w(visible_cols_mi_w),
+    .visible_height(visible_height),
+    .visible_rows_mi_q(visible_rows_mi_q),
+    .visible_rows_mi_w(visible_rows_mi_w),
+    .visible_width(visible_width),
+    .width_bits_q(width_bits_q),
+    .width_bits_w(width_bits_w),
+    .width_q(width_q)
+  );
 
 endmodule
