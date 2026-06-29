@@ -909,6 +909,38 @@ module ff_av2_encoder #(
     .carry_read_after_next_word_addr(carry_read_after_next_word_addr_w)
   );
 
+  ff_av2_payload_write_mux payload_write_mux (
+    .start(start),
+    .state_partition(state_q == ST_PARTITION),
+    .state_leaf(state_q == ST_LEAF),
+    .state_finish_push(state_q == ST_FINISH_PUSH),
+    .state_carry_write(state_q == ST_CARRY_WRITE),
+    .state_payload_prefix(state_q == ST_PAYLOAD_PREFIX),
+    .pending_push_valid(pending_push_valid_q),
+    .precarry_len(precarry_len_q),
+    .pending_push_word(pending_push_word_q),
+    .op_valid(op_valid_w),
+    .norm_push_count(norm_push_count_w),
+    .norm_push0(norm_push0_w),
+    .finish_s(finish_s_q),
+    .finish_e(finish_e_q),
+    .finish_c(finish_c_q),
+    .carry_group_addr(carry_group_addr_w),
+    .carry_group_strobe(carry_group_strobe_w),
+    .carry_group_data(carry_group_data_w),
+    .tile_is_last(tile_is_last_w),
+    .payload_prefix_index(payload_prefix_index_q),
+    .payload_len(payload_len_q),
+    .payload_prefix_byte(payload_prefix_byte_w),
+    .precarry_write_valid(precarry_write_valid_w),
+    .precarry_write_addr(precarry_write_addr_w),
+    .precarry_write_data(precarry_write_data_w),
+    .payload_write_valid(payload_write_valid_w),
+    .payload_write_addr(payload_write_addr_w),
+    .payload_write_strobe(payload_write_strobe_w),
+    .payload_write_data(payload_write_data_w)
+  );
+
   ff_av2_local_hash_matcher_444 #(
     .SAMPLE_BITS(SAMPLE_BITS)
   ) local_hash_ibc (
@@ -1656,79 +1688,6 @@ module ff_av2_encoder #(
     (chroma_format_idc == 2'd1) ?
       ({11'd0, leaf_visible_txb_w_w[4:1]} * {11'd0, leaf_visible_txb_h_w[4:1]}) :
       txb_count_w;
-
-  always @* begin
-    precarry_write_valid_w = 1'b0;
-    precarry_write_addr_w = precarry_len_q;
-    precarry_write_data_w = 16'd0;
-
-    if (!start && pending_push_valid_q) begin
-      precarry_write_valid_w = 1'b1;
-      precarry_write_addr_w = precarry_len_q;
-      precarry_write_data_w = pending_push_word_q;
-    end else if (!start) begin
-      case (state_q)
-        ST_PARTITION,
-        ST_LEAF: begin
-          if (op_valid_w && norm_push_count_w != 2'd0) begin
-            precarry_write_valid_w = 1'b1;
-            precarry_write_addr_w = precarry_len_q;
-            precarry_write_data_w = norm_push0_w;
-          end
-        end
-        ST_FINISH_PUSH: begin
-          if (finish_s_q > 8'sd0) begin
-            precarry_write_valid_w = 1'b1;
-            precarry_write_addr_w = precarry_len_q;
-            precarry_write_data_w =
-              (finish_e_q >> (finish_c_q[5:0] + 6'd16)) & 16'hffff;
-          end
-        end
-        default: begin
-          precarry_write_valid_w = 1'b0;
-        end
-      endcase
-    end
-  end
-
-  always @* begin
-    payload_write_valid_w = 1'b0;
-    payload_write_addr_w = 16'd0;
-    payload_write_strobe_w = 16'd0;
-    payload_write_data_w = 128'd0;
-
-    if (!start) begin
-      case (state_q)
-        ST_CARRY_WRITE: begin
-          payload_write_valid_w = 1'b1;
-          payload_write_addr_w = carry_group_addr_w;
-          payload_write_strobe_w = carry_group_strobe_w;
-          payload_write_data_w =
-            (carry_group_data_w << ({3'd0, carry_group_addr_w[3:0]} << 3));
-        end
-        ST_PAYLOAD_PREFIX: begin
-          if (!tile_is_last_w && payload_prefix_index_q != 2'd3) begin
-            payload_write_valid_w = 1'b1;
-            payload_write_addr_w = payload_len_q + {14'd0, payload_prefix_index_q};
-            payload_write_strobe_w = 16'h0001 << payload_write_addr_w[3:0];
-            payload_write_data_w =
-              ({120'd0, payload_prefix_byte_w} <<
-               ({3'd0, payload_write_addr_w[3:0]} << 3));
-          end else if (!tile_is_last_w) begin
-            payload_write_valid_w = 1'b1;
-            payload_write_addr_w = payload_len_q + 16'd3;
-            payload_write_strobe_w = 16'h0001 << payload_write_addr_w[3:0];
-            payload_write_data_w =
-              ({120'd0, payload_prefix_byte_w} <<
-               ({3'd0, payload_write_addr_w[3:0]} << 3));
-          end
-        end
-        default: begin
-          payload_write_valid_w = 1'b0;
-        end
-      endcase
-    end
-  end
 
   always_ff @(posedge clk) begin
     if (!rst_n) begin
