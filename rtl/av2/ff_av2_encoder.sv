@@ -404,14 +404,6 @@ module ff_av2_encoder #(
   logic [1:0] chroma_left_source_index_w;
   logic [1:0] chroma_above_source_index_w;
   logic chroma_fetch_predictor_only_w;
-  logic [31:0] cached_u_left_predictor_w;
-  logic [31:0] cached_v_left_predictor_w;
-  logic [31:0] cached_u_above_predictor_w;
-  logic [31:0] cached_v_above_predictor_w;
-  logic [31:0] cached_u_external_left_predictor_w;
-  logic [31:0] cached_v_external_left_predictor_w;
-  logic [31:0] cached_u_external_above_predictor_w;
-  logic [31:0] cached_v_external_above_predictor_w;
   logic [31:0] chroma_cached_predictor_samples_w;
   logic chroma_external_left_predictor_valid_w;
   logic chroma_req_external_left_predictor_valid_w;
@@ -539,12 +531,7 @@ module ff_av2_encoder #(
   logic [4:0] lossy420_luma_left_col_mi_q [0:15];
   logic [15:0] lossy420_luma_left_valid_q;
   logic [7:0] lossy420_luma_predictor_w;
-  logic lossy420_luma_have_left_w;
-  logic lossy420_luma_have_top_w;
-  logic lossy420_luma_external_left_valid_w;
   logic [3:0] lossy420_luma_left_row_index_w;
-  logic [7:0] lossy420_luma_left_sample_w;
-  logic [7:0] lossy420_luma_top_sample_w;
   logic signed [9:0] lossy420_luma_delta_w;
   logic lossy420_luma_known_zero_w;
   logic [7:0] lossy420_u_above_q [0:15];
@@ -558,12 +545,7 @@ module ff_av2_encoder #(
   logic [15:0] lossy420_u_left_valid_q;
   logic [15:0] lossy420_v_left_valid_q;
   logic [7:0] lossy420_chroma_predictor_w;
-  logic lossy420_chroma_have_left_w;
-  logic lossy420_chroma_have_top_w;
-  logic lossy420_chroma_external_left_valid_w;
   logic [3:0] lossy420_chroma_left_row_index_w;
-  logic [7:0] lossy420_chroma_left_sample_w;
-  logic [7:0] lossy420_chroma_top_sample_w;
   logic signed [9:0] lossy420_chroma_delta_w;
   logic lossy420_chroma_known_zero_w;
   logic [4:0] visible_rows_mi_w;
@@ -1366,66 +1348,39 @@ module ff_av2_encoder #(
     .chroma_above_source_index(chroma_above_source_index_w)
   );
 
-  assign lossy420_luma_left_row_index_w = block_row_mi_q[3:0];
-  assign lossy420_luma_external_left_valid_w =
-    lossy420_luma_left_valid_q[lossy420_luma_left_row_index_w] &&
-    ((lossy420_luma_left_col_mi_q[lossy420_luma_left_row_index_w] + 5'd2) ==
-      block_col_mi_q);
-  assign lossy420_luma_have_left_w =
-    (txb_col_w[4:0] != 5'd0) &&
-    (txb_index_q[0] || lossy420_luma_external_left_valid_w);
-  assign lossy420_luma_have_top_w =
-    (txb_row_w[4:0] != 5'd0) &&
-    (txb_index_q[1] || lossy420_luma_above_valid_q[txb_col_w[3:0]]);
-  assign lossy420_luma_left_sample_w =
-    txb_index_q[0] ?
-      lossy420_luma_recon_q[txb_index_q[1:0] - 2'd1] :
-      (txb_index_q[1] ?
-        lossy420_luma_left_bottom_q[lossy420_luma_left_row_index_w] :
-        lossy420_luma_left_top_q[lossy420_luma_left_row_index_w]);
-  assign lossy420_luma_top_sample_w =
-    txb_index_q[1] ?
-      lossy420_luma_recon_q[txb_index_q[1:0] - 2'd2] :
-      lossy420_luma_above_q[txb_col_w[3:0]];
-  assign lossy420_luma_predictor_w =
-    (lossy420_luma_have_left_w && lossy420_luma_have_top_w) ?
-      (({1'b0, lossy420_luma_left_sample_w} +
-        {1'b0, lossy420_luma_top_sample_w} + 9'd1) >> 1) :
-    lossy420_luma_have_left_w ? lossy420_luma_left_sample_w :
-    lossy420_luma_have_top_w ? lossy420_luma_top_sample_w :
-      8'd128;
-  assign lossy420_chroma_left_row_index_w = txb_row_w[3:0];
-  assign lossy420_chroma_external_left_valid_w =
-    (phase_q == PHASE_V_COEFF) ?
-      (lossy420_v_left_valid_q[lossy420_chroma_left_row_index_w] &&
-       ((lossy420_v_left_col_mi_q[lossy420_chroma_left_row_index_w] + 5'd1) ==
-        txb_col_w[4:0])) :
-      (lossy420_u_left_valid_q[lossy420_chroma_left_row_index_w] &&
-       ((lossy420_u_left_col_mi_q[lossy420_chroma_left_row_index_w] + 5'd1) ==
-        txb_col_w[4:0]));
-  assign lossy420_chroma_have_left_w =
-    (txb_col_w[4:0] != 5'd0) &&
-    lossy420_chroma_external_left_valid_w;
-  assign lossy420_chroma_have_top_w =
-    (txb_row_w[4:0] != 5'd0) &&
-    ((phase_q == PHASE_V_COEFF) ?
-      lossy420_v_above_valid_q[txb_col_w[3:0]] :
-      lossy420_u_above_valid_q[txb_col_w[3:0]]);
-  assign lossy420_chroma_left_sample_w =
-    (phase_q == PHASE_V_COEFF) ?
-      lossy420_v_left_q[lossy420_chroma_left_row_index_w] :
-      lossy420_u_left_q[lossy420_chroma_left_row_index_w];
-  assign lossy420_chroma_top_sample_w =
-    (phase_q == PHASE_V_COEFF) ?
-      lossy420_v_above_q[txb_col_w[3:0]] :
-      lossy420_u_above_q[txb_col_w[3:0]];
-  assign lossy420_chroma_predictor_w =
-    (lossy420_chroma_have_left_w && lossy420_chroma_have_top_w) ?
-      (({1'b0, lossy420_chroma_left_sample_w} +
-        {1'b0, lossy420_chroma_top_sample_w} + 9'd1) >> 1) :
-    lossy420_chroma_have_left_w ? lossy420_chroma_left_sample_w :
-    lossy420_chroma_have_top_w ? lossy420_chroma_top_sample_w :
-      8'd128;
+  ff_av2_lossy420_predictors lossy420_predictors (
+    .phase_v_coeff(phase_q == PHASE_V_COEFF),
+    .block_row_mi(block_row_mi_q),
+    .block_col_mi(block_col_mi_q),
+    .txb_row(txb_row_w),
+    .txb_col(txb_col_w),
+    .txb_index(txb_index_q),
+    .luma_recon0(lossy420_luma_recon_q[0]),
+    .luma_recon1(lossy420_luma_recon_q[1]),
+    .luma_recon2(lossy420_luma_recon_q[2]),
+    .luma_recon3(lossy420_luma_recon_q[3]),
+    .luma_above(lossy420_luma_above_q[txb_col_w[3:0]]),
+    .luma_above_valid(lossy420_luma_above_valid_q[txb_col_w[3:0]]),
+    .luma_left_top(lossy420_luma_left_top_q[block_row_mi_q[3:0]]),
+    .luma_left_bottom(lossy420_luma_left_bottom_q[block_row_mi_q[3:0]]),
+    .luma_left_col_mi(lossy420_luma_left_col_mi_q[block_row_mi_q[3:0]]),
+    .luma_left_valid(lossy420_luma_left_valid_q[block_row_mi_q[3:0]]),
+    .u_above(lossy420_u_above_q[txb_col_w[3:0]]),
+    .v_above(lossy420_v_above_q[txb_col_w[3:0]]),
+    .u_above_valid(lossy420_u_above_valid_q[txb_col_w[3:0]]),
+    .v_above_valid(lossy420_v_above_valid_q[txb_col_w[3:0]]),
+    .u_left(lossy420_u_left_q[txb_row_w[3:0]]),
+    .v_left(lossy420_v_left_q[txb_row_w[3:0]]),
+    .u_left_col_mi(lossy420_u_left_col_mi_q[txb_row_w[3:0]]),
+    .v_left_col_mi(lossy420_v_left_col_mi_q[txb_row_w[3:0]]),
+    .u_left_valid(lossy420_u_left_valid_q[txb_row_w[3:0]]),
+    .v_left_valid(lossy420_v_left_valid_q[txb_row_w[3:0]]),
+    .luma_left_row_index(lossy420_luma_left_row_index_w),
+    .chroma_left_row_index(lossy420_chroma_left_row_index_w),
+    .luma_predictor(lossy420_luma_predictor_w),
+    .chroma_predictor(lossy420_chroma_predictor_w)
+  );
+
   // AV2 4:4:4 bring-up path: traverse one 64x64 superblock, split visible
   // coding leaves down to 8x8, and generate syntax through the range coder.
   // Any TX_4X4 loops below are AV2 transform blocks, not public input blocks.
@@ -1456,96 +1411,50 @@ module ff_av2_encoder #(
     {1'd0, ibc_above_q[block_col_mi_q]} + {1'd0, ibc_left_q[block_row_mi_q]};
   assign intrabc_skip_ctx_w =
     {1'd0, skip_above_q[block_col_mi_q]} + {1'd0, skip_left_q[block_row_mi_q]};
-  assign cached_u_left_predictor_w = {
-    cached_u_txb_samples_q[chroma_left_source_index_w][15 * 8 +: 8],
-    cached_u_txb_samples_q[chroma_left_source_index_w][11 * 8 +: 8],
-    cached_u_txb_samples_q[chroma_left_source_index_w][7 * 8 +: 8],
-    cached_u_txb_samples_q[chroma_left_source_index_w][3 * 8 +: 8]
-  };
-  assign cached_v_left_predictor_w = {
-    cached_v_txb_samples_q[chroma_left_source_index_w][15 * 8 +: 8],
-    cached_v_txb_samples_q[chroma_left_source_index_w][11 * 8 +: 8],
-    cached_v_txb_samples_q[chroma_left_source_index_w][7 * 8 +: 8],
-    cached_v_txb_samples_q[chroma_left_source_index_w][3 * 8 +: 8]
-  };
-  assign cached_u_above_predictor_w = {
-    cached_u_txb_samples_q[chroma_above_source_index_w][12 * 8 +: 8],
-    cached_u_txb_samples_q[chroma_above_source_index_w][12 * 8 +: 8],
-    cached_u_txb_samples_q[chroma_above_source_index_w][12 * 8 +: 8],
-    cached_u_txb_samples_q[chroma_above_source_index_w][12 * 8 +: 8]
-  };
-  assign cached_v_above_predictor_w = {
-    cached_v_txb_samples_q[chroma_above_source_index_w][12 * 8 +: 8],
-    cached_v_txb_samples_q[chroma_above_source_index_w][12 * 8 +: 8],
-    cached_v_txb_samples_q[chroma_above_source_index_w][12 * 8 +: 8],
-    cached_v_txb_samples_q[chroma_above_source_index_w][12 * 8 +: 8]
-  };
-  assign cached_u_external_left_predictor_w =
-    txb_row_w[0] ? left_edge_u_bottom_q : left_edge_u_top_q;
-  assign cached_v_external_left_predictor_w =
-    txb_row_w[0] ? left_edge_v_bottom_q : left_edge_v_top_q;
-  assign cached_u_external_above_predictor_w = above_col0_u_q;
-  assign cached_v_external_above_predictor_w = above_col0_v_q;
-  assign chroma_cached_predictor_samples_w =
-    ((txb_row_w[4:0] == 5'd0) && (txb_col_w[4:0] == 5'd0)) ? 32'h81818181 :
-    txb_col_w[0] ?
-      ((phase_q == PHASE_V_COEFF) ? cached_v_left_predictor_w : cached_u_left_predictor_w) :
-    chroma_external_left_predictor_valid_w ?
-      ((phase_q == PHASE_V_COEFF) ?
-        cached_v_external_left_predictor_w : cached_u_external_left_predictor_w) :
-    chroma_external_above_predictor_valid_w ?
-      ((phase_q == PHASE_V_COEFF) ?
-        cached_v_external_above_predictor_w : cached_u_external_above_predictor_w) :
-      ((phase_q == PHASE_V_COEFF) ? cached_v_above_predictor_w : cached_u_above_predictor_w);
-  assign current_u_right_edge_top_w = {
-    cached_u_txb_samples_q[2'd1][15 * 8 +: 8],
-    cached_u_txb_samples_q[2'd1][11 * 8 +: 8],
-    cached_u_txb_samples_q[2'd1][7 * 8 +: 8],
-    cached_u_txb_samples_q[2'd1][3 * 8 +: 8]
-  };
-  assign current_u_right_edge_bottom_w = {
-    cached_u_txb_samples_q[2'd3][15 * 8 +: 8],
-    cached_u_txb_samples_q[2'd3][11 * 8 +: 8],
-    cached_u_txb_samples_q[2'd3][7 * 8 +: 8],
-    cached_u_txb_samples_q[2'd3][3 * 8 +: 8]
-  };
-  assign current_v_right_edge_top_w = {
-    cached_v_txb_samples_q[2'd1][15 * 8 +: 8],
-    cached_v_txb_samples_q[2'd1][11 * 8 +: 8],
-    cached_v_txb_samples_q[2'd1][7 * 8 +: 8],
-    cached_v_txb_samples_q[2'd1][3 * 8 +: 8]
-  };
-  assign current_v_right_edge_bottom_w = {
-    cached_v_txb_samples_q[2'd3][15 * 8 +: 8],
-    cached_v_txb_samples_q[2'd3][11 * 8 +: 8],
-    cached_v_txb_samples_q[2'd3][7 * 8 +: 8],
-    cached_v_txb_samples_q[2'd3][3 * 8 +: 8]
-  };
-  assign current_u_col0_above_edge_w = {
-    cached_u_txb_samples_q[2'd2][12 * 8 +: 8],
-    cached_u_txb_samples_q[2'd2][12 * 8 +: 8],
-    cached_u_txb_samples_q[2'd2][12 * 8 +: 8],
-    cached_u_txb_samples_q[2'd2][12 * 8 +: 8]
-  };
-  assign current_v_col0_above_edge_w = {
-    cached_v_txb_samples_q[2'd2][12 * 8 +: 8],
-    cached_v_txb_samples_q[2'd2][12 * 8 +: 8],
-    cached_v_txb_samples_q[2'd2][12 * 8 +: 8],
-    cached_v_txb_samples_q[2'd2][12 * 8 +: 8]
-  };
-  assign chroma_bdpcm_txb_samples_w =
-    lossy_420_mode_q ? chroma_fetch_txb_samples_w :
-    ((phase_q == PHASE_V_COEFF) && cached_chroma_samples_valid_q[txb_index_q[1:0]]) ?
-      cached_v_txb_samples_q[txb_index_q[1:0]] :
-    ((phase_q == PHASE_U_COEFF) && cached_chroma_samples_valid_q[txb_index_q[1:0]]) ?
-      cached_u_txb_samples_q[txb_index_q[1:0]] :
-      chroma_fetch_txb_samples_w;
-  assign chroma_bdpcm_predictor_samples_w =
-    ((phase_q == PHASE_V_COEFF) && cached_v_valid_q[txb_index_q[1:0]]) ?
-      cached_v_predictor_samples_q[txb_index_q[1:0]] :
-    chroma_predictor_compute_valid_w ?
-      chroma_cached_predictor_samples_w :
-      chroma_fetch_predictor_samples_w;
+  ff_av2_chroma_predictor_cache chroma_predictor_cache (
+    .lossy_420_mode(lossy_420_mode_q),
+    .phase_u_coeff(phase_q == PHASE_U_COEFF),
+    .phase_v_coeff(phase_q == PHASE_V_COEFF),
+    .txb_row(txb_row_w),
+    .txb_col(txb_col_w),
+    .txb_index(txb_index_q),
+    .chroma_left_source_index(chroma_left_source_index_w),
+    .chroma_above_source_index(chroma_above_source_index_w),
+    .chroma_predictor_compute_valid(chroma_predictor_compute_valid_w),
+    .chroma_external_left_predictor_valid(chroma_external_left_predictor_valid_w),
+    .chroma_external_above_predictor_valid(chroma_external_above_predictor_valid_w),
+    .cached_chroma_samples_valid(cached_chroma_samples_valid_q),
+    .cached_v_valid(cached_v_valid_q),
+    .cached_u_txb_samples0(cached_u_txb_samples_q[0]),
+    .cached_u_txb_samples1(cached_u_txb_samples_q[1]),
+    .cached_u_txb_samples2(cached_u_txb_samples_q[2]),
+    .cached_u_txb_samples3(cached_u_txb_samples_q[3]),
+    .cached_v_txb_samples0(cached_v_txb_samples_q[0]),
+    .cached_v_txb_samples1(cached_v_txb_samples_q[1]),
+    .cached_v_txb_samples2(cached_v_txb_samples_q[2]),
+    .cached_v_txb_samples3(cached_v_txb_samples_q[3]),
+    .cached_v_predictor_samples0(cached_v_predictor_samples_q[0]),
+    .cached_v_predictor_samples1(cached_v_predictor_samples_q[1]),
+    .cached_v_predictor_samples2(cached_v_predictor_samples_q[2]),
+    .cached_v_predictor_samples3(cached_v_predictor_samples_q[3]),
+    .left_edge_u_top(left_edge_u_top_q),
+    .left_edge_u_bottom(left_edge_u_bottom_q),
+    .left_edge_v_top(left_edge_v_top_q),
+    .left_edge_v_bottom(left_edge_v_bottom_q),
+    .above_col0_u(above_col0_u_q),
+    .above_col0_v(above_col0_v_q),
+    .chroma_fetch_txb_samples(chroma_fetch_txb_samples_w),
+    .chroma_fetch_predictor_samples(chroma_fetch_predictor_samples_w),
+    .chroma_cached_predictor_samples(chroma_cached_predictor_samples_w),
+    .current_u_right_edge_top(current_u_right_edge_top_w),
+    .current_u_right_edge_bottom(current_u_right_edge_bottom_w),
+    .current_v_right_edge_top(current_v_right_edge_top_w),
+    .current_v_right_edge_bottom(current_v_right_edge_bottom_w),
+    .current_u_col0_above_edge(current_u_col0_above_edge_w),
+    .current_v_col0_above_edge(current_v_col0_above_edge_w),
+    .chroma_bdpcm_txb_samples(chroma_bdpcm_txb_samples_w),
+    .chroma_bdpcm_predictor_samples(chroma_bdpcm_predictor_samples_w)
+  );
   always_ff @(posedge clk) begin
     if (!rst_n) begin
       payload_read_data_word_addr_q <= 12'd0;
