@@ -749,7 +749,7 @@
                   step_q <= step_q + 5'd1;
                 end
               end else begin
-                if ((residual_mode_w && chroma_bdpcm_txb_done_w) || (!residual_mode_w && step_q == 7'd7)) begin
+                if ((residual_mode_w && chroma_bdpcm_txb_done_w) || (!residual_mode_w && step_q == 5'd7)) begin
                   if (residual_mode_w) begin
                     if (phase_q == PHASE_U_COEFF) begin
                       last_u_txb_nonzero_q <= chroma_bdpcm_txb_nonzero_w;
