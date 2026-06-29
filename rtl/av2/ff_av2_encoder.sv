@@ -1270,6 +1270,102 @@ module ff_av2_encoder #(
     .tile_entropy_ibc_mode(tile_entropy_ibc_mode_w)
   );
 
+  ff_av2_txb_scheduler txb_scheduler (
+    .start(start),
+    .pending_push_valid(pending_push_valid_q),
+    .state_leaf(state_q == ST_LEAF),
+    .state_chroma_fetch(state_q == ST_CHROMA_FETCH),
+    .phase_intra(phase_q == PHASE_INTRA),
+    .phase_palette_header(phase_q == PHASE_PALETTE_HEADER),
+    .phase_palette_map(phase_q == PHASE_PALETTE_MAP),
+    .phase_y_coeff(phase_q == PHASE_Y_COEFF),
+    .phase_u_coeff(phase_q == PHASE_U_COEFF),
+    .phase_v_coeff(phase_q == PHASE_V_COEFF),
+    .chroma_format_idc(chroma_format_idc),
+    .palette_mode(palette_mode_q),
+    .leaf_chroma_bdpcm_horz(leaf_chroma_bdpcm_horz_q),
+    .residual_mode(residual_mode_w),
+    .lossy_420_mode(lossy_420_mode_q),
+    .block_row_mi(block_row_mi_q),
+    .block_col_mi(block_col_mi_q),
+    .block_w_mi(block_w_mi_q),
+    .block_h_mi(block_h_mi_q),
+    .visible_cols_mi(visible_cols_mi_q),
+    .visible_rows_mi(visible_rows_mi_q),
+    .txb_local_row(txb_local_row_q),
+    .txb_local_col(txb_local_col_q),
+    .txb_index(txb_index_q),
+    .current_txb_count(txb_count_q),
+    .current_txb_width(txb_width_q),
+    .txb_prefetch_started(txb_prefetch_started_q),
+    .txb_prefetch_done(txb_prefetch_done_q),
+    .txb_prefetch_chroma(txb_prefetch_chroma_q),
+    .txb_prefetch_plane_v(txb_prefetch_plane_v_q),
+    .txb_prefetch_index(txb_prefetch_index_q),
+    .luma_fetch_done(luma_fetch_done_w),
+    .chroma_fetch_done(chroma_fetch_done_w),
+    .cached_chroma_samples_valid(cached_chroma_samples_valid_q),
+    .cached_v_valid(cached_v_valid_q),
+    .left_edge_valid(left_edge_valid_q),
+    .left_edge_row_mi(left_edge_row_mi_q),
+    .left_edge_col_mi(left_edge_col_mi_q),
+    .above_col0_valid(above_col0_valid_q),
+    .above_col0_row_mi(above_col0_row_mi_q),
+    .chroma_fetch_start(chroma_fetch_start_w),
+    .luma_fetch_start(luma_fetch_start_w),
+    .leaf_visible_txb_w(leaf_visible_txb_w_w),
+    .leaf_visible_txb_h(leaf_visible_txb_h_w),
+    .txb_width(txb_width_w),
+    .txb_count(txb_count_w),
+    .chroma_txb_width(chroma_txb_width_w),
+    .chroma_txb_count(chroma_txb_count_w),
+    .chroma_subsampled_phase(chroma_subsampled_phase_w),
+    .txb_row(txb_row_w),
+    .txb_col(txb_col_w),
+    .same_phase_has_next_txb(same_phase_has_next_txb_w),
+    .cross_phase_has_next_txb(cross_phase_has_next_txb_w),
+    .next_txb_local_row(next_txb_local_row_w),
+    .next_txb_local_col(next_txb_local_col_w),
+    .next_txb_row(next_txb_row_w),
+    .next_txb_col(next_txb_col_w),
+    .txb_fetch_done(txb_fetch_done_w),
+    .txb_prefetch_fetch_done(txb_prefetch_fetch_done_w),
+    .v_chroma_cache_hit(v_chroma_cache_hit_w),
+    .u_chroma_cache_hit(u_chroma_cache_hit_w),
+    .chroma_fetch_current_cache_hit(chroma_fetch_current_cache_hit_w),
+    .chroma_fetch_cache_index(chroma_fetch_cache_index_w),
+    .luma_fetch_cache_index(luma_fetch_cache_index_w),
+    .chroma_fetch_req_cross_phase(chroma_fetch_req_cross_phase_w),
+    .chroma_fetch_req_next_txb(chroma_fetch_req_next_txb_w),
+    .chroma_fetch_req_index(chroma_fetch_req_index_w),
+    .chroma_predictor_compute_valid(chroma_predictor_compute_valid_w),
+    .chroma_fetch_req_predictor_compute(chroma_fetch_req_predictor_compute_w),
+    .chroma_external_left_predictor_valid(chroma_external_left_predictor_valid_w),
+    .chroma_req_external_left_predictor_valid(chroma_req_external_left_predictor_valid_w),
+    .chroma_external_above_predictor_valid(chroma_external_above_predictor_valid_w),
+    .chroma_req_external_above_predictor_valid(chroma_req_external_above_predictor_valid_w),
+    .chroma_fetch_req_ready(chroma_fetch_req_ready_w),
+    .chroma_fetch_predictor_only(chroma_fetch_predictor_only_w),
+    .chroma_fetch_completed_u(chroma_fetch_completed_u_w),
+    .luma_fetch_completed(luma_fetch_completed_w),
+    .txb_prefetch_chroma_target_v(txb_prefetch_chroma_target_v_w),
+    .txb_prefetch_luma_start(txb_prefetch_luma_start_w),
+    .txb_prefetch_chroma_start(txb_prefetch_chroma_start_w),
+    .txb_prefetch_cross_phase(txb_prefetch_cross_phase_w),
+    .txb_prefetch_first_luma(txb_prefetch_first_luma_w),
+    .luma_fetch_req_row_mi(luma_fetch_req_row_mi_w),
+    .luma_fetch_req_col_mi(luma_fetch_req_col_mi_w),
+    .chroma_fetch_current_storage_row_mi(chroma_fetch_current_storage_row_mi_w),
+    .chroma_fetch_current_storage_col_mi(chroma_fetch_current_storage_col_mi_w),
+    .chroma_fetch_next_storage_row_mi(chroma_fetch_next_storage_row_mi_w),
+    .chroma_fetch_next_storage_col_mi(chroma_fetch_next_storage_col_mi_w),
+    .chroma_fetch_req_row_mi(chroma_fetch_req_row_mi_w),
+    .chroma_fetch_req_col_mi(chroma_fetch_req_col_mi_w),
+    .chroma_fetch_req_plane_v(chroma_fetch_req_plane_v_w),
+    .chroma_left_source_index(chroma_left_source_index_w),
+    .chroma_above_source_index(chroma_above_source_index_w)
+  );
+
   assign lossy420_luma_left_row_index_w = block_row_mi_q[3:0];
   assign lossy420_luma_external_left_valid_w =
     lossy420_luma_left_valid_q[lossy420_luma_left_row_index_w] &&
@@ -1330,19 +1426,6 @@ module ff_av2_encoder #(
     lossy420_chroma_have_left_w ? lossy420_chroma_left_sample_w :
     lossy420_chroma_have_top_w ? lossy420_chroma_top_sample_w :
       8'd128;
-  assign chroma_fetch_start_w =
-    ((state_q == ST_CHROMA_FETCH) &&
-     !txb_prefetch_started_q &&
-     (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF) &&
-     !chroma_fetch_current_cache_hit_w) ||
-    txb_prefetch_chroma_start_w ||
-    (txb_prefetch_started_q && !txb_prefetch_done_q && txb_prefetch_chroma_q);
-  assign luma_fetch_start_w =
-    ((state_q == ST_CHROMA_FETCH) &&
-     !txb_prefetch_started_q &&
-     (phase_q == PHASE_Y_COEFF)) ||
-    txb_prefetch_luma_start_w ||
-    (txb_prefetch_started_q && !txb_prefetch_done_q && !txb_prefetch_chroma_q);
   // AV2 4:4:4 bring-up path: traverse one 64x64 superblock, split visible
   // coding leaves down to 8x8, and generate syntax through the range coder.
   // Any TX_4X4 loops below are AV2 transform blocks, not public input blocks.
@@ -1373,190 +1456,6 @@ module ff_av2_encoder #(
     {1'd0, ibc_above_q[block_col_mi_q]} + {1'd0, ibc_left_q[block_row_mi_q]};
   assign intrabc_skip_ctx_w =
     {1'd0, skip_above_q[block_col_mi_q]} + {1'd0, skip_left_q[block_row_mi_q]};
-  assign txb_width_w = {11'd0, leaf_visible_txb_w_w};
-  assign txb_count_w = {11'd0, leaf_visible_txb_w_w} * {11'd0, leaf_visible_txb_h_w};
-  assign chroma_subsampled_phase_w =
-    (chroma_format_idc == 2'd1) &&
-    (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF);
-  assign txb_row_w = chroma_subsampled_phase_w ?
-    {11'd0, (block_row_mi_q >> 1) + txb_local_row_q} :
-    {11'd0, block_row_mi_q + txb_local_row_q};
-  assign txb_col_w = chroma_subsampled_phase_w ?
-    {11'd0, (block_col_mi_q >> 1) + txb_local_col_q} :
-    {11'd0, block_col_mi_q + txb_local_col_q};
-  assign same_phase_has_next_txb_w =
-    residual_mode_w &&
-    (phase_q == PHASE_Y_COEFF || phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF) &&
-    (txb_index_q != (txb_count_q - 16'd1));
-  assign cross_phase_has_next_txb_w =
-    residual_mode_w &&
-    (txb_index_q == (txb_count_q - 16'd1)) &&
-    (phase_q == PHASE_Y_COEFF || phase_q == PHASE_U_COEFF);
-  assign next_txb_local_col_w =
-    (txb_local_col_q == (txb_width_q[4:0] - 5'd1)) ? 5'd0 : (txb_local_col_q + 5'd1);
-  assign next_txb_local_row_w =
-    (txb_local_col_q == (txb_width_q[4:0] - 5'd1)) ?
-      (txb_local_row_q + 5'd1) : txb_local_row_q;
-  assign next_txb_row_w = {11'd0, block_row_mi_q + next_txb_local_row_w};
-  assign next_txb_col_w = {11'd0, block_col_mi_q + next_txb_local_col_w};
-  assign txb_fetch_done_w =
-    (phase_q == PHASE_Y_COEFF) ? luma_fetch_done_w :
-    (phase_q == PHASE_U_COEFF) ? chroma_fetch_done_w :
-    (phase_q == PHASE_V_COEFF) ? (chroma_fetch_done_w || v_chroma_cache_hit_w) : 1'b0;
-  assign txb_prefetch_fetch_done_w = luma_fetch_done_w || chroma_fetch_done_w;
-  assign v_chroma_cache_hit_w =
-    palette_mode_q &&
-    (phase_q == PHASE_V_COEFF) &&
-    (cached_v_valid_q[txb_index_q[1:0]] || chroma_predictor_compute_valid_w);
-  assign u_chroma_cache_hit_w =
-    palette_mode_q &&
-    (phase_q == PHASE_U_COEFF) &&
-    leaf_chroma_bdpcm_horz_q &&
-    chroma_predictor_compute_valid_w;
-  assign chroma_fetch_current_cache_hit_w = u_chroma_cache_hit_w || v_chroma_cache_hit_w;
-  assign chroma_fetch_cache_index_w =
-    txb_prefetch_started_q ? txb_prefetch_index_q : txb_index_q[1:0];
-  assign luma_fetch_cache_index_w =
-    txb_prefetch_started_q ? txb_prefetch_index_q : txb_index_q[1:0];
-  assign chroma_fetch_req_cross_phase_w =
-    (state_q == ST_LEAF) &&
-    cross_phase_has_next_txb_w &&
-    !(same_phase_has_next_txb_w && (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF));
-  assign chroma_fetch_req_next_txb_w =
-    (state_q == ST_LEAF) &&
-    ((same_phase_has_next_txb_w && (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF)) ||
-     cross_phase_has_next_txb_w);
-  assign chroma_fetch_req_index_w =
-    chroma_fetch_req_cross_phase_w ? 2'd0 :
-    (chroma_fetch_req_next_txb_w ? (txb_index_q[1:0] + 2'd1) : txb_index_q[1:0]);
-  // The cached predictor shortcut is intentionally limited to cases that
-  // match ff_av2_palette_analyzer_444's fetch_pred_read_addr_w sequence: the
-  // tile top-left constant and left-edge predictors from the previous 4x4 TXB.
-  assign chroma_predictor_compute_valid_w =
-    leaf_chroma_bdpcm_horz_q &&
-    cached_chroma_samples_valid_q[txb_index_q[1:0]] &&
-    (((txb_row_w[4:0] == 5'd0) && (txb_col_w[4:0] == 5'd0)) ||
-     txb_col_w[0] ||
-     chroma_external_left_predictor_valid_w ||
-     chroma_external_above_predictor_valid_w ||
-     ((txb_col_w[4:0] == 5'd0) && txb_row_w[0]));
-  assign chroma_fetch_req_predictor_compute_w =
-    leaf_chroma_bdpcm_horz_q &&
-    cached_chroma_samples_valid_q[chroma_fetch_req_index_w] &&
-    (((chroma_fetch_req_row_mi_w == 5'd0) && (chroma_fetch_req_col_mi_w == 5'd0)) ||
-     chroma_fetch_req_col_mi_w[0] ||
-     chroma_req_external_left_predictor_valid_w ||
-     chroma_req_external_above_predictor_valid_w ||
-     ((chroma_fetch_req_col_mi_w == 5'd0) && chroma_fetch_req_row_mi_w[0]));
-  assign chroma_external_left_predictor_valid_w =
-    (txb_col_w[4:0] != 5'd0) &&
-    !txb_col_w[0] &&
-    left_edge_valid_q &&
-    (left_edge_row_mi_q == block_row_mi_q) &&
-    ((left_edge_col_mi_q + 5'd2) == block_col_mi_q);
-  assign chroma_req_external_left_predictor_valid_w =
-    (chroma_fetch_req_col_mi_w != 5'd0) &&
-    !chroma_fetch_req_col_mi_w[0] &&
-    left_edge_valid_q &&
-    (left_edge_row_mi_q == block_row_mi_q) &&
-    ((left_edge_col_mi_q + 5'd2) == block_col_mi_q);
-  assign chroma_external_above_predictor_valid_w =
-    (txb_col_w[4:0] == 5'd0) &&
-    (txb_row_w[4:0] != 5'd0) &&
-    !txb_row_w[0] &&
-    above_col0_valid_q &&
-    ((above_col0_row_mi_q + 5'd2) == block_row_mi_q);
-  assign chroma_req_external_above_predictor_valid_w =
-    (chroma_fetch_req_col_mi_w == 5'd0) &&
-    (chroma_fetch_req_row_mi_w != 5'd0) &&
-    !chroma_fetch_req_row_mi_w[0] &&
-    above_col0_valid_q &&
-    ((above_col0_row_mi_q + 5'd2) == block_row_mi_q);
-  assign chroma_fetch_req_ready_w =
-    palette_mode_q &&
-    (chroma_fetch_req_predictor_compute_w ||
-     (chroma_fetch_req_plane_v_w && cached_v_valid_q[chroma_fetch_req_index_w]));
-  assign chroma_fetch_predictor_only_w =
-    palette_mode_q &&
-    cached_chroma_samples_valid_q[chroma_fetch_req_index_w] &&
-    !chroma_fetch_req_predictor_compute_w;
-  assign chroma_fetch_completed_u_w =
-    chroma_fetch_done_w &&
-    (txb_prefetch_started_q ?
-      (txb_prefetch_chroma_q && !txb_prefetch_plane_v_q) :
-      (phase_q == PHASE_U_COEFF));
-  assign luma_fetch_completed_w =
-    luma_fetch_done_w &&
-    (txb_prefetch_started_q ? !txb_prefetch_chroma_q : (phase_q == PHASE_Y_COEFF));
-  assign txb_prefetch_chroma_target_v_w =
-    ((same_phase_has_next_txb_w && (phase_q == PHASE_V_COEFF)) ||
-     (cross_phase_has_next_txb_w && (phase_q == PHASE_U_COEFF)));
-  assign txb_prefetch_luma_start_w =
-    !start &&
-    !pending_push_valid_q &&
-    !lossy_420_mode_q &&
-    (state_q == ST_LEAF) &&
-    ((same_phase_has_next_txb_w && (phase_q == PHASE_Y_COEFF)) ||
-     ((phase_q == PHASE_INTRA ||
-       phase_q == PHASE_PALETTE_HEADER ||
-       phase_q == PHASE_PALETTE_MAP) &&
-      residual_mode_w &&
-      (txb_index_q == 16'd0))) &&
-    !txb_prefetch_started_q &&
-    !luma_fetch_done_w;
-  assign txb_prefetch_chroma_start_w =
-    !start &&
-    !pending_push_valid_q &&
-    !lossy_420_mode_q &&
-    (state_q == ST_LEAF) &&
-    ((same_phase_has_next_txb_w && (phase_q == PHASE_U_COEFF || phase_q == PHASE_V_COEFF)) ||
-     cross_phase_has_next_txb_w) &&
-    !txb_prefetch_started_q &&
-    !txb_prefetch_chroma_target_v_w &&
-    !chroma_fetch_req_predictor_compute_w &&
-    !chroma_fetch_done_w;
-  assign txb_prefetch_cross_phase_w =
-    txb_prefetch_chroma_start_w &&
-    chroma_fetch_req_cross_phase_w;
-  assign txb_prefetch_first_luma_w =
-    txb_prefetch_luma_start_w &&
-    (phase_q == PHASE_INTRA || phase_q == PHASE_PALETTE_HEADER || phase_q == PHASE_PALETTE_MAP);
-  assign luma_fetch_req_row_mi_w =
-    txb_prefetch_first_luma_w ? block_row_mi_q :
-    (txb_prefetch_luma_start_w ? next_txb_row_w[4:0] : txb_row_w[4:0]);
-  assign luma_fetch_req_col_mi_w =
-    txb_prefetch_first_luma_w ? block_col_mi_q :
-    (txb_prefetch_luma_start_w ? next_txb_col_w[4:0] : txb_col_w[4:0]);
-  assign chroma_fetch_current_storage_row_mi_w =
-    (chroma_format_idc == 2'd1) ?
-      (block_row_mi_q + (txb_local_row_q << 1)) :
-      txb_row_w[4:0];
-  assign chroma_fetch_current_storage_col_mi_w =
-    (chroma_format_idc == 2'd1) ?
-      (block_col_mi_q + (txb_local_col_q << 1)) :
-      txb_col_w[4:0];
-  assign chroma_fetch_next_storage_row_mi_w =
-    (chroma_format_idc == 2'd1) ?
-      (block_row_mi_q + (next_txb_local_row_w << 1)) :
-      next_txb_row_w[4:0];
-  assign chroma_fetch_next_storage_col_mi_w =
-    (chroma_format_idc == 2'd1) ?
-      (block_col_mi_q + (next_txb_local_col_w << 1)) :
-      next_txb_col_w[4:0];
-  assign chroma_fetch_req_row_mi_w =
-    chroma_fetch_req_cross_phase_w ? block_row_mi_q :
-    (chroma_fetch_req_next_txb_w ?
-      chroma_fetch_next_storage_row_mi_w :
-      chroma_fetch_current_storage_row_mi_w);
-  assign chroma_fetch_req_col_mi_w =
-    chroma_fetch_req_cross_phase_w ? block_col_mi_q :
-    (chroma_fetch_req_next_txb_w ?
-      chroma_fetch_next_storage_col_mi_w :
-      chroma_fetch_current_storage_col_mi_w);
-  assign chroma_fetch_req_plane_v_w =
-    chroma_fetch_req_cross_phase_w ? (phase_q == PHASE_U_COEFF) : (phase_q == PHASE_V_COEFF);
-  assign chroma_left_source_index_w = txb_index_q[1:0] - 2'd1;
-  assign chroma_above_source_index_w = txb_index_q[1:0] - txb_width_q[1:0];
   assign cached_u_left_predictor_w = {
     cached_u_txb_samples_q[chroma_left_source_index_w][15 * 8 +: 8],
     cached_u_txb_samples_q[chroma_left_source_index_w][11 * 8 +: 8],
@@ -1647,19 +1546,6 @@ module ff_av2_encoder #(
     chroma_predictor_compute_valid_w ?
       chroma_cached_predictor_samples_w :
       chroma_fetch_predictor_samples_w;
-  assign leaf_visible_txb_w_w =
-    ((block_col_mi_q + block_w_mi_q) > visible_cols_mi_q) ?
-      (visible_cols_mi_q - block_col_mi_q) : block_w_mi_q;
-  assign leaf_visible_txb_h_w =
-    ((block_row_mi_q + block_h_mi_q) > visible_rows_mi_q) ?
-      (visible_rows_mi_q - block_row_mi_q) : block_h_mi_q;
-  assign chroma_txb_width_w =
-    (chroma_format_idc == 2'd1) ? {11'd0, leaf_visible_txb_w_w[4:1]} : txb_width_w;
-  assign chroma_txb_count_w =
-    (chroma_format_idc == 2'd1) ?
-      ({11'd0, leaf_visible_txb_w_w[4:1]} * {11'd0, leaf_visible_txb_h_w[4:1]}) :
-      txb_count_w;
-
   always_ff @(posedge clk) begin
     if (!rst_n) begin
       payload_read_data_word_addr_q <= 12'd0;
