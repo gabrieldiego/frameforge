@@ -446,8 +446,6 @@ module ff_av2_encoder #(
   logic palette_analyzer_nonblack_seen_w;
   logic palette_analyzer_luma_mode_w;
   logic [63:0] palette_analyzer_block_ready_mask_w;
-  logic tile_entropy_start_early_444_w;
-  logic tile_entropy_start_early_420_w;
   logic tile_entropy_start_ready_w;
   logic tile_entropy_palette_mode_w;
   logic tile_entropy_lossy420_mode_w;
@@ -757,10 +755,6 @@ module ff_av2_encoder #(
   );
 
   assign packet_axis_count_w = packet_axis_data[INPUT_FIFO_BITS - 1:INPUT_PACKET_BITS];
-  assign packet_axis_ready =
-    tile_input_active_q &&
-    palette_analyzer_sample_ready_w &&
-    !palette_analyzer_done_w;
 
   ff_axi4_bitstream_packet_writer #(
     .AXI_ADDR_BITS(AXI_ADDR_BITS),
@@ -1215,31 +1209,67 @@ module ff_av2_encoder #(
     .norm_cnt(norm_cnt_w)
   );
 
-  assign start_invalid_w =
-    !((chroma_format_idc == 2'd1) || (chroma_format_idc == 2'd3)) ||
-    (frame_count == 32'd0) ||
-    (visible_width == 16'd0) ||
-    (visible_height == 16'd0) ||
-    (visible_width[2:0] != 3'd0) ||
-    (visible_height[2:0] != 3'd0);
-  assign palette_analyzer_start_w = (state_q == ST_TILE_START);
-  assign input_sample_fire_w =
-    1'b0;
-  assign input_packet_fire_w =
-    packet_axis_valid &&
-    packet_axis_ready;
-  assign input_fire_w = input_packet_fire_w;
-  assign input_fire_count_w = packet_axis_count_w;
-  assign input_axis_last_w = packet_axis_last;
-  assign tile_input_last_w =
-    input_fire_w &&
-    ((tile_input_index_q + {28'd0, input_fire_count_w}) >= tile_samples_w);
-  assign input_fire_error_w =
-    input_fire_w &&
-    (input_axis_last_w != (tile_is_last_w && tile_input_last_w));
-  assign frame_is_last_w = ((frame_index_q + 32'd1) >= frame_count);
-  assign palette_query_start_w = (state_q == ST_PALETTE_QUERY);
-  assign leaf_luma_palette_w = palette_mode_q && (leaf_luma_mode_q == LUMA_MODE_DC);
+  ff_av2_frontend_control #(
+    .SUPPORT_PALETTE_444(SUPPORT_PALETTE_444)
+  ) frontend_control (
+    .start(start),
+    .state_idle(state_q == ST_IDLE),
+    .state_tile_start(state_q == ST_TILE_START),
+    .state_palette_query(state_q == ST_PALETTE_QUERY),
+    .chroma_format_idc(chroma_format_idc),
+    .frame_count(frame_count),
+    .visible_width(visible_width),
+    .visible_height(visible_height),
+    .packet_axis_valid(packet_axis_valid),
+    .packet_axis_last(packet_axis_last),
+    .packet_axis_count(packet_axis_count_w),
+    .tile_input_index(tile_input_index_q),
+    .tile_input_active(tile_input_active_q),
+    .tile_block_count(tile_block_count_w),
+    .tile_count(tile_count_q),
+    .tile_index(tile_index_q),
+    .payload_len(payload_len_q),
+    .frame_index(frame_index_q),
+    .palette_analyzer_sample_ready(palette_analyzer_sample_ready_w),
+    .palette_analyzer_done(palette_analyzer_done_w),
+    .palette_analyzer_nonblack_seen(palette_analyzer_nonblack_seen_w),
+    .palette_analyzer_luma_mode(palette_analyzer_luma_mode_w),
+    .palette_analyzer_black(palette_analyzer_black_w),
+    .palette_analyzer_block_ready_mask(palette_analyzer_block_ready_mask_w),
+    .palette_mode(palette_mode_q),
+    .leaf_luma_mode(leaf_luma_mode_q),
+    .bitstream_writer_frame_done(bitstream_writer_frame_done_w),
+    .frame_reader_error(frame_reader_error_w),
+    .bitstream_writer_error(bitstream_writer_error_w),
+    .start_invalid(start_invalid_w),
+    .packet_axis_ready(packet_axis_ready),
+    .palette_analyzer_start(palette_analyzer_start_w),
+    .input_sample_fire(input_sample_fire_w),
+    .input_packet_fire(input_packet_fire_w),
+    .input_fire(input_fire_w),
+    .input_fire_count(input_fire_count_w),
+    .input_axis_last(input_axis_last_w),
+    .tile_input_last(tile_input_last_w),
+    .input_fire_error(input_fire_error_w),
+    .frame_is_last(frame_is_last_w),
+    .palette_query_start(palette_query_start_w),
+    .leaf_luma_palette(leaf_luma_palette_w),
+    .busy(busy),
+    .frame_reader_start(frame_reader_start_w),
+    .bitstream_writer_start(bitstream_writer_start_w),
+    .done(done),
+    .axi_error(axi_error),
+    .tile_luma_samples(tile_luma_samples_w),
+    .tile_samples(tile_samples_w),
+    .tile_is_last(tile_is_last_w),
+    .multi_tile(multi_tile_w),
+    .payload_tile_start(payload_tile_start_w),
+    .tile_entropy_start_ready(tile_entropy_start_ready_w),
+    .tile_entropy_palette_mode(tile_entropy_palette_mode_w),
+    .tile_entropy_lossy420_mode(tile_entropy_lossy420_mode_w),
+    .tile_entropy_ibc_mode(tile_entropy_ibc_mode_w)
+  );
+
   assign lossy420_luma_left_row_index_w = block_row_mi_q[3:0];
   assign lossy420_luma_external_left_valid_w =
     lossy420_luma_left_valid_q[lossy420_luma_left_row_index_w] &&
@@ -1316,50 +1346,14 @@ module ff_av2_encoder #(
   // AV2 4:4:4 bring-up path: traverse one 64x64 superblock, split visible
   // coding leaves down to 8x8, and generate syntax through the range coder.
   // Any TX_4X4 loops below are AV2 transform blocks, not public input blocks.
-  assign busy = (state_q != ST_IDLE);
   // AV2 bring-up input order is a visible 8x8 block packet: 64 Y samples,
   // 64 U samples, then 64 V samples. This mirrors the VVC 4:4:4 8x8-leaf
   // packing at the interface while allowing the AV2 superblock walker to keep
   // its own partition/leaf order internally.
-  assign frame_reader_start_w = (state_q == ST_TILE_START);
-  assign bitstream_writer_start_w = start && !busy;
-  assign done = bitstream_writer_frame_done_w;
-  assign axi_error = frame_reader_error_w || bitstream_writer_error_w;
   assign s_axis_valid = 1'b0;
   assign s_axis_data = '0;
   assign s_axis_last = 1'b0;
   assign s_axis_ready = 1'b0;
-  assign tile_luma_samples_w = {18'd0, tile_block_count_w, 6'd0};
-  assign tile_samples_w =
-    (chroma_format_idc == 2'd1) ?
-      (tile_luma_samples_w + (tile_luma_samples_w >> 1)) :
-      (tile_luma_samples_w + (tile_luma_samples_w << 1));
-  assign tile_is_last_w = (tile_index_q == (tile_count_q - 16'd1));
-  assign multi_tile_w = (tile_count_q != 16'd1);
-  assign payload_tile_start_w = payload_len_q + (tile_is_last_w ? 16'd0 : 16'd4);
-  assign tile_entropy_start_early_444_w =
-    (chroma_format_idc == 2'd3) &&
-    (SUPPORT_PALETTE_444 != 0) &&
-    palette_analyzer_nonblack_seen_w &&
-    palette_analyzer_block_ready_mask_w[0];
-  assign tile_entropy_start_early_420_w =
-    (chroma_format_idc == 2'd1) &&
-    palette_analyzer_nonblack_seen_w &&
-    palette_analyzer_block_ready_mask_w[0];
-  assign tile_entropy_start_ready_w =
-    palette_analyzer_done_w ||
-    tile_entropy_start_early_444_w ||
-    tile_entropy_start_early_420_w;
-  assign tile_entropy_palette_mode_w =
-    tile_entropy_start_early_444_w ? 1'b1 :
-      (tile_entropy_start_early_420_w ? 1'b0 : palette_analyzer_luma_mode_w);
-  assign tile_entropy_lossy420_mode_w =
-    tile_entropy_start_early_444_w ? 1'b0 :
-      (tile_entropy_start_early_420_w ? 1'b1 :
-        ((chroma_format_idc == 2'd1) && !palette_analyzer_black_w));
-  assign tile_entropy_ibc_mode_w =
-    tile_entropy_start_early_444_w ? 1'b1 :
-      (tile_entropy_start_early_420_w ? 1'b0 : palette_analyzer_luma_mode_w);
   assign ibc_current_block_id_w = {block_row_mi_q[3:1], block_col_mi_q[3:1]};
   assign current_leaf_block_id_w = ibc_current_block_id_w;
   assign current_leaf_ready_w =
