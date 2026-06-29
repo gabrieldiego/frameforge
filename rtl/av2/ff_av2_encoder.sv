@@ -264,8 +264,6 @@ module ff_av2_encoder #(
   logic [4:0] stack_col_mi_q [0:AV2_STACK_DEPTH - 1];
   logic [4:0] stack_w_mi_q [0:AV2_STACK_DEPTH - 1];
   logic [4:0] stack_h_mi_q [0:AV2_STACK_DEPTH - 1];
-  logic [7:0] partition_above_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
-  logic [7:0] partition_left_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
   logic [63:0] finish_e_q;
   logic signed [7:0] finish_c_q;
   logic signed [7:0] finish_s_q;
@@ -569,6 +567,10 @@ module ff_av2_encoder #(
   logic [1:0] partition_raw_ctx_w;
   logic [31:0] partition_do_cdf0_w;
   logic [31:0] partition_rect_cdf0_w;
+  logic [7:0] partition_above_ctx_w;
+  logic [7:0] partition_left_ctx_w;
+  logic partition_context_clear_w;
+  logic partition_context_update_w;
   logic [7:0] partition_update_above_w;
   logic [7:0] partition_update_left_w;
   logic [4:0] leaf_visible_txb_w_w;
@@ -576,6 +578,32 @@ module ff_av2_encoder #(
   logic luma_residual_enable_w;
   logic chroma_bdpcm_enable_w;
   logic chroma_subsampled_phase_w;
+
+  assign partition_context_clear_w =
+    ((state_q == ST_INPUT_READ) &&
+     tile_entropy_start_ready_w &&
+     !palette_analyzer_unsupported_w);
+  assign partition_context_update_w =
+    (state_q == ST_PARTITION) &&
+    (partition_q == PARTITION_NONE) &&
+    (!op_valid_w || !(partition_emit_do_split_w && partition_need_rect_w));
+
+  ff_av2_partition_context_bank #(
+    .CONTEXT_DIM(AV2_PARTITION_CONTEXT_DIM)
+  ) partition_context_bank (
+    .clk(clk),
+    .rst_n(rst_n),
+    .clear(partition_context_clear_w),
+    .update(partition_context_update_w),
+    .block_row_mi(block_row_mi_q),
+    .block_col_mi(block_col_mi_q),
+    .block_w_mi(block_w_mi_q),
+    .block_h_mi(block_h_mi_q),
+    .update_above(partition_update_above_w),
+    .update_left(partition_update_left_w),
+    .selected_above(partition_above_ctx_w),
+    .selected_left(partition_left_ctx_w)
+  );
 
   ff_av2_partition_controller partition_controller (
     .tile_width(tile_width_q),
@@ -587,8 +615,8 @@ module ff_av2_encoder #(
     .partition(partition_q),
     .partition_emit_step(partition_emit_step_q),
     .palette_mode(palette_mode_q),
-    .partition_above_ctx(partition_above_q[block_col_mi_q]),
-    .partition_left_ctx(partition_left_q[block_row_mi_q]),
+    .partition_above_ctx(partition_above_ctx_w),
+    .partition_left_ctx(partition_left_ctx_w),
     .visible_rows_mi(visible_rows_mi_w),
     .visible_cols_mi(visible_cols_mi_w),
     .block_visible(block_visible_w),
@@ -1606,8 +1634,6 @@ module ff_av2_encoder #(
       carry_index_q <= 16'd0;
       output_last_q <= 1'b0;
       for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
-        partition_above_q[context_index_q] <= 8'd0;
-        partition_left_q[context_index_q] <= 8'd0;
         y_txb_above_q[context_index_q] <= 8'd0;
         y_txb_left_q[context_index_q] <= 8'd0;
         u_txb_above_q[context_index_q] <= 8'd0;
@@ -1866,8 +1892,6 @@ module ff_av2_encoder #(
                 partition_emit_step_q <= 1'b0;
                 stack_sp_q <= 5'd0;
                 for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
-                  partition_above_q[context_index_q] <= 8'd0;
-                  partition_left_q[context_index_q] <= 8'd0;
                   y_txb_above_q[context_index_q] <= 8'd0;
                   y_txb_left_q[context_index_q] <= 8'd0;
                   u_txb_above_q[context_index_q] <= 8'd0;
@@ -1953,14 +1977,6 @@ module ff_av2_encoder #(
               if (partition_emit_do_split_w && partition_need_rect_w) begin
                 partition_emit_step_q <= 1'b1;
               end else if (partition_q == PARTITION_NONE) begin
-                for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
-                  if (context_index_q >= block_col_mi_q && context_index_q < (block_col_mi_q + block_w_mi_q)) begin
-                    partition_above_q[context_index_q] <= partition_update_above_w;
-                  end
-                  if (context_index_q >= block_row_mi_q && context_index_q < (block_row_mi_q + block_h_mi_q)) begin
-                    partition_left_q[context_index_q] <= partition_update_left_w;
-                  end
-                end
                 phase_q <= frame_ibc_mode_q ? PHASE_INTRABC : PHASE_INTRA;
                 step_q <= 5'd0;
                 palette_row_q <= 6'd0;
@@ -2006,14 +2022,6 @@ module ff_av2_encoder #(
                 state_q <= ST_LOAD_BLOCK;
               end
             end else if (partition_q == PARTITION_NONE) begin
-              for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
-                if (context_index_q >= block_col_mi_q && context_index_q < (block_col_mi_q + block_w_mi_q)) begin
-                  partition_above_q[context_index_q] <= partition_update_above_w;
-                end
-                if (context_index_q >= block_row_mi_q && context_index_q < (block_row_mi_q + block_h_mi_q)) begin
-                  partition_left_q[context_index_q] <= partition_update_left_w;
-                end
-              end
               phase_q <= frame_ibc_mode_q ? PHASE_INTRABC : PHASE_INTRA;
               step_q <= 5'd0;
               palette_row_q <= 6'd0;
@@ -2629,8 +2637,6 @@ module ff_av2_encoder #(
                   stack_sp_q <= 5'd0;
                   output_last_q <= 1'b0;
                   for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
-                    partition_above_q[context_index_q] <= 8'd0;
-                    partition_left_q[context_index_q] <= 8'd0;
                     y_txb_above_q[context_index_q] <= 8'd0;
                     y_txb_left_q[context_index_q] <= 8'd0;
                     u_txb_above_q[context_index_q] <= 8'd0;
