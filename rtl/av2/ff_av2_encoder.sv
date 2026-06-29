@@ -506,11 +506,6 @@ module ff_av2_encoder #(
   logic [11:0] lossy420_chroma_sample_sum_now_w;
   logic [3:0] luma_residual_skip_ctx_w;
   logic [1:0] luma_residual_dc_sign_ctx_w;
-  logic [2:0] luma_residual_top_level_w;
-  logic [2:0] luma_residual_left_level_w;
-  logic signed [3:0] luma_residual_top_sign_w;
-  logic signed [3:0] luma_residual_left_sign_w;
-  logic signed [5:0] luma_residual_sign_sum_w;
   logic [7:0] lossy420_luma_residual_recon_sample_w;
   logic luma_residual_op_valid_w;
   logic luma_residual_op_literal_w;
@@ -1070,6 +1065,21 @@ module ff_av2_encoder #(
     .op_fh_inc(palette_op_fh_inc_w),
     .header_last_step(palette_header_last_step_w),
     .map_token_required(palette_map_token_required_w)
+  );
+
+  ff_av2_residual_contexts residual_contexts (
+    .phase_v_coeff(phase_q == PHASE_V_COEFF),
+    .chroma_format_idc(chroma_format_idc),
+    .luma_above_context(y_txb_above_q[txb_col_w[4:0]]),
+    .luma_left_context(y_txb_left_q[txb_row_w[4:0]]),
+    .u_above_context(u_txb_above_q[txb_col_w[4:0]]),
+    .u_left_context(u_txb_left_q[txb_row_w[4:0]]),
+    .v_above_context(v_txb_above_q[txb_col_w[4:0]]),
+    .v_left_context(v_txb_left_q[txb_row_w[4:0]]),
+    .last_u_txb_nonzero(last_u_txb_nonzero_q),
+    .luma_skip_ctx(luma_residual_skip_ctx_w),
+    .luma_dc_sign_ctx(luma_residual_dc_sign_ctx_w),
+    .chroma_bdpcm_skip_ctx(chroma_bdpcm_skip_ctx_w)
   );
 
   ff_av2_residual_top residual_top (
@@ -1637,45 +1647,6 @@ module ff_av2_encoder #(
     chroma_predictor_compute_valid_w ?
       chroma_cached_predictor_samples_w :
       chroma_fetch_predictor_samples_w;
-  assign luma_residual_top_level_w =
-    ((y_txb_above_q[txb_col_w[4:0]] & 8'd7) > 8'd4) ?
-      3'd4 : y_txb_above_q[txb_col_w[4:0]][2:0];
-  assign luma_residual_left_level_w =
-    ((y_txb_left_q[txb_row_w[4:0]] & 8'd7) > 8'd4) ?
-      3'd4 : y_txb_left_q[txb_row_w[4:0]][2:0];
-  assign luma_residual_skip_ctx_w =
-    (luma_residual_top_level_w == 3'd0 && luma_residual_left_level_w == 3'd0) ? 4'd1 :
-    ((luma_residual_top_level_w == 3'd0 && luma_residual_left_level_w <= 3'd2) ||
-     (luma_residual_left_level_w == 3'd0 && luma_residual_top_level_w <= 3'd2) ||
-     (luma_residual_top_level_w == 3'd1 && luma_residual_left_level_w == 3'd1)) ? 4'd2 :
-    ((luma_residual_top_level_w == 3'd0) ||
-     (luma_residual_left_level_w == 3'd0) ||
-     (luma_residual_top_level_w == 3'd1 && luma_residual_left_level_w >= 3'd2 && luma_residual_left_level_w <= 3'd3) ||
-     (luma_residual_left_level_w == 3'd1 && luma_residual_top_level_w >= 3'd2 && luma_residual_top_level_w <= 3'd3) ||
-     (luma_residual_top_level_w == 3'd2 && luma_residual_left_level_w == 3'd2)) ? 4'd3 :
-    (((luma_residual_top_level_w >= 3'd1 && luma_residual_top_level_w <= 3'd2) && luma_residual_left_level_w == 3'd4) ||
-     ((luma_residual_left_level_w >= 3'd1 && luma_residual_left_level_w <= 3'd2) && luma_residual_top_level_w == 3'd4) ||
-     ((luma_residual_top_level_w >= 3'd2 && luma_residual_top_level_w <= 3'd3) &&
-      (luma_residual_left_level_w >= 3'd2 && luma_residual_left_level_w <= 3'd3))) ? 4'd4 : 4'd5;
-  assign luma_residual_top_sign_w =
-    (y_txb_above_q[txb_col_w[4:0]][4:3] == 2'd1) ? -4'sd1 :
-    (y_txb_above_q[txb_col_w[4:0]][4:3] == 2'd2) ? 4'sd1 : 4'sd0;
-  assign luma_residual_left_sign_w =
-    (y_txb_left_q[txb_row_w[4:0]][4:3] == 2'd1) ? -4'sd1 :
-    (y_txb_left_q[txb_row_w[4:0]][4:3] == 2'd2) ? 4'sd1 : 4'sd0;
-  assign luma_residual_sign_sum_w = luma_residual_top_sign_w + luma_residual_left_sign_w;
-  assign luma_residual_dc_sign_ctx_w =
-    (luma_residual_sign_sum_w < 0) ? 2'd1 :
-    (luma_residual_sign_sum_w > 0) ? 2'd2 : 2'd0;
-  assign chroma_bdpcm_skip_ctx_w =
-    (phase_q == PHASE_V_COEFF) ?
-      (((chroma_format_idc == 2'd1) ? 4'd0 : 4'd3) +
-       {3'd0, v_txb_above_q[txb_col_w[4:0]] != 8'd0} +
-       {3'd0, v_txb_left_q[txb_row_w[4:0]] != 8'd0} +
-       (last_u_txb_nonzero_q ? 4'd6 : 4'd0)) :
-      (4'd6 +
-       {3'd0, u_txb_above_q[txb_col_w[4:0]] != 8'd0} +
-       {3'd0, u_txb_left_q[txb_row_w[4:0]] != 8'd0});
   assign leaf_visible_txb_w_w =
     ((block_col_mi_q + block_w_mi_q) > visible_cols_mi_q) ?
       (visible_cols_mi_q - block_col_mi_q) : block_w_mi_q;
