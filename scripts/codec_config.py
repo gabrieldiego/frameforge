@@ -51,7 +51,7 @@ def resolve_codec_config(codec: str) -> CodecConfig:
             rust_encode_command="av2-encode",
             bitstream_extension="av2",
             rtl_dir=REPO_ROOT / "rtl" / "av2",
-            rtl_include_dirs=(),
+            rtl_include_dirs=(REPO_ROOT / "rtl" / "av2",),
             default_synth_dut="av2-encoder",
             reference_dir=REPO_ROOT / "verification" / "codecs" / "av2" / "reference",
             legacy_reference_dirs=(),

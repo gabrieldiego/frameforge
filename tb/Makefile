@@ -47,7 +47,7 @@ endif
 
 ifeq ($(CODEC),av2)
 ifeq ($(DUT),av2-encoder)
-VERILOG_SOURCES := $(RTL_DIR)/common/ff_encoder_axil_regs.sv $(RTL_DIR)/common/ff_axi4_frame_reader.sv $(RTL_DIR)/common/ff_axis_sample_fifo.sv $(RTL_DIR)/common/ff_axis_sample_packet_unpacker.sv $(RTL_DIR)/common/ff_axi4_bitstream_writer.sv $(RTL_DIR)/common/ff_axi4_bitstream_packet_writer.sv $(RTL_DIR)/common/ff_sync_block_ram_1r1w.sv $(RTL_DIR)/common/ff_sync_byte_write_word_ram_1r1w.sv $(RTL_DIR)/common/ff_sync_halfword_write_quad_read_ram_1r1w.sv $(CODEC_RTL_DIR)/bitstream/ff_av2_bitstream_headers.sv $(CODEC_RTL_DIR)/bitstream/ff_av2_output_packetizer.sv $(CODEC_RTL_DIR)/bitstream/ff_av2_carry_propagator.sv $(CODEC_RTL_DIR)/bitstream/ff_av2_payload_write_mux.sv $(CODEC_RTL_DIR)/entropy/ff_av2_partition_controller.sv $(CODEC_RTL_DIR)/entropy/ff_av2_partition_context_bank.sv $(CODEC_RTL_DIR)/entropy/ff_av2_partition_cdf_lut.sv $(CODEC_RTL_DIR)/residual/ff_av2_txb_context_bank.sv $(CODEC_RTL_DIR)/entropy/ff_av2_entropy_op_mux.sv $(CODEC_RTL_DIR)/entropy/ff_av2_range_coder_step.sv $(CODEC_RTL_DIR)/entropy/ff_av2_entropy_coder.sv $(CODEC_RTL_DIR)/ibc/ff_av2_local_hash_matcher_444.sv $(CODEC_RTL_DIR)/ibc/ff_av2_ibc_context_bank.sv $(CODEC_RTL_DIR)/palette/ff_av2_chroma_sample_store.sv $(CODEC_RTL_DIR)/palette/ff_av2_palette_analyzer_444.sv $(CODEC_RTL_DIR)/palette/ff_av2_luma_palette_symbolizer.sv $(CODEC_RTL_DIR)/residual/ff_av2_lossy420_dc_estimator.sv $(CODEC_RTL_DIR)/residual/ff_av2_lossy420_predictors.sv $(CODEC_RTL_DIR)/residual/ff_av2_dc_delta_txb_symbolizer.sv $(CODEC_RTL_DIR)/residual/ff_av2_chroma_bdpcm_symbolizer.sv $(CODEC_RTL_DIR)/residual/ff_av2_chroma_predictor_cache.sv $(CODEC_RTL_DIR)/residual/ff_av2_residual_contexts.sv $(CODEC_RTL_DIR)/residual/ff_av2_txb_scheduler.sv $(CODEC_RTL_DIR)/residual/ff_av2_residual_top.sv $(CODEC_RTL_DIR)/ff_av2_geometry.sv $(CODEC_RTL_DIR)/ff_av2_frontend_control.sv $(CODEC_RTL_DIR)/ff_av2_encoder.sv
+VERILOG_SOURCES := $(RTL_DIR)/common/ff_encoder_axil_regs.sv $(RTL_DIR)/common/ff_axi4_frame_reader.sv $(RTL_DIR)/common/ff_axis_sample_fifo.sv $(RTL_DIR)/common/ff_axis_sample_packet_unpacker.sv $(RTL_DIR)/common/ff_axi4_bitstream_writer.sv $(RTL_DIR)/common/ff_axi4_bitstream_packet_writer.sv $(RTL_DIR)/common/ff_sync_block_ram_1r1w.sv $(RTL_DIR)/common/ff_sync_byte_write_word_ram_1r1w.sv $(RTL_DIR)/common/ff_sync_halfword_write_quad_read_ram_1r1w.sv $(CODEC_RTL_DIR)/bitstream/ff_av2_bitstream_headers.sv $(CODEC_RTL_DIR)/bitstream/ff_av2_output_packetizer.sv $(CODEC_RTL_DIR)/bitstream/ff_av2_carry_propagator.sv $(CODEC_RTL_DIR)/bitstream/ff_av2_payload_write_mux.sv $(CODEC_RTL_DIR)/entropy/ff_av2_partition_controller.sv $(CODEC_RTL_DIR)/entropy/ff_av2_partition_context_bank.sv $(CODEC_RTL_DIR)/entropy/ff_av2_context_banks.sv $(CODEC_RTL_DIR)/entropy/ff_av2_partition_cdf_lut.sv $(CODEC_RTL_DIR)/residual/ff_av2_txb_context_bank.sv $(CODEC_RTL_DIR)/entropy/ff_av2_entropy_op_mux.sv $(CODEC_RTL_DIR)/entropy/ff_av2_range_coder_step.sv $(CODEC_RTL_DIR)/entropy/ff_av2_entropy_coder.sv $(CODEC_RTL_DIR)/ibc/ff_av2_local_hash_matcher_444.sv $(CODEC_RTL_DIR)/ibc/ff_av2_ibc_context_bank.sv $(CODEC_RTL_DIR)/palette/ff_av2_chroma_sample_store.sv $(CODEC_RTL_DIR)/palette/ff_av2_palette_analyzer_444.sv $(CODEC_RTL_DIR)/palette/ff_av2_luma_palette_symbolizer.sv $(CODEC_RTL_DIR)/residual/ff_av2_lossy420_dc_estimator.sv $(CODEC_RTL_DIR)/residual/ff_av2_lossy420_predictors.sv $(CODEC_RTL_DIR)/residual/ff_av2_dc_delta_txb_symbolizer.sv $(CODEC_RTL_DIR)/residual/ff_av2_chroma_bdpcm_symbolizer.sv $(CODEC_RTL_DIR)/residual/ff_av2_chroma_predictor_cache.sv $(CODEC_RTL_DIR)/residual/ff_av2_residual_contexts.sv $(CODEC_RTL_DIR)/residual/ff_av2_txb_scheduler.sv $(CODEC_RTL_DIR)/residual/ff_av2_residual_top.sv $(CODEC_RTL_DIR)/ff_av2_geometry.sv $(CODEC_RTL_DIR)/ff_av2_frontend_control.sv $(CODEC_RTL_DIR)/ff_av2_encoder.sv
 TOPLEVEL := ff_av2_encoder
 COCOTB_TEST_MODULES := test_av2_encoder
 else
@@ -135,16 +135,17 @@ COMPILE_ARGS += -P$(TOPLEVEL).CTU_SIZE=$(RTL_CTU_SIZE)
 COMPILE_ARGS += -P$(TOPLEVEL).SUPPORT_PALETTE_444=$(RTL_SUPPORT_PALETTE_444)
 endif
 endif
-ifeq ($(DUT),av2-encoder)
-ifeq ($(SIM),icarus)
-COMPILE_ARGS += -P$(TOPLEVEL).SAMPLE_BITS=$(RTL_SAMPLE_BITS)
-COMPILE_ARGS += -P$(TOPLEVEL).SOURCE_SAMPLE_BITS=$(RTL_SOURCE_SAMPLE_BITS)
-COMPILE_ARGS += -P$(TOPLEVEL).MAX_VISIBLE_WIDTH=$(RTL_MAX_VISIBLE_WIDTH)
-COMPILE_ARGS += -P$(TOPLEVEL).MAX_VISIBLE_HEIGHT=$(RTL_MAX_VISIBLE_HEIGHT)
-COMPILE_ARGS += -P$(TOPLEVEL).CTU_SIZE=$(RTL_CTU_SIZE)
-COMPILE_ARGS += -P$(TOPLEVEL).SUPPORT_PALETTE_444=$(RTL_SUPPORT_PALETTE_444)
-endif
-endif
+	ifeq ($(DUT),av2-encoder)
+	ifeq ($(SIM),icarus)
+	COMPILE_ARGS += -P$(TOPLEVEL).SAMPLE_BITS=$(RTL_SAMPLE_BITS)
+	COMPILE_ARGS += -P$(TOPLEVEL).SOURCE_SAMPLE_BITS=$(RTL_SOURCE_SAMPLE_BITS)
+	COMPILE_ARGS += -P$(TOPLEVEL).MAX_VISIBLE_WIDTH=$(RTL_MAX_VISIBLE_WIDTH)
+	COMPILE_ARGS += -P$(TOPLEVEL).MAX_VISIBLE_HEIGHT=$(RTL_MAX_VISIBLE_HEIGHT)
+	COMPILE_ARGS += -P$(TOPLEVEL).CTU_SIZE=$(RTL_CTU_SIZE)
+	COMPILE_ARGS += -P$(TOPLEVEL).SUPPORT_PALETTE_444=$(RTL_SUPPORT_PALETTE_444)
+	COMPILE_ARGS += -I$(RTL_DIR)/av2
+	endif
+	endif
 
 ifeq ($(filter print-verilog-sources print-toplevel,$(MAKECMDGOALS)),)
 .DEFAULT_GOAL := sim
