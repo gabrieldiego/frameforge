@@ -1077,9 +1077,15 @@ module ff_av2_encoder #(
     .v_above_context(v_txb_above_q[txb_col_w[4:0]]),
     .v_left_context(v_txb_left_q[txb_row_w[4:0]]),
     .last_u_txb_nonzero(last_u_txb_nonzero_q),
+    .txb_row(txb_row_w),
+    .txb_col(txb_col_w),
     .luma_skip_ctx(luma_residual_skip_ctx_w),
     .luma_dc_sign_ctx(luma_residual_dc_sign_ctx_w),
-    .chroma_bdpcm_skip_ctx(chroma_bdpcm_skip_ctx_w)
+    .chroma_bdpcm_skip_ctx(chroma_bdpcm_skip_ctx_w),
+    .y_txb_nonzero_fh(y_txb_nonzero_fh_w),
+    .u_txb_nonzero_fh(u_txb_nonzero_fh_w),
+    .v_txb_nonzero_fh(v_txb_nonzero_fh_w),
+    .y_dc_sign_fl(y_dc_sign_fl_w)
   );
 
   ff_av2_residual_top residual_top (
@@ -1707,29 +1713,6 @@ module ff_av2_encoder #(
   assign seq_write_step_w =
     (seq_bits_left_q < {3'd0, seq_byte_remaining_w}) ?
       {1'b0, seq_bits_left_q[2:0]} : seq_byte_remaining_w;
-
-  always @* begin
-    if (txb_row_w == 16'd0 && txb_col_w == 16'd0) begin
-      y_txb_nonzero_fh_w = 32'd31669;
-      u_txb_nonzero_fh_w = 32'd23870;
-      // AV2 v1.0.0 read_tx_block()/get_txb_ctx(): V TXB skip contexts use
-      // the retained U-plane EOB flag. 4:4:4 adds the chroma-block-larger-
-      // than-TXB offset, landing on ctx9..11 here; 4:2:0 chroma is exactly
-      // one 4x4 TXB per 8x8 luma block, landing on ctx6..8 instead.
-      v_txb_nonzero_fh_w = (chroma_format_idc == 2'd1) ? 32'd25120 : 32'd16384;
-      y_dc_sign_fl_w = 32'd16937;
-    end else if (txb_row_w == 16'd0 || txb_col_w == 16'd0) begin
-      y_txb_nonzero_fh_w = 32'd24824;
-      u_txb_nonzero_fh_w = 32'd19113;
-      v_txb_nonzero_fh_w = (chroma_format_idc == 2'd1) ? 32'd16620 : 32'd16384;
-      y_dc_sign_fl_w = 32'd19136;
-    end else begin
-      y_txb_nonzero_fh_w = 32'd3692;
-      u_txb_nonzero_fh_w = 32'd10420;
-      v_txb_nonzero_fh_w = (chroma_format_idc == 2'd1) ? 32'd8203 : 32'd16384;
-      y_dc_sign_fl_w = 32'd19136;
-    end
-  end
 
   always_ff @(posedge clk) begin
     if (!rst_n) begin

@@ -10,9 +10,15 @@ module ff_av2_residual_contexts (
   input  logic [7:0]  v_above_context,
   input  logic [7:0]  v_left_context,
   input  logic        last_u_txb_nonzero,
+  input  logic [15:0] txb_row,
+  input  logic [15:0] txb_col,
   output logic [3:0]  luma_skip_ctx,
   output logic [1:0]  luma_dc_sign_ctx,
-  output logic [3:0]  chroma_bdpcm_skip_ctx
+  output logic [3:0]  chroma_bdpcm_skip_ctx,
+  output logic [31:0] y_txb_nonzero_fh,
+  output logic [31:0] u_txb_nonzero_fh,
+  output logic [31:0] v_txb_nonzero_fh,
+  output logic [31:0] y_dc_sign_fl
 );
 
   logic [2:0] luma_top_level_w;
@@ -60,5 +66,28 @@ module ff_av2_residual_contexts (
       (4'd6 +
        {3'd0, u_above_context != 8'd0} +
        {3'd0, u_left_context != 8'd0});
+
+  always @* begin
+    if (txb_row == 16'd0 && txb_col == 16'd0) begin
+      y_txb_nonzero_fh = 32'd31669;
+      u_txb_nonzero_fh = 32'd23870;
+      // AV2 v1.0.0 read_tx_block()/get_txb_ctx(): V TXB skip contexts use
+      // the retained U-plane EOB flag. 4:4:4 adds the chroma-block-larger-
+      // than-TXB offset, landing on ctx9..11 here; 4:2:0 chroma is exactly
+      // one 4x4 TXB per 8x8 luma block, landing on ctx6..8 instead.
+      v_txb_nonzero_fh = (chroma_format_idc == 2'd1) ? 32'd25120 : 32'd16384;
+      y_dc_sign_fl = 32'd16937;
+    end else if (txb_row == 16'd0 || txb_col == 16'd0) begin
+      y_txb_nonzero_fh = 32'd24824;
+      u_txb_nonzero_fh = 32'd19113;
+      v_txb_nonzero_fh = (chroma_format_idc == 2'd1) ? 32'd16620 : 32'd16384;
+      y_dc_sign_fl = 32'd19136;
+    end else begin
+      y_txb_nonzero_fh = 32'd3692;
+      u_txb_nonzero_fh = 32'd10420;
+      v_txb_nonzero_fh = (chroma_format_idc == 2'd1) ? 32'd8203 : 32'd16384;
+      y_dc_sign_fl = 32'd19136;
+    end
+  end
 
 endmodule
