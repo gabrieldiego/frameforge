@@ -271,17 +271,21 @@ module ff_av2_encoder #(
   logic [15:0] carry_index_q;
   integer context_index_q;
   integer seq_write_i;
-  logic [7:0] y_txb_above_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
-  logic [7:0] y_txb_left_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
-  logic [7:0] u_txb_above_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
-  logic [7:0] u_txb_left_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
-  logic [7:0] v_txb_above_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
-  logic [7:0] v_txb_left_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
-  logic ibc_above_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
-  logic ibc_left_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
-  logic skip_above_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
-  logic skip_left_q [0:AV2_PARTITION_CONTEXT_DIM - 1];
   logic last_u_txb_nonzero_q;
+  logic txb_context_clear_w;
+  logic txb_context_clear_leaf_w;
+  logic txb_context_set_luma_w;
+  logic txb_context_set_u_w;
+  logic txb_context_set_v_w;
+  logic [7:0] txb_context_luma_update_w;
+  logic [7:0] txb_context_u_update_w;
+  logic [7:0] txb_context_v_update_w;
+  logic [7:0] txb_context_luma_above_w;
+  logic [7:0] txb_context_luma_left_w;
+  logic [7:0] txb_context_u_above_w;
+  logic [7:0] txb_context_u_left_w;
+  logic [7:0] txb_context_v_above_w;
+  logic [7:0] txb_context_v_left_w;
 
   logic        op_valid_w;
   logic        op_last_w;
@@ -321,6 +325,13 @@ module ff_av2_encoder #(
   logic [1:0] ibc_drl_idx_w;
   logic [1:0] intrabc_ctx_w;
   logic [1:0] intrabc_skip_ctx_w;
+  logic ibc_context_clear_w;
+  logic ibc_context_set_leaf_w;
+  logic ibc_context_clear_leaf_w;
+  logic ibc_above_ctx_w;
+  logic ibc_left_ctx_w;
+  logic skip_above_ctx_w;
+  logic skip_left_ctx_w;
   logic [3:0] closed_header_len_w;
   logic [7:0] payload_prefix_byte_w;
   logic [15:0] closed_len_w;
@@ -587,6 +598,36 @@ module ff_av2_encoder #(
     (state_q == ST_PARTITION) &&
     (partition_q == PARTITION_NONE) &&
     (!op_valid_w || !(partition_emit_do_split_w && partition_need_rect_w));
+  assign txb_context_clear_w =
+    ((state_q == ST_IDLE) && start && !start_invalid_w) ||
+    (state_q == ST_INPUT_READ && tile_entropy_start_ready_w && !palette_analyzer_unsupported_w) ||
+    ((state_q == ST_OUTPUT_VALID) && m_axis_valid && m_axis_ready &&
+     output_last_q && !frame_is_last_w);
+  assign txb_context_clear_leaf_w =
+    state_q == ST_LEAF &&
+    op_valid_w &&
+    (phase_q == PHASE_INTRABC) &&
+    ((step_q == 5'd3 && ibc_drl_idx_w == 2'd0) ||
+     (step_q == 5'd4 && ibc_drl_idx_w == 2'd1) ||
+     (step_q == 5'd5));
+  assign txb_context_set_luma_w =
+    (state_q == ST_LEAF) &&
+    (phase_q == PHASE_Y_COEFF) &&
+    residual_mode_w &&
+    luma_residual_txb_done_w;
+  assign txb_context_set_u_w =
+    (state_q == ST_LEAF) &&
+    (phase_q == PHASE_U_COEFF) &&
+    residual_mode_w &&
+    chroma_bdpcm_txb_done_w;
+  assign txb_context_set_v_w =
+    (state_q == ST_LEAF) &&
+    (phase_q == PHASE_V_COEFF) &&
+    residual_mode_w &&
+    chroma_bdpcm_txb_done_w;
+  assign txb_context_luma_update_w = luma_residual_entropy_context_w;
+  assign txb_context_u_update_w = chroma_bdpcm_entropy_context_w;
+  assign txb_context_v_update_w = chroma_bdpcm_entropy_context_w;
 
   ff_av2_partition_context_bank #(
     .CONTEXT_DIM(AV2_PARTITION_CONTEXT_DIM)
@@ -603,6 +644,33 @@ module ff_av2_encoder #(
     .update_left(partition_update_left_w),
     .selected_above(partition_above_ctx_w),
     .selected_left(partition_left_ctx_w)
+  );
+
+  ff_av2_txb_context_bank #(
+    .CONTEXT_DIM(AV2_PARTITION_CONTEXT_DIM)
+  ) txb_context_bank (
+    .clk(clk),
+    .rst_n(rst_n),
+    .clear(txb_context_clear_w),
+    .clear_leaf(txb_context_clear_leaf_w),
+    .set_luma(txb_context_set_luma_w),
+    .set_u(txb_context_set_u_w),
+    .set_v(txb_context_set_v_w),
+    .txb_row_mi(txb_row_w[4:0]),
+    .txb_col_mi(txb_col_w[4:0]),
+    .block_row_mi(block_row_mi_q),
+    .block_col_mi(block_col_mi_q),
+    .block_w_mi(block_w_mi_q),
+    .block_h_mi(block_h_mi_q),
+    .luma_context(txb_context_luma_update_w),
+    .u_context(txb_context_u_update_w),
+    .v_context(txb_context_v_update_w),
+    .luma_above_context(txb_context_luma_above_w),
+    .luma_left_context(txb_context_luma_left_w),
+    .u_above_context(txb_context_u_above_w),
+    .u_left_context(txb_context_u_left_w),
+    .v_above_context(txb_context_v_above_w),
+    .v_left_context(txb_context_v_left_w)
   );
 
   ff_av2_partition_controller partition_controller (
@@ -963,6 +1031,43 @@ module ff_av2_encoder #(
     .drl_idx_table(ibc_drl_idx_table_w)
   );
 
+  assign ibc_context_clear_w =
+    ((state_q == ST_INPUT_READ) &&
+     tile_entropy_start_ready_w &&
+     !palette_analyzer_unsupported_w);
+  assign ibc_context_set_leaf_w =
+    (state_q == ST_LEAF) &&
+    op_valid_w &&
+    (phase_q == PHASE_INTRABC) &&
+    (((step_q == 5'd3) && (ibc_drl_idx_w == 2'd0)) ||
+     ((step_q == 5'd4) && (ibc_drl_idx_w == 2'd1)) ||
+     (step_q == 5'd5));
+  assign ibc_context_clear_leaf_w =
+    (state_q == ST_LEAF) &&
+    op_valid_w &&
+    (phase_q == PHASE_V_COEFF) &&
+    (((residual_mode_w && chroma_bdpcm_txb_done_w) ||
+      (!residual_mode_w && (step_q == 7'd7)))) &&
+    (txb_index_q == (txb_count_q - 16'd1));
+
+  ff_av2_ibc_context_bank #(
+    .CONTEXT_DIM(AV2_PARTITION_CONTEXT_DIM)
+  ) ibc_context_bank (
+    .clk(clk),
+    .rst_n(rst_n),
+    .clear(ibc_context_clear_w),
+    .set_leaf(ibc_context_set_leaf_w),
+    .clear_leaf(ibc_context_clear_leaf_w),
+    .block_row_mi(block_row_mi_q),
+    .block_col_mi(block_col_mi_q),
+    .block_w_mi(block_w_mi_q),
+    .block_h_mi(block_h_mi_q),
+    .selected_ibc_above(ibc_above_ctx_w),
+    .selected_ibc_left(ibc_left_ctx_w),
+    .selected_skip_above(skip_above_ctx_w),
+    .selected_skip_left(skip_left_ctx_w)
+  );
+
   ff_av2_palette_analyzer_444 #(
     .SAMPLE_BITS(SAMPLE_BITS),
     .SUPPORT_PALETTE_444(SUPPORT_PALETTE_444)
@@ -1074,12 +1179,12 @@ module ff_av2_encoder #(
   ff_av2_residual_contexts residual_contexts (
     .phase_v_coeff(phase_q == PHASE_V_COEFF),
     .chroma_format_idc(chroma_format_idc),
-    .luma_above_context(y_txb_above_q[txb_col_w[4:0]]),
-    .luma_left_context(y_txb_left_q[txb_row_w[4:0]]),
-    .u_above_context(u_txb_above_q[txb_col_w[4:0]]),
-    .u_left_context(u_txb_left_q[txb_row_w[4:0]]),
-    .v_above_context(v_txb_above_q[txb_col_w[4:0]]),
-    .v_left_context(v_txb_left_q[txb_row_w[4:0]]),
+    .luma_above_context(txb_context_luma_above_w),
+    .luma_left_context(txb_context_luma_left_w),
+    .u_above_context(txb_context_u_above_w),
+    .u_left_context(txb_context_u_left_w),
+    .v_above_context(txb_context_v_above_w),
+    .v_left_context(txb_context_v_left_w),
     .last_u_txb_nonzero(last_u_txb_nonzero_q),
     .txb_row(txb_row_w),
     .txb_col(txb_col_w),
@@ -1436,9 +1541,9 @@ module ff_av2_encoder #(
     ibc_copy_mask_w[ibc_current_block_id_w];
   assign ibc_drl_idx_w = ibc_drl_idx_table_w[ibc_drl_idx_bit_index_w +: 2];
   assign intrabc_ctx_w =
-    {1'd0, ibc_above_q[block_col_mi_q]} + {1'd0, ibc_left_q[block_row_mi_q]};
+    {1'd0, ibc_above_ctx_w} + {1'd0, ibc_left_ctx_w};
   assign intrabc_skip_ctx_w =
-    {1'd0, skip_above_q[block_col_mi_q]} + {1'd0, skip_left_q[block_row_mi_q]};
+    {1'd0, skip_above_ctx_w} + {1'd0, skip_left_ctx_w};
   ff_av2_chroma_predictor_cache chroma_predictor_cache (
     .lossy_420_mode(lossy_420_mode_q),
     .phase_u_coeff(phase_q == PHASE_U_COEFF),
@@ -1634,16 +1739,6 @@ module ff_av2_encoder #(
       carry_index_q <= 16'd0;
       output_last_q <= 1'b0;
       for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
-        y_txb_above_q[context_index_q] <= 8'd0;
-        y_txb_left_q[context_index_q] <= 8'd0;
-        u_txb_above_q[context_index_q] <= 8'd0;
-        u_txb_left_q[context_index_q] <= 8'd0;
-        v_txb_above_q[context_index_q] <= 8'd0;
-        v_txb_left_q[context_index_q] <= 8'd0;
-        ibc_above_q[context_index_q] <= 1'b0;
-        ibc_left_q[context_index_q] <= 1'b0;
-        skip_above_q[context_index_q] <= 1'b0;
-        skip_left_q[context_index_q] <= 1'b0;
         lossy420_luma_above_q[context_index_q] <= 8'd128;
         lossy420_luma_left_top_q[context_index_q] <= 8'd128;
         lossy420_luma_left_bottom_q[context_index_q] <= 8'd128;
@@ -1892,16 +1987,6 @@ module ff_av2_encoder #(
                 partition_emit_step_q <= 1'b0;
                 stack_sp_q <= 5'd0;
                 for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
-                  y_txb_above_q[context_index_q] <= 8'd0;
-                  y_txb_left_q[context_index_q] <= 8'd0;
-                  u_txb_above_q[context_index_q] <= 8'd0;
-                  u_txb_left_q[context_index_q] <= 8'd0;
-                  v_txb_above_q[context_index_q] <= 8'd0;
-                  v_txb_left_q[context_index_q] <= 8'd0;
-                  ibc_above_q[context_index_q] <= 1'b0;
-                  ibc_left_q[context_index_q] <= 1'b0;
-                  skip_above_q[context_index_q] <= 1'b0;
-                  skip_left_q[context_index_q] <= 1'b0;
                   lossy420_luma_above_q[context_index_q] <= 8'd128;
                   lossy420_luma_left_top_q[context_index_q] <= 8'd128;
                   lossy420_luma_left_bottom_q[context_index_q] <= 8'd128;
@@ -2120,27 +2205,13 @@ module ff_av2_encoder #(
                              (step_q == 5'd4 && ibc_drl_idx_w == 2'd1) ||
                              (step_q == 5'd5)) begin
                   // AV2 v1.0.0 read_intra_frame_mode_info()/read_skip_txfm():
-                  // an IntraBC leaf updates both use_intrabc and skip_txfm
-                  // neighbor contexts. TODO(av2 entropy): if SDP, chroma
-                  // partition trees, or non-8x8 leaves are enabled, mirror the
-                  // AVM MB_MODE_INFO availability rules instead of this shared
-                  // fixed-leaf context map.
-                  for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
-                    if (context_index_q >= block_col_mi_q && context_index_q < (block_col_mi_q + block_w_mi_q)) begin
-                      ibc_above_q[context_index_q] <= 1'b1;
-                      skip_above_q[context_index_q] <= 1'b1;
-                      y_txb_above_q[context_index_q] <= 8'd0;
-                      u_txb_above_q[context_index_q] <= 8'd0;
-                      v_txb_above_q[context_index_q] <= 8'd0;
-                    end
-                    if (context_index_q >= block_row_mi_q && context_index_q < (block_row_mi_q + block_h_mi_q)) begin
-                      ibc_left_q[context_index_q] <= 1'b1;
-                      skip_left_q[context_index_q] <= 1'b1;
-                      y_txb_left_q[context_index_q] <= 8'd0;
-                      u_txb_left_q[context_index_q] <= 8'd0;
-                      v_txb_left_q[context_index_q] <= 8'd0;
-                    end
-                  end
+                  // an IntraBC leaf updates use_intrabc and skip_txfm
+                  // neighbor contexts in ff_av2_ibc_context_bank. This also
+                  // clears the TXB contexts for the copied leaf via the
+                  // context bank. TODO(av2 entropy): if
+                  // SDP, chroma partition trees, or non-8x8 leaves are
+                  // enabled, mirror the AVM MB_MODE_INFO availability rules
+                  // instead of this shared fixed-leaf context map.
                   if (stack_sp_q != 5'd0) begin
                     block_row_mi_q <= stack_row_mi_q[stack_sp_q - 5'd1];
                     block_col_mi_q <= stack_col_mi_q[stack_sp_q - 5'd1];
@@ -2250,10 +2321,6 @@ module ff_av2_encoder #(
                 end
               end else if (phase_q == PHASE_Y_COEFF) begin
                 if ((residual_mode_w && luma_residual_txb_done_w) || (!residual_mode_w && step_q == 5'd8)) begin
-                  if (residual_mode_w) begin
-                    y_txb_above_q[txb_col_w[4:0]] <= luma_residual_entropy_context_w;
-                    y_txb_left_q[txb_row_w[4:0]] <= luma_residual_entropy_context_w;
-                  end
                   if (lossy_420_mode_q) begin
                     lossy420_luma_recon_q[txb_index_q[1:0]] <=
                       lossy420_luma_residual_recon_sample_w;
@@ -2323,8 +2390,6 @@ module ff_av2_encoder #(
                 if ((residual_mode_w && chroma_bdpcm_txb_done_w) || (!residual_mode_w && step_q == 7'd7)) begin
                   if (residual_mode_w) begin
                     if (phase_q == PHASE_U_COEFF) begin
-                      u_txb_above_q[txb_col_w[4:0]] <= chroma_bdpcm_entropy_context_w;
-                      u_txb_left_q[txb_row_w[4:0]] <= chroma_bdpcm_entropy_context_w;
                       last_u_txb_nonzero_q <= chroma_bdpcm_txb_nonzero_w;
                       if (lossy_420_mode_q) begin
                         lossy420_u_above_q[txb_col_w[3:0]] <=
@@ -2337,8 +2402,6 @@ module ff_av2_encoder #(
                         lossy420_u_left_valid_q[lossy420_chroma_left_row_index_w] <= 1'b1;
                       end
                     end else begin
-                      v_txb_above_q[txb_col_w[4:0]] <= chroma_bdpcm_entropy_context_w;
-                      v_txb_left_q[txb_row_w[4:0]] <= chroma_bdpcm_entropy_context_w;
                       if (lossy_420_mode_q) begin
                         lossy420_v_above_q[txb_col_w[3:0]] <=
                           lossy420_chroma_bdpcm_recon_sample_w;
@@ -2376,16 +2439,6 @@ module ff_av2_encoder #(
                         end
                       end
                     end else begin
-                      for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
-                        if (context_index_q >= block_col_mi_q && context_index_q < (block_col_mi_q + block_w_mi_q)) begin
-                          ibc_above_q[context_index_q] <= 1'b0;
-                          skip_above_q[context_index_q] <= 1'b0;
-                        end
-                        if (context_index_q >= block_row_mi_q && context_index_q < (block_row_mi_q + block_h_mi_q)) begin
-                          ibc_left_q[context_index_q] <= 1'b0;
-                          skip_left_q[context_index_q] <= 1'b0;
-                        end
-                      end
                       left_edge_u_top_q <= current_u_right_edge_top_w;
                       left_edge_u_bottom_q <= current_u_right_edge_bottom_w;
                       left_edge_v_top_q <= current_v_right_edge_top_w;
@@ -2637,16 +2690,6 @@ module ff_av2_encoder #(
                   stack_sp_q <= 5'd0;
                   output_last_q <= 1'b0;
                   for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
-                    y_txb_above_q[context_index_q] <= 8'd0;
-                    y_txb_left_q[context_index_q] <= 8'd0;
-                    u_txb_above_q[context_index_q] <= 8'd0;
-                    u_txb_left_q[context_index_q] <= 8'd0;
-                    v_txb_above_q[context_index_q] <= 8'd0;
-                    v_txb_left_q[context_index_q] <= 8'd0;
-                    ibc_above_q[context_index_q] <= 1'b0;
-                    ibc_left_q[context_index_q] <= 1'b0;
-                    skip_above_q[context_index_q] <= 1'b0;
-                    skip_left_q[context_index_q] <= 1'b0;
                     lossy420_luma_above_q[context_index_q] <= 8'd128;
                     lossy420_luma_left_top_q[context_index_q] <= 8'd128;
                     lossy420_luma_left_bottom_q[context_index_q] <= 8'd128;
