@@ -517,10 +517,26 @@ def find_vivado_command() -> list[str]:
     )
 
 
-def vivado_environment() -> dict[str, str]:
+def vivado_environment(out_dir: Path | None = None) -> dict[str, str]:
     env = os.environ.copy()
     if "XILINXD_LICENSE_FILE" not in env and LOCAL_LICENSE.exists():
         env["XILINXD_LICENSE_FILE"] = str(LOCAL_LICENSE.resolve())
+
+    if out_dir is not None:
+        runtime_home = out_dir / "vivado_runtime"
+        xilinx_user_data = runtime_home / ".Xilinx"
+        tmp_dir = runtime_home / "tmp"
+        for path in (runtime_home, runtime_home / "xdg", xilinx_user_data, tmp_dir):
+            path.mkdir(parents=True, exist_ok=True)
+        env["HOME"] = str(runtime_home.resolve())
+        env["TMPDIR"] = str(tmp_dir.resolve())
+        env["TMP"] = str(tmp_dir.resolve())
+        env["TEMP"] = str(tmp_dir.resolve())
+        env["XILINX_LOCAL_USER_DATA"] = str(xilinx_user_data.resolve())
+        existing_java_options = env.get("_JAVA_OPTIONS", "").strip()
+        user_home_arg = f"-Duser.home={runtime_home.resolve()}"
+        if user_home_arg not in existing_java_options:
+            env["_JAVA_OPTIONS"] = f"{existing_java_options} {user_home_arg}".strip()
     compat_lib = ensure_vivado_compat_libs()
     if compat_lib:
         existing = env.get("LD_LIBRARY_PATH")
@@ -528,6 +544,11 @@ def vivado_environment() -> dict[str, str]:
             str(compat_lib.resolve()) if not existing else f"{compat_lib.resolve()}:{existing}"
         )
     return env
+
+
+def _vivado_has_rtd_failure(log: Path) -> bool:
+    text = log.read_text(errors="replace")
+    return "Failed to open './.Xil/" in text and "rtd.straps.rtd" in text
 
 
 def ensure_vivado_compat_libs() -> Path | None:
@@ -829,53 +850,78 @@ def run_vivado(
     xdc = out_dir / "vivado_synth.xdc"
     period_ns = 1000.0 / clock_mhz
     part = board.get("FPGA_PART", "xc7z010clg400-1")
-    generic_args = encoder_vivado_generic_args(
-        top,
-        max_visible_width,
-        max_visible_height,
-        support_palette_444,
-    )
-    synth_options = generic_args
-    if vivado_directive and vivado_directive != "Default":
-        synth_options += f" -directive {vivado_directive}"
-    if vivado_retiming:
-        synth_options += " -retiming"
-    include_dirs_tcl = " ".join(quote_tcl_path(path) for path in include_dirs)
-    xdc.write_text(
-        "\n".join(
-            [
-                f"create_clock -name ff_synth_clk -period {period_ns:.3f} [get_ports clk]",
-                "",
-            ]
+    def write_tcl(max_threads: int) -> None:
+        generic_args = encoder_vivado_generic_args(
+            top,
+            max_visible_width,
+            max_visible_height,
+            support_palette_444,
         )
-    )
-    thread_setup = (
-        [f"set_param general.maxThreads {vivado_max_threads}"]
-        if vivado_max_threads > 0
-        else []
-    )
-    tcl.write_text(
-        "\n".join(
-            [
-                f"set part {part}",
-                f"set top {top}",
-                f"set out_dir {out_dir}",
-                *thread_setup,
-                "create_project -in_memory -part $part",
-                f"set_property include_dirs [list {include_dirs_tcl}] [current_fileset]",
-                *[f"read_verilog -sv {quote_tcl_path(source)}" for source in sources],
-                f"read_xdc {quote_tcl_path(xdc)}",
-                "set_property top $top [current_fileset]",
-                f"synth_design -top $top -part $part{synth_options}",
-                "report_utilization -file $out_dir/vivado_utilization.rpt",
-                "report_timing_summary -file $out_dir/vivado_timing_summary.rpt",
-                "report_timing -max_paths 20 -sort_by group -file $out_dir/vivado_critical_paths.rpt",
-                "write_verilog -force $out_dir/${top}.vivado_post_synth.v",
-                "exit",
-                "",
-            ]
+        synth_options = generic_args
+        if vivado_directive and vivado_directive != "Default":
+            synth_options += f" -directive {vivado_directive}"
+        if vivado_retiming:
+            synth_options += " -retiming"
+        include_dirs_tcl = " ".join(quote_tcl_path(path) for path in include_dirs)
+        xdc.write_text(
+            "\n".join(
+                [
+                    f"create_clock -name ff_synth_clk -period {period_ns:.3f} [get_ports clk]",
+                    "",
+                ]
+            )
         )
-    )
+        thread_setup = [f"set_param general.maxThreads {max_threads}"] if max_threads > 0 else []
+        tcl.write_text(
+            "\n".join(
+                [
+                    f"set part {part}",
+                    f"set top {top}",
+                    f"set out_dir {out_dir}",
+                    *thread_setup,
+                    "create_project -in_memory -part $part",
+                    f"set_property include_dirs [list {include_dirs_tcl}] [current_fileset]",
+                    *[f"read_verilog -sv {quote_tcl_path(source)}" for source in sources],
+                    f"read_xdc {quote_tcl_path(xdc)}",
+                    "set_property top $top [current_fileset]",
+                    f"synth_design -top $top -part $part{synth_options}",
+                    "report_utilization -file $out_dir/vivado_utilization.rpt",
+                    "report_timing_summary -file $out_dir/vivado_timing_summary.rpt",
+                    "report_timing -max_paths 20 -sort_by group -file $out_dir/vivado_critical_paths.rpt",
+                    "write_verilog -force $out_dir/${top}.vivado_post_synth.v",
+                    "exit",
+                    "",
+                ]
+            )
+        )
+
+    def run_with_threads(max_threads: int, tag: str) -> tuple[int, Path]:
+        write_tcl(max_threads)
+        log_for_run = out_dir / ("vivado.log" if not tag else "vivado_retry.log")
+        # Use consistent command output path for the actual command.
+        if tag:
+            print(f"Retrying Vivado synthesis using {tag} (max_threads={max_threads})")
+        rc = run_logged_command(
+            [
+                *vivado_cmd,
+                "-mode",
+                "batch",
+                "-source",
+                str(tcl),
+                "-log",
+                str(log_for_run),
+                "-journal",
+                str(journal),
+            ],
+            log_for_run,
+            f"Vivado synthesis{f' ({tag})' if tag else ''}",
+            timeout_sec,
+            memory_limit_mb,
+            warn_after_sec,
+            env=vivado_environment(out_dir=out_dir),
+        )
+        return rc, log_for_run
+
     log = out_dir / "vivado.log"
     journal = out_dir / "vivado.jou"
     print(f"Running Vivado synthesis for {top} on {part}")
@@ -899,25 +945,13 @@ def run_vivado(
         print(f"Synthesis memory limit: {memory_limit_mb:g} MiB")
     if warn_after_sec is not None:
         print(f"Synthesis review threshold: {warn_after_sec:g} seconds")
-    rc = run_logged_command(
-        [
-            *vivado_cmd,
-            "-mode",
-            "batch",
-            "-source",
-            str(tcl),
-            "-log",
-            str(log),
-            "-journal",
-            str(journal),
-        ],
-        log,
-        "Vivado synthesis",
-        timeout_sec,
-        memory_limit_mb,
-        warn_after_sec,
-        env=vivado_environment(),
-    )
+    rc, log = run_with_threads(vivado_max_threads, "")
+    if rc != 0 and _vivado_has_rtd_failure(log):
+        if vivado_max_threads != 0:
+            print("Vivado encountered a realtime temp-file failure; retrying with helper threads disabled.")
+            rc, log = run_with_threads(0, "_retry")
+            if rc != 0 and _vivado_has_rtd_failure(log):
+                print(f"Vivado retry also hit the same realtime temp-file failure. Last log: {log}")
     print(f"Vivado log: {log}")
     return rc
 
