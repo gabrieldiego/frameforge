@@ -149,7 +149,11 @@ report-regressions:
 
 report-codec:
 	$(MAKE) report-regressions CODEC="$(CODEC)"
+ifeq ($(REPORT_SYNTHESIS_TOOL),yosys-vivado)
+	$(MAKE) synth-vivado CODEC="$(CODEC)" SYNTH_DUT="$(REPORT_SYNTH_DUT)"
+else
 	$(MAKE) synth CODEC="$(CODEC)" SYNTH_DUT="$(REPORT_SYNTH_DUT)"
+endif
 	python3 scripts/update_codec_reports.py --codec "$(CODEC)" --checkpoint-title "$(REPORT_TITLE)" --synthesis-tool "$(REPORT_SYNTHESIS_TOOL)" $(if $(REPORT_BASELINE_REF),--baseline-ref "$(REPORT_BASELINE_REF)")
 
 report-av2:

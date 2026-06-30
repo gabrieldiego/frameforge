@@ -651,18 +651,48 @@ def parse_synth_current() -> dict[str, float]:
         mm = re.search(rf"\b{key}\s+([0-9]+)", body)
         out[key] = float(mm.group(1)) if mm else 0.0
     if INCLUDE_VIVADO:
-        vivado = (synth_dir / "vivado.log").read_text()
-        vivado_timing = (synth_dir / "vivado_timing_summary.rpt").read_text()
-        vivado_util = (synth_dir / "vivado_utilization.rpt").read_text()
+        vivado_log = synth_dir / "vivado.log"
+        vivado_timing_file = synth_dir / "vivado_timing_summary.rpt"
+        vivado_util_file = synth_dir / "vivado_utilization.rpt"
+        if not (vivado_log.exists() and vivado_timing_file.exists() and vivado_util_file.exists()):
+            out["Vivado unavailable"] = 1.0
+            out["Vivado synth_design elapsed time (s)"] = math.nan
+            out["Vivado synth_design peak memory (MiB)"] = math.nan
+            out["Vivado total elapsed time (s)"] = math.nan
+            out["Vivado WNS (ns)"] = math.nan
+            out["Vivado WHS (ns)"] = math.nan
+            out["Vivado critical data path delay (ns)"] = math.nan
+            out["Vivado critical logic levels"] = math.nan
+            out["Vivado Slice LUTs"] = math.nan
+            out["Vivado Slice Registers"] = math.nan
+            out["Vivado Block RAM Tiles"] = math.nan
+            out["Vivado DSPs"] = math.nan
+            return out
+        vivado = vivado_log.read_text()
+        vivado_timing = vivado_timing_file.read_text()
+        vivado_util = vivado_util_file.read_text()
         m = re.search(
             r"synth_design: Time \(s\): cpu = [0-9:.]+ ; elapsed = ([0-9:.]+) \. "
             r"Memory \(MB\): peak = ([0-9.]+)",
             vivado,
         )
         if not m:
-            raise SystemExit("missing vivado synth_design timing line")
+            out["Vivado unavailable"] = 1.0
+            out["Vivado synth_design elapsed time (s)"] = math.nan
+            out["Vivado synth_design peak memory (MiB)"] = math.nan
+            out["Vivado total elapsed time (s)"] = math.nan
+            out["Vivado WNS (ns)"] = math.nan
+            out["Vivado WHS (ns)"] = math.nan
+            out["Vivado critical data path delay (ns)"] = math.nan
+            out["Vivado critical logic levels"] = math.nan
+            out["Vivado Slice LUTs"] = math.nan
+            out["Vivado Slice Registers"] = math.nan
+            out["Vivado Block RAM Tiles"] = math.nan
+            out["Vivado DSPs"] = math.nan
+            return out
         out["Vivado synth_design elapsed time (s)"] = elapsed_to_seconds(m.group(1))
         out["Vivado synth_design peak memory (MiB)"] = float(m.group(2))
+        out["Vivado total elapsed time (s)"] = math.nan
         m = re.search(r"# Start of session at: (.+)", vivado)
         n = re.search(r"Exiting Vivado at (.+)\.\.\.", vivado)
         if m and n:
@@ -670,13 +700,13 @@ def parse_synth_current() -> dict[str, float]:
             end = datetime.strptime(n.group(1).strip(), "%a %b %d %H:%M:%S %Y")
             out["Vivado total elapsed time (s)"] = (end - start).total_seconds()
         m = re.search(r"Setup\s+:\s+0\s+Failing Endpoints,\s+Worst Slack\s+([-+0-9.]+)ns", vivado_timing)
-        out["Vivado WNS (ns)"] = float(m.group(1))
+        out["Vivado WNS (ns)"] = float(m.group(1)) if m else math.nan
         m = re.search(r"Hold\s+:\s+0\s+Failing Endpoints,\s+Worst Slack\s+([-+0-9.]+)ns", vivado_timing)
-        out["Vivado WHS (ns)"] = float(m.group(1))
+        out["Vivado WHS (ns)"] = float(m.group(1)) if m else math.nan
         m = re.search(r"Data Path Delay:\s+([-+0-9.]+)ns", vivado_timing)
-        out["Vivado critical data path delay (ns)"] = float(m.group(1))
+        out["Vivado critical data path delay (ns)"] = float(m.group(1)) if m else math.nan
         m = re.search(r"Logic Levels:\s+([0-9]+)", vivado_timing)
-        out["Vivado critical logic levels"] = float(m.group(1))
+        out["Vivado critical logic levels"] = float(m.group(1)) if m else math.nan
         util_keys = {
             "Vivado Slice LUTs": r"\| Slice LUTs\*\s+\|\s+([0-9]+)",
             "Vivado Slice Registers": r"\| Slice Registers\s+\|\s+([0-9]+)",
@@ -686,7 +716,8 @@ def parse_synth_current() -> dict[str, float]:
         for key, pattern in util_keys.items():
             m = re.search(pattern, vivado_util)
             if not m:
-                raise SystemExit(f"missing {key} in Vivado utilization report")
+                out[key] = math.nan
+                continue
             out[key] = float(m.group(1))
     return out
 
@@ -808,6 +839,7 @@ def write_synthesis() -> None:
         "",
     ]
     if INCLUDE_VIVADO:
+        vivado_unavailable = curr.get("Vivado unavailable", 0.0) == 1.0
         lines += [
             "Vivado synthesis configuration:",
             "",
@@ -817,28 +849,39 @@ def write_synthesis() -> None:
             "- clock target: 25 MHz",
             "- max visible size: 1024x1024",
             "- palette 4:4:4 support: enabled",
-            "",
-            "Vivado synthesis and timing result:",
-            "",
-            "| Metric | Baseline | Current | Delta |",
-            "|---|---:|---:|---:|",
         ]
-        for key in vivado_order:
-            if key not in curr:
-                continue
-            base = old.get(key, math.nan)
-            val = curr[key]
-            lines.append(
-                f"| {key} | {format_metric_value(key, base)} | "
-                f"{format_metric_value(key, val)} | {format_metric_delta(key, val, base)} |"
-            )
-        lines += [
-            "",
-            "Vivado critical-path summary:",
-            "",
-            "- Setup timing met at 25 MHz with positive WNS.",
-            *vivado_path_notes(),
-        ]
+        if vivado_unavailable:
+            lines += [
+                "",
+                "Vivado synthesis and timing result:",
+                "",
+                "- Not rerun for this checkpoint; Vivado reports were not available.",
+                "- Re-run with `REPORT_SYNTHESIS_TOOL=yosys-vivado` after running Vivado synthesis.",
+            ]
+        else:
+            lines += [
+                "",
+                "Vivado synthesis and timing result:",
+                "",
+                "| Metric | Baseline | Current | Delta |",
+                "|---|---:|---:|---:|",
+            ]
+            for key in vivado_order:
+                if key not in curr:
+                    continue
+                base = old.get(key, math.nan)
+                val = curr[key]
+                lines.append(
+                    f"| {key} | {format_metric_value(key, base)} | "
+                    f"{format_metric_value(key, val)} | {format_metric_delta(key, val, base)} |"
+                )
+            lines += [
+                "",
+                "Vivado critical-path summary:",
+                "",
+                "- Setup timing met at 25 MHz with positive WNS.",
+                *vivado_path_notes(),
+            ]
     else:
         lines += [
             "Vivado synthesis and timing result:",

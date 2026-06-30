@@ -5,12 +5,12 @@ Older measurements are intentionally left to git history so this page stays
 focused on the current baseline and immediate delta. The shared synthesis flow
 is documented in [../synthesis.md](../synthesis.md).
 
-## AV2 analyzer overlap and IBC safety checkpoint
+## 2026-06-29 AV2 Report Checkpoint
 
 Baseline and current sources:
 
 - Baseline Git SHA: `509b74f7670b9bfff61209f0779c12e256b00f07`
-- Current validated source Git SHA: `8b06ee49bb8aa6944afcad0101f0867f84dfa49a`
+- Current validated source Git SHA: `28fa335ecfba2e9463e416688f0144bd29f159f3`
 
 Validation result:
 
@@ -20,7 +20,7 @@ Validation result:
 - `racehorses-multictu-420`: PASS (10/10), strict SW/RTL/reference-decoder checksum parity.
 - `multiframe-smoke`: PASS (4/4), strict SW/RTL/reference-decoder checksum parity.
 - Yosys synthesis: PASS at 25 MHz metadata target.
-- Vivado synthesis/timing: PASS at 25 MHz target, WNS is positive.
+- Vivado synthesis/timing: not rerun for this checkpoint.
 
 Yosys synthesis configuration:
 
@@ -37,27 +37,27 @@ Yosys synthesis result:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| Main Yosys elapsed time (s) | 579.50 s | 559.20 s | -20.30 s |
-| Runner-observed peak child RSS (MiB) | 2074.95 MiB | 1917.12 MiB | -157.83 MiB |
+| Main Yosys elapsed time (s) | 579.50 s | 606.20 s | +26.70 s |
+| Runner-observed peak child RSS (MiB) | 2074.95 MiB | 2435.23 MiB | +360.28 MiB |
 | Topological path length | 120 | 122 | +2 |
-| Flattened cells | 123021 | 116638 | -6383 |
-| Estimated LCs | 55926 | 52585 | -3341 |
-| CARRY4 | 3815 | 3819 | +4 |
-| DSP48E1 | 1 | 1 | +0 |
-| FDCE | 6382 | 6562 | +180 |
+| Flattened cells | 123021 | 137682 | +14661 |
+| Estimated LCs | 55926 | 65368 | +9442 |
+| CARRY4 | 3815 | 3871 | +56 |
+| DSP48E1 | 1 | 2 | +1 |
+| FDCE | 6382 | 7714 | +1332 |
 | FDPE | 92 | 78 | -14 |
-| FDRE | 23019 | 20939 | -2080 |
-| FDSE | 132 | 132 | +0 |
-| LUT1 | 981 | 827 | -154 |
-| LUT2 | 15006 | 14697 | -309 |
-| LUT3 | 12231 | 11090 | -1141 |
-| LUT4 | 7583 | 7176 | -407 |
-| LUT5 | 10142 | 9780 | -362 |
-| LUT6 | 25970 | 24539 | -1431 |
-| MUXF7 | 6140 | 5486 | -654 |
-| MUXF8 | 1434 | 1310 | -124 |
+| FDRE | 23019 | 20565 | -2454 |
+| FDSE | 132 | 133 | +1 |
+| LUT1 | 981 | 1159 | +178 |
+| LUT2 | 15006 | 16368 | +1362 |
+| LUT3 | 12231 | 13129 | +898 |
+| LUT4 | 7583 | 8239 | +656 |
+| LUT5 | 10142 | 11982 | +1840 |
+| LUT6 | 25970 | 32018 | +6048 |
+| MUXF7 | 6140 | 8296 | +2156 |
+| MUXF8 | 1434 | 1679 | +245 |
 | RAMB36E1 | 30 | 30 | +0 |
-| RAM32M | 10 | 10 | +0 |
+| RAM32M | 10 | 0 | -10 |
 
 Critical-path summary:
 
@@ -66,36 +66,10 @@ Critical-path summary:
   palette-color update path in `ff_av2_palette_analyzer_444`.
 - Longest topological path in `ff_av2_chroma_sample_store`: length 1.
 
-Vivado synthesis configuration:
-
-- command: `make synth-vivado CODEC=av2 SYNTH_DUT=av2-encoder SYNTH_TIMEOUT_SEC=1800 SYNTH_WARN_AFTER_SEC=600 SYNTH_VIVADO_MAX_THREADS=1 SYNTH_MEMORY_LIMIT_MB=4096`
-- RTL top: `ff_av2_encoder`
-- board/device metadata: Arty Z7-10, `xc7z010clg400-1`
-- clock target: 25 MHz
-- max visible size: 1024x1024
-- palette 4:4:4 support: enabled
-
 Vivado synthesis and timing result:
 
-| Metric | Baseline | Current | Delta |
-|---|---:|---:|---:|
-| Vivado total elapsed time (s) | n/a | 1127.00 s | n/a |
-| Vivado synth_design elapsed time (s) | n/a | 1024.00 s | n/a |
-| Vivado synth_design peak memory (MiB) | n/a | 3343.42 MiB | n/a |
-| Vivado WNS (ns) | n/a | 2.160 ns | n/a |
-| Vivado WHS (ns) | n/a | 0.043 ns | n/a |
-| Vivado critical data path delay (ns) | n/a | 37.689 ns | n/a |
-| Vivado critical logic levels | n/a | 51 | n/a |
-| Vivado Slice LUTs | n/a | 59036 | n/a |
-| Vivado Slice Registers | n/a | 27320 | n/a |
-| Vivado Block RAM Tiles | n/a | 30 | n/a |
-| Vivado DSPs | n/a | 0 | n/a |
-
-Vivado critical-path summary:
-
-- Setup timing met at 25 MHz with positive WNS.
-- Current critical path is route-dominated inside the AV2 palette analyzer,
-  from `input_sample_fifo/data_q_reg` into `palette_color_q`.
+- Not rerun for this checkpoint; use the previous committed report as the
+  latest Vivado timing reference.
 
 Notes:
 

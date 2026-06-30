@@ -13,12 +13,12 @@ Metric definitions:
 - Internal block utilization is testbench instrumentation. It is used to find
   pipeline starvation/backpressure and is not part of the codec bitstream contract.
 
-## AV2 analyzer overlap and IBC safety checkpoint
+## 2026-06-29 AV2 Report Checkpoint
 
 Baseline and current sources:
 
 - Baseline Git SHA: `509b74f7670b9bfff61209f0779c12e256b00f07`
-- Current validated source Git SHA: `8b06ee49bb8aa6944afcad0101f0867f84dfa49a`
+- Current validated source Git SHA: `28fa335ecfba2e9463e416688f0144bd29f159f3`
 - Delta columns compare against the previous documented AV2 output-utilization
   checkpoint where the same vector or aggregate was present.
 
@@ -30,7 +30,7 @@ Validation result:
 - `racehorses-multictu-420`: PASS (10/10), strict SW/RTL/reference-decoder checksum parity.
 - `multiframe-smoke`: PASS (4/4), strict SW/RTL/reference-decoder checksum parity.
 - Yosys synthesis: PASS at 25 MHz metadata target.
-- Vivado synthesis/timing: PASS at 25 MHz target, WNS is positive.
+- Vivado synthesis/timing: not rerun for this checkpoint.
 
 Aggregate top-level RTL utilization:
 
