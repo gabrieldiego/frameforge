@@ -100,6 +100,9 @@
       carry_q <= 16'd0;
       carry_index_q <= 16'd0;
       output_last_q <= 1'b0;
+      for (seq_write_i = 0; seq_write_i < AV2_MAX_SEQUENCE_BYTES; seq_write_i = seq_write_i + 1) begin
+        seq_mem_u[seq_write_i] <= 8'd0;
+      end
       for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
         lossy420_luma_above_q[context_index_q] <= 8'd128;
         lossy420_luma_left_top_q[context_index_q] <= 8'd128;
@@ -145,22 +148,9 @@
           seq_len_q <= 16'd0;
           payload_len_q <= 16'd0;
           payload_prefix_index_q <= 2'd0;
-          seq_mem_q[0] <= 8'd0;
-          seq_mem_q[1] <= 8'd0;
-          seq_mem_q[2] <= 8'd0;
-          seq_mem_q[3] <= 8'd0;
-          seq_mem_q[4] <= 8'd0;
-          seq_mem_q[5] <= 8'd0;
-          seq_mem_q[6] <= 8'd0;
-          seq_mem_q[7] <= 8'd0;
-          seq_mem_q[8] <= 8'd0;
-          seq_mem_q[9] <= 8'd0;
-          seq_mem_q[10] <= 8'd0;
-          seq_mem_q[11] <= 8'd0;
-          seq_mem_q[12] <= 8'd0;
-          seq_mem_q[13] <= 8'd0;
-          seq_mem_q[14] <= 8'd0;
-          seq_mem_q[15] <= 8'd0;
+          for (seq_write_i = 0; seq_write_i < AV2_MAX_SEQUENCE_BYTES; seq_write_i = seq_write_i + 1) begin
+            seq_mem_u[seq_write_i] <= 8'd0;
+          end
           low_q <= 64'd0;
           rng_q <= 32'h8000;
           cnt_q <= -8'sd9;
@@ -377,9 +367,25 @@
           ST_SEQ_WRITE: begin
             for (seq_write_i = 0; seq_write_i < 8; seq_write_i = seq_write_i + 1) begin
               if (seq_write_i[3:0] < seq_write_step_w) begin
-                seq_mem_q[seq_bit_pos_q[15:3]]
-                  [7 - (seq_bit_pos_q[2:0] + seq_write_i[2:0])] <=
+                case (seq_bit_pos_q[2:0] + seq_write_i[2:0])
+                  3'd0: seq_mem_u[seq_mem_addr_q][7] <=
                     seq_value_q[seq_bits_left_q - {3'd0, seq_write_i[3:0]} - 7'd1];
+                  3'd1: seq_mem_u[seq_mem_addr_q][6] <=
+                    seq_value_q[seq_bits_left_q - {3'd0, seq_write_i[3:0]} - 7'd1];
+                  3'd2: seq_mem_u[seq_mem_addr_q][5] <=
+                    seq_value_q[seq_bits_left_q - {3'd0, seq_write_i[3:0]} - 7'd1];
+                  3'd3: seq_mem_u[seq_mem_addr_q][4] <=
+                    seq_value_q[seq_bits_left_q - {3'd0, seq_write_i[3:0]} - 7'd1];
+                  3'd4: seq_mem_u[seq_mem_addr_q][3] <=
+                    seq_value_q[seq_bits_left_q - {3'd0, seq_write_i[3:0]} - 7'd1];
+                  3'd5: seq_mem_u[seq_mem_addr_q][2] <=
+                    seq_value_q[seq_bits_left_q - {3'd0, seq_write_i[3:0]} - 7'd1];
+                  3'd6: seq_mem_u[seq_mem_addr_q][1] <=
+                    seq_value_q[seq_bits_left_q - {3'd0, seq_write_i[3:0]} - 7'd1];
+                  3'd7: seq_mem_u[seq_mem_addr_q][0] <=
+                    seq_value_q[seq_bits_left_q - {3'd0, seq_write_i[3:0]} - 7'd1];
+                  default: ;
+                endcase
               end
             end
             seq_bit_pos_q <= seq_bit_pos_q + {12'd0, seq_write_step_w};

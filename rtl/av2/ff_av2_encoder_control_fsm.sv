@@ -23,9 +23,9 @@ module ff_av2_encoder_control_fsm #(
   input logic block_visible_w,
   output logic [4:0] block_w_mi_q,
   output logic [3:0] cached_chroma_samples_valid_q,
-  output logic [127:0] cached_u_txb_samples_q [0:3],
-  output logic [31:0] cached_v_predictor_samples_q [0:3],
-  output logic [127:0] cached_v_txb_samples_q [0:3],
+  output logic [3:0][127:0] cached_u_txb_samples_q,
+  output logic [3:0][31:0] cached_v_predictor_samples_q,
+  output logic [3:0][127:0] cached_v_txb_samples_q,
   output logic [3:0] cached_v_valid_q,
   input logic [15:0] carry_after_step_w,
   input logic carry_done_after_step_w,
@@ -87,24 +87,24 @@ module ff_av2_encoder_control_fsm #(
   output logic left_edge_valid_q,
   input logic [7:0] lossy420_chroma_bdpcm_recon_sample_w,
   input logic [3:0] lossy420_chroma_left_row_index_w,
-  output logic [7:0] lossy420_luma_above_q [0:15],
+  output logic [15:0][7:0] lossy420_luma_above_q,
   output logic [15:0] lossy420_luma_above_valid_q,
-  output logic [7:0] lossy420_luma_left_bottom_q [0:15],
-  output logic [4:0] lossy420_luma_left_col_mi_q [0:15],
+  output logic [15:0][7:0] lossy420_luma_left_bottom_q,
+  output logic [15:0][4:0] lossy420_luma_left_col_mi_q,
   input logic [3:0] lossy420_luma_left_row_index_w,
-  output logic [7:0] lossy420_luma_left_top_q [0:15],
+  output logic [15:0][7:0] lossy420_luma_left_top_q,
   output logic [15:0] lossy420_luma_left_valid_q,
-  output logic [7:0] lossy420_luma_recon_q [0:3],
+  output logic [3:0][7:0] lossy420_luma_recon_q,
   input logic [7:0] lossy420_luma_residual_recon_sample_w,
-  output logic [7:0] lossy420_u_above_q [0:15],
+  output logic [15:0][7:0] lossy420_u_above_q,
   output logic [15:0] lossy420_u_above_valid_q,
-  output logic [4:0] lossy420_u_left_col_mi_q [0:15],
-  output logic [7:0] lossy420_u_left_q [0:15],
+  output logic [15:0][4:0] lossy420_u_left_col_mi_q,
+  output logic [15:0][7:0] lossy420_u_left_q,
   output logic [15:0] lossy420_u_left_valid_q,
-  output logic [7:0] lossy420_v_above_q [0:15],
+  output logic [15:0][7:0] lossy420_v_above_q,
   output logic [15:0] lossy420_v_above_valid_q,
-  output logic [4:0] lossy420_v_left_col_mi_q [0:15],
-  output logic [7:0] lossy420_v_left_q [0:15],
+  output logic [15:0][4:0] lossy420_v_left_col_mi_q,
+  output logic [15:0][7:0] lossy420_v_left_q,
   output logic [15:0] lossy420_v_left_valid_q,
   output logic lossy_420_mode_q,
   output logic [63:0] low_q,
@@ -175,16 +175,16 @@ module ff_av2_encoder_control_fsm #(
   output logic [15:0] seq_len_q,
   input logic [6:0] seq_load_bits_w,
   input logic [63:0] seq_load_value_w,
-  output logic [7:0] seq_mem_q [0:AV2_MAX_SEQUENCE_BYTES - 1],
+  output logic [AV2_MAX_SEQUENCE_BYTES - 1:0][7:0] seq_mem_q,
   output logic [7:0] seq_op_q,
   output logic [63:0] seq_value_q,
   input logic [3:0] seq_write_step_w,
   input logic [31:0] src_frame_stride,
-  output logic [4:0] stack_col_mi_q [0:AV2_STACK_DEPTH - 1],
-  output logic [4:0] stack_h_mi_q [0:AV2_STACK_DEPTH - 1],
-  output logic [4:0] stack_row_mi_q [0:AV2_STACK_DEPTH - 1],
+  output logic [AV2_STACK_DEPTH - 1:0][4:0] stack_col_mi_q,
+  output logic [AV2_STACK_DEPTH - 1:0][4:0] stack_h_mi_q,
+  output logic [AV2_STACK_DEPTH - 1:0][4:0] stack_row_mi_q,
   output logic [4:0] stack_sp_q,
-  output logic [4:0] stack_w_mi_q [0:AV2_STACK_DEPTH - 1],
+  output logic [AV2_STACK_DEPTH - 1:0][4:0] stack_w_mi_q,
   input logic       start,
   input logic start_invalid_w,
   output logic [6:0] step_q,
@@ -273,9 +273,23 @@ module ff_av2_encoder_control_fsm #(
   localparam logic [4:0] ST_OUTPUT_VALID = 5'd17;
   localparam logic [4:0] ST_OUTPUT_PAYLOAD_WAIT = 5'd18;
   localparam logic [4:0] ST_OUTPUT_PAYLOAD_LOAD = 5'd19;
+  localparam int SEQ_MEM_ADDR_BITS = (AV2_MAX_SEQUENCE_BYTES > 1) ? $clog2(AV2_MAX_SEQUENCE_BYTES) : 1;
 
   integer context_index_q;
   integer seq_write_i;
+  integer seq_mem_pack_i;
+  logic [7:0] seq_mem_u [0:AV2_MAX_SEQUENCE_BYTES - 1];
+  logic [SEQ_MEM_ADDR_BITS - 1:0] seq_mem_addr_q;
+
+  always_comb begin
+    for (seq_mem_pack_i = 0; seq_mem_pack_i < AV2_MAX_SEQUENCE_BYTES; seq_mem_pack_i = seq_mem_pack_i + 1) begin
+      seq_mem_q[seq_mem_pack_i] = seq_mem_u[seq_mem_pack_i];
+    end
+  end
+
+  // Sequence buffer stores one byte every 8 bits. Convert from bit position to
+  // byte address using bits [3:].
+  assign seq_mem_addr_q = seq_bit_pos_q[SEQ_MEM_ADDR_BITS + 2:3];
 
 `include "ff_av2_encoder_control_logic.sv"
 
