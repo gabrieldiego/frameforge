@@ -23,6 +23,10 @@ item tied to concrete validation and synthesis checkpoints.
 - Prefer 8-bit operation initially; keep higher bit-depth path as cleanup work.
 - Any new syntax path must be generated from named, spec-referenced software
   decisions and mirrored in RTL (no opaque blobs).
+- Any new RTL feature path must be introduced as a focused submodule under the
+  appropriate `rtl/av2/<feature>/` folder. Avoid growing
+  `ff_av2_encoder.sv` with feature logic beyond structural instantiation and
+  narrow handoff wiring.
 - A feature is considered complete only after at least:
   - one focused SW-only validation pass,
   - one full AV2 sweep for the affected format, such as
@@ -106,6 +110,9 @@ reducing cost rather than proving the plumbing again:
    - Add a small SW/RTL decision block that chooses between the currently
      implemented predictors: luma palette+residual, DC residual, H/V intra
      residual, and local hash IBC.
+   - RTL should live under `rtl/av2/decision/` and be instantiated by the AV2
+     top instead of adding another decision state machine directly to
+     `ff_av2_encoder.sv`.
    - Keep the first version simple: deterministic priority or rough bit-count
      estimates are acceptable; exact RDO can come later.
    - The block should emit explicit trace labels explaining why each 8x8 leaf

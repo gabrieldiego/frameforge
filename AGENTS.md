@@ -123,13 +123,16 @@ otherwise:
 
 1. Implement the software model first, with named syntax decisions and local
    reconstruction.
-2. Validate software against the external reference decoder.
-3. Implement the matching RTL.
-4. Run focused smoke validation.
-5. Run the relevant full regression set.
-6. Run synthesis when RTL changed.
-7. Update reports with bitrate, output-utilization, and synthesis deltas.
-8. Commit source changes first when practical, then commit report updates with
+2. Define the feature's module boundary before adding RTL. New feature logic
+   should live in a focused submodule under the relevant codec/block directory,
+   with the codec top mostly instantiating and wiring it.
+3. Validate software against the external reference decoder.
+4. Implement the matching RTL inside the planned submodule boundary.
+5. Run focused smoke validation.
+6. Run the relevant full regression set.
+7. Run synthesis when RTL changed.
+8. Update reports with bitrate, output-utilization, and synthesis deltas.
+9. Commit source changes first when practical, then commit report updates with
    the source SHA recorded in the reports.
 
 Every new syntax path should be traceable in source comments or docs to the
@@ -240,6 +243,10 @@ The RTL must be synthesis-ready by default.
 - Prefer modules with clear valid/ready-style streaming boundaries.
 - Top-level codec modules should mostly instantiate and connect higher-level
   submodules. Push logic into `rtl/<codec>/<block>/` modules when it grows.
+- Do not park new feature state machines, cost models, predictors, or entropy
+  side logic directly in the codec top while "temporarily" bringing up a
+  feature. Add a small submodule first, even if its first implementation is
+  simple.
 - Do not add board-facing debug/observability ports. Testbenches may probe
   internal signals hierarchically.
 - Avoid resolution-sized line buffers in codec blocks. `MAX_VISIBLE_WIDTH` and

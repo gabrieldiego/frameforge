@@ -17,6 +17,29 @@ The register map and public interface contract are documented in
 Do not add public debug ports for observability. Testbenches should probe
 internal wires hierarchically when they need extra counters or waveforms.
 
+## Modularity Rule For New Features
+
+New RTL feature work should start by defining the module boundary. Do not add a
+new predictor, mode decision, entropy side path, cost model, or sample-store
+state machine directly into a codec top as bring-up glue.
+
+Preferred pattern:
+
+```text
+rtl/<codec>/<feature>/ff_<codec>_<feature>_<role>.sv
+  -> optional smaller helper modules in the same folder
+  -> codec top instantiates and wires the feature top
+```
+
+The codec top should remain mostly structural: register/config plumbing,
+submodule instantiation, and narrow handoff logic. If the top-level file gains
+new feature state, counters, or mode-specific conditionals, treat that as a
+refactoring trigger before the feature is called complete.
+
+This rule is intentionally active during feature bring-up, not only during
+post-feature cleanup. Small modules make SW/RTL parity, block waveforms,
+synthesis reports, and later optimization easier to audit.
+
 ## Shared RTL
 
 Shared modules live under:
