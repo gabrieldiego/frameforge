@@ -530,8 +530,8 @@
           end
           ST_PALETTE_QUERY: begin
             if (palette_query_done_w) begin
-              leaf_luma_mode_q <= palette_luma_mode_w;
-              leaf_chroma_bdpcm_horz_q <= palette_chroma_bdpcm_horz_w;
+              leaf_luma_mode_q <= decision_leaf_luma_mode_w;
+              leaf_chroma_bdpcm_horz_q <= decision_leaf_chroma_bdpcm_horz_w;
               state_q <= ST_LEAF;
             end else if (!palette_mode_q) begin
               state_q <= ST_LEAF;
@@ -563,14 +563,14 @@
               cnt_q <= norm_cnt_w;
 
               if (phase_q == PHASE_INTRABC) begin
-                if (step_q == 5'd0 && !ibc_use_copy_w) begin
+                if (step_q == 5'd0 && !decision_ibc_use_copy_w) begin
                   phase_q <= PHASE_INTRA;
                   step_q <= 5'd0;
                   leaf_luma_mode_q <= LUMA_MODE_DC;
                   leaf_chroma_bdpcm_horz_q <= 1'b1;
                   state_q <= palette_mode_q ? ST_PALETTE_QUERY : ST_LEAF;
-                end else if ((step_q == 5'd3 && ibc_drl_idx_w == 2'd0) ||
-                             (step_q == 5'd4 && ibc_drl_idx_w == 2'd1) ||
+                end else if ((step_q == 5'd3 && decision_ibc_drl_idx_w == 2'd0) ||
+                             (step_q == 5'd4 && decision_ibc_drl_idx_w == 2'd1) ||
                              (step_q == 5'd5)) begin
                   // AV2 v1.0.0 read_intra_frame_mode_info()/read_skip_txfm():
                   // an IntraBC leaf updates use_intrabc and skip_txfm

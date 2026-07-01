@@ -1,4 +1,5 @@
 use super::{Av2Black444MvpProfile, Av2ChromaFormat, Av2VideoGeometry};
+use crate::av2::decision::{decide_leaf_prediction, Av2LeafPredictionMode, Av2LeafResidualMode};
 use crate::av2::entropy::{Av2EntropyPayload, Av2EntropyWriter};
 use crate::av2::ibc::Av2LocalIbc444;
 use crate::av2::palette::{
@@ -1355,67 +1356,91 @@ impl Av2Black444TilePlan {
         let luma_mode = palette
             .map(|palette| palette.luma_mode_for_block(x0, y0))
             .unwrap_or(Av2LumaIntraMode::Dc);
-        let use_luma_palette = self.luma_palette && luma_mode == Av2LumaIntraMode::Dc;
         let chroma_bdpcm_horz = palette
             .map(|palette| palette.chroma_bdpcm_horz_for_block(x0, y0))
             .unwrap_or(true);
+        let prediction = decide_leaf_prediction(
+            self.allow_intrabc,
+            ibc_drl_idx,
+            self.luma_palette,
+            luma_mode,
+            chroma_bdpcm_horz,
+        );
         if self.allow_intrabc {
             self.decisions.push(Av2TileDecision {
-                kind: Av2TileDecisionKind::IntrabcFlag(ibc_drl_idx.is_some()),
+                kind: Av2TileDecisionKind::IntrabcFlag(prediction.intrabc_flag),
                 row: row_mi,
                 col: col_mi,
                 block_size,
             });
         }
-        if let Some(drl_idx) = ibc_drl_idx {
-            self.decisions.push(Av2TileDecision {
-                kind: Av2TileDecisionKind::IntrabcCopy { drl_idx },
-                row: row_mi,
-                col: col_mi,
-                block_size,
-            });
-            return;
+        match prediction.prediction {
+            Av2LeafPredictionMode::IntrabcCopy { drl_idx } => {
+                self.decisions.push(Av2TileDecision {
+                    kind: Av2TileDecisionKind::IntrabcCopy { drl_idx },
+                    row: row_mi,
+                    col: col_mi,
+                    block_size,
+                });
+            }
+            Av2LeafPredictionMode::Intra {
+                luma_mode,
+                use_luma_palette,
+                use_bdpcm_uv,
+                chroma_bdpcm_horz,
+            } => {
+                self.decisions.push(Av2TileDecision {
+                    kind: Av2TileDecisionKind::IntraLumaMode(luma_mode),
+                    row: row_mi,
+                    col: col_mi,
+                    block_size,
+                });
+                self.decisions.push(Av2TileDecision {
+                    kind: Av2TileDecisionKind::IntraChromaMode {
+                        use_bdpcm_uv,
+                        bdpcm_horz: chroma_bdpcm_horz,
+                    },
+                    row: row_mi,
+                    col: col_mi,
+                    block_size,
+                });
+                if use_luma_palette {
+                    self.decisions.push(Av2TileDecision {
+                        kind: Av2TileDecisionKind::LumaPaletteModeInfo,
+                        row: row_mi,
+                        col: col_mi,
+                        block_size,
+                    });
+                    self.decisions.push(Av2TileDecision {
+                        kind: Av2TileDecisionKind::LumaPaletteColorMap,
+                        row: row_mi,
+                        col: col_mi,
+                        block_size,
+                    });
+                }
+                match prediction.residual {
+                    Av2LeafResidualMode::BlackDc => {
+                        self.decisions.push(Av2TileDecision {
+                            kind: Av2TileDecisionKind::BlackDcResidualCoefficients,
+                            row: row_mi,
+                            col: col_mi,
+                            block_size,
+                        });
+                    }
+                    Av2LeafResidualMode::LumaPalette { chroma_bdpcm_horz } => {
+                        self.decisions.push(Av2TileDecision {
+                            kind: Av2TileDecisionKind::LumaPaletteResidualCoefficients {
+                                chroma_bdpcm_horz,
+                            },
+                            row: row_mi,
+                            col: col_mi,
+                            block_size,
+                        });
+                    }
+                    Av2LeafResidualMode::None => {}
+                }
+            }
         }
-
-        self.decisions.push(Av2TileDecision {
-            kind: Av2TileDecisionKind::IntraLumaMode(luma_mode),
-            row: row_mi,
-            col: col_mi,
-            block_size,
-        });
-        self.decisions.push(Av2TileDecision {
-            kind: Av2TileDecisionKind::IntraChromaMode {
-                use_bdpcm_uv: self.luma_palette,
-                bdpcm_horz: chroma_bdpcm_horz,
-            },
-            row: row_mi,
-            col: col_mi,
-            block_size,
-        });
-        if use_luma_palette {
-            self.decisions.push(Av2TileDecision {
-                kind: Av2TileDecisionKind::LumaPaletteModeInfo,
-                row: row_mi,
-                col: col_mi,
-                block_size,
-            });
-            self.decisions.push(Av2TileDecision {
-                kind: Av2TileDecisionKind::LumaPaletteColorMap,
-                row: row_mi,
-                col: col_mi,
-                block_size,
-            });
-        }
-        self.decisions.push(Av2TileDecision {
-            kind: if self.luma_palette {
-                Av2TileDecisionKind::LumaPaletteResidualCoefficients { chroma_bdpcm_horz }
-            } else {
-                Av2TileDecisionKind::BlackDcResidualCoefficients
-            },
-            row: row_mi,
-            col: col_mi,
-            block_size,
-        });
     }
 
     fn write_entropy(

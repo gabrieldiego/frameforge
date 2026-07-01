@@ -28,7 +28,7 @@ module ff_av2_residual_top (
   input  logic [31:0] chroma_bdpcm_predictor_samples,
   input  logic [11:0] lossy420_chroma_sample_sum,
   input  logic [7:0]  lossy420_chroma_predictor,
-  output logic        residual_mode,
+  input  logic        residual_mode,
   output logic        luma_residual_enable,
   output logic        chroma_bdpcm_enable,
   output logic        luma_residual_op_valid,
@@ -255,7 +255,6 @@ module ff_av2_residual_top (
     .latched_dc_recon_sample(lossy420_chroma_bdpcm_recon_sample)
   );
 
-  assign residual_mode = palette_mode || lossy_420_mode;
   assign luma_residual_op_valid =
     lossy_420_mode ? lossy420_luma_residual_op_valid_w : palette_luma_residual_op_valid_w;
   assign luma_residual_op_literal =

@@ -2,6 +2,7 @@ use std::io::{Read, Write};
 
 use crate::picture::{Picture, PixelFormat};
 
+mod decision;
 pub mod entropy;
 mod ibc;
 mod palette;

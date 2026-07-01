@@ -69,6 +69,7 @@ VERILOG_SOURCES := \
   $(CODEC_RTL_DIR)/entropy/ff_av2_entropy_op_mux.sv \
   $(CODEC_RTL_DIR)/entropy/ff_av2_range_coder_step.sv \
   $(CODEC_RTL_DIR)/entropy/ff_av2_entropy_coder.sv \
+  $(CODEC_RTL_DIR)/decision/ff_av2_prediction_decision.sv \
   $(CODEC_RTL_DIR)/ibc/ff_av2_local_hash_matcher_444.sv \
   $(CODEC_RTL_DIR)/ibc/ff_av2_ibc_context_bank.sv \
   $(CODEC_RTL_DIR)/palette/ff_av2_chroma_sample_store.sv \

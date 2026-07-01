@@ -27,8 +27,6 @@ module ff_av2_frontend_control #(
   input  logic        palette_analyzer_luma_mode,
   input  logic        palette_analyzer_black,
   input  logic [63:0] palette_analyzer_block_ready_mask,
-  input  logic        palette_mode,
-  input  logic [1:0]  leaf_luma_mode,
   input  logic        bitstream_writer_frame_done,
   input  logic        frame_reader_error,
   input  logic        bitstream_writer_error,
@@ -44,7 +42,6 @@ module ff_av2_frontend_control #(
   output logic        input_fire_error,
   output logic        frame_is_last,
   output logic        palette_query_start,
-  output logic        leaf_luma_palette,
   output logic        busy,
   output logic        frame_reader_start,
   output logic        bitstream_writer_start,
@@ -97,7 +94,6 @@ module ff_av2_frontend_control #(
 
   assign frame_is_last = ((frame_index + 32'd1) >= frame_count);
   assign palette_query_start = state_palette_query;
-  assign leaf_luma_palette = palette_mode && (leaf_luma_mode == 2'd0);
 
   assign tile_luma_samples = {18'd0, tile_block_count, 6'd0};
   assign tile_samples =

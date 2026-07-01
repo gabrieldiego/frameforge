@@ -334,6 +334,8 @@ module ff_av2_encoder #(
   logic [6:0] ibc_drl_idx_bit_index_w;
   logic ibc_use_copy_w;
   logic [1:0] ibc_drl_idx_w;
+  logic decision_ibc_use_copy_w;
+  logic [1:0] decision_ibc_drl_idx_w;
   logic [1:0] intrabc_ctx_w;
   logic [1:0] intrabc_skip_ctx_w;
   logic ibc_context_clear_w;
@@ -473,6 +475,7 @@ module ff_av2_encoder #(
   logic [55:0] palette_delta_minus1_w;
   logic [34:0] palette_delta_literal_bits_w;
   logic [1:0] palette_luma_mode_w;
+  logic [1:0] decision_leaf_luma_mode_w;
   logic leaf_luma_palette_w;
   logic [2:0] palette_current_index_w;
   logic [2:0] palette_left_index_w;
@@ -480,6 +483,7 @@ module ff_av2_encoder #(
   logic [2:0] palette_top_left_index_w;
   logic palette_luma_residual_zero_w;
   logic palette_chroma_bdpcm_horz_w;
+  logic decision_leaf_chroma_bdpcm_horz_w;
   logic [1:0] palette_identity_row_flag_w;
   logic palette_op_valid_w;
   logic palette_op_literal_w;
@@ -666,7 +670,7 @@ module ff_av2_encoder #(
     .output_last_q(output_last_q),
     .frame_is_last_w(frame_is_last_w),
     .step_q(step_q[4:0]),
-    .ibc_drl_idx_w(ibc_drl_idx_w),
+    .ibc_drl_idx_w(decision_ibc_drl_idx_w),
     .residual_mode_w(residual_mode_w),
     .luma_residual_txb_done_w(luma_residual_txb_done_w),
     .chroma_bdpcm_txb_done_w(chroma_bdpcm_txb_done_w),
@@ -1290,8 +1294,8 @@ module ff_av2_encoder #(
     .partition_emit_rect(partition_emit_rect_w),
     .partition_do_cdf0(partition_do_cdf0_w),
     .partition_rect_cdf0(partition_rect_cdf0_w),
-    .ibc_use_copy(ibc_use_copy_w),
-    .ibc_drl_idx(ibc_drl_idx_w),
+    .ibc_use_copy(decision_ibc_use_copy_w),
+    .ibc_drl_idx(decision_ibc_drl_idx_w),
     .intrabc_ctx(intrabc_ctx_w),
     .intrabc_skip_ctx(intrabc_skip_ctx_w),
     .leaf_luma_mode(leaf_luma_mode_q),
@@ -1370,8 +1374,6 @@ module ff_av2_encoder #(
     .palette_analyzer_luma_mode(palette_analyzer_luma_mode_w),
     .palette_analyzer_black(palette_analyzer_black_w),
     .palette_analyzer_block_ready_mask(palette_analyzer_block_ready_mask_w),
-    .palette_mode(palette_mode_q),
-    .leaf_luma_mode(leaf_luma_mode_q),
     .bitstream_writer_frame_done(bitstream_writer_frame_done_w),
     .frame_reader_error(frame_reader_error_w),
     .bitstream_writer_error(bitstream_writer_error_w),
@@ -1387,7 +1389,6 @@ module ff_av2_encoder #(
     .input_fire_error(input_fire_error_w),
     .frame_is_last(frame_is_last_w),
     .palette_query_start(palette_query_start_w),
-    .leaf_luma_palette(leaf_luma_palette_w),
     .busy(busy),
     .frame_reader_start(frame_reader_start_w),
     .bitstream_writer_start(bitstream_writer_start_w),
@@ -1571,6 +1572,22 @@ module ff_av2_encoder #(
     .intrabc_ctx_w(intrabc_ctx_w),
     .intrabc_skip_ctx_w(intrabc_skip_ctx_w)
   );
+
+  ff_av2_prediction_decision prediction_decision (
+    .palette_mode(palette_mode_q),
+    .lossy_420_mode(lossy_420_mode_q),
+    .ibc_use_copy(ibc_use_copy_w),
+    .ibc_drl_idx(ibc_drl_idx_w),
+    .current_leaf_luma_mode(leaf_luma_mode_q),
+    .analyzed_luma_mode(palette_luma_mode_w),
+    .analyzed_chroma_bdpcm_horz(palette_chroma_bdpcm_horz_w),
+    .selected_ibc_use_copy(decision_ibc_use_copy_w),
+    .selected_ibc_drl_idx(decision_ibc_drl_idx_w),
+    .selected_leaf_luma_mode(decision_leaf_luma_mode_w),
+    .selected_leaf_chroma_bdpcm_horz(decision_leaf_chroma_bdpcm_horz_w),
+    .leaf_luma_palette(leaf_luma_palette_w),
+    .residual_mode(residual_mode_w)
+  );
   ff_av2_chroma_predictor_cache chroma_predictor_cache (
     .lossy_420_mode(lossy_420_mode_q),
     .phase_u_coeff(phase_u_coeff_w),
@@ -1720,8 +1737,8 @@ module ff_av2_encoder #(
     .height_bits_q(height_bits_q),
     .height_bits_w(height_bits_w),
     .height_q(height_q),
-    .ibc_drl_idx_w(ibc_drl_idx_w),
-    .ibc_use_copy_w(ibc_use_copy_w),
+    .decision_ibc_drl_idx_w(decision_ibc_drl_idx_w),
+    .decision_ibc_use_copy_w(decision_ibc_use_copy_w),
     .input_error(input_error),
     .input_fire_count_w(input_fire_count_w),
     .input_fire_error_w(input_fire_error_w),
@@ -1799,12 +1816,12 @@ module ff_av2_encoder #(
     .output_payload_packet_data_w(output_payload_packet_data_w),
     .palette_analyzer_done_w(palette_analyzer_done_w),
     .palette_analyzer_unsupported_w(palette_analyzer_unsupported_w),
-    .palette_chroma_bdpcm_horz_w(palette_chroma_bdpcm_horz_w),
+    .decision_leaf_chroma_bdpcm_horz_w(decision_leaf_chroma_bdpcm_horz_w),
     .palette_col_q(palette_col_q),
     .palette_header_last_step_w(palette_header_last_step_w),
     .palette_identity_row_ctx_q(palette_identity_row_ctx_q),
     .palette_identity_row_flag_w(palette_identity_row_flag_w),
-    .palette_luma_mode_w(palette_luma_mode_w),
+    .decision_leaf_luma_mode_w(decision_leaf_luma_mode_w),
     .palette_map_token_required_w(palette_map_token_required_w),
     .palette_mode_q(palette_mode_q),
     .palette_query_done_w(palette_query_done_w),
