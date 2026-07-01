@@ -40,6 +40,7 @@ git status --short
 sed -n '1,220p' README.md
 sed -n '1,220p' docs/rtl/hardware-interface.md
 sed -n '1,220p' docs/synthesis.md
+sed -n '1,220p' docs/validation/targets.md
 ```
 
 For AV2 work, also read:
@@ -60,6 +61,10 @@ For current measurements, read the codec-specific reports:
 
 Generated outputs live under `verification/generated/` and `synth/out/`; these
 are not source-of-truth documents.
+
+Current numeric validation, bubble-rate, runtime, and synthesis-memory targets
+are maintained in `docs/validation/targets.md`. Treat that file as the source
+of truth for milestone acceptance thresholds.
 
 ## Suggested Session Bootstrap
 
