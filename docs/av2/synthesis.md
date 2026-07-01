@@ -5,12 +5,12 @@ Older measurements are intentionally left to git history so this page stays
 focused on the current baseline and immediate delta. The shared synthesis flow
 is documented in [../synthesis.md](../synthesis.md).
 
-## 2026-06-29 AV2 Report Checkpoint
+## AV2 prediction decision block
 
 Baseline and current sources:
 
-- Baseline Git SHA: `509b74f7670b9bfff61209f0779c12e256b00f07`
-- Current validated source Git SHA: `28fa335ecfba2e9463e416688f0144bd29f159f3`
+- Baseline Git SHA: `28fa335ecfba2e9463e416688f0144bd29f159f3`
+- Current validated source Git SHA: `7383aee7b77230a85bdd86c5cf151008ba7de553`
 
 Validation result:
 
@@ -37,27 +37,27 @@ Yosys synthesis result:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| Main Yosys elapsed time (s) | 579.50 s | 606.20 s | +26.70 s |
-| Runner-observed peak child RSS (MiB) | 2074.95 MiB | 2435.23 MiB | +360.28 MiB |
-| Topological path length | 120 | 122 | +2 |
-| Flattened cells | 123021 | 137682 | +14661 |
-| Estimated LCs | 55926 | 65368 | +9442 |
-| CARRY4 | 3815 | 3871 | +56 |
-| DSP48E1 | 1 | 2 | +1 |
-| FDCE | 6382 | 7714 | +1332 |
-| FDPE | 92 | 78 | -14 |
-| FDRE | 23019 | 20565 | -2454 |
-| FDSE | 132 | 133 | +1 |
-| LUT1 | 981 | 1159 | +178 |
-| LUT2 | 15006 | 16368 | +1362 |
-| LUT3 | 12231 | 13129 | +898 |
-| LUT4 | 7583 | 8239 | +656 |
-| LUT5 | 10142 | 11982 | +1840 |
-| LUT6 | 25970 | 32018 | +6048 |
-| MUXF7 | 6140 | 8296 | +2156 |
-| MUXF8 | 1434 | 1679 | +245 |
+| Main Yosys elapsed time (s) | 606.20 s | 629.20 s | +23.00 s |
+| Runner-observed peak child RSS (MiB) | 2435.23 MiB | 2453.74 MiB | +18.51 MiB |
+| Topological path length | 122 | 122 | +0 |
+| Flattened cells | 137682 | 137782 | +100 |
+| Estimated LCs | 65368 | 65883 | +515 |
+| CARRY4 | 3871 | 3871 | +0 |
+| DSP48E1 | 2 | 2 | +0 |
+| FDCE | 7714 | 7714 | +0 |
+| FDPE | 78 | 78 | +0 |
+| FDRE | 20565 | 20565 | +0 |
+| FDSE | 133 | 133 | +0 |
+| LUT1 | 1159 | 1392 | +233 |
+| LUT2 | 16368 | 16084 | -284 |
+| LUT3 | 13129 | 13098 | -31 |
+| LUT4 | 8239 | 9478 | +1239 |
+| LUT5 | 11982 | 12247 | +265 |
+| LUT6 | 32018 | 31060 | -958 |
+| MUXF7 | 8296 | 7875 | -421 |
+| MUXF8 | 1679 | 1705 | +26 |
 | RAMB36E1 | 30 | 30 | +0 |
-| RAM32M | 10 | 0 | -10 |
+| RAM32M | 0 | 0 | +0 |
 
 Critical-path summary:
 
