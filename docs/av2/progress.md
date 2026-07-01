@@ -24,6 +24,13 @@ See the [AV2 roadmap](roadmap.md) for the next planned milestones.
 - `src/av2/entropy.rs` contains the first Rust AV2 range-writer implementation,
   following the AVM encoder side of the spec descriptors for arithmetic-coded
   literals and symbols.
+- The software AV2 range writer now uses a forward pre-carry finalizer instead
+  of relying only on AVM-style reverse carry propagation. The finalizer keeps a
+  bounded pending queue of 32 9-bit byte-plus-carry words, matching a small
+  288-bit RTL guard buffer. It is debug-checked against the reverse finalizer
+  for byte-exact output. Current SW-only validation observed worst pending
+  depths of 9 words on `screenshot-sweep-444`/`screenshot-multictu-444` and 4
+  words on `racehorses-sweep-420`/`racehorses-multictu-420`.
 - `src/av2/tile.rs` contains the structured black 4:4:4 tile plan for the full
   8x8-through-64x64 geometry sweep. The current minimum viable profile fixes
   coding leaves at 8x8 and disables SDP, extended partitions, IBC, loop tools,
@@ -204,8 +211,11 @@ Last checked on 2026-06-15:
 - Optimize the current luma-palette symbolizer path; synthesis reports the
   palette delta-bit calculation through the range coder as the current
   topological critical path.
-- Replace the staged tile carry buffer with a streaming carry resolver after
-  the next functional blocks are in place.
+- Port the Rust forward pre-carry finalizer into RTL so AV2 entropy can remove
+  the staged tile payload buffer. The intended hardware shape is a fixed 32x9
+  pending-word queue plus an overflow/error path; if that trips on a real
+  stream, treat it as an entropy-finalizer bug rather than reinstating a full
+  payload buffer.
 - Continue expanding the block partition and luma-palette decisions while
   keeping the internal codec-core packet contract at visible 8x8 Y/U/V blocks
   unless a codec-specific order is clearly cheaper.

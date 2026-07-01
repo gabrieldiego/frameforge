@@ -22,7 +22,7 @@ module ff_av2_encoder_seq_stream (
   output logic [3:0]  seq_byte_remaining_w;
   output logic [3:0]  seq_write_step_w;
 
-  always_comb begin
+  always @* begin
     seq_stream_byte_w = 8'd0;
     if ((stream_lookup_index_w >= 16'd4) && (stream_lookup_index_w < seq_end_index_w)) begin
       seq_stream_byte_w = seq_mem_q[(seq_stream_index_w[3:0] * 8) +: 8];

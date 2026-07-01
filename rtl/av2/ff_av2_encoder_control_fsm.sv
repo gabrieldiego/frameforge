@@ -58,6 +58,14 @@ module ff_av2_encoder_control_fsm #(
   output logic signed [7:0] finish_c_q,
   output logic [63:0] finish_e_q,
   output logic signed [7:0] finish_s_q,
+  input logic [15:0] forward_precarry_byte_count_w,
+  input logic forward_precarry_flush_done_w,
+  input logic forward_precarry_overflow_error_w,
+  input logic forward_precarry_payload_write_valid_w,
+  input logic [7:0] forward_precarry_payload_write_data_w,
+  input logic forward_precarry_payload_write_last_w,
+  output logic forward_precarry_count_only_w,
+  output logic forward_precarry_flush_start_w,
   output logic frame_ibc_mode_q,
   output logic [31:0] frame_index_q,
   input logic frame_is_last_w,
@@ -119,6 +127,15 @@ module ff_av2_encoder_control_fsm #(
   output logic       m_axis_last,
   input logic       m_axis_ready,
   output logic       m_axis_valid,
+  output logic bitstream_stream_flush_valid_w,
+  input logic bitstream_stream_flush_ready_w,
+  input logic bitstream_stream_flush_done_w,
+  output logic bitstream_patch_valid_w,
+  input logic bitstream_patch_ready_w,
+  input logic bitstream_patch_done_w,
+  output logic [31:0] bitstream_patch_offset_w,
+  output logic [AXI_DATA_BITS - 1:0] bitstream_patch_data_w,
+  output logic [(AXI_DATA_BITS / 8) - 1:0] bitstream_patch_strobe_w,
   input logic signed [7:0] norm_cnt_w,
   input logic [63:0] norm_low_w,
   input logic [15:0] norm_push1_w,
@@ -161,6 +178,9 @@ module ff_av2_encoder_control_fsm #(
   output logic [1:0] partition_q,
   output logic [15:0] payload_len_q,
   output logic [1:0] payload_prefix_index_q,
+  output logic [15:0] prefix_patch_offset_q,
+  output logic [1:0] prefix_patch_index_q,
+  output logic output_pass_q,
   input logic [11:0] payload_read_data_word_addr_q,
   output logic [11:0] payload_read_word_addr_q,
   output logic pending_push_valid_q,
@@ -273,6 +293,11 @@ module ff_av2_encoder_control_fsm #(
   localparam logic [4:0] ST_OUTPUT_VALID = 5'd17;
   localparam logic [4:0] ST_OUTPUT_PAYLOAD_WAIT = 5'd18;
   localparam logic [4:0] ST_OUTPUT_PAYLOAD_LOAD = 5'd19;
+  localparam logic [4:0] ST_OUTPUT_PREFIX = 5'd20;
+  localparam logic [4:0] ST_STREAM_FLUSH_REQ = 5'd21;
+  localparam logic [4:0] ST_STREAM_FLUSH_WAIT = 5'd22;
+  localparam logic [4:0] ST_PREFIX_PATCH_REQ = 5'd23;
+  localparam logic [4:0] ST_PREFIX_PATCH_WAIT = 5'd24;
   localparam int SEQ_MEM_ADDR_BITS = (AV2_MAX_SEQUENCE_BYTES > 1) ? $clog2(AV2_MAX_SEQUENCE_BYTES) : 1;
 
   integer context_index_q;
@@ -286,6 +311,8 @@ module ff_av2_encoder_control_fsm #(
       seq_mem_q[seq_mem_pack_i] = seq_mem_u[seq_mem_pack_i];
     end
   end
+
+  assign forward_precarry_count_only_w = !output_pass_q;
 
   // Sequence buffer stores one byte every 8 bits. Convert from bit position to
   // byte address using bits [3:].

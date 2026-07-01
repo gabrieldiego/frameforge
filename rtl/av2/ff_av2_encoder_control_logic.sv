@@ -97,9 +97,18 @@
       finish_e_q <= 64'd0;
       finish_c_q <= 8'sd0;
       finish_s_q <= 8'sd0;
+      forward_precarry_flush_start_w <= 1'b0;
+      bitstream_stream_flush_valid_w <= 1'b0;
+      bitstream_patch_valid_w <= 1'b0;
+      bitstream_patch_offset_w <= 32'd0;
+      bitstream_patch_data_w <= '0;
+      bitstream_patch_strobe_w <= '0;
       carry_q <= 16'd0;
       carry_index_q <= 16'd0;
       output_last_q <= 1'b0;
+      prefix_patch_offset_q <= 16'd0;
+      prefix_patch_index_q <= 2'd0;
+      output_pass_q <= 1'b0;
       for (seq_write_i = 0; seq_write_i < AV2_MAX_SEQUENCE_BYTES; seq_write_i = seq_write_i + 1) begin
         seq_mem_u[seq_write_i] <= 8'd0;
       end
@@ -117,6 +126,9 @@
       end
     end else begin
       input_error <= 1'b0;
+      forward_precarry_flush_start_w <= 1'b0;
+      bitstream_stream_flush_valid_w <= 1'b0;
+      bitstream_patch_valid_w <= 1'b0;
       if (luma_fetch_completed_w) begin
         cached_u_txb_samples_q[luma_fetch_cache_index_w] <= luma_fetch_u_txb_samples_w;
         cached_v_txb_samples_q[luma_fetch_cache_index_w] <= luma_fetch_v_txb_samples_w;
@@ -129,6 +141,20 @@
         end
         cached_v_predictor_samples_q[chroma_fetch_cache_index_w] <= chroma_fetch_v_predictor_samples_w;
         cached_v_valid_q[chroma_fetch_cache_index_w] <= 1'b1;
+      end
+      if (m_axis_valid && m_axis_ready) begin
+        m_axis_valid <= 1'b0;
+        m_axis_count <= '0;
+        m_axis_last <= 1'b0;
+      end
+      if (output_pass_q && forward_precarry_payload_write_valid_w &&
+          (!m_axis_valid || m_axis_ready)) begin
+        m_axis_valid <= 1'b1;
+        m_axis_data <= {{(AXI_DATA_BITS - 8){1'b0}}, forward_precarry_payload_write_data_w};
+        m_axis_count <= OUTPUT_PACKET_COUNT_BITS'(1);
+        m_axis_last <=
+          forward_precarry_payload_write_last_w && tile_is_last_w && frame_is_last_w;
+        stream_index_q <= stream_index_q + 16'd1;
       end
       if (start) begin
         input_error <= start_invalid_w;
@@ -148,6 +174,14 @@
           seq_len_q <= 16'd0;
           payload_len_q <= 16'd0;
           payload_prefix_index_q <= 2'd0;
+          prefix_patch_offset_q <= 16'd0;
+          prefix_patch_index_q <= 2'd0;
+          output_pass_q <= 1'b0;
+          bitstream_stream_flush_valid_w <= 1'b0;
+          bitstream_patch_valid_w <= 1'b0;
+          bitstream_patch_offset_w <= 32'd0;
+          bitstream_patch_data_w <= '0;
+          bitstream_patch_strobe_w <= '0;
           for (seq_write_i = 0; seq_write_i < AV2_MAX_SEQUENCE_BYTES; seq_write_i = seq_write_i + 1) begin
             seq_mem_u[seq_write_i] <= 8'd0;
           end
@@ -240,9 +274,12 @@
         if (palette_analyzer_done_w) begin
           tile_input_active_q <= 1'b0;
         end
-        if (input_fire_error_w) begin
+        if (input_fire_error_w || forward_precarry_overflow_error_w) begin
           input_error <= 1'b1;
           tile_input_active_q <= 1'b0;
+          m_axis_valid <= 1'b0;
+          m_axis_count <= '0;
+          m_axis_last <= 1'b0;
           state_q <= ST_IDLE;
         end else if (pending_push_valid_q) begin
           precarry_len_q <= precarry_len_q + 16'd1;
@@ -350,14 +387,16 @@
                   lossy420_u_left_col_mi_q[context_index_q] <= 5'd0;
                   lossy420_v_left_col_mi_q[context_index_q] <= 5'd0;
                 end
-                state_q <= (tile_index_q == 16'd0) ? ST_SEQ_LOAD : ST_LOAD_BLOCK;
+                state_q <=
+                  output_pass_q ? ST_LOAD_BLOCK :
+                    ((tile_index_q == 16'd0) ? ST_SEQ_LOAD : ST_LOAD_BLOCK);
               end
             end
           end
           ST_SEQ_LOAD: begin
             if (seq_op_q == 8'd18) begin
               seq_len_q <= (seq_bit_pos_q + 16'd7) >> 3;
-              state_q <= ST_LOAD_BLOCK;
+              state_q <= output_pass_q ? ST_OUTPUT_PREP : ST_LOAD_BLOCK;
             end else begin
               seq_value_q <= seq_load_value_w;
               seq_bits_left_q <= seq_load_bits_w;
@@ -903,85 +942,26 @@
               finish_c_q <= finish_c_q - 8'sd8;
               finish_s_q <= finish_s_q - 8'sd8;
             end else begin
-              carry_q <= 16'd0;
-              carry_index_q <= precarry_len_q - 16'd1;
-              precarry_read_word_addr_q <= (precarry_len_q - 16'd1) >> 4;
-              tile_len_q <= precarry_len_q;
+              forward_precarry_flush_start_w <= 1'b1;
               state_q <= ST_CARRY_READ;
             end
           end
           ST_CARRY_READ: begin
-            precarry_read_word_addr_q <= carry_read_after_current_word_addr_w;
             state_q <= ST_CARRY_WRITE;
           end
           ST_CARRY_WRITE: begin
-            if (carry_done_after_step_w) begin
-              carry_q <= carry_after_step_w;
+            if (forward_precarry_flush_done_w) begin
+              tile_len_q <= forward_precarry_byte_count_w;
               payload_prefix_index_q <= 2'd0;
-              precarry_read_word_addr_q <= 12'd0;
-              state_q <= ST_PAYLOAD_PREFIX;
-            end else begin
-              carry_q <= carry_after_step_w;
-              carry_index_q <= carry_index_after_step_w;
-              precarry_read_word_addr_q <= carry_read_after_next_word_addr_w;
-              state_q <= ST_CARRY_WRITE;
-            end
-          end
-          ST_PAYLOAD_PREFIX: begin
-            if (!tile_is_last_w && payload_prefix_index_q != 2'd3) begin
-              payload_prefix_index_q <= payload_prefix_index_q + 2'd1;
-            end else if (!tile_is_last_w) begin
-              payload_len_q <= payload_len_q + 16'd4 + tile_len_q;
-              tile_index_q <= tile_index_q + 16'd1;
-              if (tile_col_q == (tile_cols_q - 16'd1)) begin
-                tile_col_q <= 16'd0;
-                tile_row_q <= tile_row_q + 16'd1;
-              end else begin
-                tile_col_q <= tile_col_q + 16'd1;
-              end
-              if (tile_col_q == (tile_cols_q - 16'd1)) begin
-                tile_width_q <= (tile_cols_q == 16'd1) ? width_q : 16'd64;
-                tile_height_q <=
-                  ((tile_row_q + 16'd1) == (tile_rows_q - 16'd1)) ?
-                    (height_q - ((tile_row_q + 16'd1) << 6)) : 16'd64;
-              end else begin
-                tile_width_q <=
-                  ((tile_col_q + 16'd1) == (tile_cols_q - 16'd1)) ?
-                    (width_q - ((tile_col_q + 16'd1) << 6)) : 16'd64;
-                tile_height_q <= tile_height_q;
-              end
-              state_q <= ST_TILE_START;
-            end else begin
-              payload_len_q <= payload_len_q + tile_len_q;
-              stream_index_q <= 16'd0;
-              state_q <= ST_OUTPUT_PREP;
-            end
-          end
-          ST_OUTPUT_PREP: begin
-            // Header bytes are short and stay byte-serial. The staged tile
-            // payload is read through a 16-bank RAM and handed to AXI in
-            // aligned packets once stream_index_q reaches tile_payload_start_w.
-            payload_read_word_addr_q <= 12'd0;
-            output_last_q <= output_lookup_last_w;
-            m_axis_valid <= 1'b1;
-            m_axis_data <= {{(AXI_DATA_BITS - 8){1'b0}}, output_lookup_byte_w};
-            m_axis_count <= OUTPUT_PACKET_COUNT_BITS'(1);
-            m_axis_last <= output_lookup_last_w && frame_is_last_w;
-            state_q <= ST_OUTPUT_VALID;
-          end
-          ST_OUTPUT_VALID: begin
-            if (m_axis_valid && m_axis_ready) begin
-              output_byte_phase_q <= output_next_byte_phase_w;
-              if (output_last_q) begin
-                m_axis_valid <= 1'b0;
-                m_axis_count <= '0;
-                m_axis_last <= 1'b0;
-                stream_index_q <= 16'd0;
-                if (frame_is_last_w) begin
+              if (output_pass_q) begin
+                if (!tile_is_last_w) begin
+                  state_q <= ST_STREAM_FLUSH_REQ;
+                end else if (frame_is_last_w) begin
                   state_q <= ST_IDLE;
                 end else begin
                   frame_index_q <= frame_index_q + 32'd1;
                   input_frame_offset_q <= input_frame_offset_q + src_frame_stride;
+                  output_pass_q <= 1'b0;
                   seq_op_q <= 8'd0;
                   seq_bits_left_q <= 7'd0;
                   seq_value_q <= 64'd0;
@@ -989,6 +969,8 @@
                   seq_len_q <= 16'd0;
                   payload_len_q <= 16'd0;
                   payload_prefix_index_q <= 2'd0;
+                  prefix_patch_offset_q <= 16'd0;
+                  prefix_patch_index_q <= 2'd0;
                   low_q <= 64'd0;
                   rng_q <= 32'h8000;
                   cnt_q <= -8'sd9;
@@ -997,6 +979,7 @@
                   pending_push_word_q <= 16'd0;
                   precarry_len_q <= 16'd0;
                   tile_len_q <= 16'd0;
+                  stream_index_q <= 16'd0;
                   tile_index_q <= 16'd0;
                   tile_col_q <= 16'd0;
                   tile_row_q <= 16'd0;
@@ -1056,7 +1039,6 @@
                   partition_q <= PARTITION_NONE;
                   partition_emit_step_q <= 1'b0;
                   stack_sp_q <= 5'd0;
-                  output_last_q <= 1'b0;
                   for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
                     lossy420_luma_above_q[context_index_q] <= 8'd128;
                     lossy420_luma_left_top_q[context_index_q] <= 8'd128;
@@ -1072,59 +1054,147 @@
                   state_q <= ST_TILE_START;
                 end
               end else begin
-                stream_index_q <= output_next_stream_index_w;
-                if (output_next_stream_index_w >= tile_payload_start_w) begin
-                  if (output_next_payload_word_addr_w == payload_read_data_word_addr_q) begin
-                    output_last_q <= output_next_packet_last_w;
-                    m_axis_valid <= 1'b1;
-                    m_axis_data <= output_next_payload_packet_data_w;
-                    m_axis_count <= output_next_payload_count_w;
-                    m_axis_last <= output_next_packet_last_w && frame_is_last_w;
-                    if (output_after_next_payload_w &&
-                        (output_after_next_payload_word_addr_w != payload_read_data_word_addr_q)) begin
-                      payload_read_word_addr_q <= output_after_next_payload_word_addr_w;
-                    end
-                    state_q <= ST_OUTPUT_VALID;
-                  end else if (output_next_payload_word_addr_w == payload_read_word_addr_q) begin
-                    m_axis_valid <= 1'b0;
-                    m_axis_count <= '0;
-                    m_axis_last <= 1'b0;
-                    state_q <= ST_OUTPUT_PAYLOAD_LOAD;
-                  end else begin
-                    payload_read_word_addr_q <= output_next_payload_word_addr_w;
-                    m_axis_valid <= 1'b0;
-                    m_axis_count <= '0;
-                    m_axis_last <= 1'b0;
-                    state_q <= ST_OUTPUT_PAYLOAD_WAIT;
-                  end
-                end else begin
-                  output_last_q <= output_lookup_last_w;
-                  m_axis_valid <= 1'b1;
-                  m_axis_data <= {{(AXI_DATA_BITS - 8){1'b0}}, output_lookup_byte_w};
-                  m_axis_count <= OUTPUT_PACKET_COUNT_BITS'(1);
-                  m_axis_last <= output_lookup_last_w && frame_is_last_w;
-                  state_q <= ST_OUTPUT_VALID;
-                end
+                state_q <= ST_PAYLOAD_PREFIX;
               end
             end
           end
-          ST_OUTPUT_PAYLOAD_WAIT: begin
-            m_axis_valid <= 1'b0;
-            m_axis_count <= '0;
-            m_axis_last <= 1'b0;
-            state_q <= ST_OUTPUT_PAYLOAD_LOAD;
-          end
-          ST_OUTPUT_PAYLOAD_LOAD: begin
-            output_last_q <= output_current_packet_last_w;
-            m_axis_valid <= 1'b1;
-            m_axis_data <= output_payload_packet_data_w;
-            m_axis_count <= output_payload_count_w;
-            m_axis_last <= output_current_packet_last_w && frame_is_last_w;
-            if (output_after_current_payload_w &&
-                (output_after_current_payload_word_addr_w != payload_read_data_word_addr_q)) begin
-              payload_read_word_addr_q <= output_after_current_payload_word_addr_w;
+          ST_PAYLOAD_PREFIX: begin
+            if (!tile_is_last_w) begin
+              payload_len_q <= payload_len_q + 16'd4 + tile_len_q;
+              tile_index_q <= tile_index_q + 16'd1;
+              if (tile_col_q == (tile_cols_q - 16'd1)) begin
+                tile_col_q <= 16'd0;
+                tile_row_q <= tile_row_q + 16'd1;
+              end else begin
+                tile_col_q <= tile_col_q + 16'd1;
+              end
+              if (tile_col_q == (tile_cols_q - 16'd1)) begin
+                tile_width_q <= (tile_cols_q == 16'd1) ? width_q : 16'd64;
+                tile_height_q <=
+                  ((tile_row_q + 16'd1) == (tile_rows_q - 16'd1)) ?
+                    (height_q - ((tile_row_q + 16'd1) << 6)) : 16'd64;
+              end else begin
+                tile_width_q <=
+                  ((tile_col_q + 16'd1) == (tile_cols_q - 16'd1)) ?
+                    (width_q - ((tile_col_q + 16'd1) << 6)) : 16'd64;
+                tile_height_q <= tile_height_q;
+              end
+              state_q <= ST_TILE_START;
+            end else begin
+              payload_len_q <= payload_len_q + tile_len_q;
+              stream_index_q <= 16'd0;
+              output_pass_q <= 1'b1;
+              tile_index_q <= 16'd0;
+              tile_col_q <= 16'd0;
+              tile_row_q <= 16'd0;
+              tile_width_q <= (tile_cols_q == 16'd1) ? width_q : 16'd64;
+              tile_height_q <= (tile_rows_q == 16'd1) ? height_q : 16'd64;
+              tile_input_index_q <= 32'd0;
+              tile_input_active_q <= 1'b0;
+              payload_prefix_index_q <= 2'd0;
+              prefix_patch_index_q <= 2'd0;
+              prefix_patch_offset_q <= 16'd0;
+              seq_op_q <= 8'd0;
+              seq_bits_left_q <= 7'd0;
+              seq_value_q <= 64'd0;
+              seq_bit_pos_q <= 16'd0;
+              seq_len_q <= 16'd0;
+              for (seq_write_i = 0; seq_write_i < AV2_MAX_SEQUENCE_BYTES; seq_write_i = seq_write_i + 1) begin
+                seq_mem_u[seq_write_i] <= 8'd0;
+              end
+              state_q <= ST_SEQ_LOAD;
             end
-            state_q <= ST_OUTPUT_VALID;
+          end
+          ST_OUTPUT_PREP: begin
+            if (stream_index_q < tile_payload_start_w) begin
+              if (!m_axis_valid || m_axis_ready) begin
+                m_axis_valid <= 1'b1;
+                m_axis_data <= {{(AXI_DATA_BITS - 8){1'b0}}, output_lookup_byte_w};
+                m_axis_count <= OUTPUT_PACKET_COUNT_BITS'(1);
+                m_axis_last <= 1'b0;
+                stream_index_q <= stream_index_q + 16'd1;
+                if ((stream_index_q + 16'd1) >= tile_payload_start_w) begin
+                  payload_prefix_index_q <= 2'd0;
+                  prefix_patch_index_q <= 2'd0;
+                  prefix_patch_offset_q <= stream_index_q + 16'd1;
+                  state_q <= tile_is_last_w ? ST_TILE_START : ST_OUTPUT_PREFIX;
+                end
+              end
+            end else begin
+              payload_prefix_index_q <= 2'd0;
+              prefix_patch_index_q <= 2'd0;
+              prefix_patch_offset_q <= stream_index_q;
+              state_q <= tile_is_last_w ? ST_TILE_START : ST_OUTPUT_PREFIX;
+            end
+          end
+          ST_OUTPUT_PREFIX: begin
+            if (!m_axis_valid || m_axis_ready) begin
+              m_axis_valid <= 1'b1;
+              m_axis_data <= {AXI_DATA_BITS{1'b0}};
+              m_axis_count <= OUTPUT_PACKET_COUNT_BITS'(1);
+              m_axis_last <= 1'b0;
+              stream_index_q <= stream_index_q + 16'd1;
+              if (payload_prefix_index_q == 2'd3) begin
+                payload_prefix_index_q <= 2'd0;
+                state_q <= ST_TILE_START;
+              end else begin
+                payload_prefix_index_q <= payload_prefix_index_q + 2'd1;
+              end
+            end
+          end
+          ST_STREAM_FLUSH_REQ: begin
+            bitstream_stream_flush_valid_w <= 1'b1;
+            if (bitstream_stream_flush_ready_w) begin
+              state_q <= bitstream_stream_flush_done_w ? ST_PREFIX_PATCH_REQ : ST_STREAM_FLUSH_WAIT;
+            end
+          end
+          ST_STREAM_FLUSH_WAIT: begin
+            if (bitstream_stream_flush_done_w) begin
+              state_q <= ST_PREFIX_PATCH_REQ;
+            end
+          end
+          ST_PREFIX_PATCH_REQ: begin
+            bitstream_patch_valid_w <= 1'b1;
+            bitstream_patch_offset_w <= {16'd0, prefix_patch_offset_q} + {30'd0, prefix_patch_index_q};
+            bitstream_patch_data_w <= {AXI_DATA_BITS{1'b0}};
+            bitstream_patch_strobe_w <= {{((AXI_DATA_BITS / 8) - 1){1'b0}}, 1'b1};
+            case (prefix_patch_index_q)
+              2'd0: bitstream_patch_data_w[7:0] <= tile_len_q - 16'd1;
+              2'd1: bitstream_patch_data_w[7:0] <= (tile_len_q - 16'd1) >> 8;
+              default: bitstream_patch_data_w[7:0] <= 8'd0;
+            endcase
+            if (bitstream_patch_ready_w) begin
+              state_q <= ST_PREFIX_PATCH_WAIT;
+            end
+          end
+          ST_PREFIX_PATCH_WAIT: begin
+            if (bitstream_patch_done_w) begin
+              if (prefix_patch_index_q == 2'd3) begin
+                prefix_patch_index_q <= 2'd0;
+                tile_index_q <= tile_index_q + 16'd1;
+                if (tile_col_q == (tile_cols_q - 16'd1)) begin
+                  tile_col_q <= 16'd0;
+                  tile_row_q <= tile_row_q + 16'd1;
+                end else begin
+                  tile_col_q <= tile_col_q + 16'd1;
+                end
+                if (tile_col_q == (tile_cols_q - 16'd1)) begin
+                  tile_width_q <= (tile_cols_q == 16'd1) ? width_q : 16'd64;
+                  tile_height_q <=
+                    ((tile_row_q + 16'd1) == (tile_rows_q - 16'd1)) ?
+                      (height_q - ((tile_row_q + 16'd1) << 6)) : 16'd64;
+                end else begin
+                  tile_width_q <=
+                    ((tile_col_q + 16'd1) == (tile_cols_q - 16'd1)) ?
+                      (width_q - ((tile_col_q + 16'd1) << 6)) : 16'd64;
+                  tile_height_q <= tile_height_q;
+                end
+                state_q <= ST_OUTPUT_PREP;
+              end else begin
+                prefix_patch_index_q <= prefix_patch_index_q + 2'd1;
+                state_q <= ST_PREFIX_PATCH_REQ;
+              end
+            end
           end
           default: state_q <= ST_IDLE;
           endcase

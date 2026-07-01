@@ -207,7 +207,11 @@ reducing cost rather than proving the plumbing again:
    - Remove excess sequential fan-out in high-frequency symbolizer logic.
 
 2. Buffer and storage optimization
-   - Review staged carry/sample buffers for opportunities to stream data without
+   - Replace AV2 staged payload/carry buffering with the bounded forward
+     pre-carry finalizer already prototyped in Rust: 32 pending 9-bit words,
+     byte-exact with AVM-style reverse carry propagation, overflow treated as
+     an encoder bug.
+   - Review staged sample buffers for opportunities to stream data without
      changing semantics.
    - Prioritize FF reductions while preserving lossless behavior.
 

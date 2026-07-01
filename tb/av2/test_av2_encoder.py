@@ -1166,15 +1166,25 @@ async def av2_encoder_emits_obu_stream(dut):
                 "s_axis_ready": signal_int(dut, "s_axis_ready"),
                 "s_axis_valid": signal_int(dut, "s_axis_valid"),
                 "s_axis_last": signal_int(dut, "s_axis_last"),
-                "analyzer_state": handle_int(dut.palette_analyzer.state_q),
-                "analyzer_done": handle_int(dut.palette_analyzer.done),
-                "analyzer_unsupported": handle_int(dut.palette_analyzer.unsupported),
-                "analyzer_sample_ready": handle_int(dut.palette_analyzer.sample_ready),
-                "analyzer_sample_index": handle_int(dut.palette_analyzer.sample_index_q),
-                "analyzer_area": handle_int(dut.palette_analyzer.area_q),
-                "analyzer_frame_samples": handle_int(dut.palette_analyzer.frame_samples_q),
-                "analyzer_block_id": handle_int(dut.palette_analyzer.block_id_q),
-                "analyzer_block_sample": handle_int(dut.palette_analyzer.block_sample_q),
+                "analyzer_state": nested_signal_int(dut, "palette_analyzer.state_q"),
+                "analyzer_done": nested_signal_int(dut, "palette_analyzer.done"),
+                "analyzer_unsupported": nested_signal_int(
+                    dut, "palette_analyzer.unsupported"
+                ),
+                "analyzer_sample_ready": nested_signal_int(
+                    dut, "palette_analyzer.sample_ready"
+                ),
+                "analyzer_sample_index": nested_signal_int(
+                    dut, "palette_analyzer.sample_index_q"
+                ),
+                "analyzer_area": nested_signal_int(dut, "palette_analyzer.area_q"),
+                "analyzer_frame_samples": nested_signal_int(
+                    dut, "palette_analyzer.frame_samples_q"
+                ),
+                "analyzer_block_id": nested_signal_int(dut, "palette_analyzer.block_id_q"),
+                "analyzer_block_sample": nested_signal_int(
+                    dut, "palette_analyzer.block_sample_q"
+                ),
             }
             close_block_waveform()
             raise AssertionError(f"AV2 RTL rejected the input: {details}")
@@ -1242,30 +1252,48 @@ async def av2_encoder_emits_obu_stream(dut):
             "tile_len": signal_int(dut, "tile_len_q"),
             "stream_index": signal_int(dut, "stream_index_q"),
             "observed_bytes": len(observed),
-            "analyzer_state": handle_int(dut.palette_analyzer.state_q),
-            "analyzer_done": handle_int(dut.palette_analyzer.done),
-            "analyzer_sample_index": handle_int(dut.palette_analyzer.sample_index_q),
-            "analyzer_frame_samples": handle_int(dut.palette_analyzer.frame_samples_q),
-            "analyzer_block_id": handle_int(dut.palette_analyzer.block_id_q),
-            "analyzer_block_sample": handle_int(dut.palette_analyzer.block_sample_q),
-            "analyzer_collected_count": handle_int(dut.palette_analyzer.collected_count_q),
-            "analyzer_target_palette_size": handle_int(dut.palette_analyzer.target_palette_size_q),
-            "analyzer_candidate": handle_int(dut.palette_analyzer.candidate_q),
-            "analyzer_fetch_active": handle_int(dut.palette_analyzer.fetch_active_q),
-            "analyzer_fetch_start_q": handle_int(dut.palette_analyzer.fetch_start_q),
-            "analyzer_fetch_step": handle_int(dut.palette_analyzer.fetch_step_q),
-            "analyzer_fetch_pending": handle_int(dut.palette_analyzer.fetch_read_pending_q),
-            "analyzer_fetch_row": handle_int(dut.palette_analyzer.fetch_txb_row_mi_q),
-            "analyzer_fetch_col": handle_int(dut.palette_analyzer.fetch_txb_col_mi_q),
-            "analyzer_fetch_plane_v": handle_int(dut.palette_analyzer.fetch_plane_v_q),
-            "analyzer_luma_fetch_active": handle_int(dut.palette_analyzer.luma_fetch_active_q),
-            "analyzer_luma_fetch_start_q": handle_int(dut.palette_analyzer.luma_fetch_start_q),
-            "analyzer_luma_fetch_step": handle_int(dut.palette_analyzer.luma_fetch_step_q),
-            "analyzer_luma_fetch_pending": handle_int(
-                dut.palette_analyzer.luma_fetch_read_pending_q
+            "analyzer_state": nested_signal_int(dut, "palette_analyzer.state_q"),
+            "analyzer_done": nested_signal_int(dut, "palette_analyzer.done"),
+            "analyzer_sample_index": nested_signal_int(
+                dut, "palette_analyzer.sample_index_q"
             ),
-            "analyzer_luma_fetch_row": handle_int(dut.palette_analyzer.luma_fetch_txb_row_mi_q),
-            "analyzer_luma_fetch_col": handle_int(dut.palette_analyzer.luma_fetch_txb_col_mi_q),
+            "analyzer_frame_samples": nested_signal_int(dut, "palette_analyzer.frame_samples_q"),
+            "analyzer_block_id": nested_signal_int(dut, "palette_analyzer.block_id_q"),
+            "analyzer_block_sample": nested_signal_int(dut, "palette_analyzer.block_sample_q"),
+            "analyzer_collected_count": nested_signal_int(
+                dut, "palette_analyzer.collected_count_q"
+            ),
+            "analyzer_target_palette_size": nested_signal_int(
+                dut, "palette_analyzer.target_palette_size_q"
+            ),
+            "analyzer_candidate": nested_signal_int(dut, "palette_analyzer.candidate_q"),
+            "analyzer_fetch_active": nested_signal_int(dut, "palette_analyzer.fetch_active_q"),
+            "analyzer_fetch_start_q": nested_signal_int(dut, "palette_analyzer.fetch_start_q"),
+            "analyzer_fetch_step": nested_signal_int(dut, "palette_analyzer.fetch_step_q"),
+            "analyzer_fetch_pending": nested_signal_int(
+                dut, "palette_analyzer.fetch_read_pending_q"
+            ),
+            "analyzer_fetch_row": nested_signal_int(dut, "palette_analyzer.fetch_txb_row_mi_q"),
+            "analyzer_fetch_col": nested_signal_int(dut, "palette_analyzer.fetch_txb_col_mi_q"),
+            "analyzer_fetch_plane_v": nested_signal_int(dut, "palette_analyzer.fetch_plane_v_q"),
+            "analyzer_luma_fetch_active": nested_signal_int(
+                dut, "palette_analyzer.luma_fetch_active_q"
+            ),
+            "analyzer_luma_fetch_start_q": nested_signal_int(
+                dut, "palette_analyzer.luma_fetch_start_q"
+            ),
+            "analyzer_luma_fetch_step": nested_signal_int(
+                dut, "palette_analyzer.luma_fetch_step_q"
+            ),
+            "analyzer_luma_fetch_pending": nested_signal_int(
+                dut, "palette_analyzer.luma_fetch_read_pending_q"
+            ),
+            "analyzer_luma_fetch_row": nested_signal_int(
+                dut, "palette_analyzer.luma_fetch_txb_row_mi_q"
+            ),
+            "analyzer_luma_fetch_col": nested_signal_int(
+                dut, "palette_analyzer.luma_fetch_txb_col_mi_q"
+            ),
         }
         raise AssertionError(f"AV2 RTL did not complete an OBU stream: {details}")
     await RisingEdge(dut.clk)

@@ -1,5 +1,12 @@
 const CDF_PROB_TOP: u32 = 1 << 15;
 const EC_PROB_SHIFT: u32 = 7;
+// The forward AV2 pre-carry finalizer delays output while a future carry could
+// still change pending bytes. Each pending word is a 9-bit byte-plus-carry
+// value, so 32 words map to a small 288-bit RTL queue. This is intentionally
+// slightly wider than a 256-bit guard against pathological all-carry runs; if
+// this ever overflows on real streams, treat it as an encoder bug and revisit
+// the entropy finalizer instead of reinstating a full payload buffer.
+const AV2_PRE_CARRY_PENDING_LIMIT: usize = 32;
 
 const PROB_INC: [[i32; 16]; 15] = [
     [8, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
@@ -51,9 +58,18 @@ pub struct Av2EntropyWriter {
     low: u64,
     rng: u32,
     cnt: i32,
-    precarry: Vec<u16>,
+    precarry: Av2PrecarryForwardFinalizer,
+    #[cfg(debug_assertions)]
+    reverse_precarry: Vec<u16>,
     fields: Vec<Av2EntropyField>,
     symbol_bits: usize,
+}
+
+#[derive(Debug, Clone)]
+struct Av2PrecarryForwardFinalizer {
+    pending: Vec<u16>,
+    bytes: Vec<u8>,
+    max_pending_words: usize,
 }
 
 impl Av2EntropyWriter {
@@ -62,7 +78,9 @@ impl Av2EntropyWriter {
             low: 0,
             rng: 0x8000,
             cnt: -9,
-            precarry: Vec::new(),
+            precarry: Av2PrecarryForwardFinalizer::new(),
+            #[cfg(debug_assertions)]
+            reverse_precarry: Vec::new(),
             fields: Vec::new(),
             symbol_bits: 0,
         }
@@ -174,7 +192,7 @@ impl Av2EntropyWriter {
         if s > 0 {
             let mut n = mask(c + 16);
             while s > 0 {
-                self.precarry.push((e >> (c + 16)) as u16);
+                self.push_precarry((e >> (c + 16)) as u16);
                 e &= n;
                 s -= 8;
                 c -= 8;
@@ -182,12 +200,22 @@ impl Av2EntropyWriter {
             }
         }
 
-        let mut out = vec![0; self.precarry.len()];
-        let mut carry = 0u16;
-        for index in (0..self.precarry.len()).rev() {
-            carry += self.precarry[index];
-            out[index] = carry as u8;
-            carry >>= 8;
+        let max_pending_words = self.precarry.max_pending_words;
+        let out = self.precarry.finish();
+        #[cfg(debug_assertions)]
+        {
+            let reverse = finalize_precarry_reverse(&self.reverse_precarry);
+            debug_assert_eq!(
+                out, reverse,
+                "AV2 forward pre-carry finalizer diverged from reverse AVM carry propagation"
+            );
+            if std::env::var_os("FRAMEFORGE_AV2_PRE_CARRY_STATS").is_some() {
+                eprintln!(
+                    "FRAMEFORGE_AV2_PRE_CARRY_STATS words={} max_pending_words={}",
+                    self.reverse_precarry.len(),
+                    max_pending_words
+                );
+            }
         }
 
         Av2EntropyPayload {
@@ -204,6 +232,20 @@ impl Av2EntropyWriter {
         );
         let low = (self.low << bits) + (self.rng as u64 * value as u64);
         self.normalize(low, self.rng, bits as i32);
+    }
+
+    fn push_precarry(&mut self, word: u16) {
+        // AVM stores pre-carry values as uint16_t, but the AV2 range coder
+        // normalize()/exit_symbol() process is expected to emit a 9-bit
+        // byte-plus-carry value. Keeping this invariant explicit is what makes
+        // a VVC-style forward delayed-carry finalizer possible.
+        assert!(
+            word <= 0x01ff,
+            "AV2 pre-carry word exceeded the 9-bit forward-carry invariant: {word:#06x}"
+        );
+        self.precarry.push(word);
+        #[cfg(debug_assertions)]
+        self.reverse_precarry.push(word);
     }
 
     fn encode_cdf_q15(&mut self, symbol: usize, icdf: &[u16], nsymbs: usize) {
@@ -252,12 +294,12 @@ impl Av2EntropyWriter {
             c += 16;
             let mut m = mask(c);
             if s >= 8 {
-                self.precarry.push((low >> c) as u16);
+                self.push_precarry((low >> c) as u16);
                 low &= m;
                 c -= 8;
                 m >>= 8;
             }
-            self.precarry.push((low >> c) as u16);
+            self.push_precarry((low >> c) as u16);
             s = c + d - 24;
             low &= m;
         }
@@ -265,6 +307,87 @@ impl Av2EntropyWriter {
         self.rng = rng << d;
         self.cnt = s;
     }
+}
+
+impl Av2PrecarryForwardFinalizer {
+    fn new() -> Self {
+        Self {
+            pending: Vec::new(),
+            bytes: Vec::new(),
+            max_pending_words: 0,
+        }
+    }
+
+    fn push(&mut self, word: u16) {
+        self.pending.push(word);
+        assert!(
+            self.pending.len() <= AV2_PRE_CARRY_PENDING_LIMIT,
+            "AV2 forward pre-carry pending buffer exceeded {AV2_PRE_CARRY_PENDING_LIMIT} words"
+        );
+        self.max_pending_words = self.max_pending_words.max(self.pending.len());
+        self.flush_common_prefix();
+    }
+
+    fn finish(mut self) -> Vec<u8> {
+        let (_, tail) = eval_precarry_suffix(&self.pending, 0);
+        self.bytes.extend(tail);
+        self.pending.clear();
+        self.bytes
+    }
+
+    fn flush_common_prefix(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+
+        let (_, carry0_bytes) = eval_precarry_suffix(&self.pending, 0);
+        let (_, carry1_bytes) = eval_precarry_suffix(&self.pending, 1);
+        let (_, carry2_bytes) = eval_precarry_suffix(&self.pending, 2);
+        let mut common = 0usize;
+        while common < self.pending.len()
+            && carry0_bytes[common] == carry1_bytes[common]
+            && carry0_bytes[common] == carry2_bytes[common]
+        {
+            common += 1;
+        }
+
+        if common != 0 {
+            self.bytes.extend_from_slice(&carry0_bytes[..common]);
+            self.pending.drain(..common);
+        }
+    }
+}
+
+fn finalize_precarry_reverse(precarry: &[u16]) -> Vec<u8> {
+    let mut out = vec![0; precarry.len()];
+    let mut carry = 0u16;
+    for index in (0..precarry.len()).rev() {
+        carry += precarry[index];
+        out[index] = carry as u8;
+        carry >>= 8;
+    }
+    out
+}
+
+#[cfg(test)]
+fn finalize_precarry_forward(precarry: &[u16]) -> (Vec<u8>, usize) {
+    let mut finalizer = Av2PrecarryForwardFinalizer::new();
+    for &word in precarry {
+        finalizer.push(word);
+    }
+    let max_pending = finalizer.max_pending_words;
+    (finalizer.finish(), max_pending)
+}
+
+fn eval_precarry_suffix(precarry: &[u16], terminal_carry: u16) -> (u16, Vec<u8>) {
+    let mut out = vec![0; precarry.len()];
+    let mut carry = terminal_carry;
+    for index in (0..precarry.len()).rev() {
+        carry += precarry[index];
+        out[index] = carry as u8;
+        carry >>= 8;
+    }
+    (carry, out)
 }
 
 impl Default for Av2EntropyWriter {
@@ -376,5 +499,72 @@ mod tests {
         assert_eq!(payload.symbol_bits, 1);
         assert_eq!(payload.fields[0].code, Av2EntropyCode::Symbol);
         assert_eq!(cdf[2], 1);
+    }
+
+    #[test]
+    fn av2_forward_precarry_matches_reverse_for_edge_patterns() {
+        let patterns: &[&[u16]] = &[
+            &[0x000],
+            &[0x0ff],
+            &[0x100],
+            &[0x1ff],
+            &[0x000, 0x1ff, 0x100],
+            &[0x1ff, 0x1ff, 0x1ff, 0x100],
+            &[0x0ff, 0x0ff, 0x100, 0x1ff],
+        ];
+
+        for pattern in patterns {
+            let (forward, _) = finalize_precarry_forward(pattern);
+            assert_eq!(forward, finalize_precarry_reverse(pattern), "{pattern:#x?}");
+        }
+    }
+
+    #[test]
+    fn av2_forward_precarry_matches_reverse_for_representative_words() {
+        let values = [
+            0x000, 0x001, 0x07f, 0x0fe, 0x0ff, 0x100, 0x101, 0x1fe, 0x1ff,
+        ];
+        for &a in &values {
+            for &b in &values {
+                for &c in &values {
+                    for &d in &values {
+                        let words = [a, b, c, d];
+                        let (forward, _) = finalize_precarry_forward(&words);
+                        assert_eq!(forward, finalize_precarry_reverse(&words), "{words:#x?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn av2_forward_precarry_matches_reverse_for_deterministic_random_words() {
+        let mut seed = 0x1234_5678_u32;
+        let mut max_pending = 0usize;
+        for len in [1usize, 2, 3, 4, 8, 16, 64, 256] {
+            for _ in 0..128 {
+                let mut words = Vec::with_capacity(len);
+                for _ in 0..len {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    words.push(((seed >> 7) & 0x1ff) as u16);
+                }
+                let (forward, pending) = finalize_precarry_forward(&words);
+                max_pending = max_pending.max(pending);
+                assert_eq!(forward, finalize_precarry_reverse(&words));
+            }
+        }
+        assert!(max_pending > 0);
+    }
+
+    #[test]
+    fn av2_forward_precarry_handles_long_max_carry_run_with_small_pending_buffer() {
+        let words = vec![0x1ff; 4096];
+        let (forward, max_pending) = finalize_precarry_forward(&words);
+
+        assert_eq!(forward, finalize_precarry_reverse(&words));
+        assert!(
+            max_pending <= AV2_PRE_CARRY_PENDING_LIMIT,
+            "max pending {max_pending} exceeded limit"
+        );
     }
 }

@@ -188,7 +188,7 @@ async def axi_write_memory_model(dut, memory, data_bytes=AXI_DATA_BYTES):
         if int(dut.m_axi_wvalid.value) == 1 and int(dut.m_axi_wready.value) == 1:
             assert pending_addr is not None, "AXI write data arrived without an address"
             strobe = int(dut.m_axi_wstrb.value)
-            data_bits = dut.m_axi_wdata.value.binstr
+            data_bits = str(dut.m_axi_wdata.value)
             data_width = len(data_bits)
             for byte in range(pending_size):
                 if strobe & (1 << byte):

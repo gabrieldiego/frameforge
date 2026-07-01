@@ -14,12 +14,7 @@ module ff_av2_encoder #(
   parameter int SOURCE_SAMPLE_BITS = SAMPLE_BITS,
   parameter int AXI_ADDR_BITS = 32,
   parameter int AXI_DATA_BITS = 128,
-  parameter int SUPPORT_PALETTE_444 = 1,
-  // TODO(av2-delete-buffer): remove AV2_MAX_TILE_BYTES and the staged
-  // precarry/payload RAMs once the entropy/carry path streams directly to the
-  // AXI packet writer. This whole-tile buffer is a temporary area/bubble
-  // liability; larger future pictures must not scale this memory by frame.
-  parameter int AV2_MAX_TILE_BYTES = 32768
+  parameter int SUPPORT_PALETTE_444 = 1
 ) (
   input  logic       clk,
   input  logic       rst_n,
@@ -72,6 +67,10 @@ module ff_av2_encoder #(
   localparam int AV2_MAX_SEQUENCE_BYTES = 16;
   localparam int OUTPUT_PACKET_BYTES = 16;
   localparam int OUTPUT_PACKET_COUNT_BITS = 5;
+  // Must match src/av2/entropy.rs AV2_PRE_CARRY_PENDING_LIMIT. This stays
+  // local to the AV2 RTL entropy path to avoid exposing an internal carry guard
+  // through the public synthesis/build interface.
+  localparam int AV2_PRE_CARRY_PENDING_WORDS = 32;
   typedef enum logic [4:0] {
     ST_IDLE,
     ST_TILE_START,
@@ -92,7 +91,12 @@ module ff_av2_encoder #(
     ST_OUTPUT_PREP,
     ST_OUTPUT_VALID,
     ST_OUTPUT_PAYLOAD_WAIT,
-    ST_OUTPUT_PAYLOAD_LOAD
+    ST_OUTPUT_PAYLOAD_LOAD,
+    ST_OUTPUT_PREFIX,
+    ST_STREAM_FLUSH_REQ,
+    ST_STREAM_FLUSH_WAIT,
+    ST_PREFIX_PATCH_REQ,
+    ST_PREFIX_PATCH_WAIT
   } state_t;
 
   localparam int AV2_STACK_DEPTH = 16;
@@ -155,6 +159,15 @@ module ff_av2_encoder #(
   logic       frame_reader_done_w;
   logic       frame_reader_error_w;
   logic       bitstream_writer_start_w;
+  logic       bitstream_stream_flush_valid_w;
+  logic       bitstream_stream_flush_ready_w;
+  logic       bitstream_stream_flush_done_w;
+  logic       bitstream_patch_valid_w;
+  logic       bitstream_patch_ready_w;
+  logic       bitstream_patch_done_w;
+  logic [31:0] bitstream_patch_offset_w;
+  logic [AXI_DATA_BITS - 1:0] bitstream_patch_data_w;
+  logic [(AXI_DATA_BITS / 8) - 1:0] bitstream_patch_strobe_w;
   logic       bitstream_writer_busy_w;
   logic       bitstream_writer_frame_done_w;
   logic       bitstream_writer_error_w;
@@ -173,17 +186,20 @@ module ff_av2_encoder #(
   logic state_output_valid_w;
   logic start_invalid_w;
   logic [AV2_MAX_SEQUENCE_BYTES - 1:0][7:0] seq_mem_q;
-  logic [15:0] precarry_read_addr_q;
-  logic [11:0] precarry_read_word_addr_q;
-  logic [255:0] precarry_read_word_data_w;
-  logic [15:0] precarry_read_data_q;
-  logic precarry_write_valid_w;
-  logic [15:0] precarry_write_addr_w;
-  logic [15:0] precarry_write_data_w;
-  logic payload_write_valid_w;
-  logic [15:0] payload_write_addr_w;
-  logic [15:0] payload_write_strobe_w;
-  logic [127:0] payload_write_data_w;
+  logic precarry_push_valid_w;
+  logic [15:0] precarry_push_word_w;
+  logic forward_precarry_push_ready_w;
+  logic forward_precarry_flush_start_w;
+  logic forward_precarry_flush_done_w;
+  logic forward_precarry_payload_write_valid_w;
+  logic [15:0] forward_precarry_payload_write_addr_w;
+  logic [7:0] forward_precarry_payload_write_data_w;
+  logic forward_precarry_payload_write_last_w;
+  logic forward_precarry_count_only_w;
+  logic [15:0] forward_precarry_byte_count_w;
+  logic [5:0] forward_precarry_pending_count_w;
+  logic forward_precarry_overflow_error_w;
+  logic stream_output_ready_w;
   logic [11:0] payload_read_word_addr_q;
   logic [11:0] payload_read_data_word_addr_q;
   logic [127:0] payload_read_data_w;
@@ -193,6 +209,9 @@ module ff_av2_encoder #(
   logic [15:0] tile_len_q;
   logic [15:0] payload_len_q;
   logic [1:0] payload_prefix_index_q;
+  logic [15:0] prefix_patch_offset_q;
+  logic [1:0] prefix_patch_index_q;
+  logic output_pass_q;
   logic [15:0] seq_len_q;
   logic [15:0] stream_index_q;
   logic [31:0] frame_index_q;
@@ -281,8 +300,6 @@ module ff_av2_encoder #(
   logic [63:0] finish_e_q;
   logic signed [7:0] finish_c_q;
   logic signed [7:0] finish_s_q;
-  logic [15:0] carry_q;
-  logic [15:0] carry_index_q;
   logic last_u_txb_nonzero_q;
   logic txb_context_clear_w;
   logic txb_context_clear_leaf_w;
@@ -380,15 +397,6 @@ module ff_av2_encoder #(
   logic frame_is_last_w;
   logic output_last_q;
   logic output_tile_payload_w;
-  logic [15:0] carry_sum_w;
-  logic [15:0] carry_group_addr_w;
-  logic [15:0] carry_index_after_step_w;
-  logic [15:0] carry_after_step_w;
-  logic [127:0] carry_group_data_w;
-  logic [15:0] carry_group_strobe_w;
-  logic carry_done_after_step_w;
-  logic [11:0] carry_read_after_current_word_addr_w;
-  logic [11:0] carry_read_after_next_word_addr_w;
   logic leaf_fsc_symbol_w;
   logic [31:0] leaf_fsc_fh_w;
   logic [15:0] txb_width_w;
@@ -577,22 +585,11 @@ module ff_av2_encoder #(
   logic block_visible_w;
   logic [4:0] block_half_w_mi_w;
   logic [4:0] block_half_h_mi_w;
-  logic allowed_none_w;
-  logic allowed_horz_w;
-  logic allowed_vert_w;
-  logic forced_valid_w;
-  logic [1:0] forced_partition_w;
   logic [1:0] chosen_partition_w;
   logic partition_need_do_split_w;
   logic partition_need_rect_w;
   logic partition_emit_do_split_w;
   logic partition_emit_rect_w;
-  logic partition_emit_done_w;
-  logic [5:0] partition_split_ctx_w;
-  logic [5:0] partition_rect_ctx_w;
-  logic [1:0] partition_raw_ctx_w;
-  logic [31:0] partition_do_cdf0_w;
-  logic [31:0] partition_rect_cdf0_w;
   logic [7:0] partition_above_ctx_w;
   logic [7:0] partition_left_ctx_w;
   logic partition_context_clear_w;
@@ -604,6 +601,26 @@ module ff_av2_encoder #(
   logic luma_residual_enable_w;
   logic chroma_bdpcm_enable_w;
   logic chroma_subsampled_phase_w;
+
+  assign stream_output_ready_w = !m_axis_valid || m_axis_ready;
+  assign stream_lookup_index_w = stream_index_q;
+  assign output_lookup_byte_w = output_byte_w;
+  assign output_lookup_last_w = (stream_index_q == (total_stream_len_w - 16'd1));
+  assign output_next_stream_index_w = stream_index_q + {11'd0, m_axis_count};
+  assign output_next_byte_phase_w = output_byte_phase_q + m_axis_count[3:0];
+  assign output_current_packet_last_w = output_lookup_last_w;
+  assign output_next_packet_last_w = output_lookup_last_w;
+  assign output_payload_count_w = '0;
+  assign output_next_payload_count_w = '0;
+  assign output_payload_packet_data_w = '0;
+  assign output_next_payload_packet_data_w = '0;
+  assign output_next_payload_word_addr_w = 12'd0;
+  assign output_after_current_payload_word_addr_w = 12'd0;
+  assign output_after_next_payload_word_addr_w = 12'd0;
+  assign output_after_current_payload_w = 1'b0;
+  assign output_after_next_payload_w = 1'b0;
+  assign payload_read_data_word_addr_q = 12'd0;
+  assign payload_read_data_w = 128'd0;
 
   ff_av2_state_phase_decode #(
     .ST_IDLE(ST_IDLE),
@@ -733,7 +750,9 @@ module ff_av2_encoder #(
     .ibc_selected_skip_left(skip_left_ctx_w)
   );
 
-  ff_av2_partition_controller partition_controller (
+  ff_av2_entropy_top entropy_top (
+    .partition_active(state_partition_w),
+    .leaf_active(state_leaf_w),
     .tile_width(tile_width_q),
     .tile_height(tile_height_q),
     .block_row_mi(block_row_mi_q),
@@ -742,39 +761,76 @@ module ff_av2_encoder #(
     .block_h_mi(block_h_mi_q),
     .partition(partition_q),
     .partition_emit_step(partition_emit_step_q),
-    .palette_mode(palette_mode_q),
     .partition_above_ctx(partition_above_ctx_w),
     .partition_left_ctx(partition_left_ctx_w),
+    .low(low_q),
+    .rng(rng_q),
+    .cnt(cnt_q),
+    .phase(phase_q),
+    .step(step_q),
+    .ibc_use_copy(decision_ibc_use_copy_w),
+    .ibc_drl_idx(decision_ibc_drl_idx_w),
+    .intrabc_ctx(intrabc_ctx_w),
+    .intrabc_skip_ctx(intrabc_skip_ctx_w),
+    .leaf_luma_mode(leaf_luma_mode_q),
+    .palette_mode(palette_mode_q),
+    .chroma_bdpcm_horz(leaf_chroma_bdpcm_horz_q),
+    .residual_mode(residual_mode_w),
+    .leaf_luma_palette(leaf_luma_palette_w),
+    .palette_op_valid(palette_op_valid_w),
+    .palette_op_literal(palette_op_literal_w),
+    .palette_op_literal_value(palette_op_literal_value_w),
+    .palette_op_literal_bits(palette_op_literal_bits_w),
+    .palette_op_fl(palette_op_fl_w),
+    .palette_op_fh(palette_op_fh_w),
+    .palette_op_fl_inc(palette_op_fl_inc_w),
+    .palette_op_fh_inc(palette_op_fh_inc_w),
+    .luma_residual_op_valid(luma_residual_op_valid_w),
+    .luma_residual_op_literal(luma_residual_op_literal_w),
+    .luma_residual_op_literal_value(luma_residual_op_literal_value_w),
+    .luma_residual_op_literal_bits(luma_residual_op_literal_bits_w),
+    .luma_residual_op_fl(luma_residual_op_fl_w),
+    .luma_residual_op_fh(luma_residual_op_fh_w),
+    .luma_residual_op_fl_inc(luma_residual_op_fl_inc_w),
+    .luma_residual_op_fh_inc(luma_residual_op_fh_inc_w),
+    .chroma_bdpcm_op_valid(chroma_bdpcm_op_valid_w),
+    .chroma_bdpcm_op_literal(chroma_bdpcm_op_literal_w),
+    .chroma_bdpcm_op_literal_value(chroma_bdpcm_op_literal_value_w),
+    .chroma_bdpcm_op_literal_bits(chroma_bdpcm_op_literal_bits_w),
+    .chroma_bdpcm_op_fl(chroma_bdpcm_op_fl_w),
+    .chroma_bdpcm_op_fh(chroma_bdpcm_op_fh_w),
+    .chroma_bdpcm_op_fl_inc(chroma_bdpcm_op_fl_inc_w),
+    .chroma_bdpcm_op_fh_inc(chroma_bdpcm_op_fh_inc_w),
+    .y_txb_nonzero_fh(y_txb_nonzero_fh_w),
+    .u_txb_nonzero_fh(u_txb_nonzero_fh_w),
+    .v_txb_nonzero_fh(v_txb_nonzero_fh_w),
+    .y_dc_sign_fl(y_dc_sign_fl_w),
+    .txb_index(txb_index_q),
+    .txb_count(txb_count_q),
+    .chroma_bdpcm_txb_done(chroma_bdpcm_txb_done_w),
+    .stack_empty(stack_sp_q == 5'd0),
     .visible_rows_mi(visible_rows_mi_w),
     .visible_cols_mi(visible_cols_mi_w),
     .block_visible(block_visible_w),
     .block_half_w_mi(block_half_w_mi_w),
     .block_half_h_mi(block_half_h_mi_w),
-    .allowed_none(allowed_none_w),
-    .allowed_horz(allowed_horz_w),
-    .allowed_vert(allowed_vert_w),
-    .forced_valid(forced_valid_w),
-    .forced_partition(forced_partition_w),
     .chosen_partition(chosen_partition_w),
     .partition_need_do_split(partition_need_do_split_w),
     .partition_need_rect(partition_need_rect_w),
     .partition_emit_do_split(partition_emit_do_split_w),
     .partition_emit_rect(partition_emit_rect_w),
-    .partition_emit_done(partition_emit_done_w),
-    .partition_split_ctx(partition_split_ctx_w),
-    .partition_rect_ctx(partition_rect_ctx_w),
-    .partition_raw_ctx(partition_raw_ctx_w),
     .partition_update_above(partition_update_above_w),
     .partition_update_left(partition_update_left_w),
     .leaf_fsc_symbol(leaf_fsc_symbol_w),
-    .leaf_fsc_fh(leaf_fsc_fh_w)
-  );
-
-  ff_av2_partition_cdf_lut partition_cdf_lut (
-    .split_ctx(partition_split_ctx_w),
-    .rect_ctx(partition_rect_ctx_w),
-    .do_split_cdf0(partition_do_cdf0_w),
-    .rect_type_cdf0(partition_rect_cdf0_w)
+    .leaf_fsc_fh(leaf_fsc_fh_w),
+    .op_valid(op_valid_w),
+    .op_last(op_last_w),
+    .norm_push_count(norm_push_count_w),
+    .norm_push0(norm_push0_w),
+    .norm_push1(norm_push1_w),
+    .norm_low(norm_low_w),
+    .norm_rng(norm_rng_w),
+    .norm_cnt(norm_cnt_w)
   );
 
   ff_encoder_axil_regs #(
@@ -908,6 +964,15 @@ module ff_av2_encoder #(
     .s_axis_data(m_axis_data),
     .s_axis_count(m_axis_count),
     .s_axis_last(m_axis_last),
+    .stream_flush_valid(bitstream_stream_flush_valid_w),
+    .stream_flush_ready(bitstream_stream_flush_ready_w),
+    .stream_flush_done(bitstream_stream_flush_done_w),
+    .patch_valid(bitstream_patch_valid_w),
+    .patch_ready(bitstream_patch_ready_w),
+    .patch_offset(bitstream_patch_offset_w),
+    .patch_data(bitstream_patch_data_w),
+    .patch_strobe(bitstream_patch_strobe_w),
+    .patch_done(bitstream_patch_done_w),
     .m_axi_awvalid(m_axi_awvalid),
     .m_axi_awready(m_axi_awready),
     .m_axi_awaddr(m_axi_awaddr),
@@ -984,56 +1049,27 @@ module ff_av2_encoder #(
     .output_byte(output_byte_w)
   );
 
-  ff_av2_output_packetizer #(
-    .OUTPUT_PACKET_COUNT_BITS(OUTPUT_PACKET_COUNT_BITS)
-  ) output_packetizer (
-    .state_output_valid(state_output_valid_w),
-    .axis_valid(m_axis_valid),
-    .axis_ready(m_axis_ready),
-    .output_last(output_last_q),
-    .stream_index(stream_index_q),
-    .axis_count(m_axis_count),
-    .output_byte_phase(output_byte_phase_q),
-    .tile_payload_start(tile_payload_start_w),
-    .total_stream_len(total_stream_len_w),
-    .output_tile_payload(output_tile_payload_w),
-    .output_byte(output_byte_w),
-    .payload_read_data(payload_read_data_w),
-    .stream_lookup_index(stream_lookup_index_w),
-    .output_next_stream_index(output_next_stream_index_w),
-    .output_payload_addr(output_payload_addr_w),
-    .output_next_payload_word_addr(output_next_payload_word_addr_w),
-    .output_after_current_payload_word_addr(output_after_current_payload_word_addr_w),
-    .output_after_next_payload_word_addr(output_after_next_payload_word_addr_w),
-    .output_next_byte_phase(output_next_byte_phase_w),
-    .output_after_current_payload(output_after_current_payload_w),
-    .output_after_next_payload(output_after_next_payload_w),
-    .output_payload_count(output_payload_count_w),
-    .output_next_payload_count(output_next_payload_count_w),
-    .output_payload_packet_data(output_payload_packet_data_w),
-    .output_next_payload_packet_data(output_next_payload_packet_data_w),
-    .output_current_packet_last(output_current_packet_last_w),
-    .output_next_packet_last(output_next_packet_last_w),
-    .output_lookup_byte(output_lookup_byte_w),
-    .output_lookup_last(output_lookup_last_w)
-  );
-
-  ff_av2_carry_propagator carry_propagator (
-    .carry(carry_q),
-    .carry_index(carry_index_q),
-    .payload_tile_start(payload_tile_start_w),
-    .precarry_read_word_data(precarry_read_word_data_w),
-    .precarry_read_addr(precarry_read_addr_q),
-    .precarry_read_data(precarry_read_data_q),
-    .carry_sum(carry_sum_w),
-    .carry_group_addr(carry_group_addr_w),
-    .carry_index_after_step(carry_index_after_step_w),
-    .carry_after_step(carry_after_step_w),
-    .carry_group_data(carry_group_data_w),
-    .carry_group_strobe(carry_group_strobe_w),
-    .carry_done_after_step(carry_done_after_step_w),
-    .carry_read_after_current_word_addr(carry_read_after_current_word_addr_w),
-    .carry_read_after_next_word_addr(carry_read_after_next_word_addr_w)
+  ff_av2_forward_precarry_finalizer #(
+    .PENDING_WORDS(AV2_PRE_CARRY_PENDING_WORDS)
+  ) forward_precarry_finalizer (
+    .clk(clk),
+    .rst_n(rst_n),
+    .tile_reset(state_tile_start_w),
+    .push_valid(precarry_push_valid_w),
+    .push_word(precarry_push_word_w),
+    .push_ready(forward_precarry_push_ready_w),
+    .flush_start(forward_precarry_flush_start_w),
+    .count_only(forward_precarry_count_only_w),
+    .payload_write_ready(stream_output_ready_w),
+    .flush_done(forward_precarry_flush_done_w),
+    .payload_write_valid(forward_precarry_payload_write_valid_w),
+    .payload_write_addr(forward_precarry_payload_write_addr_w),
+    .payload_write_data(forward_precarry_payload_write_data_w),
+    .payload_base(payload_tile_start_w),
+    .payload_write_last(forward_precarry_payload_write_last_w),
+    .byte_count(forward_precarry_byte_count_w),
+    .pending_count(forward_precarry_pending_count_w),
+    .overflow_error(forward_precarry_overflow_error_w)
   );
 
   ff_av2_payload_write_mux payload_write_mux (
@@ -1041,10 +1077,8 @@ module ff_av2_encoder #(
     .state_partition(state_partition_w),
     .state_leaf(state_leaf_w),
     .state_finish_push(state_finish_push_w),
-    .state_carry_write(state_carry_write_w),
     .state_payload_prefix(state_payload_prefix_w),
     .pending_push_valid(pending_push_valid_q),
-    .precarry_len(precarry_len_q),
     .pending_push_word(pending_push_word_q),
     .op_valid(op_valid_w),
     .norm_push_count(norm_push_count_w),
@@ -1052,20 +1086,8 @@ module ff_av2_encoder #(
     .finish_s(finish_s_q),
     .finish_e(finish_e_q),
     .finish_c(finish_c_q),
-    .carry_group_addr(carry_group_addr_w),
-    .carry_group_strobe(carry_group_strobe_w),
-    .carry_group_data(carry_group_data_w),
-    .tile_is_last(tile_is_last_w),
-    .payload_prefix_index(payload_prefix_index_q),
-    .payload_len(payload_len_q),
-    .payload_prefix_byte(payload_prefix_byte_w),
-    .precarry_write_valid(precarry_write_valid_w),
-    .precarry_write_addr(precarry_write_addr_w),
-    .precarry_write_data(precarry_write_data_w),
-    .payload_write_valid(payload_write_valid_w),
-    .payload_write_addr(payload_write_addr_w),
-    .payload_write_strobe(payload_write_strobe_w),
-    .payload_write_data(payload_write_data_w)
+    .precarry_push_valid(precarry_push_valid_w),
+    .precarry_push_word(precarry_push_word_w)
   );
 
   ff_av2_local_hash_matcher_444 #(
@@ -1279,72 +1301,6 @@ module ff_av2_encoder #(
     .lossy420_chroma_bdpcm_recon_sample(lossy420_chroma_bdpcm_recon_sample_w),
     .lossy420_chroma_delta(lossy420_chroma_delta_w),
     .lossy420_chroma_known_zero(lossy420_chroma_known_zero_w)
-  );
-
-  ff_av2_entropy_coder entropy_coder (
-    .partition_active(state_partition_w),
-    .leaf_active(state_leaf_w),
-    .low(low_q),
-    .rng(rng_q),
-    .cnt(cnt_q),
-    .phase(phase_q),
-    .step(step_q),
-    .partition(partition_q),
-    .partition_emit_do_split(partition_emit_do_split_w),
-    .partition_emit_rect(partition_emit_rect_w),
-    .partition_do_cdf0(partition_do_cdf0_w),
-    .partition_rect_cdf0(partition_rect_cdf0_w),
-    .ibc_use_copy(decision_ibc_use_copy_w),
-    .ibc_drl_idx(decision_ibc_drl_idx_w),
-    .intrabc_ctx(intrabc_ctx_w),
-    .intrabc_skip_ctx(intrabc_skip_ctx_w),
-    .leaf_luma_mode(leaf_luma_mode_q),
-    .leaf_fsc_symbol(leaf_fsc_symbol_w),
-    .leaf_fsc_fh(leaf_fsc_fh_w),
-    .palette_mode(palette_mode_q),
-    .chroma_bdpcm_horz(leaf_chroma_bdpcm_horz_q),
-    .residual_mode(residual_mode_w),
-    .leaf_luma_palette(leaf_luma_palette_w),
-    .palette_op_valid(palette_op_valid_w),
-    .palette_op_literal(palette_op_literal_w),
-    .palette_op_literal_value(palette_op_literal_value_w),
-    .palette_op_literal_bits(palette_op_literal_bits_w),
-    .palette_op_fl(palette_op_fl_w),
-    .palette_op_fh(palette_op_fh_w),
-    .palette_op_fl_inc(palette_op_fl_inc_w),
-    .palette_op_fh_inc(palette_op_fh_inc_w),
-    .luma_residual_op_valid(luma_residual_op_valid_w),
-    .luma_residual_op_literal(luma_residual_op_literal_w),
-    .luma_residual_op_literal_value(luma_residual_op_literal_value_w),
-    .luma_residual_op_literal_bits(luma_residual_op_literal_bits_w),
-    .luma_residual_op_fl(luma_residual_op_fl_w),
-    .luma_residual_op_fh(luma_residual_op_fh_w),
-    .luma_residual_op_fl_inc(luma_residual_op_fl_inc_w),
-    .luma_residual_op_fh_inc(luma_residual_op_fh_inc_w),
-    .chroma_bdpcm_op_valid(chroma_bdpcm_op_valid_w),
-    .chroma_bdpcm_op_literal(chroma_bdpcm_op_literal_w),
-    .chroma_bdpcm_op_literal_value(chroma_bdpcm_op_literal_value_w),
-    .chroma_bdpcm_op_literal_bits(chroma_bdpcm_op_literal_bits_w),
-    .chroma_bdpcm_op_fl(chroma_bdpcm_op_fl_w),
-    .chroma_bdpcm_op_fh(chroma_bdpcm_op_fh_w),
-    .chroma_bdpcm_op_fl_inc(chroma_bdpcm_op_fl_inc_w),
-    .chroma_bdpcm_op_fh_inc(chroma_bdpcm_op_fh_inc_w),
-    .y_txb_nonzero_fh(y_txb_nonzero_fh_w),
-    .u_txb_nonzero_fh(u_txb_nonzero_fh_w),
-    .v_txb_nonzero_fh(v_txb_nonzero_fh_w),
-    .y_dc_sign_fl(y_dc_sign_fl_w),
-    .txb_index(txb_index_q),
-    .txb_count(txb_count_q),
-    .chroma_bdpcm_txb_done(chroma_bdpcm_txb_done_w),
-    .stack_empty(stack_sp_q == 5'd0),
-    .op_valid(op_valid_w),
-    .op_last(op_last_w),
-    .norm_push_count(norm_push_count_w),
-    .norm_push0(norm_push0_w),
-    .norm_push1(norm_push1_w),
-    .norm_low(norm_low_w),
-    .norm_rng(norm_rng_w),
-    .norm_cnt(norm_cnt_w)
   );
 
   ff_av2_frontend_control #(
@@ -1632,39 +1588,6 @@ module ff_av2_encoder #(
     .chroma_bdpcm_txb_samples(chroma_bdpcm_txb_samples_w),
     .chroma_bdpcm_predictor_samples(chroma_bdpcm_predictor_samples_w)
   );
-  ff_av2_encoder_payload_word_delay payload_word_delay (
-    .clk(clk),
-    .rst_n(rst_n),
-    .payload_read_word_addr_q(payload_read_word_addr_q),
-    .payload_read_data_word_addr_q(payload_read_data_word_addr_q)
-  );
-
-  ff_sync_halfword_write_quad_read_ram_1r1w #(
-    .ADDR_BITS(16),
-    .DEPTH_HALFWORDS(AV2_MAX_TILE_BYTES),
-    .READ_HALFWORDS(16)
-  ) precarry_ram (
-    .clk(clk),
-    .write_valid(precarry_write_valid_w),
-    .write_addr(precarry_write_addr_w),
-    .write_data(precarry_write_data_w),
-    .read_word_addr(precarry_read_word_addr_q),
-    .read_data(precarry_read_word_data_w)
-  );
-
-  ff_sync_byte_write_word_ram_1r1w #(
-    .ADDR_BITS(16),
-    .DEPTH_BYTES(AV2_MAX_TILE_BYTES)
-  ) payload_ram (
-    .clk(clk),
-    .write_valid(payload_write_valid_w),
-    .write_addr(payload_write_addr_w),
-    .write_strobe(payload_write_strobe_w),
-    .write_data(payload_write_data_w),
-    .read_word_addr(payload_read_word_addr_q),
-    .read_data(payload_read_data_w)
-  );
-
   ff_av2_encoder_seq_stream seq_stream (
     .stream_lookup_index_w(stream_lookup_index_w),
     .seq_end_index_w(seq_end_index_w),
@@ -1698,13 +1621,6 @@ module ff_av2_encoder #(
     .cached_v_predictor_samples_q(cached_v_predictor_samples_q),
     .cached_v_txb_samples_q(cached_v_txb_samples_q),
     .cached_v_valid_q(cached_v_valid_q),
-    .carry_after_step_w(carry_after_step_w),
-    .carry_done_after_step_w(carry_done_after_step_w),
-    .carry_index_after_step_w(carry_index_after_step_w),
-    .carry_index_q(carry_index_q),
-    .carry_q(carry_q),
-    .carry_read_after_current_word_addr_w(carry_read_after_current_word_addr_w),
-    .carry_read_after_next_word_addr_w(carry_read_after_next_word_addr_w),
     .chosen_partition_w(chosen_partition_w),
     .chroma_bdpcm_txb_done_w(chroma_bdpcm_txb_done_w),
     .chroma_bdpcm_txb_nonzero_w(chroma_bdpcm_txb_nonzero_w),
@@ -1729,6 +1645,14 @@ module ff_av2_encoder #(
     .finish_c_q(finish_c_q),
     .finish_e_q(finish_e_q),
     .finish_s_q(finish_s_q),
+    .forward_precarry_byte_count_w(forward_precarry_byte_count_w),
+    .forward_precarry_flush_done_w(forward_precarry_flush_done_w),
+    .forward_precarry_overflow_error_w(forward_precarry_overflow_error_w),
+    .forward_precarry_payload_write_valid_w(forward_precarry_payload_write_valid_w),
+    .forward_precarry_payload_write_data_w(forward_precarry_payload_write_data_w),
+    .forward_precarry_payload_write_last_w(forward_precarry_payload_write_last_w),
+    .forward_precarry_count_only_w(forward_precarry_count_only_w),
+    .forward_precarry_flush_start_w(forward_precarry_flush_start_w),
     .frame_ibc_mode_q(frame_ibc_mode_q),
     .frame_index_q(frame_index_q),
     .frame_is_last_w(frame_is_last_w),
@@ -1790,6 +1714,15 @@ module ff_av2_encoder #(
     .m_axis_last(m_axis_last),
     .m_axis_ready(m_axis_ready),
     .m_axis_valid(m_axis_valid),
+    .bitstream_stream_flush_valid_w(bitstream_stream_flush_valid_w),
+    .bitstream_stream_flush_ready_w(bitstream_stream_flush_ready_w),
+    .bitstream_stream_flush_done_w(bitstream_stream_flush_done_w),
+    .bitstream_patch_valid_w(bitstream_patch_valid_w),
+    .bitstream_patch_ready_w(bitstream_patch_ready_w),
+    .bitstream_patch_done_w(bitstream_patch_done_w),
+    .bitstream_patch_offset_w(bitstream_patch_offset_w),
+    .bitstream_patch_data_w(bitstream_patch_data_w),
+    .bitstream_patch_strobe_w(bitstream_patch_strobe_w),
     .norm_cnt_w(norm_cnt_w),
     .norm_low_w(norm_low_w),
     .norm_push1_w(norm_push1_w),
@@ -1832,13 +1765,15 @@ module ff_av2_encoder #(
     .partition_q(partition_q),
     .payload_len_q(payload_len_q),
     .payload_prefix_index_q(payload_prefix_index_q),
+    .prefix_patch_offset_q(prefix_patch_offset_q),
+    .prefix_patch_index_q(prefix_patch_index_q),
+    .output_pass_q(output_pass_q),
     .payload_read_data_word_addr_q(payload_read_data_word_addr_q),
     .payload_read_word_addr_q(payload_read_word_addr_q),
     .pending_push_valid_q(pending_push_valid_q),
     .pending_push_word_q(pending_push_word_q),
     .phase_q(phase_q),
     .precarry_len_q(precarry_len_q),
-    .precarry_read_word_addr_q(precarry_read_word_addr_q),
     .residual_mode_w(residual_mode_w),
     .rng_q(rng_q),
     .seq_bit_pos_q(seq_bit_pos_q),

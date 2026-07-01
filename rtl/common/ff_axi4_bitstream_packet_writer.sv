@@ -17,6 +17,16 @@ module ff_axi4_bitstream_packet_writer #(
   input  logic [AXI_DATA_BITS-1:0] s_axis_data,
   input  logic [$clog2((AXI_DATA_BITS/8)+1)-1:0] s_axis_count,
   input  logic                     s_axis_last,
+  input  logic                     stream_flush_valid,
+  output logic                     stream_flush_ready,
+  output logic                     stream_flush_done,
+
+  input  logic                     patch_valid,
+  output logic                     patch_ready,
+  input  logic [31:0]              patch_offset,
+  input  logic [AXI_DATA_BITS-1:0] patch_data,
+  input  logic [(AXI_DATA_BITS/8)-1:0] patch_strobe,
+  output logic                     patch_done,
 
   output logic                     m_axi_awvalid,
   input  logic                     m_axi_awready,
@@ -54,13 +64,17 @@ module ff_axi4_bitstream_packet_writer #(
     (AXI_BYTES <= 16) ? 4 :
     (AXI_BYTES <= 32) ? 5 :
     6;
+  localparam int AXI_BYTE_INDEX_BITS = (AXI_BYTES <= 1) ? 1 : AXI_BYTE_SHIFT;
   localparam logic [2:0] AXI_SIZE = AXI_BYTE_SHIFT;
 
-  typedef enum logic [1:0] {
+  typedef enum logic [2:0] {
     TX_IDLE,
     TX_AW,
     TX_W,
-    TX_B
+    TX_B,
+    TX_PATCH_AW,
+    TX_PATCH_W,
+    TX_PATCH_B
   } tx_state_t;
 
   tx_state_t tx_state_q;
@@ -76,8 +90,16 @@ module ff_axi4_bitstream_packet_writer #(
   logic [BURST_COUNT_BITS-1:0] tx_count_q;
   logic [BURST_COUNT_BITS-1:0] tx_remaining_q;
   logic tx_pending_last_q;
+  logic tx_pending_flush_q;
+  logic tx_pending_partial_flush_q;
+  logic tx_patch_active_q;
   logic final_seen_q;
+  logic flush_pending_q;
   logic [31:0] write_offset_q;
+  logic patch_pending_q;
+  logic [AXI_ADDR_BITS-1:0] patch_addr_q;
+  logic [AXI_DATA_BITS-1:0] patch_data_q;
+  logic [AXI_BYTES-1:0] patch_strobe_q;
   logic [AXI_DATA_BITS-1:0] next_word_w;
   logic [AXI_BYTES-1:0] next_strobe_w;
   logic [AXI_BYTE_COUNT_BITS-1:0] s_axis_count_safe_w;
@@ -87,7 +109,10 @@ module ff_axi4_bitstream_packet_writer #(
   logic capacity_ok_w;
   logic fifo_has_room_w;
   logic flush_input_w;
+  logic flush_accept_w;
+  logic enqueue_flush_word_w;
   logic take_word_w;
+  logic enqueue_stream_word_w;
   logic enqueue_word_w;
   logic dequeue_word_w;
   logic final_available_w;
@@ -98,11 +123,19 @@ module ff_axi4_bitstream_packet_writer #(
   logic [FIFO_INDEX_BITS-1:0] fifo_rd_ptr_next_w;
   logic [BURST_COUNT_BITS-1:0] start_burst_count_w;
   logic [31:0] tx_byte_advance_w;
+  logic [31:0] tx_flush_byte_advance_w;
   logic [AXI_BYTES-1:0] packet_strobe_unshifted_w;
   logic [AXI_BYTES-1:0] packet_strobe_shifted_w;
   logic [AXI_DATA_BITS-1:0] packet_data_masked_w;
   logic [AXI_DATA_BITS-1:0] packet_data_shifted_w;
   logic [7:0] packet_shift_bits_w;
+  logic [AXI_ADDR_BITS-1:0] patch_addr_w;
+  logic [31:0] patch_word_offset_w;
+  logic [AXI_BYTE_INDEX_BITS-1:0] patch_lane_w;
+  logic [AXI_DATA_BITS-1:0] patch_data_shifted_w;
+  logic [AXI_BYTES-1:0] patch_strobe_shifted_w;
+  logic [7:0] patch_shift_bits_w;
+  logic patch_capacity_ok_w;
   logic invalid_axis_count_w;
   integer packet_i;
   integer axis_count_i;
@@ -112,14 +145,18 @@ module ff_axi4_bitstream_packet_writer #(
     run_q ||
     (tx_state_q != TX_IDLE) ||
     (fifo_count_q != '0) ||
-    (byte_count_q != '0);
-  assign m_axi_awaddr = dst_base + write_offset_q;
-  assign m_axi_awlen = {{(8-BURST_COUNT_BITS){1'b0}}, tx_count_q} - 8'd1;
+    (byte_count_q != '0) ||
+    flush_pending_q ||
+    patch_pending_q;
+  assign m_axi_awaddr = tx_patch_active_q ? patch_addr_q : (dst_base + write_offset_q);
+  assign m_axi_awlen = tx_patch_active_q ?
+    8'd0 :
+    ({{(8-BURST_COUNT_BITS){1'b0}}, tx_count_q} - 8'd1);
   assign m_axi_awsize = AXI_SIZE;
   assign m_axi_awburst = 2'b01;
-  assign m_axi_wdata = fifo_data_q[fifo_rd_ptr_q];
-  assign m_axi_wstrb = fifo_strobe_q[fifo_rd_ptr_q];
-  assign m_axi_wlast = (tx_remaining_q == BURST_COUNT_BITS'(1));
+  assign m_axi_wdata = tx_patch_active_q ? patch_data_q : fifo_data_q[fifo_rd_ptr_q];
+  assign m_axi_wstrb = tx_patch_active_q ? patch_strobe_q : fifo_strobe_q[fifo_rd_ptr_q];
+  assign m_axi_wlast = tx_patch_active_q || (tx_remaining_q == BURST_COUNT_BITS'(1));
   always @* begin
     s_axis_count_safe_w = '0;
     s_axis_count_valid_w = 1'b0;
@@ -142,9 +179,17 @@ module ff_axi4_bitstream_packet_writer #(
   assign flush_input_w =
     s_axis_valid &&
     ((packet_count_sum_w >= AXI_BYTES_VALUE) || s_axis_last);
+  assign stream_flush_ready =
+    run_q &&
+    !final_seen_q &&
+    !flush_pending_q &&
+    (byte_count_q == '0 || fifo_has_room_w);
+  assign flush_accept_w = stream_flush_valid && stream_flush_ready;
   assign s_axis_ready =
     run_q &&
     !final_seen_q &&
+    !flush_pending_q &&
+    !stream_flush_valid &&
     capacity_ok_w &&
     (!flush_input_w || fifo_has_room_w);
   assign take_word_w =
@@ -154,10 +199,12 @@ module ff_axi4_bitstream_packet_writer #(
     (s_axis_count_safe_w != '0);
   assign invalid_axis_count_w =
     s_axis_valid && s_axis_count_valid_w === 1'b0;
-  assign enqueue_word_w =
+  assign enqueue_stream_word_w =
     take_word_w &&
     ((packet_count_sum_w >= AXI_BYTES_VALUE) || s_axis_last);
-  assign dequeue_word_w = m_axi_wvalid && m_axi_wready;
+  assign enqueue_flush_word_w = flush_accept_w && (byte_count_q != '0);
+  assign enqueue_word_w = enqueue_stream_word_w || enqueue_flush_word_w;
+  assign dequeue_word_w = !tx_patch_active_q && m_axi_wvalid && m_axi_wready;
   assign fifo_wr_ptr_next_w =
     (fifo_wr_ptr_q == FIFO_INDEX_BITS'(FIFO_WORDS - 1)) ? '0 : (fifo_wr_ptr_q + 1'b1);
   assign fifo_rd_ptr_next_w =
@@ -166,11 +213,13 @@ module ff_axi4_bitstream_packet_writer #(
     fifo_count_q - {{(FIFO_COUNT_BITS-1){1'b0}}, dequeue_word_w};
   assign fifo_count_after_activity_w =
     fifo_count_after_pop_w + {{(FIFO_COUNT_BITS-1){1'b0}}, enqueue_word_w};
-  assign final_available_w = final_seen_q || (enqueue_word_w && s_axis_last);
+  assign final_available_w = final_seen_q || (enqueue_stream_word_w && s_axis_last);
   assign start_burst_w =
     (tx_state_q == TX_IDLE) &&
     (fifo_count_after_activity_w != '0) &&
     (final_available_w ||
+      flush_pending_q ||
+      flush_accept_w ||
       (fifo_count_after_activity_w >=
         {{(FIFO_COUNT_BITS-BURST_COUNT_BITS){1'b0}}, BURST_MAX_BEATS_VALUE}));
   assign start_burst_count_w =
@@ -180,6 +229,10 @@ module ff_axi4_bitstream_packet_writer #(
         fifo_count_after_activity_w[BURST_COUNT_BITS-1:0];
   assign tx_byte_advance_w =
     {{(32-BURST_COUNT_BITS-AXI_BYTE_SHIFT){1'b0}}, tx_count_q, {AXI_BYTE_SHIFT{1'b0}}};
+  assign tx_flush_byte_advance_w =
+    (tx_count_q == BURST_COUNT_BITS'(0)) ? 32'd0 :
+      {{(32-BURST_COUNT_BITS-AXI_BYTE_SHIFT){1'b0}},
+        (tx_count_q - BURST_COUNT_BITS'(1)), {AXI_BYTE_SHIFT{1'b0}}};
   assign packet_strobe_unshifted_w =
     (s_axis_count_safe_w == '0) ?
       {AXI_BYTES{1'b0}} :
@@ -187,6 +240,26 @@ module ff_axi4_bitstream_packet_writer #(
   assign packet_strobe_shifted_w = packet_strobe_unshifted_w << byte_count_q;
   assign packet_shift_bits_w = {3'd0, byte_count_q} << 3;
   assign packet_data_shifted_w = packet_data_masked_w << packet_shift_bits_w;
+  assign patch_word_offset_w = (patch_offset >> AXI_BYTE_SHIFT) << AXI_BYTE_SHIFT;
+  generate
+    if (AXI_BYTES <= 1) begin : gen_single_patch_lane
+      assign patch_lane_w = 1'b0;
+    end else begin : gen_multi_patch_lane
+      assign patch_lane_w = patch_offset[AXI_BYTE_INDEX_BITS-1:0];
+    end
+  endgenerate
+  assign patch_addr_w = dst_base + patch_word_offset_w[AXI_ADDR_BITS-1:0];
+  assign patch_shift_bits_w = {3'd0, patch_lane_w} << 3;
+  assign patch_data_shifted_w = patch_data << patch_shift_bits_w;
+  assign patch_strobe_shifted_w = patch_strobe << patch_lane_w;
+  assign patch_capacity_ok_w =
+    (dst_capacity == 32'd0) ||
+    (patch_offset < dst_capacity);
+  assign patch_ready =
+    run_q &&
+    !patch_pending_q &&
+    !final_seen_q &&
+    patch_capacity_ok_w;
 
   always @* begin
     packet_data_masked_w = '0;
@@ -213,10 +286,20 @@ module ff_axi4_bitstream_packet_writer #(
       tx_count_q <= '0;
       tx_remaining_q <= '0;
       tx_pending_last_q <= 1'b0;
+      tx_pending_flush_q <= 1'b0;
+      tx_pending_partial_flush_q <= 1'b0;
+      tx_patch_active_q <= 1'b0;
       final_seen_q <= 1'b0;
+      flush_pending_q <= 1'b0;
       write_offset_q <= 32'd0;
+      patch_pending_q <= 1'b0;
+      patch_addr_q <= '0;
+      patch_data_q <= '0;
+      patch_strobe_q <= '0;
       bytes_written <= 32'd0;
       frame_done <= 1'b0;
+      stream_flush_done <= 1'b0;
+      patch_done <= 1'b0;
       error <= 1'b0;
       m_axi_awvalid <= 1'b0;
       m_axi_wvalid <= 1'b0;
@@ -227,6 +310,8 @@ module ff_axi4_bitstream_packet_writer #(
       end
     end else begin
       frame_done <= 1'b0;
+      stream_flush_done <= 1'b0;
+      patch_done <= 1'b0;
       if (start) begin
         tx_state_q <= TX_IDLE;
         run_q <= 1'b1;
@@ -239,8 +324,16 @@ module ff_axi4_bitstream_packet_writer #(
         tx_count_q <= '0;
         tx_remaining_q <= '0;
         tx_pending_last_q <= 1'b0;
+        tx_pending_flush_q <= 1'b0;
+        tx_pending_partial_flush_q <= 1'b0;
+        tx_patch_active_q <= 1'b0;
         final_seen_q <= 1'b0;
+        flush_pending_q <= 1'b0;
         write_offset_q <= 32'd0;
+        patch_pending_q <= 1'b0;
+        patch_addr_q <= '0;
+        patch_data_q <= '0;
+        patch_strobe_q <= '0;
         bytes_written <= 32'd0;
         error <= 1'b0;
         m_axi_awvalid <= 1'b0;
@@ -251,12 +344,34 @@ module ff_axi4_bitstream_packet_writer #(
           fifo_strobe_q[clear_i] <= '0;
         end
       end else begin
+        if (flush_accept_w) begin
+          if ((byte_count_q == '0) && (fifo_count_after_pop_w == '0) &&
+              (tx_state_q == TX_IDLE)) begin
+            stream_flush_done <= 1'b1;
+          end else begin
+            flush_pending_q <= 1'b1;
+          end
+        end
+
+        if (patch_valid && !patch_capacity_ok_w) begin
+          error <= 1'b1;
+        end
+        if (patch_valid && patch_ready) begin
+          patch_pending_q <= 1'b1;
+          patch_addr_q <= patch_addr_w;
+          patch_data_q <= patch_data_shifted_w;
+          patch_strobe_q <= patch_strobe_shifted_w;
+          if (patch_strobe_shifted_w == {AXI_BYTES{1'b0}}) begin
+            error <= 1'b1;
+          end
+        end
+
         if (run_q && invalid_axis_count_w) begin
           error <= 1'b1;
         end
         if (take_word_w) begin
           bytes_written <= bytes_written + packet_byte_advance_w;
-          if (enqueue_word_w) begin
+          if (enqueue_stream_word_w) begin
             fifo_data_q[fifo_wr_ptr_q] <= next_word_w;
             fifo_strobe_q[fifo_wr_ptr_q] <= next_strobe_w;
             fifo_wr_ptr_q <= fifo_wr_ptr_next_w;
@@ -271,6 +386,12 @@ module ff_axi4_bitstream_packet_writer #(
             strobe_q <= next_strobe_w;
             byte_count_q <= packet_count_sum_w[AXI_BYTE_COUNT_BITS-1:0];
           end
+        end else if (enqueue_flush_word_w) begin
+          fifo_data_q[fifo_wr_ptr_q] <= word_q;
+          fifo_strobe_q[fifo_wr_ptr_q] <= strobe_q;
+          fifo_wr_ptr_q <= fifo_wr_ptr_next_w;
+          word_q <= '0;
+          strobe_q <= '0;
         end else if (run_q && s_axis_valid && !capacity_ok_w) begin
           error <= 1'b1;
         end
@@ -293,13 +414,31 @@ module ff_axi4_bitstream_packet_writer #(
             m_axi_wvalid <= 1'b0;
             m_axi_bready <= 1'b0;
             if (start_burst_w) begin
+              tx_patch_active_q <= 1'b0;
               tx_count_q <= start_burst_count_w;
               tx_remaining_q <= start_burst_count_w;
               tx_pending_last_q <= final_available_w &&
                 (fifo_count_after_activity_w <=
                   {{(FIFO_COUNT_BITS-BURST_COUNT_BITS){1'b0}}, BURST_MAX_BEATS_VALUE});
+              tx_pending_flush_q <= (flush_pending_q || flush_accept_w) &&
+                (fifo_count_after_activity_w <=
+                  {{(FIFO_COUNT_BITS-BURST_COUNT_BITS){1'b0}}, BURST_MAX_BEATS_VALUE});
+              tx_pending_partial_flush_q <=
+                (flush_pending_q || flush_accept_w) &&
+                (byte_count_q != '0) &&
+                (fifo_count_after_activity_w <=
+                  {{(FIFO_COUNT_BITS-BURST_COUNT_BITS){1'b0}}, BURST_MAX_BEATS_VALUE});
               m_axi_awvalid <= 1'b1;
               tx_state_q <= TX_AW;
+            end else if (patch_pending_q &&
+                         (fifo_count_after_activity_w == '0) &&
+                         (strobe_q == {AXI_BYTES{1'b0}})) begin
+              tx_patch_active_q <= 1'b1;
+              tx_count_q <= BURST_COUNT_BITS'(1);
+              tx_remaining_q <= BURST_COUNT_BITS'(1);
+              tx_pending_last_q <= 1'b0;
+              m_axi_awvalid <= 1'b1;
+              tx_state_q <= TX_PATCH_AW;
             end
           end
           TX_AW: begin
@@ -321,7 +460,8 @@ module ff_axi4_bitstream_packet_writer #(
           TX_B: begin
             if (m_axi_bvalid && m_axi_bready) begin
               m_axi_bready <= 1'b0;
-              write_offset_q <= write_offset_q + tx_byte_advance_w;
+              write_offset_q <= write_offset_q +
+                (tx_pending_partial_flush_q ? tx_flush_byte_advance_w : tx_byte_advance_w);
               if (m_axi_bresp != 2'b00) begin
                 error <= 1'b1;
               end
@@ -330,7 +470,39 @@ module ff_axi4_bitstream_packet_writer #(
                 run_q <= 1'b0;
                 final_seen_q <= 1'b0;
               end
+              if (tx_pending_flush_q) begin
+                stream_flush_done <= 1'b1;
+                flush_pending_q <= 1'b0;
+              end
               tx_pending_last_q <= 1'b0;
+              tx_pending_flush_q <= 1'b0;
+              tx_pending_partial_flush_q <= 1'b0;
+              tx_state_q <= TX_IDLE;
+            end
+          end
+          TX_PATCH_AW: begin
+            if (m_axi_awvalid && m_axi_awready) begin
+              m_axi_awvalid <= 1'b0;
+              m_axi_wvalid <= 1'b1;
+              tx_state_q <= TX_PATCH_W;
+            end
+          end
+          TX_PATCH_W: begin
+            if (m_axi_wvalid && m_axi_wready) begin
+              m_axi_wvalid <= 1'b0;
+              m_axi_bready <= 1'b1;
+              tx_state_q <= TX_PATCH_B;
+            end
+          end
+          TX_PATCH_B: begin
+            if (m_axi_bvalid && m_axi_bready) begin
+              m_axi_bready <= 1'b0;
+              if (m_axi_bresp != 2'b00) begin
+                error <= 1'b1;
+              end
+              patch_pending_q <= 1'b0;
+              patch_done <= 1'b1;
+              tx_patch_active_q <= 1'b0;
               tx_state_q <= TX_IDLE;
             end
           end

@@ -55,11 +55,10 @@ VERILOG_SOURCES := \
   $(RTL_DIR)/common/ff_axi4_bitstream_writer.sv \
   $(RTL_DIR)/common/ff_axi4_bitstream_packet_writer.sv \
   $(RTL_DIR)/common/ff_sync_block_ram_1r1w.sv \
-  $(RTL_DIR)/common/ff_sync_byte_write_word_ram_1r1w.sv \
   $(RTL_DIR)/common/ff_sync_halfword_write_quad_read_ram_1r1w.sv \
   $(CODEC_RTL_DIR)/bitstream/ff_av2_bitstream_headers.sv \
-  $(CODEC_RTL_DIR)/bitstream/ff_av2_output_packetizer.sv \
   $(CODEC_RTL_DIR)/bitstream/ff_av2_carry_propagator.sv \
+  $(CODEC_RTL_DIR)/bitstream/ff_av2_forward_precarry_finalizer.sv \
   $(CODEC_RTL_DIR)/bitstream/ff_av2_payload_write_mux.sv \
   $(CODEC_RTL_DIR)/entropy/ff_av2_partition_controller.sv \
   $(CODEC_RTL_DIR)/entropy/ff_av2_partition_context_bank.sv \
@@ -69,6 +68,7 @@ VERILOG_SOURCES := \
   $(CODEC_RTL_DIR)/entropy/ff_av2_entropy_op_mux.sv \
   $(CODEC_RTL_DIR)/entropy/ff_av2_range_coder_step.sv \
   $(CODEC_RTL_DIR)/entropy/ff_av2_entropy_coder.sv \
+  $(CODEC_RTL_DIR)/entropy/ff_av2_entropy_top.sv \
   $(CODEC_RTL_DIR)/decision/ff_av2_prediction_decision.sv \
   $(CODEC_RTL_DIR)/ibc/ff_av2_local_hash_matcher_444.sv \
   $(CODEC_RTL_DIR)/ibc/ff_av2_ibc_context_bank.sv \
@@ -90,7 +90,6 @@ VERILOG_SOURCES := \
   $(CODEC_RTL_DIR)/ff_av2_encoder_ibc_controls.sv \
   $(CODEC_RTL_DIR)/ff_av2_state_phase_decode.sv \
   $(CODEC_RTL_DIR)/ff_av2_encoder_seq_stream.sv \
-  $(CODEC_RTL_DIR)/ff_av2_encoder_payload_word_delay.sv \
   $(CODEC_RTL_DIR)/ff_av2_encoder.sv
 TOPLEVEL := ff_av2_encoder
 COCOTB_TEST_MODULES := test_av2_encoder
