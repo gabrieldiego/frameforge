@@ -10,6 +10,9 @@ with zero chroma.
 Committed manifests must be portable. Do not put workstation-local media paths
 in committed files.
 
+For the broader local asset policy, including RaceHorses and screenshot source
+handling, see `../../docs/validation/local-assets.md`.
+
 Local source-crop manifests belong under:
 
 ```text

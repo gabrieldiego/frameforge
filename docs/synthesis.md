@@ -9,6 +9,9 @@ Codec-specific reports:
 - [VVC synthesis baselines](vvc/synthesis.md)
 - [AV2 synthesis baselines](av2/synthesis.md)
 
+Current synthesis runtime and memory targets are tracked in
+[validation/targets.md](validation/targets.md).
+
 The encoder top-level integration interface is shared across codecs and is
 documented in [rtl/hardware-interface.md](rtl/hardware-interface.md). Synthesis
 reports should continue to be codec-specific because each codec top instantiates

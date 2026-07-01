@@ -17,8 +17,9 @@ item tied to concrete validation and synthesis checkpoints.
 
 ## Guiding Constraints
 
-- Keep the public AV2 top-level input contract at 8x8 visible packet blocks
-  (64 Y, then 64 U, then 64 V samples) for now.
+- Keep the AV2 core boundary at visible 8x8 packet blocks (64 Y, then 64 U,
+  then 64 V samples) behind the shared AXI reader for now. The public hardware
+  interface remains the shared AXI control/read/write contract.
 - Prefer 8-bit operation initially; keep higher bit-depth path as cleanup work.
 - Any new syntax path must be generated from named, spec-referenced software
   decisions and mirrored in RTL (no opaque blobs).
@@ -55,7 +56,8 @@ The current validated AV2 baseline is no longer just palette bring-up. Treat
 these blocks as implemented, with future work focused on widening decisions and
 reducing cost rather than proving the plumbing again:
 
-- 8x8 visible Y/U/V packet input contract shared with the VVC 4:4:4 testbench.
+- Internal 8x8 visible Y/U/V packet core boundary behind the shared AXI
+  hardware interface.
 - 64x64 superblock/tile walking with partial and multi-superblock screenshot
   crop coverage.
 - Luma-only AV2 palette syntax for 8x8 leaves, using up to eight palette colors
@@ -253,9 +255,9 @@ Use this as the recurring feature checklist for each active development cycle:
   - Screen-aware coding-tool tuning hooks
 
 - **Format and input coverage**
-- 4:4:4 arbitrary-color full-frame/screenshot cases
-- 4:2:0 RaceHorses crop and multi-superblock cases
-- Multi-CTU geometry support with deterministic ordering
+  - 4:4:4 arbitrary-color full-frame/screenshot cases
+  - 4:2:0 RaceHorses crop and multi-superblock cases
+  - Multi-CTU geometry support with deterministic ordering
   - Partial-CTU edge cases and non-tile-aligned crops
   - Deterministic seed/replay support for pseudo-random screen crop generation
 

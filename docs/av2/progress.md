@@ -41,12 +41,11 @@ See the [AV2 roadmap](roadmap.md) for the next planned milestones.
   palette syntax. The current chroma path uses horizontal/vertical BDPCM plus
   lossless `TX_4X4` coefficient coding, with a local U/V edge-SAD chooser for
   the DPCM direction bit in `read_intra_uv_mode()`.
-- `rtl/av2/ff_av2_encoder.sv` is a synthesizable AV2 top with the same
-  top-level handshake shape as the VVC encoder. It consumes a visible 8x8 block
-  packet stream over `s_axis_*`: 64 Y samples, then 64 U samples, then 64 V
-  samples. That keeps the public testbench-facing interface compatible with the
-  VVC 4:4:4 packet shape while leaving AV2 superblock traversal internal to the
-  AV2 encoder.
+- `rtl/av2/ff_av2_encoder.sv` is a synthesizable AV2 top using the shared
+  FrameForge AXI4-Lite control interface plus AXI4 memory-mapped source-read
+  and bitstream-write interfaces. Behind the shared AXI reader, the AV2 core
+  still works on visible 8x8 Y/U/V block packets so codec traversal remains
+  local to the AV2 encoder rather than part of the board-facing interface.
 - `rtl/av2/palette/` contains standalone luma-palette modules:
   `ff_av2_palette_analyzer_444`, `ff_av2_chroma_sample_store`, and
   `ff_av2_luma_palette_symbolizer`.
@@ -155,7 +154,11 @@ make validate-set \
   VALIDATION_WITH_SYNTH=0
 ```
 
-## Current Checks
+## Historical Checks
+
+These older checks are kept as implementation history. Current measurements and
+deltas live in `quality-bitrate.md`, `output-utilization.md`, and
+`synthesis.md`.
 
 Last checked on 2026-06-15:
 
@@ -204,7 +207,7 @@ Last checked on 2026-06-15:
 - Replace the staged tile carry buffer with a streaming carry resolver after
   the next functional blocks are in place.
 - Continue expanding the block partition and luma-palette decisions while
-  keeping the shared top-level packet contract at visible 8x8 Y/U/V blocks
+  keeping the internal codec-core packet contract at visible 8x8 Y/U/V blocks
   unless a codec-specific order is clearly cheaper.
 - Keep checksum, bitrate, and PSNR reporting in the shared validation path as
   new AV2 syntax is added.

@@ -21,10 +21,13 @@ Current status: experimental, not production-ready. The current VVC software and
 
 - `src/` - Rust CLI, encoder framework, bitstream utilities, trace support, and codec software models.
 - `docs/` - shared process notes plus codec-specific implementation reports.
+- `docs/project/` - project-wide feature/status orientation.
+- `docs/validation/` - validation targets, failure triage, reporting workflow,
+  and local asset policy.
 - `docs/vvc/` and `docs/av2/` - VVC and AV2 implementation notes, including
   codec-specific synthesis baselines.
 - `docs/rtl/` - shared RTL integration contracts, including the common encoder
-  AXI register map.
+  AXI register map and architecture notes.
 - `scripts/` - helper tools such as optional external decoder validation.
 - `rtl/common/` - codec-independent RTL glue such as AXI control, frame-read,
   and bitstream-write adapters.
@@ -480,21 +483,21 @@ For AV2, the same helper can prepare AVM:
   assembler is available.
 - `FRAMEFORGE_AV2_ENCODER_CMD` / `FRAMEFORGE_AVM_ENCODER_CMD`: full encoder command template for local AVM command-line differences.
 
-AV2 validation infrastructure is staged. The Rust and RTL AV2 paths now emit
-generated unmuxed OBU streams for the current black 4:4:4 geometry sweep and a
-luma-palette 4:4:4 subset. The top-level RTL input contract uses the same
-visible 8x8 block packet shape as the VVC 4:4:4 path: 64 Y samples, then 64 U
-samples, then 64 V samples. Codec-specific block traversal remains internal to
-each encoder. The current AV2 v1.0.0/AVM path signals palette syntax for luma
-only, so arbitrary screenshots are still lossy until an explicit chroma coding
-path is added. The AV2 entropy stream is generated from named syntax decisions
-rather than stored bitstream payloads, and the validation path compares
-software, RTL, and AVM reference reconstruction checksums. Use
-`VALIDATION_SET=sweep-black-444` for the black geometry sweep,
-`VALIDATION_SET=av2-palette-luma-444` for the first lossless luma-palette
-smoke, and local `VALIDATION_SET=screenshot-sweep-444` when the local
-screenshot manifest is available. See [docs/av2/progress.md](docs/av2/progress.md)
-for the current AV2 checkpoint list.
+AV2 validation infrastructure is active. The Rust and RTL AV2 paths generate
+unmuxed OBU streams from named syntax decisions rather than stored bitstream
+payloads, and the validation path compares software, RTL, and AVM reference
+reconstruction checksums. The public RTL interface is the shared AXI4-Lite plus
+AXI4 memory-mapped source/bitstream contract used by both codecs; visible 8x8
+Y/U/V packet handling is now an internal codec-core boundary behind the shared
+AXI reader. The current AV2 v1.0.0/AVM-compatible palette syntax is luma-only,
+so arbitrary 4:4:4 screenshot losslessness is achieved by combining luma
+palette prediction with lossless luma residual and chroma BDPCM/residual paths.
+Use local `VALIDATION_SET=screenshot-sweep-444` and
+`VALIDATION_SET=screenshot-multictu-444` when screenshot manifests are
+available, and use the RaceHorses 4:2:0 local sets as the lossy natural-video
+guard. See [docs/av2/progress.md](docs/av2/progress.md) and
+[docs/project/feature-matrix.md](docs/project/feature-matrix.md) for the
+current checkpoint list and cross-codec status.
 
 Prepare a decoder:
 

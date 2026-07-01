@@ -29,6 +29,8 @@ Required checks for implemented paths:
 Do not change validation scripts to hide known failures. Unsupported syntax or
 geometry should fail visibly until implemented.
 
+See `failure-triage.md` for the debug workflow when one of these gates fails.
+
 ## Required Regression Coverage
 
 For shared encoder, RTL, or reporting changes, run the affected codec sets:
@@ -149,6 +151,8 @@ For algorithmic encoder changes:
 Reports should include baseline and current Git SHA values. When practical,
 commit validated source first, then regenerate reports using that source commit
 as the current SHA and commit the reports separately.
+
+See `reporting-workflow.md` for the full report-generation lifecycle.
 
 ## Design Constraints That Affect Validation
 

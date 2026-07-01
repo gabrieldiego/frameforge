@@ -38,7 +38,9 @@ before making assumptions:
 ```sh
 git status --short
 sed -n '1,220p' README.md
+sed -n '1,220p' docs/project/feature-matrix.md
 sed -n '1,220p' docs/rtl/hardware-interface.md
+sed -n '1,220p' docs/rtl/architecture.md
 sed -n '1,220p' docs/synthesis.md
 sed -n '1,220p' docs/validation/targets.md
 ```
@@ -65,6 +67,14 @@ are not source-of-truth documents.
 Current numeric validation, bubble-rate, runtime, and synthesis-memory targets
 are maintained in `docs/validation/targets.md`. Treat that file as the source
 of truth for milestone acceptance thresholds.
+
+Related operational docs:
+
+- `docs/project/feature-matrix.md` for current VVC/AV2 feature status.
+- `docs/validation/failure-triage.md` for failure-specific debug workflow.
+- `docs/validation/reporting-workflow.md` for report and commit sequencing.
+- `docs/validation/local-assets.md` for local manifest and media policy.
+- `docs/rtl/architecture.md` for the shared RTL block map.
 
 ## Suggested Session Bootstrap
 
@@ -321,8 +331,8 @@ Track:
 - block-level waiting/working/backpressure/idle rates
 
 For RTL changes, keep utilization baseline or improve it unless there is a
-clear feature reason. For streams at least 128 pixels in one dimension, bubble
-rate should trend below 80%, and longer-term work may target 60% or better.
+clear feature reason. The current numeric bubble-rate target is maintained in
+`docs/validation/targets.md`.
 
 Use:
 

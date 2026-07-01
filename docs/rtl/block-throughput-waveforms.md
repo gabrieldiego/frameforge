@@ -13,7 +13,7 @@ python3 scripts/validate.py --codec av2 --block-waveform --skip-synth <vector.yu
 or for a validation set with:
 
 ```sh
-make validate-set CODEC=av2 VALIDATION_SET=screenshot-444-sweep VALIDATION_BLOCK_WAVEFORM=1 VALIDATION_WITH_SYNTH=0
+make validate-set CODEC=av2 VALIDATION_SET=screenshot-sweep-444 VALIDATION_BLOCK_WAVEFORM=1 VALIDATION_WITH_SYNTH=0
 ```
 
 The validation log prints the generated artifact paths:
@@ -151,7 +151,8 @@ Representative block rates:
 | `grid2_128x128` | 0.063 | 0.937 | 0.743 | 0.032 | 0.367 | 0.358 | 0.066 |
 
 The `h2`, `h3`, `v2`, `v3`, `partial_h2`, `partial_wide`, and `partial_tall`
-vectors are individually at or below the requested `0.800` bubble target. The
-grid and vertical-partial outliers have very small bitstreams, so fixed CTU
-traversal and input fetch work dominate the byte-output metric even though the
-reader and CABAC handoff paths are active.
+vectors were individually at or below the historical `0.800` bubble target used
+for that checkpoint. Current bubble-rate targets are maintained in
+`docs/validation/targets.md`. The grid and vertical-partial outliers have very
+small bitstreams, so fixed CTU traversal and input fetch work dominate the
+byte-output metric even though the reader and CABAC handoff paths are active.
