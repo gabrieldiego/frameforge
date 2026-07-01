@@ -5,12 +5,12 @@ Older measurements are intentionally left to git history so this page stays
 focused on the current baseline and immediate delta. The shared synthesis flow
 is documented in [../synthesis.md](../synthesis.md).
 
-## AV2 prediction decision block
+## Streamed entropy output
 
 Baseline and current sources:
 
-- Baseline Git SHA: `28fa335ecfba2e9463e416688f0144bd29f159f3`
-- Current validated source Git SHA: `7383aee7b77230a85bdd86c5cf151008ba7de553`
+- Baseline Git SHA: `7383aee7b77230a85bdd86c5cf151008ba7de553`
+- Current validated source Git SHA: `ccc1e283b43c5833c276605f1f583d9c1476f4b3`
 
 Validation result:
 
@@ -37,33 +37,34 @@ Yosys synthesis result:
 
 | Metric | Baseline | Current | Delta |
 |---|---:|---:|---:|
-| Main Yosys elapsed time (s) | 606.20 s | 629.20 s | +23.00 s |
-| Runner-observed peak child RSS (MiB) | 2435.23 MiB | 2453.74 MiB | +18.51 MiB |
-| Topological path length | 122 | 122 | +0 |
-| Flattened cells | 137682 | 137782 | +100 |
-| Estimated LCs | 65368 | 65883 | +515 |
-| CARRY4 | 3871 | 3871 | +0 |
+| Main Yosys elapsed time (s) | 629.20 s | 546.80 s | -82.40 s |
+| Runner-observed peak child RSS (MiB) | 2453.74 MiB | 2445.40 MiB | -8.34 MiB |
+| Topological path length | 122 | 124 | +2 |
+| Flattened cells | 137782 | 135832 | -1950 |
+| Estimated LCs | 65883 | 63438 | -2445 |
+| CARRY4 | 3871 | 4022 | +151 |
 | DSP48E1 | 2 | 2 | +0 |
-| FDCE | 7714 | 7714 | +0 |
+| FDCE | 7714 | 7898 | +184 |
 | FDPE | 78 | 78 | +0 |
-| FDRE | 20565 | 20565 | +0 |
+| FDRE | 20565 | 20852 | +287 |
 | FDSE | 133 | 133 | +0 |
-| LUT1 | 1159 | 1392 | +233 |
-| LUT2 | 16368 | 16084 | -284 |
-| LUT3 | 13129 | 13098 | -31 |
-| LUT4 | 8239 | 9478 | +1239 |
-| LUT5 | 11982 | 12247 | +265 |
-| LUT6 | 32018 | 31060 | -958 |
-| MUXF7 | 8296 | 7875 | -421 |
-| MUXF8 | 1679 | 1705 | +26 |
-| RAMB36E1 | 30 | 30 | +0 |
+| LUT1 | 1392 | 1188 | -204 |
+| LUT2 | 16084 | 15759 | -325 |
+| LUT3 | 13098 | 12455 | -643 |
+| LUT4 | 9478 | 8685 | -793 |
+| LUT5 | 12247 | 12188 | -59 |
+| LUT6 | 31060 | 30110 | -950 |
+| MUXF7 | 7875 | 8092 | +217 |
+| MUXF8 | 1705 | 1864 | +159 |
+| RAMB36E1 | 30 | 6 | -24 |
 | RAM32M | 0 | 0 | +0 |
 
 Critical-path summary:
 
-- Longest Yosys topological path in `ff_av2_encoder`: length 122.
-- Reported limiter: input FIFO data selection feeding the 4:4:4
-  palette-color update path in `ff_av2_palette_analyzer_444`.
+- Longest Yosys topological path in `ff_av2_encoder`: length 124.
+- Reported limiter: the top-level path begins at
+  `ff_av2_chroma_bdpcm_symbolizer.scan_q[3]` and feeds the BDPCM scan-boundary
+  compare in `rtl/av2/residual/ff_av2_chroma_bdpcm_symbolizer.sv`.
 - Longest topological path in `ff_av2_chroma_sample_store`: length 1.
 
 Vivado synthesis and timing result:
@@ -73,6 +74,7 @@ Vivado synthesis and timing result:
 
 Notes:
 
-- Bitrate deltas reflect the refreshed validation logs for this checkpoint;
-  output-utilization deltas include any RTL-cycle changes from the current
-  RTL updates.
+- The quality/bitrate report was not refreshed for this checkpoint because the
+  encoded bitstreams remained byte-exact against the previous baseline.
+- Output-utilization deltas include RTL-cycle changes from the streamed
+  two-pass entropy-output path.
