@@ -9,6 +9,10 @@ Codec-specific reports:
 - [VVC synthesis baselines](vvc/synthesis.md)
 - [AV2 synthesis baselines](av2/synthesis.md)
 
+Research notes:
+
+- [ASIC synthesis research baseline](asic-synthesis-research.md)
+
 Current synthesis runtime and memory targets are tracked in
 [validation/targets.md](validation/targets.md).
 
