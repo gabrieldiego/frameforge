@@ -181,6 +181,17 @@ states that the D400 AV2 decoder targets high-performance use cases up to 8K
 while optimizing silicon footprint, memory bandwidth, and power. These public
 pages do not publish usable gate counts or mm2 area.
 
+An additional search for full-encoder area references, including H.264/AVC,
+HEVC, JPEG, JPEG-LS, and JPEG 2000 terms, did not find a primary-source public
+paper or product page with enough whole-encoder gate-count or die-area data to
+serve as a reliable target. The public full-encoder sources found so far mostly
+publish feature set, throughput class, or integration interface, not area. The
+practical implication is that any FrameForge area target based only on public
+commercial encoder pages would be mostly guesswork. Until a stronger public
+whole-encoder reference is found, the best full-encoder comparison is to
+synthesize another available encoder RTL, such as the local `xk265` hardware
+tree, through the exact same open ASIC flow.
+
 Academic block-level papers provide more concrete numeric anchors, but they are
 not full-encoder comparisons:
 
@@ -208,6 +219,7 @@ Reference comparison table:
 | Allegro DVT E300 encoder IP | Multi-format encoder supporting H.264, H.265, VP9, AV1, JPEG, and VVC; APB control and AXI data access; RTL and software model deliverables | Commercial IP, technology node not disclosed | Public page claims 4K encoding in a single core and beyond with multi-core configuration; no public gate count, area, frequency, or power | [E300 encoder page](https://www.allegrodvt.com/products/e300-series-video-encoder/) |
 | Allegro DVT D300 decoder IP | Multi-format decoder supporting H.265, H.264, JPEG, AV1, VP9, and VVC variants; APB control and AXI data access | Commercial IP, technology node not disclosed | Public page claims scalable multi-core decoding up to 8K; no public gate count, area, frequency, or power | [D300 decoder page](https://www.allegrodvt.com/products/d300-series-video-decoder/) |
 | Allegro DVT D400 AV2 decoder IP | AV2-capable multi-standard decoder IP | Commercial IP, technology node not disclosed | Public announcement claims high-performance use cases up to 8K and optimized silicon footprint, memory bandwidth, and power; no public gate count, area, frequency, or power | [AV2 decoder announcement](https://www.allegrodvt.com/news/pulsar-decoder-ip-support-av2-video-codec/) |
+| Ambarella vision/compression SoCs | Commercial camera/vision SoCs with video-compression technology and high-resolution video focus | Commercial SoCs, technology node not disclosed on the public page | Public page describes compression technology, high-resolution camera processing, low-power deployment, and mass-production history; no public codec-block gate count or encoder die area | [Ambarella technology page](https://www.ambarella.com/technology/) |
 | VVC fractional motion estimation block | Error-surface-based FME for VVC inter coding, 13 CU sizes from 128x128 to 8x8 | GF 28 nm synthesis | 192k gates, 400 MHz for 4K@30, 12.64 mW; 8K@30 at 631 MHz in quadtree-only mode | [arXiv:2302.06167](https://arxiv.org/abs/2302.06167) |
 | VVC transform block | Pipelined multi-standard transform block for AVC/HEVC/VVC with DCT/DST support | ASIC target, process not disclosed in the arXiv abstract | 32 regular multipliers, two pixels/cycle, 600 MHz, 4K@48 decoder throughput | [arXiv:2002.07461](https://arxiv.org/abs/2002.07461) |
 | VVC inverse-transform block | Pipelined inverse transform with MTS and LFNST support | ASIC target, process not disclosed in the arXiv abstract | 64 regular multipliers, one sample/cycle, 600 MHz, 4K@30 decoder throughput for 4:2:2 | [arXiv:2107.11659](https://arxiv.org/abs/2107.11659) |
@@ -228,6 +240,18 @@ area directly. It does provide useful guardrails:
 - Commercial IP pages emphasize AXI/APB-style system integration and memory
   bandwidth. FrameForge's shared AXI control/read/write interface is aligned
   with this public integration pattern.
+
+Because the search did not find a strong public whole-encoder area number, the
+first area projection should be treated as a two-anchor estimate:
+
+1. Block-level public anchor: VVC FME at 192k gates in GF 28 nm.
+2. Same-flow local full-encoder anchor: xk265 synthesized with the same Yosys,
+   OpenSTA, OpenROAD/OpenLane, PDK, floorplan, and constraints used for
+   FrameForge.
+
+The xk265 result should supersede any speculative whole-encoder area target in
+this document once it exists, because it will be a real full-encoder RTL
+comparison measured under the same tool assumptions.
 
 Reasonable first targets by open ASIC flow:
 
@@ -255,7 +279,9 @@ If the early screen-content encoder exceeds roughly 1-2 MGE before adding full
 inter search, deblocking, SAO/CDEF-like filters, or large reference buffers,
 that should trigger an area audit. If it cannot close above 125 MHz in 130 nm
 or above roughly 250 MHz in a 45 nm academic flow, that should trigger a timing
-audit before adding major new coding tools.
+audit before adding major new coding tools. These are provisional guardrails,
+not evidence-backed commercial full-encoder targets; replace them with a
+same-flow xk265 comparison as soon as that report is available.
 
 The practical comparison set for FrameForge should therefore be:
 
