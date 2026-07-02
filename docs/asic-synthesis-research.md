@@ -162,31 +162,100 @@ constant.
 Public commercial encoder IP pages rarely publish area or gate counts. They are
 still useful to understand integration style and throughput class.
 
-Allegro DVT's public E300 encoder page describes a multi-format hardware
-encoder supporting H.264, H.265, VP9, AV1, JPEG, and VVC. It advertises 4K
-single-core encoding, APB for control registers, AXI interfaces for data
-access, RTL deliverables, C control software, and a bit-accurate software
-reference model. This supports FrameForge's chosen public hardware shape:
-control-plane registers plus memory-mapped data access through AXI.
+Allegro DVT's public
+[E300 encoder page](https://www.allegrodvt.com/products/e300-series-video-encoder/)
+describes a multi-format hardware encoder supporting H.264, H.265, VP9, AV1,
+JPEG, and VVC. The same page advertises 4K single-core encoding, APB for
+control registers, AXI interfaces for data access, RTL deliverables, C control
+software, and a bit-accurate software reference model. This supports
+FrameForge's chosen public hardware shape: control-plane registers plus
+memory-mapped data access through AXI.
 
-Allegro DVT's public D300 decoder page similarly documents APB control, AXI
-data access, RTL source deliverables, control software, and a software
-reference model for a multi-format decoder. Its AV2 announcement states that
-their newer decoder IP targets high-performance use cases up to 8K while
-optimizing silicon footprint, memory bandwidth, and power. These pages do not
-publish usable gate counts or mm2 area.
+Allegro DVT's public
+[D300 decoder page](https://www.allegrodvt.com/products/d300-series-video-decoder/)
+similarly documents APB control, AXI data access, RTL source deliverables,
+control software, and a software reference model for a multi-format decoder.
+Its
+[AV2 decoder announcement](https://www.allegrodvt.com/news/pulsar-decoder-ip-support-av2-video-codec/)
+states that the D400 AV2 decoder targets high-performance use cases up to 8K
+while optimizing silicon footprint, memory bandwidth, and power. These public
+pages do not publish usable gate counts or mm2 area.
 
 Academic block-level papers provide more concrete numeric anchors, but they are
 not full-encoder comparisons:
 
-- A VVC fractional motion-estimation architecture synthesized in GF 28 nm
-  reports 192k gates, 400 MHz for 4K@30, and 12.64 mW. This is one inter-coding
-  block, not a full encoder.
-- VVC transform-block ASIC papers report 600 MHz-class operation for decoder
-  inverse transform modules with one or two samples per cycle. These papers are
-  useful as evidence that heavily pipelined codec blocks can reach several
-  hundred MHz in ASIC nodes, but they do not bound FrameForge's full entropy,
-  prediction, AXI, and reconstruction path.
+- A
+  [VVC fractional motion-estimation architecture](https://arxiv.org/abs/2302.06167)
+  synthesized in GF 28 nm reports 192k gates, 400 MHz for 4K@30, and 12.64 mW.
+  This is one inter-coding block, not a full encoder.
+- A
+  [VVC transform-block ASIC paper](https://arxiv.org/abs/2002.07461)
+  reports a pipelined VVC transform design with 32 multipliers, two pixels per
+  cycle, 600 MHz operation, and 4K@48 decoder throughput.
+- A
+  [VVC inverse-transform ASIC paper](https://arxiv.org/abs/2107.11659)
+  reports a pipelined inverse-transform design with 64 multipliers, one sample
+  per cycle, 600 MHz operation, and 4K@30 decoder throughput for 4:2:2 content.
+
+These papers are useful as evidence that heavily pipelined codec blocks can
+reach several hundred MHz in ASIC flows, but they do not bound FrameForge's
+full entropy, prediction, AXI, and reconstruction path.
+
+Reference comparison table:
+
+| Module or IP | Feature implemented | Technology used | Reported result | Source |
+|---|---|---|---|---|
+| Allegro DVT E300 encoder IP | Multi-format encoder supporting H.264, H.265, VP9, AV1, JPEG, and VVC; APB control and AXI data access; RTL and software model deliverables | Commercial IP, technology node not disclosed | Public page claims 4K encoding in a single core and beyond with multi-core configuration; no public gate count, area, frequency, or power | [E300 encoder page](https://www.allegrodvt.com/products/e300-series-video-encoder/) |
+| Allegro DVT D300 decoder IP | Multi-format decoder supporting H.265, H.264, JPEG, AV1, VP9, and VVC variants; APB control and AXI data access | Commercial IP, technology node not disclosed | Public page claims scalable multi-core decoding up to 8K; no public gate count, area, frequency, or power | [D300 decoder page](https://www.allegrodvt.com/products/d300-series-video-decoder/) |
+| Allegro DVT D400 AV2 decoder IP | AV2-capable multi-standard decoder IP | Commercial IP, technology node not disclosed | Public announcement claims high-performance use cases up to 8K and optimized silicon footprint, memory bandwidth, and power; no public gate count, area, frequency, or power | [AV2 decoder announcement](https://www.allegrodvt.com/news/pulsar-decoder-ip-support-av2-video-codec/) |
+| VVC fractional motion estimation block | Error-surface-based FME for VVC inter coding, 13 CU sizes from 128x128 to 8x8 | GF 28 nm synthesis | 192k gates, 400 MHz for 4K@30, 12.64 mW; 8K@30 at 631 MHz in quadtree-only mode | [arXiv:2302.06167](https://arxiv.org/abs/2302.06167) |
+| VVC transform block | Pipelined multi-standard transform block for AVC/HEVC/VVC with DCT/DST support | ASIC target, process not disclosed in the arXiv abstract | 32 regular multipliers, two pixels/cycle, 600 MHz, 4K@48 decoder throughput | [arXiv:2002.07461](https://arxiv.org/abs/2002.07461) |
+| VVC inverse-transform block | Pipelined inverse transform with MTS and LFNST support | ASIC target, process not disclosed in the arXiv abstract | 64 regular multipliers, one sample/cycle, 600 MHz, 4K@30 decoder throughput for 4:2:2 | [arXiv:2107.11659](https://arxiv.org/abs/2107.11659) |
+
+## Projected FrameForge ASIC Targets
+
+The table above does not provide enough information to calculate FrameForge
+area directly. It does provide useful guardrails:
+
+- A single VVC FME block can be about 192k gates in GF 28 nm while reaching
+  400 MHz. FrameForge's current lossless screen-content subset does not include
+  full inter motion estimation, so an early AV2/VVC screen-content ASIC core
+  should be kept in the same order as a few such blocks, not tens of them.
+- Published transform blocks reach 600 MHz when deeply pipelined. FrameForge
+  should not assume this for the whole encoder, but it should treat
+  several-hundred-MHz ASIC timing as plausible after critical entropy,
+  predictor, and AXI paths are pipelined.
+- Commercial IP pages emphasize AXI/APB-style system integration and memory
+  bandwidth. FrameForge's shared AXI control/read/write interface is aligned
+  with this public integration pattern.
+
+Reasonable first targets by open ASIC flow:
+
+| Flow target | What the result means | First-pass FrameForge target | Why this target is useful |
+|---|---|---|---|
+| SKY130 with Yosys + OpenROAD/OpenLane | Open, reproducible 130 nm physical estimate; conservative timing and large area | Timing-clean at 100-200 MHz for the core clock, with area recorded in kGE and mm2. Treat 1080p60 as the practical throughput target if cycles/input pixel is at or below 1.000. | Establishes a manufacturable-style open baseline and exposes memory, routing, and fanout problems early. |
+| GF180MCU with Yosys + OpenROAD/OpenLane | Open, reproducible 180 nm physical estimate; even more conservative density/timing | Timing-clean at 75-150 MHz, with strong pressure to keep memories explicit and small. 1080p60 at one cycle/pixel is a stretch target. | Useful as a worst-case old-node baseline and for checking whether the architecture depends on unrealistic density. |
+| IHP SG13G2 with Yosys + OpenROAD/OpenLane | Open 130 nm-class alternative with a different library/process ecosystem | Similar to SKY130: target 100-200 MHz initially, then compare area/timing against SKY130 under the same source SHA. | Gives a second open PDK sanity check so conclusions are not tied to one cell library. |
+| Nangate45 or equivalent academic 45 nm flow | Predictive/academic standard-cell comparison, not a production claim | Target 250-500 MHz if the critical paths are kept short. At one cycle/pixel, this starts to cover 4Kp30 and approaches 4Kp60. | Bridges the gap between old open nodes and the 28 nm-class academic hardware references. |
+| ASAP7 or equivalent predictive 7 nm flow | Architecture-scaling experiment only | Target 500 MHz or higher for a well-pipelined core. At one cycle/pixel, 4Kp60 becomes the relevant milestone. | Tests whether the architecture scales when cell delays shrink, while still treating the result as non-manufacturing evidence. |
+
+For the first report, the best metric is not one absolute area number. The
+report should compare AV2 and VVC under the same flow, at the same source SHA
+family, with:
+
+- standard-cell area and kGE;
+- post-route WNS/Fmax;
+- memory bits and any mapped SRAM macros;
+- cycles/input pixel from RTL validation;
+- `kGE / Gpixel/s` and `mm2 / Gpixel/s`;
+- the worst path module and whether it matches the RTL/Yosys critical-path
+  diagnosis.
+
+If the early screen-content encoder exceeds roughly 1-2 MGE before adding full
+inter search, deblocking, SAO/CDEF-like filters, or large reference buffers,
+that should trigger an area audit. If it cannot close above 125 MHz in 130 nm
+or above roughly 250 MHz in a 45 nm academic flow, that should trigger a timing
+audit before adding major new coding tools.
 
 The practical comparison set for FrameForge should therefore be:
 
