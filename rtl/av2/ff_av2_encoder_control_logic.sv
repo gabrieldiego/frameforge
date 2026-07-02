@@ -99,6 +99,7 @@
       finish_s_q <= 8'sd0;
       forward_precarry_flush_start_w <= 1'b0;
       bitstream_stream_flush_valid_w <= 1'b0;
+      bitstream_finish_valid_w <= 1'b0;
       bitstream_patch_valid_w <= 1'b0;
       bitstream_patch_offset_w <= 32'd0;
       bitstream_patch_data_w <= '0;
@@ -108,7 +109,11 @@
       output_last_q <= 1'b0;
       prefix_patch_offset_q <= 16'd0;
       prefix_patch_index_q <= 2'd0;
+      frame_output_base_q <= 32'd0;
+      closed_len_patch_q <= 1'b0;
       output_pass_q <= 1'b0;
+      frame_header_done_q <= 1'b0;
+      resume_tile_after_header_q <= 1'b0;
       for (seq_write_i = 0; seq_write_i < AV2_MAX_SEQUENCE_BYTES; seq_write_i = seq_write_i + 1) begin
         seq_mem_u[seq_write_i] <= 8'd0;
       end
@@ -128,6 +133,7 @@
       input_error <= 1'b0;
       forward_precarry_flush_start_w <= 1'b0;
       bitstream_stream_flush_valid_w <= 1'b0;
+      bitstream_finish_valid_w <= 1'b0;
       bitstream_patch_valid_w <= 1'b0;
       if (luma_fetch_completed_w) begin
         cached_u_txb_samples_q[luma_fetch_cache_index_w] <= luma_fetch_u_txb_samples_w;
@@ -152,8 +158,7 @@
         m_axis_valid <= 1'b1;
         m_axis_data <= {{(AXI_DATA_BITS - 8){1'b0}}, forward_precarry_payload_write_data_w};
         m_axis_count <= OUTPUT_PACKET_COUNT_BITS'(1);
-        m_axis_last <=
-          forward_precarry_payload_write_last_w && tile_is_last_w && frame_is_last_w;
+        m_axis_last <= 1'b0;
         stream_index_q <= stream_index_q + 16'd1;
       end
       if (start) begin
@@ -176,8 +181,13 @@
           payload_prefix_index_q <= 2'd0;
           prefix_patch_offset_q <= 16'd0;
           prefix_patch_index_q <= 2'd0;
-          output_pass_q <= 1'b0;
+          frame_output_base_q <= 32'd0;
+          closed_len_patch_q <= 1'b0;
+          output_pass_q <= 1'b1;
+          frame_header_done_q <= 1'b0;
+          resume_tile_after_header_q <= 1'b0;
           bitstream_stream_flush_valid_w <= 1'b0;
+          bitstream_finish_valid_w <= 1'b0;
           bitstream_patch_valid_w <= 1'b0;
           bitstream_patch_offset_w <= 32'd0;
           bitstream_patch_data_w <= '0;
@@ -207,8 +217,8 @@
           tile_height_q <= (tile_rows_w == 16'd1) ? visible_height : 16'd64;
           tile_input_index_q <= 32'd0;
           tile_input_active_q <= 1'b0;
-          frame_palette_mode_q <= 1'b0;
-          frame_ibc_mode_q <= 1'b0;
+          frame_palette_mode_q <= frame_palette_conservative_w;
+          frame_ibc_mode_q <= frame_ibc_conservative_w;
           phase_q <= PHASE_INTRA;
           step_q <= 5'd0;
           palette_row_q <= 6'd0;
@@ -308,8 +318,6 @@
                 input_error <= 1'b1;
                 state_q <= ST_IDLE;
               end else begin
-                palette_mode_q <= tile_entropy_palette_mode_w;
-                lossy_420_mode_q <= tile_entropy_lossy420_mode_w;
                 frame_palette_mode_q <= frame_palette_mode_q | tile_entropy_palette_mode_w;
                 // AV2 v1.0.0 read_intrabc_params()/read_intra_frame_mode_info():
                 // allow_intrabc is a frame-header decision, while the MVP RTL
@@ -317,79 +325,145 @@
                 // is observed. Each leaf still independently writes use_intrabc
                 // from the streaming hash matcher.
                 frame_ibc_mode_q <= frame_ibc_mode_q | tile_entropy_ibc_mode_w;
-                low_q <= 64'd0;
-                rng_q <= 32'h8000;
-                cnt_q <= -8'sd9;
-                precarry_read_word_addr_q <= 12'd0;
-                pending_push_valid_q <= 1'b0;
-                pending_push_word_q <= 16'd0;
-                precarry_len_q <= 16'd0;
-                tile_len_q <= 16'd0;
-                phase_q <= tile_entropy_ibc_mode_w ? PHASE_INTRABC : PHASE_INTRA;
-                step_q <= 5'd0;
-                palette_row_q <= 6'd0;
-                palette_col_q <= 6'd0;
-                palette_identity_row_ctx_q <= 2'd3;
-                leaf_luma_mode_q <= LUMA_MODE_DC;
-                leaf_chroma_bdpcm_horz_q <= 1'b1;
-                lossy420_luma_recon_q[0] <= 8'd128;
-                lossy420_luma_recon_q[1] <= 8'd128;
-                lossy420_luma_recon_q[2] <= 8'd128;
-                lossy420_luma_recon_q[3] <= 8'd128;
-                lossy420_luma_left_valid_q <= 16'd0;
-                lossy420_luma_above_valid_q <= 16'd0;
-                lossy420_u_left_valid_q <= 16'd0;
-                lossy420_v_left_valid_q <= 16'd0;
-                lossy420_u_above_valid_q <= 16'd0;
-                lossy420_v_above_valid_q <= 16'd0;
-                txb_index_q <= 16'd0;
-                txb_width_q <= 16'd0;
-                txb_count_q <= 16'd0;
-                txb_local_row_q <= 5'd0;
-                txb_local_col_q <= 5'd0;
-                txb_prefetch_started_q <= 1'b0;
-                txb_prefetch_done_q <= 1'b0;
-                txb_prefetch_chroma_q <= 1'b0;
-                txb_prefetch_plane_v_q <= 1'b0;
-                txb_prefetch_index_q <= 2'd0;
-                cached_v_valid_q <= 4'd0;
-                cached_chroma_samples_valid_q <= 4'd0;
-                left_edge_u_top_q <= 32'd0;
-                left_edge_u_bottom_q <= 32'd0;
-                left_edge_v_top_q <= 32'd0;
-                left_edge_v_bottom_q <= 32'd0;
-                left_edge_row_mi_q <= 5'd0;
-                left_edge_col_mi_q <= 5'd0;
-                left_edge_valid_q <= 1'b0;
-                above_col0_u_q <= 32'd0;
-                above_col0_v_q <= 32'd0;
-                above_col0_row_mi_q <= 5'd0;
-                above_col0_valid_q <= 1'b0;
-                last_u_txb_nonzero_q <= 1'b0;
-                visible_rows_mi_q <= visible_rows_mi_w;
-                visible_cols_mi_q <= visible_cols_mi_w;
-                block_row_mi_q <= 5'd0;
-                block_col_mi_q <= 5'd0;
-                block_w_mi_q <= 5'd16;
-                block_h_mi_q <= 5'd16;
-                partition_q <= PARTITION_NONE;
-                partition_emit_step_q <= 1'b0;
-                stack_sp_q <= 5'd0;
-                for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
-                  lossy420_luma_above_q[context_index_q] <= 8'd128;
-                  lossy420_luma_left_top_q[context_index_q] <= 8'd128;
-                  lossy420_luma_left_bottom_q[context_index_q] <= 8'd128;
-                  lossy420_luma_left_col_mi_q[context_index_q] <= 5'd0;
-                  lossy420_u_above_q[context_index_q] <= 8'd128;
-                  lossy420_v_above_q[context_index_q] <= 8'd128;
-                  lossy420_u_left_q[context_index_q] <= 8'd128;
-                  lossy420_v_left_q[context_index_q] <= 8'd128;
-                  lossy420_u_left_col_mi_q[context_index_q] <= 5'd0;
-                  lossy420_v_left_col_mi_q[context_index_q] <= 5'd0;
+                if (!output_pass_q) begin
+                  if (tile_is_last_w) begin
+                    stream_index_q <= 16'd0;
+                    payload_len_q <= 16'd0;
+                    output_pass_q <= 1'b1;
+                    tile_index_q <= 16'd0;
+                    tile_col_q <= 16'd0;
+                    tile_row_q <= 16'd0;
+                    tile_width_q <= (tile_cols_q == 16'd1) ? width_q : 16'd64;
+                    tile_height_q <= (tile_rows_q == 16'd1) ? height_q : 16'd64;
+                    tile_input_index_q <= 32'd0;
+                    tile_input_active_q <= 1'b0;
+                    payload_prefix_index_q <= 2'd0;
+                    prefix_patch_index_q <= 2'd0;
+                    prefix_patch_offset_q <= 16'd0;
+                    closed_len_patch_q <= 1'b0;
+                    seq_op_q <= 8'd0;
+                    seq_bits_left_q <= 7'd0;
+                    seq_value_q <= 64'd0;
+                    seq_bit_pos_q <= 16'd0;
+                    seq_len_q <= 16'd0;
+                    for (seq_write_i = 0; seq_write_i < AV2_MAX_SEQUENCE_BYTES; seq_write_i = seq_write_i + 1) begin
+                      seq_mem_u[seq_write_i] <= 8'd0;
+                    end
+                    state_q <= ST_SEQ_LOAD;
+                  end else begin
+                    tile_index_q <= tile_index_q + 16'd1;
+                    if (tile_col_q == (tile_cols_q - 16'd1)) begin
+                      tile_col_q <= 16'd0;
+                      tile_row_q <= tile_row_q + 16'd1;
+                    end else begin
+                      tile_col_q <= tile_col_q + 16'd1;
+                    end
+                    if (tile_col_q == (tile_cols_q - 16'd1)) begin
+                      tile_width_q <= (tile_cols_q == 16'd1) ? width_q : 16'd64;
+                      tile_height_q <=
+                        ((tile_row_q + 16'd1) == (tile_rows_q - 16'd1)) ?
+                          (height_q - ((tile_row_q + 16'd1) << 6)) : 16'd64;
+                    end else begin
+                      tile_width_q <=
+                        ((tile_col_q + 16'd1) == (tile_cols_q - 16'd1)) ?
+                          (width_q - ((tile_col_q + 16'd1) << 6)) : 16'd64;
+                      tile_height_q <= tile_height_q;
+                    end
+                    state_q <= ST_TILE_START;
+                  end
+                end else begin
+                  if (!frame_header_done_q && tile_index_q == 16'd0) begin
+                    frame_header_done_q <= 1'b1;
+                    resume_tile_after_header_q <= 1'b1;
+                    payload_prefix_index_q <= 2'd0;
+                    prefix_patch_index_q <= 2'd0;
+                    prefix_patch_offset_q <= 16'd0;
+                    closed_len_patch_q <= 1'b0;
+                    seq_op_q <= 8'd0;
+                    seq_bits_left_q <= 7'd0;
+                    seq_value_q <= 64'd0;
+                    seq_bit_pos_q <= 16'd0;
+                    seq_len_q <= 16'd0;
+                    for (seq_write_i = 0; seq_write_i < AV2_MAX_SEQUENCE_BYTES; seq_write_i = seq_write_i + 1) begin
+                      seq_mem_u[seq_write_i] <= 8'd0;
+                    end
+                    state_q <= ST_SEQ_LOAD;
+                  end else begin
+                    palette_mode_q <= tile_entropy_palette_mode_w;
+                    lossy_420_mode_q <= tile_entropy_lossy420_mode_w;
+                    low_q <= 64'd0;
+                    rng_q <= 32'h8000;
+                    cnt_q <= -8'sd9;
+                    precarry_read_word_addr_q <= 12'd0;
+                    pending_push_valid_q <= 1'b0;
+                    pending_push_word_q <= 16'd0;
+                    precarry_len_q <= 16'd0;
+                    tile_len_q <= 16'd0;
+                    phase_q <= frame_ibc_mode_q ? PHASE_INTRABC : PHASE_INTRA;
+                    step_q <= 5'd0;
+                    palette_row_q <= 6'd0;
+                    palette_col_q <= 6'd0;
+                    palette_identity_row_ctx_q <= 2'd3;
+                    leaf_luma_mode_q <= LUMA_MODE_DC;
+                    leaf_chroma_bdpcm_horz_q <= 1'b1;
+                    lossy420_luma_recon_q[0] <= 8'd128;
+                    lossy420_luma_recon_q[1] <= 8'd128;
+                    lossy420_luma_recon_q[2] <= 8'd128;
+                    lossy420_luma_recon_q[3] <= 8'd128;
+                    lossy420_luma_left_valid_q <= 16'd0;
+                    lossy420_luma_above_valid_q <= 16'd0;
+                    lossy420_u_left_valid_q <= 16'd0;
+                    lossy420_v_left_valid_q <= 16'd0;
+                    lossy420_u_above_valid_q <= 16'd0;
+                    lossy420_v_above_valid_q <= 16'd0;
+                    txb_index_q <= 16'd0;
+                    txb_width_q <= 16'd0;
+                    txb_count_q <= 16'd0;
+                    txb_local_row_q <= 5'd0;
+                    txb_local_col_q <= 5'd0;
+                    txb_prefetch_started_q <= 1'b0;
+                    txb_prefetch_done_q <= 1'b0;
+                    txb_prefetch_chroma_q <= 1'b0;
+                    txb_prefetch_plane_v_q <= 1'b0;
+                    txb_prefetch_index_q <= 2'd0;
+                    cached_v_valid_q <= 4'd0;
+                    cached_chroma_samples_valid_q <= 4'd0;
+                    left_edge_u_top_q <= 32'd0;
+                    left_edge_u_bottom_q <= 32'd0;
+                    left_edge_v_top_q <= 32'd0;
+                    left_edge_v_bottom_q <= 32'd0;
+                    left_edge_row_mi_q <= 5'd0;
+                    left_edge_col_mi_q <= 5'd0;
+                    left_edge_valid_q <= 1'b0;
+                    above_col0_u_q <= 32'd0;
+                    above_col0_v_q <= 32'd0;
+                    above_col0_row_mi_q <= 5'd0;
+                    above_col0_valid_q <= 1'b0;
+                    last_u_txb_nonzero_q <= 1'b0;
+                    visible_rows_mi_q <= visible_rows_mi_w;
+                    visible_cols_mi_q <= visible_cols_mi_w;
+                    block_row_mi_q <= 5'd0;
+                    block_col_mi_q <= 5'd0;
+                    block_w_mi_q <= 5'd16;
+                    block_h_mi_q <= 5'd16;
+                    partition_q <= PARTITION_NONE;
+                    partition_emit_step_q <= 1'b0;
+                    stack_sp_q <= 5'd0;
+                    for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
+                      lossy420_luma_above_q[context_index_q] <= 8'd128;
+                      lossy420_luma_left_top_q[context_index_q] <= 8'd128;
+                      lossy420_luma_left_bottom_q[context_index_q] <= 8'd128;
+                      lossy420_luma_left_col_mi_q[context_index_q] <= 5'd0;
+                      lossy420_u_above_q[context_index_q] <= 8'd128;
+                      lossy420_v_above_q[context_index_q] <= 8'd128;
+                      lossy420_u_left_q[context_index_q] <= 8'd128;
+                      lossy420_v_left_q[context_index_q] <= 8'd128;
+                      lossy420_u_left_col_mi_q[context_index_q] <= 5'd0;
+                      lossy420_v_left_col_mi_q[context_index_q] <= 5'd0;
+                    end
+                    state_q <= ST_LOAD_BLOCK;
+                  end
                 end
-                state_q <=
-                  output_pass_q ? ST_LOAD_BLOCK :
-                    ((tile_index_q == 16'd0) ? ST_SEQ_LOAD : ST_LOAD_BLOCK);
               end
             end
           end
@@ -907,14 +981,14 @@
           end
           ST_CHROMA_FETCH: begin
             if (((phase_q == PHASE_Y_COEFF) &&
-                 ((txb_prefetch_done_q && !txb_prefetch_chroma_q) || luma_fetch_done_w)) ||
+                 ((txb_prefetch_done_q && !txb_prefetch_chroma_q) || txb_fetch_done_w)) ||
                 ((phase_q == PHASE_U_COEFF) &&
                  ((txb_prefetch_done_q && txb_prefetch_chroma_q && !txb_prefetch_plane_v_q) ||
-                  chroma_fetch_done_w ||
+                  txb_fetch_done_w ||
                   chroma_fetch_current_cache_hit_w)) ||
                 ((phase_q == PHASE_V_COEFF) &&
                  ((txb_prefetch_done_q && txb_prefetch_chroma_q && txb_prefetch_plane_v_q) ||
-                  chroma_fetch_done_w ||
+                  txb_fetch_done_w ||
                   chroma_fetch_current_cache_hit_w))) begin
               step_q <= 5'd0;
               txb_prefetch_started_q <= 1'b0;
@@ -954,104 +1028,17 @@
               tile_len_q <= forward_precarry_byte_count_w;
               payload_prefix_index_q <= 2'd0;
               if (output_pass_q) begin
+                payload_len_q <= payload_len_q +
+                  (tile_is_last_w ? forward_precarry_byte_count_w :
+                                    (16'd4 + forward_precarry_byte_count_w));
                 if (!tile_is_last_w) begin
+                  closed_len_patch_q <= 1'b0;
                   state_q <= ST_STREAM_FLUSH_REQ;
-                end else if (frame_is_last_w) begin
-                  state_q <= ST_IDLE;
                 end else begin
-                  frame_index_q <= frame_index_q + 32'd1;
-                  input_frame_offset_q <= input_frame_offset_q + src_frame_stride;
-                  output_pass_q <= 1'b0;
-                  seq_op_q <= 8'd0;
-                  seq_bits_left_q <= 7'd0;
-                  seq_value_q <= 64'd0;
-                  seq_bit_pos_q <= 16'd0;
-                  seq_len_q <= 16'd0;
-                  payload_len_q <= 16'd0;
-                  payload_prefix_index_q <= 2'd0;
-                  prefix_patch_offset_q <= 16'd0;
+                  closed_len_patch_q <= 1'b1;
+                  prefix_patch_offset_q <= closed_leb_start_w;
                   prefix_patch_index_q <= 2'd0;
-                  low_q <= 64'd0;
-                  rng_q <= 32'h8000;
-                  cnt_q <= -8'sd9;
-                  precarry_read_word_addr_q <= 12'd0;
-                  pending_push_valid_q <= 1'b0;
-                  pending_push_word_q <= 16'd0;
-                  precarry_len_q <= 16'd0;
-                  tile_len_q <= 16'd0;
-                  stream_index_q <= 16'd0;
-                  tile_index_q <= 16'd0;
-                  tile_col_q <= 16'd0;
-                  tile_row_q <= 16'd0;
-                  tile_width_q <= (tile_cols_q == 16'd1) ? width_q : 16'd64;
-                  tile_height_q <= (tile_rows_q == 16'd1) ? height_q : 16'd64;
-                  tile_input_index_q <= 32'd0;
-                  tile_input_active_q <= 1'b0;
-                  frame_palette_mode_q <= 1'b0;
-                  frame_ibc_mode_q <= 1'b0;
-                  phase_q <= PHASE_INTRA;
-                  step_q <= 5'd0;
-                  palette_row_q <= 6'd0;
-                  palette_col_q <= 6'd0;
-                  palette_identity_row_ctx_q <= 2'd3;
-                  palette_mode_q <= 1'b0;
-                  lossy_420_mode_q <= 1'b0;
-                  leaf_luma_mode_q <= LUMA_MODE_DC;
-                  leaf_chroma_bdpcm_horz_q <= 1'b1;
-                  lossy420_luma_recon_q[0] <= 8'd128;
-                  lossy420_luma_recon_q[1] <= 8'd128;
-                  lossy420_luma_recon_q[2] <= 8'd128;
-                  lossy420_luma_recon_q[3] <= 8'd128;
-                  lossy420_luma_left_valid_q <= 16'd0;
-                  lossy420_luma_above_valid_q <= 16'd0;
-                  lossy420_u_left_valid_q <= 16'd0;
-                  lossy420_v_left_valid_q <= 16'd0;
-                  lossy420_u_above_valid_q <= 16'd0;
-                  lossy420_v_above_valid_q <= 16'd0;
-                  txb_index_q <= 16'd0;
-                  txb_width_q <= 16'd0;
-                  txb_count_q <= 16'd0;
-                  txb_local_row_q <= 5'd0;
-                  txb_local_col_q <= 5'd0;
-                  txb_prefetch_started_q <= 1'b0;
-                  txb_prefetch_done_q <= 1'b0;
-                  txb_prefetch_chroma_q <= 1'b0;
-                  txb_prefetch_plane_v_q <= 1'b0;
-                  txb_prefetch_index_q <= 2'd0;
-                  cached_v_valid_q <= 4'd0;
-                  cached_chroma_samples_valid_q <= 4'd0;
-                  left_edge_u_top_q <= 32'd0;
-                  left_edge_u_bottom_q <= 32'd0;
-                  left_edge_v_top_q <= 32'd0;
-                  left_edge_v_bottom_q <= 32'd0;
-                  left_edge_row_mi_q <= 5'd0;
-                  left_edge_col_mi_q <= 5'd0;
-                  left_edge_valid_q <= 1'b0;
-                  above_col0_u_q <= 32'd0;
-                  above_col0_v_q <= 32'd0;
-                  above_col0_row_mi_q <= 5'd0;
-                  above_col0_valid_q <= 1'b0;
-                  last_u_txb_nonzero_q <= 1'b0;
-                  block_row_mi_q <= 5'd0;
-                  block_col_mi_q <= 5'd0;
-                  block_w_mi_q <= 5'd16;
-                  block_h_mi_q <= 5'd16;
-                  partition_q <= PARTITION_NONE;
-                  partition_emit_step_q <= 1'b0;
-                  stack_sp_q <= 5'd0;
-                  for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
-                    lossy420_luma_above_q[context_index_q] <= 8'd128;
-                    lossy420_luma_left_top_q[context_index_q] <= 8'd128;
-                    lossy420_luma_left_bottom_q[context_index_q] <= 8'd128;
-                    lossy420_luma_left_col_mi_q[context_index_q] <= 5'd0;
-                    lossy420_u_above_q[context_index_q] <= 8'd128;
-                    lossy420_v_above_q[context_index_q] <= 8'd128;
-                    lossy420_u_left_q[context_index_q] <= 8'd128;
-                    lossy420_v_left_q[context_index_q] <= 8'd128;
-                    lossy420_u_left_col_mi_q[context_index_q] <= 5'd0;
-                    lossy420_v_left_col_mi_q[context_index_q] <= 5'd0;
-                  end
-                  state_q <= ST_TILE_START;
+                  state_q <= ST_STREAM_FLUSH_REQ;
                 end
               end else begin
                 state_q <= ST_PAYLOAD_PREFIX;
@@ -1117,14 +1104,32 @@
                   payload_prefix_index_q <= 2'd0;
                   prefix_patch_index_q <= 2'd0;
                   prefix_patch_offset_q <= stream_index_q + 16'd1;
-                  state_q <= tile_is_last_w ? ST_TILE_START : ST_OUTPUT_PREFIX;
+                  if (resume_tile_after_header_q) begin
+                    if (tile_is_last_w) begin
+                      resume_tile_after_header_q <= 1'b0;
+                      state_q <= ST_INPUT_READ;
+                    end else begin
+                      state_q <= ST_OUTPUT_PREFIX;
+                    end
+                  end else begin
+                    state_q <= tile_is_last_w ? ST_TILE_START : ST_OUTPUT_PREFIX;
+                  end
                 end
               end
             end else begin
               payload_prefix_index_q <= 2'd0;
               prefix_patch_index_q <= 2'd0;
               prefix_patch_offset_q <= stream_index_q;
-              state_q <= tile_is_last_w ? ST_TILE_START : ST_OUTPUT_PREFIX;
+              if (resume_tile_after_header_q) begin
+                if (tile_is_last_w) begin
+                  resume_tile_after_header_q <= 1'b0;
+                  state_q <= ST_INPUT_READ;
+                end else begin
+                  state_q <= ST_OUTPUT_PREFIX;
+                end
+              end else begin
+                state_q <= tile_is_last_w ? ST_TILE_START : ST_OUTPUT_PREFIX;
+              end
             end
           end
           ST_OUTPUT_PREFIX: begin
@@ -1136,7 +1141,12 @@
               stream_index_q <= stream_index_q + 16'd1;
               if (payload_prefix_index_q == 2'd3) begin
                 payload_prefix_index_q <= 2'd0;
-                state_q <= ST_TILE_START;
+                if (resume_tile_after_header_q) begin
+                  resume_tile_after_header_q <= 1'b0;
+                  state_q <= ST_INPUT_READ;
+                end else begin
+                  state_q <= ST_TILE_START;
+                end
               end else begin
                 payload_prefix_index_q <= payload_prefix_index_q + 2'd1;
               end
@@ -1155,21 +1165,135 @@
           end
           ST_PREFIX_PATCH_REQ: begin
             bitstream_patch_valid_w <= 1'b1;
-            bitstream_patch_offset_w <= {16'd0, prefix_patch_offset_q} + {30'd0, prefix_patch_index_q};
+            bitstream_patch_offset_w <=
+              frame_output_base_q + {16'd0, prefix_patch_offset_q} + {30'd0, prefix_patch_index_q};
             bitstream_patch_data_w <= {AXI_DATA_BITS{1'b0}};
             bitstream_patch_strobe_w <= {{((AXI_DATA_BITS / 8) - 1){1'b0}}, 1'b1};
-            case (prefix_patch_index_q)
-              2'd0: bitstream_patch_data_w[7:0] <= tile_len_q - 16'd1;
-              2'd1: bitstream_patch_data_w[7:0] <= (tile_len_q - 16'd1) >> 8;
-              default: bitstream_patch_data_w[7:0] <= 8'd0;
-            endcase
+            if (closed_len_patch_q) begin
+              case (prefix_patch_index_q)
+                2'd0: bitstream_patch_data_w[7:0] <= closed_len_w[6:0] | 8'h80;
+                2'd1: bitstream_patch_data_w[7:0] <= {1'b0, closed_len_w[13:7]} | 8'h80;
+                default: bitstream_patch_data_w[7:0] <= {6'd0, closed_len_w[15:14]};
+              endcase
+            end else begin
+              case (prefix_patch_index_q)
+                2'd0: bitstream_patch_data_w[7:0] <= tile_len_q - 16'd1;
+                2'd1: bitstream_patch_data_w[7:0] <= (tile_len_q - 16'd1) >> 8;
+                default: bitstream_patch_data_w[7:0] <= 8'd0;
+              endcase
+            end
             if (bitstream_patch_ready_w) begin
               state_q <= ST_PREFIX_PATCH_WAIT;
             end
           end
           ST_PREFIX_PATCH_WAIT: begin
             if (bitstream_patch_done_w) begin
-              if (prefix_patch_index_q == 2'd3) begin
+              if (closed_len_patch_q && prefix_patch_index_q == 2'd2) begin
+                prefix_patch_index_q <= 2'd0;
+                closed_len_patch_q <= 1'b0;
+                if (frame_is_last_w) begin
+                  state_q <= ST_STREAM_FINISH_REQ;
+                end else begin
+                  frame_output_base_q <= frame_output_base_q + {16'd0, stream_index_q};
+                  frame_index_q <= frame_index_q + 32'd1;
+                  input_frame_offset_q <= input_frame_offset_q + src_frame_stride;
+                  output_pass_q <= 1'b1;
+                  frame_header_done_q <= 1'b0;
+                  resume_tile_after_header_q <= 1'b0;
+                  seq_op_q <= 8'd0;
+                  seq_bits_left_q <= 7'd0;
+                  seq_value_q <= 64'd0;
+                  seq_bit_pos_q <= 16'd0;
+                  seq_len_q <= 16'd0;
+                  payload_len_q <= 16'd0;
+                  payload_prefix_index_q <= 2'd0;
+                  prefix_patch_offset_q <= 16'd0;
+                  low_q <= 64'd0;
+                  rng_q <= 32'h8000;
+                  cnt_q <= -8'sd9;
+                  precarry_read_word_addr_q <= 12'd0;
+                  pending_push_valid_q <= 1'b0;
+                  pending_push_word_q <= 16'd0;
+                  precarry_len_q <= 16'd0;
+                  tile_len_q <= 16'd0;
+                  stream_index_q <= 16'd0;
+                  tile_index_q <= 16'd0;
+                  tile_col_q <= 16'd0;
+                  tile_row_q <= 16'd0;
+                  tile_width_q <= (tile_cols_q == 16'd1) ? width_q : 16'd64;
+                  tile_height_q <= (tile_rows_q == 16'd1) ? height_q : 16'd64;
+                  tile_input_index_q <= 32'd0;
+                  tile_input_active_q <= 1'b0;
+                  frame_palette_mode_q <= frame_palette_conservative_w;
+                  frame_ibc_mode_q <= frame_ibc_conservative_w;
+                  phase_q <= PHASE_INTRA;
+                  step_q <= 5'd0;
+                  palette_row_q <= 6'd0;
+                  palette_col_q <= 6'd0;
+                  palette_identity_row_ctx_q <= 2'd3;
+                  palette_mode_q <= 1'b0;
+                  lossy_420_mode_q <= 1'b0;
+                  leaf_luma_mode_q <= LUMA_MODE_DC;
+                  leaf_chroma_bdpcm_horz_q <= 1'b1;
+                  lossy420_luma_recon_q[0] <= 8'd128;
+                  lossy420_luma_recon_q[1] <= 8'd128;
+                  lossy420_luma_recon_q[2] <= 8'd128;
+                  lossy420_luma_recon_q[3] <= 8'd128;
+                  lossy420_luma_left_valid_q <= 16'd0;
+                  lossy420_luma_above_valid_q <= 16'd0;
+                  lossy420_u_left_valid_q <= 16'd0;
+                  lossy420_v_left_valid_q <= 16'd0;
+                  lossy420_u_above_valid_q <= 16'd0;
+                  lossy420_v_above_valid_q <= 16'd0;
+                  txb_index_q <= 16'd0;
+                  txb_width_q <= 16'd0;
+                  txb_count_q <= 16'd0;
+                  txb_local_row_q <= 5'd0;
+                  txb_local_col_q <= 5'd0;
+                  txb_prefetch_started_q <= 1'b0;
+                  txb_prefetch_done_q <= 1'b0;
+                  txb_prefetch_chroma_q <= 1'b0;
+                  txb_prefetch_plane_v_q <= 1'b0;
+                  txb_prefetch_index_q <= 2'd0;
+                  cached_v_valid_q <= 4'd0;
+                  cached_chroma_samples_valid_q <= 4'd0;
+                  left_edge_u_top_q <= 32'd0;
+                  left_edge_u_bottom_q <= 32'd0;
+                  left_edge_v_top_q <= 32'd0;
+                  left_edge_v_bottom_q <= 32'd0;
+                  left_edge_row_mi_q <= 5'd0;
+                  left_edge_col_mi_q <= 5'd0;
+                  left_edge_valid_q <= 1'b0;
+                  above_col0_u_q <= 32'd0;
+                  above_col0_v_q <= 32'd0;
+                  above_col0_row_mi_q <= 5'd0;
+                  above_col0_valid_q <= 1'b0;
+                  last_u_txb_nonzero_q <= 1'b0;
+                  block_row_mi_q <= 5'd0;
+                  block_col_mi_q <= 5'd0;
+                  block_w_mi_q <= 5'd16;
+                  block_h_mi_q <= 5'd16;
+                  partition_q <= PARTITION_NONE;
+                  partition_emit_step_q <= 1'b0;
+                  stack_sp_q <= 5'd0;
+                  for (context_index_q = 0; context_index_q < AV2_PARTITION_CONTEXT_DIM; context_index_q = context_index_q + 1) begin
+                    lossy420_luma_above_q[context_index_q] <= 8'd128;
+                    lossy420_luma_left_top_q[context_index_q] <= 8'd128;
+                    lossy420_luma_left_bottom_q[context_index_q] <= 8'd128;
+                    lossy420_luma_left_col_mi_q[context_index_q] <= 5'd0;
+                    lossy420_u_above_q[context_index_q] <= 8'd128;
+                    lossy420_v_above_q[context_index_q] <= 8'd128;
+                    lossy420_u_left_q[context_index_q] <= 8'd128;
+                    lossy420_v_left_q[context_index_q] <= 8'd128;
+                    lossy420_u_left_col_mi_q[context_index_q] <= 5'd0;
+                    lossy420_v_left_col_mi_q[context_index_q] <= 5'd0;
+                  end
+                  state_q <= ST_SEQ_LOAD;
+                end
+              end else if (closed_len_patch_q) begin
+                prefix_patch_index_q <= prefix_patch_index_q + 2'd1;
+                state_q <= ST_PREFIX_PATCH_REQ;
+              end else if (prefix_patch_index_q == 2'd3) begin
                 prefix_patch_index_q <= 2'd0;
                 tile_index_q <= tile_index_q + 16'd1;
                 if (tile_col_q == (tile_cols_q - 16'd1)) begin
@@ -1194,6 +1318,17 @@
                 prefix_patch_index_q <= prefix_patch_index_q + 2'd1;
                 state_q <= ST_PREFIX_PATCH_REQ;
               end
+            end
+          end
+          ST_STREAM_FINISH_REQ: begin
+            bitstream_finish_valid_w <= 1'b1;
+            if (bitstream_finish_ready_w) begin
+              state_q <= bitstream_finish_done_w ? ST_IDLE : ST_STREAM_FINISH_WAIT;
+            end
+          end
+          ST_STREAM_FINISH_WAIT: begin
+            if (bitstream_finish_done_w) begin
+              state_q <= ST_IDLE;
             end
           end
           default: state_q <= ST_IDLE;

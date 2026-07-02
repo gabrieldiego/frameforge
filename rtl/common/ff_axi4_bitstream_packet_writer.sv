@@ -21,6 +21,10 @@ module ff_axi4_bitstream_packet_writer #(
   output logic                     stream_flush_ready,
   output logic                     stream_flush_done,
 
+  input  logic                     finish_valid,
+  output logic                     finish_ready,
+  output logic                     finish_done,
+
   input  logic                     patch_valid,
   output logic                     patch_ready,
   input  logic [31:0]              patch_offset,
@@ -109,6 +113,8 @@ module ff_axi4_bitstream_packet_writer #(
   logic capacity_ok_w;
   logic fifo_has_room_w;
   logic flush_input_w;
+  logic stream_flush_wait_for_inflight_w;
+  logic pending_empty_flush_done_w;
   logic flush_accept_w;
   logic enqueue_flush_word_w;
   logic take_word_w;
@@ -123,7 +129,6 @@ module ff_axi4_bitstream_packet_writer #(
   logic [FIFO_INDEX_BITS-1:0] fifo_rd_ptr_next_w;
   logic [BURST_COUNT_BITS-1:0] start_burst_count_w;
   logic [31:0] tx_byte_advance_w;
-  logic [31:0] tx_flush_byte_advance_w;
   logic [AXI_BYTES-1:0] packet_strobe_unshifted_w;
   logic [AXI_BYTES-1:0] packet_strobe_shifted_w;
   logic [AXI_DATA_BITS-1:0] packet_data_masked_w;
@@ -137,6 +142,7 @@ module ff_axi4_bitstream_packet_writer #(
   logic [7:0] patch_shift_bits_w;
   logic patch_capacity_ok_w;
   logic invalid_axis_count_w;
+  logic finish_accept_w;
   integer packet_i;
   integer axis_count_i;
   integer clear_i;
@@ -183,7 +189,18 @@ module ff_axi4_bitstream_packet_writer #(
     run_q &&
     !final_seen_q &&
     !flush_pending_q &&
+    !stream_flush_wait_for_inflight_w &&
     (byte_count_q == '0 || fifo_has_room_w);
+  assign stream_flush_wait_for_inflight_w =
+    (byte_count_q == '0) &&
+    (fifo_count_q == '0) &&
+    (tx_state_q != TX_IDLE);
+  assign pending_empty_flush_done_w =
+    flush_pending_q &&
+    (tx_state_q == TX_IDLE) &&
+    (byte_count_q == '0) &&
+    (fifo_count_q == '0) &&
+    !enqueue_word_w;
   assign flush_accept_w = stream_flush_valid && stream_flush_ready;
   assign s_axis_ready =
     run_q &&
@@ -229,10 +246,6 @@ module ff_axi4_bitstream_packet_writer #(
         fifo_count_after_activity_w[BURST_COUNT_BITS-1:0];
   assign tx_byte_advance_w =
     {{(32-BURST_COUNT_BITS-AXI_BYTE_SHIFT){1'b0}}, tx_count_q, {AXI_BYTE_SHIFT{1'b0}}};
-  assign tx_flush_byte_advance_w =
-    (tx_count_q == BURST_COUNT_BITS'(0)) ? 32'd0 :
-      {{(32-BURST_COUNT_BITS-AXI_BYTE_SHIFT){1'b0}},
-        (tx_count_q - BURST_COUNT_BITS'(1)), {AXI_BYTE_SHIFT{1'b0}}};
   assign packet_strobe_unshifted_w =
     (s_axis_count_safe_w == '0) ?
       {AXI_BYTES{1'b0}} :
@@ -260,6 +273,16 @@ module ff_axi4_bitstream_packet_writer #(
     !patch_pending_q &&
     !final_seen_q &&
     patch_capacity_ok_w;
+  assign finish_ready =
+    run_q &&
+    !final_seen_q &&
+    !flush_pending_q &&
+    !patch_pending_q &&
+    (tx_state_q == TX_IDLE) &&
+    (fifo_count_q == '0) &&
+    (byte_count_q == '0) &&
+    (strobe_q == {AXI_BYTES{1'b0}});
+  assign finish_accept_w = finish_valid && finish_ready;
 
   always @* begin
     packet_data_masked_w = '0;
@@ -299,6 +322,7 @@ module ff_axi4_bitstream_packet_writer #(
       bytes_written <= 32'd0;
       frame_done <= 1'b0;
       stream_flush_done <= 1'b0;
+      finish_done <= 1'b0;
       patch_done <= 1'b0;
       error <= 1'b0;
       m_axi_awvalid <= 1'b0;
@@ -311,6 +335,7 @@ module ff_axi4_bitstream_packet_writer #(
     end else begin
       frame_done <= 1'b0;
       stream_flush_done <= 1'b0;
+      finish_done <= 1'b0;
       patch_done <= 1'b0;
       if (start) begin
         tx_state_q <= TX_IDLE;
@@ -352,6 +377,17 @@ module ff_axi4_bitstream_packet_writer #(
             flush_pending_q <= 1'b1;
           end
         end
+        if (pending_empty_flush_done_w) begin
+          stream_flush_done <= 1'b1;
+          flush_pending_q <= 1'b0;
+        end
+
+        if (finish_accept_w) begin
+          frame_done <= 1'b1;
+          finish_done <= 1'b1;
+          run_q <= 1'b0;
+          final_seen_q <= 1'b0;
+        end
 
         if (patch_valid && !patch_capacity_ok_w) begin
           error <= 1'b1;
@@ -392,6 +428,7 @@ module ff_axi4_bitstream_packet_writer #(
           fifo_wr_ptr_q <= fifo_wr_ptr_next_w;
           word_q <= '0;
           strobe_q <= '0;
+          byte_count_q <= '0;
         end else if (run_q && s_axis_valid && !capacity_ok_w) begin
           error <= 1'b1;
         end
@@ -460,8 +497,14 @@ module ff_axi4_bitstream_packet_writer #(
           TX_B: begin
             if (m_axi_bvalid && m_axi_bready) begin
               m_axi_bready <= 1'b0;
-              write_offset_q <= write_offset_q +
-                (tx_pending_partial_flush_q ? tx_flush_byte_advance_w : tx_byte_advance_w);
+              if (tx_pending_partial_flush_q) begin
+                // A stream flush may end on a strobed partial AXI word. The
+                // next stream byte must continue after the last valid byte,
+                // not at the next aligned word boundary.
+                write_offset_q <= bytes_written;
+              end else begin
+                write_offset_q <= write_offset_q + tx_byte_advance_w;
+              end
               if (m_axi_bresp != 2'b00) begin
                 error <= 1'b1;
               end

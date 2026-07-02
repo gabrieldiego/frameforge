@@ -177,11 +177,10 @@ module ff_av2_bitstream_headers (
 
   assign closed_len = {12'd0, closed_header_len} + 16'd1 + payload_len;
   // AV2 v1.0.0 Section 5.3 uses unsigned LEB128 for OBU payload lengths.
-  // Lossless high-colour 64x64 4:4:4 tiles can exceed the two-byte LEB128
-  // range, so keep the staged writer correct through the current 16-bit bound.
-  assign closed_leb_len =
-    (closed_len >= 16'd16384) ? 2'd3 :
-    (closed_len >= 16'd128) ? 2'd2 : 2'd1;
+  // FrameForge reserves three bytes for the closed-loop OBU length so the
+  // streamed RTL can emit the frame payload once, then patch this field after
+  // the final tile length is known. AVM accepts this non-minimal LEB form.
+  assign closed_leb_len = 2'd3;
   assign seq_end_index = 16'd4 + seq_len;
   assign closed_leb_start = seq_end_index;
   assign closed_header_start = closed_leb_start + {14'd0, closed_leb_len};

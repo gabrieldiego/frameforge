@@ -14,6 +14,7 @@ module ff_av2_residual_top (
   input  logic        lossy_420_mode,
   input  logic        leaf_chroma_bdpcm_horz,
   input  logic        palette_luma_residual_zero,
+  input  logic        palette_chroma_bdpcm_known_zero_hint,
   input  logic        luma_fetch_done,
   input  logic        chroma_fetch_done,
   input  logic        chroma_fetch_current_cache_hit,
@@ -371,7 +372,8 @@ module ff_av2_residual_top (
   // or column predictor and already reconstructed samples. Detect it before
   // the residual symbolizer so zero chroma TXBs emit only the skip symbol.
   assign palette_chroma_bdpcm_known_zero_w =
-    leaf_chroma_bdpcm_horz ?
+    palette_chroma_bdpcm_known_zero_hint ||
+    (leaf_chroma_bdpcm_horz ?
       ((chroma_bdpcm_txb_samples[0 * 8 +: 8] == chroma_bdpcm_predictor_samples[0 * 8 +: 8]) &&
        (chroma_bdpcm_txb_samples[1 * 8 +: 8] == chroma_bdpcm_txb_samples[0 * 8 +: 8]) &&
        (chroma_bdpcm_txb_samples[2 * 8 +: 8] == chroma_bdpcm_txb_samples[1 * 8 +: 8]) &&
@@ -403,6 +405,6 @@ module ff_av2_residual_top (
        (chroma_bdpcm_txb_samples[12 * 8 +: 8] == chroma_bdpcm_txb_samples[8 * 8 +: 8]) &&
        (chroma_bdpcm_txb_samples[13 * 8 +: 8] == chroma_bdpcm_txb_samples[9 * 8 +: 8]) &&
        (chroma_bdpcm_txb_samples[14 * 8 +: 8] == chroma_bdpcm_txb_samples[10 * 8 +: 8]) &&
-       (chroma_bdpcm_txb_samples[15 * 8 +: 8] == chroma_bdpcm_txb_samples[11 * 8 +: 8]));
+       (chroma_bdpcm_txb_samples[15 * 8 +: 8] == chroma_bdpcm_txb_samples[11 * 8 +: 8])));
 
 endmodule

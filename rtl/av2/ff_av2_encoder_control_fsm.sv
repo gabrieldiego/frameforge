@@ -47,6 +47,8 @@ module ff_av2_encoder_control_fsm #(
   input logic [127:0] chroma_fetch_v_txb_samples_w,
   input logic [15:0] chroma_txb_count_w,
   input logic [15:0] chroma_txb_width_w,
+  input logic [15:0] closed_leb_start_w,
+  input logic [15:0] closed_len_w,
   output logic signed [7:0] cnt_q,
   input logic current_leaf_ready_w,
   input logic [31:0] current_u_col0_above_edge_w,
@@ -70,6 +72,8 @@ module ff_av2_encoder_control_fsm #(
   output logic [31:0] frame_index_q,
   input logic frame_is_last_w,
   output logic frame_palette_mode_q,
+  input logic frame_palette_conservative_w,
+  input logic frame_ibc_conservative_w,
   input logic       frame_reader_error_w,
   output logic [4:0] height_bits_q,
   input logic [4:0] height_bits_w,
@@ -130,6 +134,9 @@ module ff_av2_encoder_control_fsm #(
   output logic bitstream_stream_flush_valid_w,
   input logic bitstream_stream_flush_ready_w,
   input logic bitstream_stream_flush_done_w,
+  output logic bitstream_finish_valid_w,
+  input logic bitstream_finish_ready_w,
+  input logic bitstream_finish_done_w,
   output logic bitstream_patch_valid_w,
   input logic bitstream_patch_ready_w,
   input logic bitstream_patch_done_w,
@@ -180,6 +187,8 @@ module ff_av2_encoder_control_fsm #(
   output logic [1:0] payload_prefix_index_q,
   output logic [15:0] prefix_patch_offset_q,
   output logic [1:0] prefix_patch_index_q,
+  output logic [31:0] frame_output_base_q,
+  output logic closed_len_patch_q,
   output logic output_pass_q,
   input logic [11:0] payload_read_data_word_addr_q,
   output logic [11:0] payload_read_word_addr_q,
@@ -239,6 +248,7 @@ module ff_av2_encoder_control_fsm #(
   input logic txb_prefetch_chroma_start_w,
   input logic txb_prefetch_cross_phase_w,
   output logic txb_prefetch_done_q,
+  input logic txb_fetch_done_w,
   input logic txb_prefetch_fetch_done_w,
   input logic txb_prefetch_first_luma_w,
   output logic [1:0] txb_prefetch_index_q,
@@ -298,6 +308,8 @@ module ff_av2_encoder_control_fsm #(
   localparam logic [4:0] ST_STREAM_FLUSH_WAIT = 5'd22;
   localparam logic [4:0] ST_PREFIX_PATCH_REQ = 5'd23;
   localparam logic [4:0] ST_PREFIX_PATCH_WAIT = 5'd24;
+  localparam logic [4:0] ST_STREAM_FINISH_REQ = 5'd25;
+  localparam logic [4:0] ST_STREAM_FINISH_WAIT = 5'd26;
   localparam int SEQ_MEM_ADDR_BITS = (AV2_MAX_SEQUENCE_BYTES > 1) ? $clog2(AV2_MAX_SEQUENCE_BYTES) : 1;
 
   integer context_index_q;
@@ -305,6 +317,8 @@ module ff_av2_encoder_control_fsm #(
   integer seq_mem_pack_i;
   logic [7:0] seq_mem_u [0:AV2_MAX_SEQUENCE_BYTES - 1];
   logic [SEQ_MEM_ADDR_BITS - 1:0] seq_mem_addr_q;
+  logic frame_header_done_q;
+  logic resume_tile_after_header_q;
 
   always_comb begin
     for (seq_mem_pack_i = 0; seq_mem_pack_i < AV2_MAX_SEQUENCE_BYTES; seq_mem_pack_i = seq_mem_pack_i + 1) begin
@@ -312,7 +326,7 @@ module ff_av2_encoder_control_fsm #(
     end
   end
 
-  assign forward_precarry_count_only_w = !output_pass_q;
+  assign forward_precarry_count_only_w = 1'b0;
 
   // Sequence buffer stores one byte every 8 bits. Convert from bit position to
   // byte address using bits [3:].

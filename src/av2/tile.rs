@@ -1121,7 +1121,26 @@ pub(crate) fn av2_black_444_tile_entropy_payload_for_region(
     region: Av2TileRegion,
     profile: Av2Black444MvpProfile,
 ) -> Av2EntropyPayload {
-    av2_black_tile_entropy_payload_for_region(region, profile, Av2ChromaFormat::Yuv444)
+    av2_black_444_tile_entropy_payload_for_region_with_intrabc(region, profile, false)
+}
+
+pub(crate) fn av2_black_444_tile_entropy_payload_for_region_with_intrabc(
+    region: Av2TileRegion,
+    profile: Av2Black444MvpProfile,
+    allow_intrabc: bool,
+) -> Av2EntropyPayload {
+    let plan = Av2Black444TilePlan::for_region(
+        region,
+        profile,
+        Av2ChromaFormat::Yuv444,
+        false,
+        allow_intrabc,
+        None,
+        None,
+    );
+    let mut writer = Av2EntropyWriter::new();
+    plan.write_entropy(&mut writer, None, None);
+    writer.finish()
 }
 
 pub(crate) fn av2_black_tile_entropy_payload_for_region(

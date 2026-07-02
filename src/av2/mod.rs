@@ -13,8 +13,9 @@ use ibc::{Av2LocalIbc444, Av2LocalIbcStats};
 use palette::Av2LumaPalette444;
 use syntax::{Av2SyntaxPayload, Av2SyntaxWriter};
 use tile::{
-    av2_black_444_tile_entropy_payload_for_region, av2_black_tile_entropy_payload_for_region,
-    av2_lossy_420_tile_entropy_payload_for_region,
+    av2_black_444_tile_entropy_payload_for_region,
+    av2_black_444_tile_entropy_payload_for_region_with_intrabc,
+    av2_black_tile_entropy_payload_for_region, av2_lossy_420_tile_entropy_payload_for_region,
     av2_luma_palette_444_tile_entropy_payload_for_region, Av2TileRegion,
 };
 
@@ -340,11 +341,11 @@ impl Av2Mvp444FrameMode {
     }
 
     fn allow_screen_content_tools(&self) -> bool {
-        matches!(self, Self::LumaPalette { .. })
+        true
     }
 
     fn allow_intrabc(&self) -> bool {
-        matches!(self, Self::LumaPalette { .. })
+        true
     }
 
     fn profile(&self) -> Av2Black444MvpProfile {
@@ -436,6 +437,10 @@ fn av2_black_bitstream_for_geometry(
     chroma_format: Av2ChromaFormat,
 ) -> Vec<u8> {
     let mut out = Vec::new();
+    let profile = match chroma_format {
+        Av2ChromaFormat::Yuv420 => Av2Black444MvpProfile::current(),
+        Av2ChromaFormat::Yuv444 => Av2Black444MvpProfile::current().with_local_ibc_candidates(),
+    };
     append_obu(
         &mut out,
         Av2ObuType::TemporalDelimiter,
@@ -444,7 +449,7 @@ fn av2_black_bitstream_for_geometry(
     append_obu(
         &mut out,
         Av2ObuType::SequenceHeader,
-        &av2_mvp_sequence_header_payload(geometry, Av2Black444MvpProfile::current(), chroma_format),
+        &av2_mvp_sequence_header_payload(geometry, profile, chroma_format),
     );
     append_obu(
         &mut out,
@@ -548,7 +553,7 @@ pub fn av2_mvp_444_ibc_stats_json_for_frame(
 
     let frame_mode = Av2Mvp444FrameMode::from_frame(frame, geometry)?;
     let (black_mode, allow_intrabc, stats) = match &frame_mode {
-        Av2Mvp444FrameMode::Black => (true, false, Av2LocalIbcStats::default()),
+        Av2Mvp444FrameMode::Black => (true, true, Av2LocalIbcStats::default()),
         Av2Mvp444FrameMode::LumaPalette { ibc, .. } => (false, true, ibc.stats()),
     };
 
@@ -1162,12 +1167,24 @@ fn av2_black_closed_loop_key_payload(
     chroma_format: Av2ChromaFormat,
 ) -> Av2SyntaxPayload {
     let tile_layout = Av2TileLayout::for_geometry(geometry);
-    let profile = Av2Black444MvpProfile::current();
-    let mut payload = av2_mvp_444_closed_loop_key_header_payload(false, false, &tile_layout);
+    let allow_intrabc = chroma_format == Av2ChromaFormat::Yuv444;
+    let profile = if allow_intrabc {
+        Av2Black444MvpProfile::current().with_local_ibc_candidates()
+    } else {
+        Av2Black444MvpProfile::current()
+    };
+    let mut payload =
+        av2_mvp_444_closed_loop_key_header_payload(allow_intrabc, allow_intrabc, &tile_layout);
     let tile_payloads: Vec<_> = tile_layout
         .regions
         .iter()
-        .map(|&region| av2_black_tile_entropy_payload_for_region(region, profile, chroma_format))
+        .map(|&region| {
+            if allow_intrabc {
+                av2_black_444_tile_entropy_payload_for_region_with_intrabc(region, profile, true)
+            } else {
+                av2_black_tile_entropy_payload_for_region(region, profile, chroma_format)
+            }
+        })
         .collect();
     let tile_payload = tile_group_payload_from_entropy(&tile_payloads);
     let bit_offset = payload.bytes.len() * 8;
@@ -1270,9 +1287,11 @@ fn av2_tile_entropy_payload_for_region(
     frame_mode: &Av2Mvp444FrameMode,
 ) -> entropy::Av2EntropyPayload {
     match frame_mode {
-        Av2Mvp444FrameMode::Black => {
-            av2_black_444_tile_entropy_payload_for_region(region, Av2Black444MvpProfile::current())
-        }
+        Av2Mvp444FrameMode::Black => av2_black_444_tile_entropy_payload_for_region_with_intrabc(
+            region,
+            frame_mode.profile(),
+            frame_mode.allow_intrabc(),
+        ),
         Av2Mvp444FrameMode::LumaPalette { palette, ibc } => {
             if !frame_mode.allow_intrabc() && av2_luma_palette_region_is_black(palette, region) {
                 av2_black_444_tile_entropy_payload_for_region(region, frame_mode.profile())
@@ -1315,7 +1334,15 @@ fn write_tile_size_prefix(tile_size: usize, out: &mut Vec<u8>) {
 
 fn append_obu(out: &mut Vec<u8>, obu_type: Av2ObuType, payload: &Av2SyntaxPayload) {
     let header = av2_obu_header(obu_type);
-    write_leb128((header.len() + payload.bytes.len()) as u32, out);
+    let obu_payload_len = (header.len() + payload.bytes.len()) as u32;
+    if obu_type == Av2ObuType::ClosedLoopKey {
+        // AV2 v1.0.0 Section 5.3 defines OBU lengths as unsigned LEB128.
+        // The RTL reserves three bytes for closed-loop frame OBUs so it can
+        // stream tile payloads once and patch the final length afterward.
+        write_leb128_fixed_width(obu_payload_len, 3, out);
+    } else {
+        write_leb128(obu_payload_len, out);
+    }
     out.extend_from_slice(&header);
     out.extend_from_slice(&payload.bytes);
 }
@@ -1340,6 +1367,22 @@ fn write_leb128(mut value: u32, out: &mut Vec<u8>) {
             break;
         }
     }
+}
+
+fn write_leb128_fixed_width(mut value: u32, width: usize, out: &mut Vec<u8>) {
+    assert!(
+        (1..=5).contains(&width),
+        "AV2 fixed LEB width must be 1..=5"
+    );
+    for index in 0..width {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if index + 1 != width {
+            byte |= 0x80;
+        }
+        out.push(byte);
+    }
+    assert_eq!(value, 0, "AV2 fixed-width LEB is too narrow");
 }
 
 fn push_av2_trace_line(
@@ -1672,7 +1715,7 @@ mod tests {
             height: 64,
         });
 
-        assert_eq!(&payload.bytes[..3], &[0xe6, 0x00, 0x00]);
+        assert_eq!(&payload.bytes[..3], &[0xf5, 0x80, 0x00]);
         assert!(payload.bytes.len() > 3);
         let entropy_field = payload
             .fields

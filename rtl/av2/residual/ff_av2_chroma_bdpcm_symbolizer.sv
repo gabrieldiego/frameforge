@@ -180,7 +180,10 @@ module ff_av2_chroma_bdpcm_symbolizer #(
   logic op_done_w;
   logic progress_w;
   logic start_op_w;
-  logic zero_fast_q;
+  logic zero_fast_start_w;
+  logic emit_active_w;
+  logic [4:0] emit_state_w;
+  logic [3:0] current_skip_ctx_w;
   logic [31:0] cdf0_w;
   logic [31:0] cdf1_w;
   logic [31:0] cdf2_w;
@@ -201,7 +204,12 @@ module ff_av2_chroma_bdpcm_symbolizer #(
 
   assign dc_delta_ext_w = {{6{dc_delta[9]}}, dc_delta};
   assign dc_delta_abs_w = (dc_delta_ext_w < 0) ? -dc_delta_ext_w : dc_delta_ext_w;
-  assign current_plane_v_w = plane_v_q;
+  assign zero_fast_start_w = enable && !active_q && !prepare_context_q && known_zero_txb;
+  assign start_op_w = zero_fast_start_w;
+  assign emit_active_w = active_q || zero_fast_start_w;
+  assign emit_state_w = active_q ? emit_state_q : EMIT_SKIP;
+  assign current_plane_v_w = active_q ? plane_v_q : plane_v;
+  assign current_skip_ctx_w = active_q ? skip_ctx_q : skip_ctx;
   assign bdpcm_horz_current_w = (!active_q && !prepare_context_q) ? bdpcm_horz : bdpcm_horz_q;
 
   always @* begin
@@ -754,15 +762,15 @@ module ff_av2_chroma_bdpcm_symbolizer #(
     nsymbs_w = 5'd0;
     op_done_w = 1'b0;
 
-    if (active_q) begin
-      case (emit_state_q)
+    if (emit_active_w) begin
+      case (emit_state_w)
         EMIT_SKIP: begin
           op_valid = 1'b1;
           table_w = TABLE_SKIP;
-          table_ctx_w = skip_ctx_q;
-          symbol_w = txb_nonzero_q ? 4'd0 : 4'd1;
+          table_ctx_w = current_skip_ctx_w;
+          symbol_w = (active_q && txb_nonzero_q) ? 4'd0 : 4'd1;
           nsymbs_w = 5'd2;
-          op_done_w = !txb_nonzero_q;
+          op_done_w = zero_fast_start_w || !txb_nonzero_q;
         end
         EMIT_EOB: begin
           op_valid = 1'b1;
@@ -1204,12 +1212,13 @@ module ff_av2_chroma_bdpcm_symbolizer #(
     end
   end
 
-  assign start_op_w = zero_fast_q;
   assign progress_w = active_q && (advance || !op_valid);
-  assign txb_done = active_q && op_valid && op_done_w;
-  assign txb_nonzero = txb_nonzero_q;
-  assign entropy_context = entropy_context_q;
-  assign latched_dc_recon_sample = dc_recon_sample_q;
+  assign txb_done =
+    (active_q && op_valid && op_done_w) ||
+    (zero_fast_start_w && advance && op_valid && op_done_w);
+  assign txb_nonzero = zero_fast_start_w ? 1'b0 : txb_nonzero_q;
+  assign entropy_context = zero_fast_start_w ? 8'd0 : entropy_context_q;
+  assign latched_dc_recon_sample = active_q ? dc_recon_sample_q : dc_recon_sample;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -1229,7 +1238,6 @@ module ff_av2_chroma_bdpcm_symbolizer #(
       skip_ctx_q <= 4'd0;
       dc_sign_ctx_q <= 2'd0;
       dc_recon_sample_q <= 8'd0;
-      zero_fast_q <= 1'b0;
       hr_avg_q <= 16'd0;
       for (sample_index_w = 0; sample_index_w < 16; sample_index_w = sample_index_w + 1) begin
         level_q[sample_index_w] <= 16'd0;
@@ -1242,7 +1250,6 @@ module ff_av2_chroma_bdpcm_symbolizer #(
       prepare_context_q <= 1'b0;
       emit_state_q <= EMIT_SKIP;
       scan_q <= 4'd15;
-      zero_fast_q <= 1'b0;
       hr_avg_q <= 16'd0;
     end else if (!active_q && !prepare_context_q && known_zero_txb) begin
       active_q <= !advance;
@@ -1261,7 +1268,6 @@ module ff_av2_chroma_bdpcm_symbolizer #(
       skip_ctx_q <= skip_ctx;
       dc_sign_ctx_q <= dc_sign_ctx;
       dc_recon_sample_q <= dc_recon_sample;
-      zero_fast_q <= 1'b1;
       hr_avg_q <= 16'd0;
       for (sample_index_w = 0; sample_index_w < 16; sample_index_w = sample_index_w + 1) begin
         level_q[sample_index_w] <= 16'd0;
@@ -1282,7 +1288,6 @@ module ff_av2_chroma_bdpcm_symbolizer #(
       skip_ctx_q <= skip_ctx;
       dc_sign_ctx_q <= dc_sign_ctx;
       dc_recon_sample_q <= dc_recon_sample;
-      zero_fast_q <= 1'b0;
       hr_avg_q <= 16'd0;
       for (sample_index_w = 0; sample_index_w < 16; sample_index_w = sample_index_w + 1) begin
         level_q[sample_index_w] <= level_pre_w[sample_index_w];
@@ -1293,7 +1298,6 @@ module ff_av2_chroma_bdpcm_symbolizer #(
       active_q <= 1'b1;
       emit_state_q <= EMIT_SKIP;
       scan_q <= 4'd15;
-      zero_fast_q <= 1'b0;
       eob_q <= eob_pre_w;
       eob_pt_q <= eob_pt_pre_w;
       eob_extra_q <= eob_extra_pre_w;
@@ -1307,7 +1311,6 @@ module ff_av2_chroma_bdpcm_symbolizer #(
         br_ctx_q[sample_index_w] <= br_ctx_pre_w[sample_index_w];
       end
     end else if (progress_w) begin
-      zero_fast_q <= 1'b0;
       case (emit_state_q)
         EMIT_SKIP: begin
           if (!txb_nonzero_q) begin
@@ -1474,7 +1477,6 @@ module ff_av2_chroma_bdpcm_symbolizer #(
         end
       endcase
     end else begin
-      zero_fast_q <= 1'b0;
     end
   end
 

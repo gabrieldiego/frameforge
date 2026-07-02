@@ -1252,6 +1252,41 @@ async def av2_encoder_emits_obu_stream(dut):
             "tile_len": signal_int(dut, "tile_len_q"),
             "stream_index": signal_int(dut, "stream_index_q"),
             "observed_bytes": len(observed),
+            "writer_flush_ready": nested_signal_int(
+                dut, "bitstream_writer.stream_flush_ready"
+            ),
+            "writer_flush_done": nested_signal_int(
+                dut, "bitstream_writer.stream_flush_done"
+            ),
+            "writer_flush_pending": nested_signal_int(
+                dut, "bitstream_writer.flush_pending_q"
+            ),
+            "writer_tx_state": nested_signal_int(dut, "bitstream_writer.tx_state_q"),
+            "writer_byte_count": nested_signal_int(dut, "bitstream_writer.byte_count_q"),
+            "writer_fifo_count": nested_signal_int(dut, "bitstream_writer.fifo_count_q"),
+            "writer_tx_count": nested_signal_int(dut, "bitstream_writer.tx_count_q"),
+            "writer_tx_remaining": nested_signal_int(
+                dut, "bitstream_writer.tx_remaining_q"
+            ),
+            "writer_tx_pending_flush": nested_signal_int(
+                dut, "bitstream_writer.tx_pending_flush_q"
+            ),
+            "writer_write_offset": nested_signal_int(
+                dut, "bitstream_writer.write_offset_q"
+            ),
+            "writer_bytes_written": nested_signal_int(
+                dut, "bitstream_writer.bytes_written"
+            ),
+            "writer_s_axis_valid": nested_signal_int(
+                dut, "bitstream_writer.s_axis_valid"
+            ),
+            "writer_s_axis_ready": nested_signal_int(
+                dut, "bitstream_writer.s_axis_ready"
+            ),
+            "writer_awvalid": nested_signal_int(dut, "bitstream_writer.m_axi_awvalid"),
+            "writer_wvalid": nested_signal_int(dut, "bitstream_writer.m_axi_wvalid"),
+            "writer_bready": nested_signal_int(dut, "bitstream_writer.m_axi_bready"),
+            "writer_error": nested_signal_int(dut, "bitstream_writer.error"),
             "analyzer_state": nested_signal_int(dut, "palette_analyzer.state_q"),
             "analyzer_done": nested_signal_int(dut, "palette_analyzer.done"),
             "analyzer_sample_index": nested_signal_int(

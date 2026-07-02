@@ -55,6 +55,7 @@ module ff_av2_palette_analyzer_444 #(
   output logic [2:0] query_top_left_index,
   output logic       query_luma_residual_zero,
   output logic       query_chroma_bdpcm_horz,
+  output logic [7:0] query_chroma_bdpcm_zero_mask,
   output logic [7:0] palette_first_color,
   output logic [1:0] palette_delta_bits_minus5,
   output logic [55:0] palette_delta_minus1,
@@ -131,7 +132,9 @@ module ff_av2_palette_analyzer_444 #(
   logic [7:0] row_same_left_q [0:63];
   logic [7:0] row_same_above_q [0:63];
   logic block_chroma_bdpcm_horz_q [0:63];
+  logic [7:0] block_chroma_bdpcm_zero_mask_q [0:63];
   logic query_chroma_bdpcm_horz_q;
+  logic [7:0] query_chroma_bdpcm_zero_mask_q;
   logic [15:0] chroma_h_sad_q;
   logic [15:0] chroma_v_sad_q;
   logic [16:0] chroma_h_sad_total_w;
@@ -146,12 +149,19 @@ module ff_av2_palette_analyzer_444 #(
   logic [63:0] chroma_current_v_right_edge_q;
   logic [7:0] chroma_bottom_h_u_predictor_q;
   logic [7:0] chroma_bottom_h_v_predictor_q;
+  logic [7:0] chroma_h_zero_mask_q;
+  logic [7:0] chroma_v_zero_mask_q;
   logic [63:0] packet_chroma_left_edge_w;
   logic [63:0] packet_chroma_above_edge_w;
   logic [63:0] packet_chroma_right_edge_w;
   logic [63:0] packet_chroma_next_right_edge_w;
   logic [15:0] packet_chroma_h_sad_w;
   logic [15:0] packet_chroma_v_sad_w;
+  logic [7:0] packet_chroma_h_nonzero_mask_w;
+  logic [7:0] packet_chroma_v_nonzero_mask_w;
+  logic [7:0] chroma_h_zero_mask_after_packet_w;
+  logic [7:0] chroma_v_zero_mask_after_packet_w;
+  logic [2:0] packet_chroma_zero_mask_index_w;
   logic [2:0] query_palette_index_q [0:63];
   logic [1:0] query_luma_mode_q;
   logic [63:0] query_luma_predictor_edge_q;
@@ -374,6 +384,10 @@ module ff_av2_palette_analyzer_444 #(
   assign chroma_h_sad_total_w = {1'b0, chroma_h_sad_q} + {1'b0, packet_chroma_h_sad_w};
   assign chroma_v_sad_total_w = {1'b0, chroma_v_sad_q} + {1'b0, packet_chroma_v_sad_w};
   assign chroma_v_sad_biased_w = chroma_v_sad_total_w + 17'd256;
+  assign chroma_h_zero_mask_after_packet_w =
+    chroma_h_zero_mask_q & ~packet_chroma_h_nonzero_mask_w;
+  assign chroma_v_zero_mask_after_packet_w =
+    chroma_v_zero_mask_q & ~packet_chroma_v_nonzero_mask_w;
   assign chroma_drain_state_w =
     (state_q == ST_PAD) ||
     (state_q == ST_SORT) ||
@@ -617,6 +631,9 @@ module ff_av2_palette_analyzer_444 #(
     packet_chroma_sum_w = 12'd0;
     packet_chroma_h_sad_w = 16'd0;
     packet_chroma_v_sad_w = 16'd0;
+    packet_chroma_h_nonzero_mask_w = 8'd0;
+    packet_chroma_v_nonzero_mask_w = 8'd0;
+    packet_chroma_zero_mask_index_w = 3'd0;
     for (packet_lane_q = 0; packet_lane_q < 8; packet_lane_q = packet_lane_q + 1) begin
       if (packet_lane_q < packet_count) begin
         if (({1'b0, block_sample_q[2:0]} + packet_lane_q[3:0]) < 4'd4) begin
@@ -686,6 +703,17 @@ module ff_av2_palette_analyzer_444 #(
           packet_chroma_v_sad_w =
             packet_chroma_v_sad_w +
             {8'd0, packet_chroma_v_predictor_w[packet_lane_q] - packet_lane_w[packet_lane_q]};
+        end
+        packet_chroma_zero_mask_index_w = {
+          packet_chroma_plane_v_w,
+          packet_chroma_row_w[2],
+          packet_lane_q[2]
+        };
+        if (packet_lane_w[packet_lane_q] != packet_chroma_h_predictor_w[packet_lane_q]) begin
+          packet_chroma_h_nonzero_mask_w[packet_chroma_zero_mask_index_w] = 1'b1;
+        end
+        if (packet_lane_w[packet_lane_q] != packet_chroma_v_predictor_w[packet_lane_q]) begin
+          packet_chroma_v_nonzero_mask_w[packet_chroma_zero_mask_index_w] = 1'b1;
         end
       end else begin
         packet_chroma_h_predictor_w[packet_lane_q] = 8'd0;
@@ -1120,6 +1148,7 @@ module ff_av2_palette_analyzer_444 #(
     query_top_left_index = query_palette_index_q[query_top_left_local_index_w];
     query_luma_residual_zero = query_luma_residual_zero_q;
     query_chroma_bdpcm_horz = query_chroma_bdpcm_horz_q;
+    query_chroma_bdpcm_zero_mask = query_chroma_bdpcm_zero_mask_q;
     if (query_row[2:0] != 3'd0 && query_row_same_above_q[query_row[2:0]]) begin
       query_identity_row_flag = 2'd2;
     end else if (query_row_same_left_q[query_row[2:0]]) begin
@@ -1200,9 +1229,12 @@ module ff_av2_palette_analyzer_444 #(
       chroma_current_v_right_edge_q <= 64'd0;
       chroma_bottom_h_u_predictor_q <= 8'd0;
       chroma_bottom_h_v_predictor_q <= 8'd0;
+      chroma_h_zero_mask_q <= 8'hff;
+      chroma_v_zero_mask_q <= 8'hff;
       for (pack_index_q = 0; pack_index_q < 64; pack_index_q = pack_index_q + 1) begin
         query_palette_index_q[pack_index_q] <= 3'd0;
         block_chroma_bdpcm_horz_q[pack_index_q] <= 1'b1;
+        block_chroma_bdpcm_zero_mask_q[pack_index_q] <= 8'd0;
       end
       query_luma_mode_q <= LUMA_MODE_DC;
       query_luma_predictor_edge_q <= 64'd0;
@@ -1216,6 +1248,7 @@ module ff_av2_palette_analyzer_444 #(
       query_palette_delta_literal_bits_q <= 35'd0;
       query_luma_residual_zero_q <= 1'b0;
       query_chroma_bdpcm_horz_q <= 1'b1;
+      query_chroma_bdpcm_zero_mask_q <= 8'd0;
       query_row_same_left_q <= 8'd0;
       query_row_same_above_q <= 8'd0;
       terminal_luma_predictor_edge_q <= 64'd0;
@@ -1279,6 +1312,8 @@ module ff_av2_palette_analyzer_444 #(
       chroma_current_v_right_edge_q <= 64'd0;
       chroma_bottom_h_u_predictor_q <= 8'd0;
       chroma_bottom_h_v_predictor_q <= 8'd0;
+      chroma_h_zero_mask_q <= 8'hff;
+      chroma_v_zero_mask_q <= 8'hff;
       query_luma_mode_q <= LUMA_MODE_DC;
       query_luma_predictor_edge_q <= 64'd0;
       query_luma_predictor_inner_edge_q <= 64'd0;
@@ -1288,6 +1323,7 @@ module ff_av2_palette_analyzer_444 #(
       query_palette_delta_literal_bits_q <= 35'd0;
       query_luma_residual_zero_q <= 1'b0;
       query_chroma_bdpcm_horz_q <= 1'b1;
+      query_chroma_bdpcm_zero_mask_q <= 8'd0;
       terminal_luma_predictor_edge_q <= 64'd0;
       terminal_luma_predictor_inner_edge_q <= 64'd0;
       for (edge_index_q = 0; edge_index_q < 8; edge_index_q = edge_index_q + 1) begin
@@ -1322,6 +1358,8 @@ module ff_av2_palette_analyzer_444 #(
         black_ok_q <= black_next_w;
         chroma_h_sad_q <= chroma_h_sad_q + packet_chroma_h_sad_w;
         chroma_v_sad_q <= chroma_v_sad_q + packet_chroma_v_sad_w;
+        chroma_h_zero_mask_q <= chroma_h_zero_mask_after_packet_w;
+        chroma_v_zero_mask_q <= chroma_v_zero_mask_after_packet_w;
         chroma_prev_row_q <= packet_samples[63:0];
         if (packet_chroma_plane_v_w) begin
           chroma_current_v_right_edge_q <= packet_chroma_next_right_edge_w;
@@ -1350,6 +1388,10 @@ module ff_av2_palette_analyzer_444 #(
           // screen-content bitrate over an unbiased predictor-SAD tie break.
           block_chroma_bdpcm_horz_q[block_id_q] <=
             (chroma_h_sad_total_w <= chroma_v_sad_biased_w);
+          block_chroma_bdpcm_zero_mask_q[block_id_q] <=
+            (chroma_h_sad_total_w <= chroma_v_sad_biased_w) ?
+              chroma_h_zero_mask_after_packet_w :
+              chroma_v_zero_mask_after_packet_w;
         end
         if (packet_chroma_done_w) begin
           chroma_complete_q <= 1'b1;
@@ -1388,6 +1430,7 @@ module ff_av2_palette_analyzer_444 #(
         query_luma_predictor_inner_edge_q <= terminal_luma_predictor_inner_edge_q;
         query_luma_residual_zero_q <= block_luma_residual_zero_q[query_load_block_id_q];
         query_chroma_bdpcm_horz_q <= block_chroma_bdpcm_horz_q[query_load_block_id_q];
+        query_chroma_bdpcm_zero_mask_q <= block_chroma_bdpcm_zero_mask_q[query_load_block_id_q];
         query_row_same_left_q <= row_same_left_q[query_load_block_id_q];
         query_row_same_above_q <= row_same_above_q[query_load_block_id_q];
         query_active_q <= 1'b0;
@@ -1645,6 +1688,8 @@ module ff_av2_palette_analyzer_444 #(
             horizontal_sad_q <= 16'd0;
             chroma_h_sad_q <= 16'd0;
             chroma_v_sad_q <= 16'd0;
+            chroma_h_zero_mask_q <= 8'hff;
+            chroma_v_zero_mask_q <= 8'hff;
             chroma_prev_row_q <= 64'd0;
             chroma_current_u_right_edge_q <= 64'd0;
             chroma_current_v_right_edge_q <= 64'd0;

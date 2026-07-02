@@ -96,7 +96,9 @@ module ff_av2_encoder #(
     ST_STREAM_FLUSH_REQ,
     ST_STREAM_FLUSH_WAIT,
     ST_PREFIX_PATCH_REQ,
-    ST_PREFIX_PATCH_WAIT
+    ST_PREFIX_PATCH_WAIT,
+    ST_STREAM_FINISH_REQ,
+    ST_STREAM_FINISH_WAIT
   } state_t;
 
   localparam int AV2_STACK_DEPTH = 16;
@@ -162,6 +164,9 @@ module ff_av2_encoder #(
   logic       bitstream_stream_flush_valid_w;
   logic       bitstream_stream_flush_ready_w;
   logic       bitstream_stream_flush_done_w;
+  logic       bitstream_finish_valid_w;
+  logic       bitstream_finish_ready_w;
+  logic       bitstream_finish_done_w;
   logic       bitstream_patch_valid_w;
   logic       bitstream_patch_ready_w;
   logic       bitstream_patch_done_w;
@@ -211,6 +216,8 @@ module ff_av2_encoder #(
   logic [1:0] payload_prefix_index_q;
   logic [15:0] prefix_patch_offset_q;
   logic [1:0] prefix_patch_index_q;
+  logic [31:0] frame_output_base_q;
+  logic closed_len_patch_q;
   logic output_pass_q;
   logic [15:0] seq_len_q;
   logic [15:0] stream_index_q;
@@ -342,6 +349,8 @@ module ff_av2_encoder #(
   logic tile_is_last_w;
   logic multi_tile_w;
   logic frame_ibc_mode_q;
+  logic frame_palette_conservative_w;
+  logic frame_ibc_conservative_w;
   logic ibc_done_w;
   logic [63:0] ibc_copy_mask_w;
   logic [63:0] ibc_above_copy_mask_w;
@@ -491,6 +500,8 @@ module ff_av2_encoder #(
   logic [2:0] palette_top_left_index_w;
   logic palette_luma_residual_zero_w;
   logic palette_chroma_bdpcm_horz_w;
+  logic [7:0] palette_chroma_bdpcm_zero_mask_w;
+  logic palette_chroma_bdpcm_known_zero_hint_w;
   logic decision_leaf_chroma_bdpcm_horz_w;
   logic [1:0] palette_identity_row_flag_w;
   logic palette_op_valid_w;
@@ -967,6 +978,9 @@ module ff_av2_encoder #(
     .stream_flush_valid(bitstream_stream_flush_valid_w),
     .stream_flush_ready(bitstream_stream_flush_ready_w),
     .stream_flush_done(bitstream_stream_flush_done_w),
+    .finish_valid(bitstream_finish_valid_w),
+    .finish_ready(bitstream_finish_ready_w),
+    .finish_done(bitstream_finish_done_w),
     .patch_valid(bitstream_patch_valid_w),
     .patch_ready(bitstream_patch_ready_w),
     .patch_offset(bitstream_patch_offset_w),
@@ -1011,6 +1025,14 @@ module ff_av2_encoder #(
     .tile_height_blocks(tile_height_blocks_w),
     .tile_block_count(tile_block_count_w)
   );
+
+  // AV2 still-picture 4:4:4 streams decide frame-level screen-content syntax
+  // before tile entropy is available. Advertising palette/IntraBC
+  // conservatively lets each tile analyze once and then stream entropy instead
+  // of forcing a frame-wide discovery pass.
+  assign frame_palette_conservative_w =
+    (chroma_format_idc == 2'd3) && (SUPPORT_PALETTE_444 != 0);
+  assign frame_ibc_conservative_w = frame_palette_conservative_w;
 
   ff_av2_bitstream_headers bitstream_headers (
     .width(width_q),
@@ -1168,6 +1190,7 @@ module ff_av2_encoder #(
     .query_top_left_index(palette_top_left_index_w),
     .query_luma_residual_zero(palette_luma_residual_zero_w),
     .query_chroma_bdpcm_horz(palette_chroma_bdpcm_horz_w),
+    .query_chroma_bdpcm_zero_mask(palette_chroma_bdpcm_zero_mask_w),
     .palette_first_color(palette_first_color_w),
     .palette_delta_bits_minus5(palette_delta_bits_minus5_w),
     .palette_delta_minus1(palette_delta_minus1_w),
@@ -1256,6 +1279,7 @@ module ff_av2_encoder #(
     .lossy_420_mode(lossy_420_mode_q),
     .leaf_chroma_bdpcm_horz(leaf_chroma_bdpcm_horz_q),
     .palette_luma_residual_zero(palette_luma_residual_zero_w),
+    .palette_chroma_bdpcm_known_zero_hint(palette_chroma_bdpcm_known_zero_hint_w),
     .luma_fetch_done(luma_fetch_done_w),
     .chroma_fetch_done(chroma_fetch_done_w),
     .chroma_fetch_current_cache_hit(chroma_fetch_current_cache_hit_w),
@@ -1375,6 +1399,7 @@ module ff_av2_encoder #(
     .chroma_format_idc(chroma_format_idc),
     .palette_mode(palette_mode_q),
     .leaf_chroma_bdpcm_horz(leaf_chroma_bdpcm_horz_q),
+    .palette_chroma_bdpcm_zero_mask(palette_chroma_bdpcm_zero_mask_w),
     .residual_mode(residual_mode_w),
     .lossy_420_mode(lossy_420_mode_q),
     .block_row_mi(block_row_mi_q),
@@ -1439,6 +1464,7 @@ module ff_av2_encoder #(
     .chroma_fetch_predictor_only(chroma_fetch_predictor_only_w),
     .chroma_fetch_completed_u(chroma_fetch_completed_u_w),
     .luma_fetch_completed(luma_fetch_completed_w),
+    .chroma_known_zero_current(palette_chroma_bdpcm_known_zero_hint_w),
     .txb_prefetch_chroma_target_v(txb_prefetch_chroma_target_v_w),
     .txb_prefetch_luma_start(txb_prefetch_luma_start_w),
     .txb_prefetch_chroma_start(txb_prefetch_chroma_start_w),
@@ -1634,6 +1660,8 @@ module ff_av2_encoder #(
     .chroma_fetch_v_txb_samples_w(chroma_fetch_v_txb_samples_w),
     .chroma_txb_count_w(chroma_txb_count_w),
     .chroma_txb_width_w(chroma_txb_width_w),
+    .closed_leb_start_w(closed_leb_start_w),
+    .closed_len_w(closed_len_w),
     .cnt_q(cnt_q),
     .current_leaf_ready_w(current_leaf_ready_w),
     .current_u_col0_above_edge_w(current_u_col0_above_edge_w),
@@ -1657,6 +1685,8 @@ module ff_av2_encoder #(
     .frame_index_q(frame_index_q),
     .frame_is_last_w(frame_is_last_w),
     .frame_palette_mode_q(frame_palette_mode_q),
+    .frame_palette_conservative_w(frame_palette_conservative_w),
+    .frame_ibc_conservative_w(frame_ibc_conservative_w),
     .frame_reader_error_w(frame_reader_error_w),
     .height_bits_q(height_bits_q),
     .height_bits_w(height_bits_w),
@@ -1717,6 +1747,9 @@ module ff_av2_encoder #(
     .bitstream_stream_flush_valid_w(bitstream_stream_flush_valid_w),
     .bitstream_stream_flush_ready_w(bitstream_stream_flush_ready_w),
     .bitstream_stream_flush_done_w(bitstream_stream_flush_done_w),
+    .bitstream_finish_valid_w(bitstream_finish_valid_w),
+    .bitstream_finish_ready_w(bitstream_finish_ready_w),
+    .bitstream_finish_done_w(bitstream_finish_done_w),
     .bitstream_patch_valid_w(bitstream_patch_valid_w),
     .bitstream_patch_ready_w(bitstream_patch_ready_w),
     .bitstream_patch_done_w(bitstream_patch_done_w),
@@ -1767,6 +1800,8 @@ module ff_av2_encoder #(
     .payload_prefix_index_q(payload_prefix_index_q),
     .prefix_patch_offset_q(prefix_patch_offset_q),
     .prefix_patch_index_q(prefix_patch_index_q),
+    .frame_output_base_q(frame_output_base_q),
+    .closed_len_patch_q(closed_len_patch_q),
     .output_pass_q(output_pass_q),
     .payload_read_data_word_addr_q(payload_read_data_word_addr_q),
     .payload_read_word_addr_q(payload_read_word_addr_q),
@@ -1825,6 +1860,7 @@ module ff_av2_encoder #(
     .txb_prefetch_chroma_start_w(txb_prefetch_chroma_start_w),
     .txb_prefetch_cross_phase_w(txb_prefetch_cross_phase_w),
     .txb_prefetch_done_q(txb_prefetch_done_q),
+    .txb_fetch_done_w(txb_fetch_done_w),
     .txb_prefetch_fetch_done_w(txb_prefetch_fetch_done_w),
     .txb_prefetch_first_luma_w(txb_prefetch_first_luma_w),
     .txb_prefetch_index_q(txb_prefetch_index_q),

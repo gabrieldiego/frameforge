@@ -14,6 +14,7 @@ module ff_av2_txb_scheduler (
   input  logic [1:0]  chroma_format_idc,
   input  logic        palette_mode,
   input  logic        leaf_chroma_bdpcm_horz,
+  input  logic [7:0]  palette_chroma_bdpcm_zero_mask,
   input  logic        residual_mode,
   input  logic        lossy_420_mode,
   input  logic [4:0]  block_row_mi,
@@ -78,6 +79,7 @@ module ff_av2_txb_scheduler (
   output logic        chroma_fetch_predictor_only,
   output logic        chroma_fetch_completed_u,
   output logic        luma_fetch_completed,
+  output logic        chroma_known_zero_current,
   output logic        txb_prefetch_chroma_target_v,
   output logic        txb_prefetch_luma_start,
   output logic        txb_prefetch_chroma_start,
@@ -96,11 +98,25 @@ module ff_av2_txb_scheduler (
   output logic [1:0]  chroma_above_source_index
 );
 
+  logic chroma_known_zero_req_w;
+
+  assign chroma_known_zero_current =
+    palette_mode &&
+    !lossy_420_mode &&
+    (phase_u_coeff || phase_v_coeff) &&
+    palette_chroma_bdpcm_zero_mask[{phase_v_coeff, txb_index[1:0]}];
+  assign chroma_known_zero_req_w =
+    palette_mode &&
+    !lossy_420_mode &&
+    (phase_u_coeff || phase_v_coeff || (phase_y_coeff && cross_phase_has_next_txb)) &&
+    palette_chroma_bdpcm_zero_mask[{chroma_fetch_req_plane_v, chroma_fetch_req_index}];
+
   assign chroma_fetch_start =
     (state_chroma_fetch &&
      !txb_prefetch_started &&
      (phase_u_coeff || phase_v_coeff) &&
-     !chroma_fetch_current_cache_hit) ||
+     !chroma_fetch_current_cache_hit &&
+     !chroma_known_zero_current) ||
     txb_prefetch_chroma_start ||
     (txb_prefetch_started && !txb_prefetch_done && txb_prefetch_chroma);
   assign luma_fetch_start =
@@ -150,8 +166,8 @@ module ff_av2_txb_scheduler (
   assign next_txb_col = {11'd0, block_col_mi + next_txb_local_col};
   assign txb_fetch_done =
     phase_y_coeff ? luma_fetch_done :
-    phase_u_coeff ? chroma_fetch_done :
-    phase_v_coeff ? (chroma_fetch_done || v_chroma_cache_hit) : 1'b0;
+    phase_u_coeff ? (chroma_fetch_done || chroma_known_zero_current) :
+    phase_v_coeff ? (chroma_fetch_done || v_chroma_cache_hit || chroma_known_zero_current) : 1'b0;
   assign txb_prefetch_fetch_done = luma_fetch_done || chroma_fetch_done;
 
   assign v_chroma_cache_hit =
@@ -163,7 +179,8 @@ module ff_av2_txb_scheduler (
     phase_u_coeff &&
     leaf_chroma_bdpcm_horz &&
     chroma_predictor_compute_valid;
-  assign chroma_fetch_current_cache_hit = u_chroma_cache_hit || v_chroma_cache_hit;
+  assign chroma_fetch_current_cache_hit =
+    u_chroma_cache_hit || v_chroma_cache_hit || chroma_known_zero_current;
   assign chroma_fetch_cache_index =
     txb_prefetch_started ? txb_prefetch_index : txb_index[1:0];
   assign luma_fetch_cache_index =
@@ -226,7 +243,8 @@ module ff_av2_txb_scheduler (
     ((above_col0_row_mi + 5'd2) == block_row_mi);
   assign chroma_fetch_req_ready =
     palette_mode &&
-    (chroma_fetch_req_predictor_compute ||
+    (chroma_known_zero_req_w ||
+     chroma_fetch_req_predictor_compute ||
      (chroma_fetch_req_plane_v && cached_v_valid[chroma_fetch_req_index]));
   assign chroma_fetch_predictor_only =
     palette_mode &&
@@ -264,6 +282,7 @@ module ff_av2_txb_scheduler (
      cross_phase_has_next_txb) &&
     !txb_prefetch_started &&
     !txb_prefetch_chroma_target_v &&
+    !chroma_known_zero_req_w &&
     !chroma_fetch_req_predictor_compute &&
     !chroma_fetch_done;
   assign txb_prefetch_cross_phase =
