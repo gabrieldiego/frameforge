@@ -232,6 +232,49 @@ def old_aggregate_values(doc: str, key_col_count: int) -> dict[str, list[float]]
     return values
 
 
+def parse_metric_cell(cell: str) -> float:
+    m = re.match(r"([-+0-9.]+)", cell)
+    return float(m.group(1)) if m else math.nan
+
+
+def old_output_vector_values(doc: str) -> dict[str, list[float]]:
+    values: dict[str, list[float]] = {}
+    new_order = "| Vector | Status | Cycles/pixel" in doc
+    for line in doc.splitlines():
+        if not line.startswith("| ") or ".yuv | PASS |" not in line:
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        name = cells[0]
+        nums = [parse_metric_cell(cell) for cell in cells[2:10]]
+        if len(nums) < 8:
+            continue
+        if new_order:
+            cpp, bits, cycles, active, wait, util, bubble, cpb = nums
+        else:
+            bits, cycles, active, wait, util, bubble, cpb, cpp = nums
+        values[name] = [bits, cycles, active, wait, util, bubble, cpb, cpp]
+    return values
+
+
+def old_output_aggregate_values(doc: str) -> dict[str, list[float]]:
+    values: dict[str, list[float]] = {}
+    new_order = "| Set | Cases | Cycles/pixel" in doc
+    for line in doc.splitlines():
+        if not line.startswith("| `"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        name = cells[0].strip("`")
+        nums = [parse_metric_cell(cell) for cell in cells[2:10]]
+        if len(nums) < 8:
+            continue
+        if new_order:
+            cpp, bits, cycles, active, wait, util, bubble, cpb = nums
+        else:
+            bits, cycles, active, wait, util, bubble, cpb, cpp = nums
+        values[name] = [bits, cycles, active, wait, util, bubble, cpb, cpp]
+    return values
+
+
 def old_quality_aggregate_values(doc: str) -> dict[str, list[float]]:
     values: dict[str, list[float]] = {}
     for line in doc.splitlines():
@@ -360,8 +403,8 @@ def validation_result_lines(strict: bool) -> list[str]:
 def write_output_utilization() -> None:
     old_doc = read_baseline_text(doc_path("output-utilization.md"))
     if "Wait cycles (delta)" in old_doc:
-        old_vec = old_vector_values(old_doc, 7)
-        old_agg = old_aggregate_values(old_doc, 7)
+        old_vec = old_output_vector_values(old_doc)
+        old_agg = old_output_aggregate_values(old_doc)
     else:
         old_vec = {}
         old_agg = {}
@@ -376,12 +419,15 @@ def write_output_utilization() -> None:
         "",
         "Metric definitions:",
         "",
+        "- `cycles/input pixel`: total measured cycles divided by `width * height * frames`.",
+        "  This is the primary top-level throughput metric.",
         "- `output_utilization`: accepted output bytes divided by total measured cycles.",
         "- `bubble_rate`: `1 - output_utilization`.",
         "- `cycles/bit`: total measured cycles divided by RTL bitstream bits.",
-        "- `cycles/input pixel`: total measured cycles divided by `width * height * frames`.",
         "- Internal block utilization is testbench instrumentation. It is used to find",
         "  pipeline starvation/backpressure and is not part of the codec bitstream contract.",
+        "- Bubble rate is retained as a diagnostic and delta metric. Highly compressed",
+        "  streams can have high bubble rate even when cycles/input pixel is healthy.",
         "",
         f"## {REPORT_TITLE}",
         "",
@@ -404,23 +450,23 @@ def write_output_utilization() -> None:
         "",
         "Aggregate top-level RTL utilization:",
         "",
-        "| Set | Cases | RTL bits (delta) | Total cycles (delta) | Active cycles (delta) | Wait cycles (delta) | Output util (delta) | Bubble rate (delta) | Cycles/bit (delta) | Cycles/pixel |",
+        "| Set | Cases | Cycles/pixel (delta) | RTL bits (delta) | Total cycles (delta) | Active cycles (delta) | Wait cycles (delta) | Output util (delta) | Bubble rate (delta) | Cycles/bit (delta) |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     all_vectors: dict[str, list[Vector]] = {name: read_vectors(name) for name, _ in SET_INFO}
     for set_name, _title in SET_INFO:
         agg = aggregate_metrics(all_vectors[set_name])
-        old = old_agg.get(set_name, [math.nan] * 7)
+        old = old_agg.get(set_name, [math.nan] * 8)
         lines.append(
             f"| `{set_name}` | {len(all_vectors[set_name])} | "
+            f"{fmt_float(agg['cycles_per_pixel'])} ({fmt_delta(agg['cycles_per_pixel'], old[7])}) | "
             f"{fmt_int(agg['bits'])} ({fmt_delta(agg['bits'], old[0], 'int')}) | "
             f"{fmt_int(agg['cycles'])} ({fmt_delta(agg['cycles'], old[1], 'int')}) | "
             f"{fmt_int(agg['active'])} ({fmt_delta(agg['active'], old[2], 'int')}) | "
             f"{fmt_int(agg['wait'])} ({fmt_delta(agg['wait'], old[3], 'int')}) | "
             f"{fmt_float(agg['util'])} ({fmt_delta(agg['util'], old[4])}) | "
             f"{fmt_float(agg['bubble'])} ({fmt_delta(agg['bubble'], old[5])}) | "
-            f"{fmt_float(agg['cycles_per_bit'])} ({fmt_delta(agg['cycles_per_bit'], old[6])}) | "
-            f"{fmt_float(agg['cycles_per_pixel'])} |"
+            f"{fmt_float(agg['cycles_per_bit'])} ({fmt_delta(agg['cycles_per_bit'], old[6])}) |"
         )
     for set_name, title in SET_INFO:
         vectors = all_vectors[set_name]
@@ -438,7 +484,7 @@ def write_output_utilization() -> None:
             "",
             "Per-vector top-level metrics:",
             "",
-            "| Vector | Status | RTL bits (delta) | Total cycles (delta) | Active cycles (delta) | Wait cycles (delta) | Output util (delta) | Bubble rate (delta) | Cycles/bit (delta) | Cycles/pixel |",
+            "| Vector | Status | Cycles/pixel (delta) | RTL bits (delta) | Total cycles (delta) | Active cycles (delta) | Wait cycles (delta) | Output util (delta) | Bubble rate (delta) | Cycles/bit (delta) |",
             "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
         for v in vectors:
@@ -451,17 +497,17 @@ def write_output_utilization() -> None:
             bubble = float(m["output_bubble_rate"])
             cpb = float(m["cycles_per_bit"])
             cpp = float(m["cycles_per_input_pixel"])
-            old = old_vec.get(v.stem + ".yuv", [math.nan] * 7)
+            old = old_vec.get(v.stem + ".yuv", [math.nan] * 8)
             lines.append(
                 f"| {v.stem}.yuv | PASS | "
+                f"{fmt_float(cpp)} ({fmt_delta(cpp, old[7])}) | "
                 f"{bits} ({fmt_delta(bits, old[0], 'int')}) | "
                 f"{cycles} ({fmt_delta(cycles, old[1], 'int')}) | "
                 f"{active} ({fmt_delta(active, old[2], 'int')}) | "
                 f"{wait} ({fmt_delta(wait, old[3], 'int')}) | "
                 f"{fmt_float(util)} ({fmt_delta(util, old[4])}) | "
                 f"{fmt_float(bubble)} ({fmt_delta(bubble, old[5])}) | "
-                f"{fmt_float(cpb)} ({fmt_delta(cpb, old[6])}) | "
-                f"{fmt_float(cpp)} |"
+                f"{fmt_float(cpb)} ({fmt_delta(cpb, old[6])}) |"
             )
     doc_path("output-utilization.md").write_text("\n".join(lines) + "\n")
 

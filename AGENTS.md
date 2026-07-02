@@ -64,7 +64,7 @@ For current measurements, read the codec-specific reports:
 Generated outputs live under `verification/generated/` and `synth/out/`; these
 are not source-of-truth documents.
 
-Current numeric validation, bubble-rate, runtime, and synthesis-memory targets
+Current numeric validation, throughput, runtime, and synthesis-memory targets
 are maintained in `docs/validation/targets.md`. Treat that file as the source
 of truth for milestone acceptance thresholds.
 
@@ -89,7 +89,7 @@ RTL style, and git rules from AGENTS.md.
 If the session has a specific focus, append one line such as:
 
 ```text
-Today we are working on AV2 RTL bubble-rate optimization.
+Today we are working on AV2 RTL throughput optimization.
 ```
 
 This is usually better than pasting long historical context. The agent should
@@ -327,19 +327,23 @@ Important recurring sets:
 
 ## Throughput And Bubble Metrics
 
-Bubble-rate work is a first-class optimization target.
+Cycles per input pixel is the primary top-level throughput target. Bubble rate
+remains a first-class diagnostic and delta metric for locating internal stalls,
+but it is not the main milestone gate.
 
 Track:
 
+- cycles per input pixel
 - output utilization
 - bubble rate
 - cycles per bit
-- cycles per input pixel
 - block-level waiting/working/backpressure/idle rates
 
-For RTL changes, keep utilization baseline or improve it unless there is a
-clear feature reason. The current numeric bubble-rate target is maintained in
-`docs/validation/targets.md`.
+For RTL changes, keep cycles per input pixel at baseline or improve it unless
+there is a clear feature reason. If a stream at least 64x64 exceeds the current
+cycles-per-input-pixel target, use block-level bubble/wait/backpressure probes
+to find the limiting block. The current numeric throughput target is maintained
+in `docs/validation/targets.md`.
 
 Use:
 

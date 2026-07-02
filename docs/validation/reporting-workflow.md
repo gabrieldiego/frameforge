@@ -94,10 +94,15 @@ Quality/bitrate reports should include:
 Output-utilization reports should include:
 
 - per-set aggregate RTL bits, cycles, active cycles, wait cycles;
-- output utilization and bubble rate;
-- cycles per bit and cycles per input pixel;
+- cycles per input pixel as the primary throughput metric;
+- output utilization, bubble rate, and cycles per bit as secondary diagnostic
+  metrics;
 - per-vector rows;
 - relevant internal probe rates when available.
+
+Bubble-rate regressions are still useful for locating local stalls, especially
+with block waveforms, but they are not the top-level throughput acceptance gate.
+The current numeric target is maintained in `docs/validation/targets.md`.
 
 Synthesis reports should include:
 

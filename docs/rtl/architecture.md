@@ -147,11 +147,15 @@ docs/rtl/block-throughput-waveforms.md
 
 Use it when optimizing:
 
+- cycles per input pixel;
 - output utilization;
 - bubble rate;
 - cycles per bit;
-- cycles per input pixel;
 - waiting/working/backpressure/idle rates for internal blocks.
+
+Cycles per input pixel is the top-level throughput metric. Bubble rate is kept
+as a diagnostic signal for locating local starvation or backpressure, especially
+when a larger vector misses the current throughput target.
 
 ## Area And Timing Watchpoints
 

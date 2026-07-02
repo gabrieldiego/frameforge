@@ -43,8 +43,9 @@ bitstream-generating algorithms must refresh the bitrate report as well.
 
 1. Commit the validated SW/RTL source first, before writing the report docs.
 2. Run the required validation sets with strict SW/RTL/REF checksum parity.
-3. Update `output-utilization.md` with per-vector RTL output utilization,
-   bubble rate, cycles/bit, and cycles/input pixel when RTL validation is run.
+3. Update `output-utilization.md` with per-vector RTL cycles/input pixel as
+   the primary throughput metric, plus output utilization, bubble rate, and
+   cycles/bit for diagnostics when RTL validation is run.
 4. Run `make synth CODEC=av2` on the committed source and capture elapsed time,
    peak RSS, critical-path length, and flattened Xilinx-cell estimates.
 5. Update `synthesis.md` with area/timing/memory deltas against the previous

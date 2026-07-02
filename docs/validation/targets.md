@@ -5,7 +5,7 @@ validation, output-utilization, and synthesis runs. These are working
 constraints for AI agents and developers; codec-specific measured baselines live
 in `docs/vvc/` and `docs/av2/`.
 
-Current as of 2026-06-30.
+Current as of 2026-07-02.
 
 ## Functional Correctness
 
@@ -47,31 +47,42 @@ RaceHorses and screenshot sources are available on the machine.
 For fast debug loops, a focused smoke vector is acceptable before the full set.
 Before a change is called validated, the relevant full set must pass.
 
-## Output Utilization Target
+## Throughput Target
 
-The current bubble-rate target is:
+The current primary throughput target is:
 
-- `bubble_rate <= 0.600` for every stream whose visible resolution is at least
-  64x64 pixels.
+- `cycles/input pixel <= 1.000` for every stream whose visible resolution is at
+  least 64x64 pixels.
 
 Interpret "at least 64x64" as both visible width and visible height being
 greater than or equal to 64 pixels. Smaller vectors are still useful for
-correctness, but fixed setup/drain costs can dominate their utilization
-metrics.
+correctness, but fixed setup/drain costs can dominate their throughput metrics.
+
+This target maps directly to frame-rate estimates: at one cycle per input
+pixel, a theoretical 500 MHz implementation has enough raw pixel throughput for
+3840x2160 at 60 fps, and a 125 MHz implementation has enough raw pixel
+throughput for 1920x1080 at 60 fps. These are architecture targets, not final
+system guarantees; AXI bandwidth, clock closure, frame setup/drain, and codec
+feature costs still need to be validated.
 
 The primary top-level metrics are:
 
+- `cycles/input pixel = total measured cycles / (width * height * frames)`
 - `output_utilization = accepted output bytes / total measured cycles`
 - `bubble_rate = 1 - output_utilization`
 - `cycles/bit = total measured cycles / RTL bitstream bits`
-- `cycles/input pixel = total measured cycles / (width * height * frames)`
 
-When an RTL change worsens bubble rate or cycles/pixel, generate block-level
-throughput waveforms and inspect the internal waiting/working/backpressure/idle
-states before optimizing. The workflow is documented in
-`docs/rtl/block-throughput-waveforms.md`.
+Use bubble rate as a diagnostic and delta metric, not the primary milestone
+gate. Bubble rate depends strongly on bitstream size, so highly compressed
+streams can look inefficient even when the pixel pipeline is moving at a useful
+rate. When a stream at least 64x64 exceeds 1.000 cycles/input pixel, or when an
+RTL change materially worsens cycles/input pixel or bubble rate, generate
+block-level throughput waveforms and inspect the internal
+waiting/working/backpressure/idle states before optimizing. The workflow is
+documented in `docs/rtl/block-throughput-waveforms.md`.
 
-For report updates, preserve per-vector utilization and bubble-rate tables in:
+For report updates, preserve per-vector cycles/input pixel, utilization, and
+bubble-rate tables in:
 
 - `docs/av2/output-utilization.md`
 - `docs/vvc/output-utilization.md`

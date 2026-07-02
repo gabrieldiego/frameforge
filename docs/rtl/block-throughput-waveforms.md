@@ -152,7 +152,8 @@ Representative block rates:
 
 The `h2`, `h3`, `v2`, `v3`, `partial_h2`, `partial_wide`, and `partial_tall`
 vectors were individually at or below the historical `0.800` bubble target used
-for that checkpoint. Current bubble-rate targets are maintained in
-`docs/validation/targets.md`. The grid and vertical-partial outliers have very
-small bitstreams, so fixed CTU traversal and input fetch work dominate the
+for that checkpoint. Current throughput targets are maintained in
+`docs/validation/targets.md`. Bubble rate is now treated as a block diagnostic
+and delta metric. The grid and vertical-partial outliers have very small
+bitstreams, so fixed CTU traversal and input fetch work dominate the
 byte-output metric even though the reader and CABAC handoff paths are active.

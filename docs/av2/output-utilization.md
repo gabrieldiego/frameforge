@@ -6,12 +6,15 @@ stays focused on the current optimization baseline and immediate deltas.
 
 Metric definitions:
 
+- `cycles/input pixel`: total measured cycles divided by `width * height * frames`.
+  This is the primary top-level throughput metric.
 - `output_utilization`: accepted output bytes divided by total measured cycles.
 - `bubble_rate`: `1 - output_utilization`.
 - `cycles/bit`: total measured cycles divided by RTL bitstream bits.
-- `cycles/input pixel`: total measured cycles divided by `width * height * frames`.
 - Internal block utilization is testbench instrumentation. It is used to find
   pipeline starvation/backpressure and is not part of the codec bitstream contract.
+- Bubble rate is retained as a diagnostic and delta metric. Highly compressed
+  streams can have high bubble rate even when cycles/input pixel is healthy.
 
 ## Streamed entropy output
 

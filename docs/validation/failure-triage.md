@@ -93,14 +93,17 @@ Triage:
 No loss, quantization, rounding drift, or color change is tolerated in
 lossless validation.
 
-## Bubble Rate Regressed
+## Throughput Or Bubble Rate Regressed
 
-Use this when `bubble_rate` worsens or misses the current target in
-`docs/validation/targets.md`.
+Use this when `cycles/input pixel` worsens, a stream at least 64x64 misses the
+current throughput target in `docs/validation/targets.md`, or `bubble_rate`
+worsens enough to suggest a local pipeline stall.
 
 Triage:
 
 - Generate block throughput waveforms with `VALIDATION_BLOCK_WAVEFORM=1`.
+- Start with cycles per input pixel to decide whether the whole stream is too
+  slow for the current target.
 - Inspect waiting, working, idle, and backpressure rates.
 - Find the first block that starves downstream work or backpressures upstream
   work for a sustained interval.
