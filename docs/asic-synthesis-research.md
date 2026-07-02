@@ -33,13 +33,15 @@ trends, but they are not ASIC area estimates. LUTs, carry chains, RAMB macros,
 and FPGA routing constraints do not map cleanly to standard-cell gates or
 metal-dominated ASIC timing.
 
-The latest reported Yosys FPGA-style checkpoints show the current relative
-scale:
+The following Yosys FPGA-style checkpoints show the relative scale that was
+current when this note was written. The Git SHAs are the source commits recorded
+by each codec's synthesis report; they are not intended to track repository
+`HEAD` after later work lands.
 
-| Codec | Current Yosys target | Estimated LCs | Flattened cells | Topological path |
-|---|---|---:|---:|---:|
-| AV2 | Arty Z7-10 metadata, 25 MHz | 63,438 | 135,832 | 124 |
-| VVC | Arty Z7-10 metadata, 25 MHz | 72,133 | 196,393 | 192 |
+| Codec | Report checkpoint | Baseline source SHA | Current source SHA | Current Yosys target | Estimated LCs | Flattened cells | Topological path |
+|---|---|---|---|---|---:|---:|---:|
+| AV2 | `Streamed entropy output` in [av2/synthesis.md](av2/synthesis.md) | `7383aee7b77230a85bdd86c5cf151008ba7de553` | `ccc1e283b43c5833c276605f1f583d9c1476f4b3` | Arty Z7-10 metadata, 25 MHz | 63,438 | 135,832 | 124 |
+| VVC | `2026-06-29 VVC Report Checkpoint` in [vvc/synthesis.md](vvc/synthesis.md) | `d2cb6801f111a0023d7f982b875faccbf8c17f91` | `28fa335ecfba2e9463e416688f0144bd29f159f3` | Arty Z7-10 metadata, 25 MHz | 72,133 | 196,393 | 192 |
 
 The latest output-utilization reports are also FPGA/RTL simulation metrics, not
 ASIC metrics:
